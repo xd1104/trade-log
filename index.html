@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>微台指交易日誌</title>
+  <meta name="description" content="微台指模擬交易的每日進出場、勝率與心得紀錄">
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0F1218" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#F3F5F8" media="(prefers-color-scheme: light)">
+
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="交易日誌">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">📈</div>
+        <div>
+          <h1>交易日誌</h1>
+          <div class="sub">微台指・模擬</div>
+        </div>
+      </div>
+      <div class="today-chip">
+        <div class="d" id="todayD">—</div>
+        <div class="w" id="todayW">—</div>
+      </div>
+    </header>
+
+    <section class="card summary">
+      <div class="seg" id="seg">
+        <button data-type="days" data-n="7">7 日</button>
+        <button data-type="days" data-n="10">10 日</button>
+        <button data-type="days" data-n="30" class="on">30 日</button>
+        <button data-type="months" data-n="3">3 月</button>
+        <button data-type="months" data-n="6">半年</button>
+        <button data-type="months" data-n="12">1 年</button>
+        <button data-type="custom">自訂</button>
+      </div>
+      <div class="custrange" id="custRange" hidden>
+        <input type="date" id="cFrom" aria-label="起始日期">
+        <span class="dash">—</span>
+        <input type="date" id="cTo" aria-label="結束日期">
+        <button type="button" class="apply" id="cApply">套用</button>
+      </div>
+
+      <div class="rate-row">
+        <div class="rate-big">
+          <span class="num" id="rateNum">—</span><span class="pct">%</span>
+          <div class="lab">勝　率</div>
+        </div>
+        <div class="rate-meta">
+          <div class="wl" id="wl"></div>
+          <div class="net" id="net"><span class="v">±0</span><span class="u">點</span></div>
+          <div class="cash" id="cash"></div>
+        </div>
+      </div>
+
+      <div class="spark-wrap">
+        <div class="spark-head"><span class="t">累積點數走勢</span><span class="n" id="sparkN"></span></div>
+        <svg class="spark" id="spark" preserveAspectRatio="none" viewBox="0 0 100 40"></svg>
+      </div>
+    </section>
+
+    <div id="todaySlot"></div>
+
+    <div class="sec-head">
+      <h2>交易紀錄</h2>
+      <span class="count" id="histCount"></span>
+    </div>
+    <div class="list" id="list"></div>
+
+    <footer class="foot">
+      資料僅存在此裝置 · 記得定期<a id="exportBtn">匯出備份</a><br>
+      <a id="importBtn">匯入備份</a> · <a id="sampleBtn">載入範例資料</a>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+    </footer>
+  </div>
+
+  <div class="fab"><button id="openBtn">＋ 記錄今日交易</button></div>
+
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="記錄交易">
+    <div class="handle"></div>
+    <h3 id="sheetTitle">記錄今日交易</h3>
+    <form id="form">
+      <div class="field">
+        <label>方向</label>
+        <div class="dir-toggle">
+          <button type="button" class="long" data-dir="long" aria-pressed="true">▲ 做多</button>
+          <button type="button" class="short" data-dir="short" aria-pressed="false">▼ 做空</button>
+        </div>
+      </div>
+      <div class="two">
+        <div class="field">
+          <label>進場點數</label>
+          <input type="number" id="entry" inputmode="decimal" placeholder="23200" step="1">
+        </div>
+        <div class="field">
+          <label>出場點數</label>
+          <input type="number" id="exit" inputmode="decimal" placeholder="23240" step="1">
+        </div>
+      </div>
+      <div class="preview idle" id="preview">輸入進出場點數，自動計算損益</div>
+      <div class="field">
+        <label>心得備註</label>
+        <textarea id="note" placeholder="今天的盤感、進出場理由、紀律有沒有守…"></textarea>
+      </div>
+      <div class="field">
+        <label>日期</label>
+        <input type="date" id="date">
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn-cancel" id="cancelBtn">取消</button>
+        <button type="submit" class="btn-save" id="saveBtn" disabled>儲存紀錄</button>
+      </div>
+      <button type="button" class="btn-delete" id="deleteBtn" hidden>刪除這筆紀錄</button>
+    </form>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="js/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function () {});
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "微台指交易日誌",
+  "short_name": "交易日誌",
+  "description": "微台指模擬交易的每日進出場、勝率與心得紀錄",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F1218",
+  "theme_color": "#0F1218",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
