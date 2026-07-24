@@ -5,9 +5,14 @@
   var TICK = 10; // 微台指每點 NT$10
 
   // ---------- storage ----------
+  var SEED = (typeof window !== 'undefined' && window.TRADE_LOG_SEED) || [];
   function load() {
-    try { var r = localStorage.getItem(KEY); if (r) return JSON.parse(r); } catch (e) {}
-    return [];
+    try {
+      var r = localStorage.getItem(KEY);
+      if (r !== null) return JSON.parse(r); // 已初始化（含空陣列）→ 尊重本機
+    } catch (e) {}
+    save(SEED);              // 首次開啟：載入內建歷史資料並存檔
+    return SEED.slice();
   }
   function save(d) { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) {} }
   var data = load();
@@ -141,7 +146,7 @@
     $('histCount').textContent = desc.length + ' 筆';
     if (desc.length === 0 && data.length === 0) {
       $('list').innerHTML = '<div class="card empty-card"><div class="big">還沒有任何交易紀錄</div>' +
-        '<div class="sm">每天交易完記一筆，勝率與走勢就會長出來。<br>想先看看畫面？點下方「載入範例資料」。</div></div>';
+        '<div class="sm">每天交易完記一筆，勝率與走勢就會長出來。<br>想還原內建歷史資料？點下方「重設為初始資料」。</div></div>';
       return;
     }
     if (desc.length === 0) { $('list').innerHTML = ''; return; }
@@ -297,42 +302,9 @@
   };
 
   $('sampleBtn').onclick = function () {
-    if (data.length && !confirm('載入範例會取代目前資料，確定嗎？')) return;
-    data = buildSample(); save(data); renderAll(); toast('已載入範例資料');
+    if (!confirm('重設為內建的初始資料（' + SEED.length + ' 筆）？目前的資料會被取代。')) return;
+    data = SEED.slice(); save(data); renderAll(); toast('已重設為初始資料');
   };
-
-  function buildSample() {
-    var tpl = [
-      ['long', 23010, 23040, '開盤紅K順勢進場，有守住停利'],
-      ['short', 23080, 23050, '跌破前低放空，達標就出'],
-      ['long', 23120, 23100, '追高被套，停損認賠'],
-      ['long', 23060, 23110, '等回踩支撐再進，紀律有守'],
-      ['short', 23150, 23170, '逆勢空，錯了快跑'],
-      ['long', 23200, 23260, '跳空續強抱住，今天最順的一單'],
-      ['short', 23300, 23280, '高檔爆量轉弱，小賺'],
-      ['long', 23250, 23230, '假突破被巴一巴，該再等確認'],
-      ['long', 23180, 23180, '盤整沒方向，平出場保本'],
-      ['short', 23220, 23160, '週一開高走低，順勢波段'],
-      ['long', 23100, 23070, '手癢搶反彈，失敗，要戒掉'],
-      ['long', 23050, 23120, '止跌背離進場，抱到大波段'],
-      ['short', 23200, 23210, '太早空被軋一下，停損'],
-      ['long', 23180, 23240, '突破盤整帶續抱，紀律優'],
-      ['long', 23280, 23260, '開高追多回檔停損，別追高'],
-      ['short', 23320, 23260, '高檔十字轉空，達標出場'],
-      ['long', 23230, 23250, '回測支撐進場，小賺'],
-      ['short', 23300, 23290, '小賺就走，紀律優先']
-    ];
-    // 從昨天往回取足夠的交易日（週一~週五）
-    var dates = [], d = addDays(parseISO(todayISO()), -1);
-    while (dates.length < tpl.length) {
-      var wday = d.getDay();
-      if (wday !== 0 && wday !== 6) dates.unshift(toISO(d));
-      d = addDays(d, -1);
-    }
-    return tpl.map(function (t, i) {
-      return { date: dates[i], dir: t[0], entry: t[1], exit: t[2], note: t[3] };
-    });
-  }
 
   // ---------- settings (手續費) ----------
   var settingsSheet = $('settingsSheet');

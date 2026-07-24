@@ -80,7 +80,7 @@
     <footer class="foot">
       <a id="settingsBtn">⚙︎ 每筆手續費 NT$<span id="feeLabel">50</span></a><br>
       資料僅存在此裝置 · 記得定期<a id="exportBtn">匯出備份</a><br>
-      <a id="importBtn">匯入備份</a> · <a id="sampleBtn">載入範例資料</a>
+      <a id="importBtn">匯入備份</a> · <a id="sampleBtn">重設為初始資料</a>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
     </footer>
   </div>
@@ -142,6 +142,7 @@
 
   <div class="toast" id="toast"></div>
 
+  <script src="js/seed-data.js"></script>
   <script src="js/app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
