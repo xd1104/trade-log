@@ -31,4 +31,4 @@
 - 所有資源用**相對路徑**（Pages 在 `/trade-log/` 子路徑），`manifest` 的 `start_url`/`scope` 與 SW scope 皆為 `./`
 - 改前端資源後，把 `sw.js` 的 `CACHE` 版本號 +1（`tradelog-shell-vN`）強制更新快取
 - iOS：input 字級 ≥ 16px 防自動放大；換 icon 後已安裝的 PWA 要移除主畫面重加才會更新
-- icon 由不進 repo 的 Node 腳本產生，輸出到 `icons/`
+- icon 由 `tools/gen-icons.js`（純 Node、無依賴）產生「走勢箭頭」設計，輸出到 `icons/`；改設計後重跑並把 SW 版本號 +1
