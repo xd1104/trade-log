@@ -8,6 +8,7 @@
   --radius:16px; --radius-sm:11px;
   --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
   --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --safe-t:env(safe-area-inset-top,0px);
   --safe-b:env(safe-area-inset-bottom,0px);
 }
 @media (prefers-color-scheme:light){
@@ -31,7 +32,7 @@ body{
 .app{max-width:480px; margin:0 auto; padding:0 16px calc(120px + var(--safe-b)); min-height:100vh}
 
 /* ---- top bar ---- */
-.topbar{display:flex; align-items:center; justify-content:space-between; padding:22px 2px 18px}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:calc(18px + var(--safe-t)) 2px 18px}
 .brand{display:flex; align-items:center; gap:10px}
 .brand .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
   background:var(--gold-soft); color:var(--gold); font-size:18px}
