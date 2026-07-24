@@ -12,6 +12,11 @@
   function save(d) { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) {} }
   var data = load();
 
+  var FEE_KEY = 'trade-log-fee-v1';
+  function loadFee() { var v = parseFloat(localStorage.getItem(FEE_KEY)); return isNaN(v) ? 50 : v; }
+  var fee = loadFee();
+  function saveFee(v) { fee = v; try { localStorage.setItem(FEE_KEY, String(v)); } catch (e) {} }
+
   // ---------- helpers ----------
   function res(t) { return t.dir === 'long' ? (t.exit - t.entry) : (t.entry - t.exit); }
   function signed(n) { var r = Math.round(n); if (r > 0) return '+' + r; if (r < 0) return '−' + Math.abs(r); return '±0'; }
@@ -70,8 +75,8 @@
       (s.f ? '　<span class="f"><b>' + s.f + '</b> 平</span>' : '');
     net.className = 'net ' + cls(s.net);
     net.innerHTML = '<span class="v">' + signed(s.net) + '</span><span class="u">點</span>';
-    var nt = s.net * TICK;
-    cash.textContent = '≈ ' + (nt < 0 ? '−' : '+') + 'NT$' + nfmt(Math.abs(nt));
+    var nt = s.net * TICK - fee * s.total;
+    cash.textContent = '淨 ' + (nt < 0 ? '−' : '+') + 'NT$' + nfmt(Math.abs(nt));
     $('sparkN').textContent = list.length + ' 筆交易';
     renderSpark(list);
   }
@@ -155,7 +160,7 @@
     }
   }
 
-  function renderAll() { renderSummary(); renderToday(); renderList(); }
+  function renderAll() { $('feeLabel').textContent = fee; renderSummary(); renderToday(); renderList(); }
 
   // ---------- top date ----------
   (function () {
@@ -219,7 +224,11 @@
     updatePreview();
     scrim.classList.add('show'); sheet.classList.add('show');
   }
-  function closeSheet() { scrim.classList.remove('show'); sheet.classList.remove('show'); }
+  function closeSheet() {
+    scrim.classList.remove('show');
+    sheet.classList.remove('show');
+    $('settingsSheet').classList.remove('show');
+  }
 
   $('openBtn').onclick = function () { openSheet(null); };
   $('cancelBtn').onclick = closeSheet;
@@ -234,9 +243,10 @@
     var e = parseFloat(entryEl.value), x = parseFloat(exitEl.value);
     if (isNaN(e) || isNaN(x)) { pv.className = 'preview idle'; pv.textContent = '輸入進出場點數，自動計算損益'; sv.disabled = true; return; }
     var r = curDir === 'long' ? (x - e) : (e - x), rc = cls(r), lab = r > 0 ? '勝' : r < 0 ? '敗' : '平';
+    var netNt = r * TICK - fee;
     pv.className = 'preview';
     pv.innerHTML = '<span class="pv-res r-' + rc + '">' + signed(r) + ' 點</span>' +
-      '<span class="pv-lab">·　' + lab + '　·　≈ ' + (r * TICK < 0 ? '−' : '+') + 'NT$' + nfmt(Math.abs(r * TICK)) + '</span>';
+      '<span class="pv-lab">·　' + lab + '　·　淨 ' + (netNt < 0 ? '−' : '+') + 'NT$' + nfmt(Math.abs(netNt)) + '</span>';
     sv.disabled = false;
   }
 
@@ -323,6 +333,19 @@
       return { date: dates[i], dir: t[0], entry: t[1], exit: t[2], note: t[3] };
     });
   }
+
+  // ---------- settings (手續費) ----------
+  var settingsSheet = $('settingsSheet');
+  $('settingsBtn').onclick = function () {
+    $('feeInput').value = fee;
+    scrim.classList.add('show'); settingsSheet.classList.add('show');
+  };
+  $('feeCancelBtn').onclick = closeSheet;
+  $('feeSaveBtn').onclick = function () {
+    var v = parseFloat($('feeInput').value);
+    if (isNaN(v) || v < 0) v = 0;
+    saveFee(v); closeSheet(); renderAll(); toast('手續費已設為 NT$' + v);
+  };
 
   // ---------- toast ----------
   var toastTimer;

@@ -78,6 +78,7 @@
     <div class="list" id="list"></div>
 
     <footer class="foot">
+      <a id="settingsBtn">⚙︎ 每筆手續費 NT$<span id="feeLabel">50</span></a><br>
       資料僅存在此裝置 · 記得定期<a id="exportBtn">匯出備份</a><br>
       <a id="importBtn">匯入備份</a> · <a id="sampleBtn">載入範例資料</a>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
@@ -123,6 +124,20 @@
       </div>
       <button type="button" class="btn-delete" id="deleteBtn" hidden>刪除這筆紀錄</button>
     </form>
+  </div>
+
+  <div class="sheet" id="settingsSheet" role="dialog" aria-modal="true" aria-label="手續費設定">
+    <div class="handle"></div>
+    <h3>手續費設定</h3>
+    <div class="field">
+      <label>每筆手續費（來回，NT$）</label>
+      <input type="number" id="feeInput" inputmode="numeric" step="1" min="0" placeholder="50">
+      <div class="hint">淨損益 = 點數 × 10 − 手續費。你 Notion 用的是每筆 NT$50；勝敗仍以「點數」判定，手續費只影響台幣金額。</div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn-cancel" id="feeCancelBtn">取消</button>
+      <button type="button" class="btn-save" id="feeSaveBtn">儲存</button>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>
