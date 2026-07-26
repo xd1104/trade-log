@@ -77,12 +77,6 @@ body{
 .net.pos .v{color:var(--win)} .net.neg .v{color:var(--loss)} .net.zero .v{color:var(--flat)}
 .cash{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
 
-.spark-wrap{margin-top:18px; border-top:1px solid var(--line); padding-top:14px}
-.spark-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px}
-.spark-head .t{font-size:11px; color:var(--faint); letter-spacing:1.5px}
-.spark-head .n{font-size:11px; color:var(--dim); font-family:var(--font-mono)}
-svg.spark{width:100%; height:56px; display:block; overflow:visible}
-
 /* ---- section head ---- */
 .sec-head{display:flex; align-items:center; justify-content:space-between; margin:22px 4px 12px}
 .sec-head h2{font-size:13px; margin:0; color:var(--dim); letter-spacing:1.5px; font-weight:600}

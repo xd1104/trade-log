@@ -71,8 +71,6 @@
       wl.innerHTML = '<span class="f">此區間尚無交易</span>';
       net.className = 'net zero'; net.innerHTML = '<span class="v">±0</span><span class="u">點</span>';
       cash.textContent = '';
-      $('sparkN').textContent = '0 筆交易';
-      $('spark').innerHTML = '';
       return;
     }
     $('rateNum').textContent = s.rate;
@@ -82,31 +80,6 @@
     net.innerHTML = '<span class="v">' + signed(s.net) + '</span><span class="u">點</span>';
     var nt = s.net * TICK - fee * s.total;
     cash.textContent = '淨 ' + (nt < 0 ? '−' : '+') + 'NT$' + nfmt(Math.abs(nt));
-    $('sparkN').textContent = list.length + ' 筆交易';
-    renderSpark(list);
-  }
-
-  function svgEl(name, attrs) {
-    var e = document.createElementNS('http://www.w3.org/2000/svg', name);
-    for (var k in attrs) e.setAttribute(k, attrs[k]);
-    return e;
-  }
-  function renderSpark(list) {
-    var svg = $('spark'); svg.innerHTML = '';
-    if (list.length < 2) return;
-    var cum = [], run = 0;
-    list.forEach(function (t) { run += res(t); cum.push(run); });
-    var min = Math.min(0, Math.min.apply(null, cum)), max = Math.max(0, Math.max.apply(null, cum));
-    var range = (max - min) || 1, W = 100, H = 40, pad = 3;
-    var X = function (i) { return (i / (list.length - 1)) * W; };
-    var Y = function (v) { return H - pad - ((v - min) / range) * (H - pad * 2); };
-    var pts = cum.map(function (v, i) { return X(i) + ',' + Y(v); });
-    var up = cum[cum.length - 1] >= 0, col = up ? 'var(--win)' : 'var(--loss)', y0 = Y(0);
-    svg.appendChild(svgEl('line', { x1: 0, x2: W, y1: y0, y2: y0, stroke: 'var(--line)', 'stroke-width': 1, 'stroke-dasharray': '2 2', 'vector-effect': 'non-scaling-stroke' }));
-    svg.appendChild(svgEl('polygon', { points: '0,' + y0 + ' ' + pts.join(' ') + ' ' + W + ',' + y0, fill: col, opacity: .12 }));
-    svg.appendChild(svgEl('polyline', { points: pts.join(' '), fill: 'none', stroke: col, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', 'vector-effect': 'non-scaling-stroke' }));
-    var last = cum.length - 1;
-    svg.appendChild(svgEl('circle', { cx: X(last), cy: Y(cum[last]), r: 2.4, fill: col, stroke: 'var(--surface)', 'stroke-width': 1.5, 'vector-effect': 'non-scaling-stroke' }));
   }
 
   // ---------- render: today + list ----------
