@@ -6,16 +6,27 @@
 
   // ---------- storage ----------
   var SEED = (typeof window !== 'undefined' && window.TRADE_LOG_SEED) || [];
+  function withMode(arr) {
+    return arr.map(function (t) { return t.mode ? t : Object.assign({}, t, { mode: 'sim' }); });
+  }
   function load() {
     try {
       var r = localStorage.getItem(KEY);
-      if (r !== null) return JSON.parse(r); // 已初始化（含空陣列）→ 尊重本機
+      if (r !== null) return withMode(JSON.parse(r)); // 已初始化（含空陣列）→ 尊重本機
     } catch (e) {}
-    save(SEED);              // 首次開啟：載入內建歷史資料並存檔
-    return SEED.slice();
+    var seeded = withMode(SEED); // 首次開啟：載入內建歷史資料（皆為模擬）
+    save(seeded);
+    return seeded;
   }
   function save(d) { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) {} }
   var data = load();
+
+  // 模式：sim（模擬）/ real（真實操作）。所有統計與紀錄依當前模式分流。
+  var MODE_KEY = 'trade-log-mode';
+  var mode = 'sim';
+  try { var _m = localStorage.getItem(MODE_KEY); if (_m === 'real' || _m === 'sim') mode = _m; } catch (e) {}
+  function saveMode(m) { mode = m; try { localStorage.setItem(MODE_KEY, m); } catch (e) {} }
+  function md() { return data.filter(function (x) { return (x.mode || 'sim') === mode; }); }
 
   var FEE_KEY = 'trade-log-fee-v1';
   function loadFee() { var v = parseFloat(localStorage.getItem(FEE_KEY)); return isNaN(v) ? 50 : v; }
@@ -43,7 +54,7 @@
   // {type:'days',n} | {type:'months',n} | {type:'range',from,to}
   var period = { type: 'days', n: 30 };
   function periodList() {
-    var asc = sortAsc(data), ref = todayISO();
+    var asc = sortAsc(md()), ref = todayISO();
     if (period.type === 'range') {
       return asc.filter(function (x) { return x.date >= period.from && x.date <= period.to; });
     }
@@ -103,7 +114,7 @@
 
   function renderToday() {
     var slot = $('todaySlot'), t = todayISO();
-    var rec = data.filter(function (x) { return x.date === t; })[0];
+    var rec = md().filter(function (x) { return x.date === t; })[0];
     if (rec) {
       slot.innerHTML = '<div class="sec-head"><h2>今日</h2><span class="count">已記錄・點擊編輯</span></div>' + tradeHTML(rec);
     } else {
@@ -135,11 +146,16 @@
   var openMonths = null; // 展開中的月份 key 集合（null = 尚未初始化）
 
   function renderList() {
-    var desc = sortAsc(data).reverse().filter(function (x) { return x.date !== todayISO(); });
+    var listAll = md();
+    var desc = sortAsc(listAll).reverse().filter(function (x) { return x.date !== todayISO(); });
     $('histCount').textContent = desc.length + ' 筆';
-    if (desc.length === 0 && data.length === 0) {
-      $('list').innerHTML = '<div class="card empty-card"><div class="big">還沒有任何交易紀錄</div>' +
-        '<div class="sm">每天交易完記一筆，勝率就會長出來。<br>想還原內建歷史資料？點下方「重設為初始資料」。</div></div>';
+    if (listAll.length === 0) {
+      $('list').innerHTML = '<div class="card empty-card"><div class="big">' +
+        (mode === 'real' ? '真實操作還沒有紀錄' : '還沒有任何模擬紀錄') + '</div>' +
+        '<div class="sm">' + (mode === 'real'
+          ? '八月開始，記下你的第一筆真單 💪'
+          : '每天交易完記一筆，勝率就會長出來。<br>想還原內建歷史資料？點下方「重設為初始資料」。') +
+        '</div></div>';
       return;
     }
     if (desc.length === 0) { $('list').innerHTML = ''; return; }
@@ -151,17 +167,20 @@
       if (!map[k]) { map[k] = []; order.push(k); }
       map[k].push(t);
     });
-    if (openMonths === null) { openMonths = {}; openMonths[order[0]] = true; } // 預設只展開最新月份
+    if (openMonths === null) openMonths = {};
+    if (!order.some(function (k) { return openMonths[k]; })) openMonths[order[0]] = true; // 至少展開最新月份
 
     $('list').innerHTML = order.map(function (k) {
       var items = map[k], w = 0, l = 0, net = 0;
       items.forEach(function (t) { var r = res(t); net += r; if (r > 0) w++; else if (r < 0) l++; });
+      var rate = Math.round(w / items.length * 100);
       var open = !!openMonths[k];
-      var sum = '<span class="ms-wl"><b class="w">' + w + '</b>勝 <b class="l">' + l + '</b>敗</span>' +
+      var sum = '<span class="ms-rate">勝率 ' + rate + '%</span>' +
+        '<span class="ms-wl"><b class="w">' + w + '</b>勝 <b class="l">' + l + '</b>敗</span>' +
         '<span class="ms-net ' + cls(net) + '">' + signed(net) + '點</span>';
       return '<div class="month">' +
         '<div class="month-head' + (open ? ' open' : '') + '" data-mk="' + k + '" tabindex="0" role="button" aria-expanded="' + open + '">' +
-          '<span class="mh-l"><span class="chev">▾</span>' + monthLabel(k) + ' <span class="mh-n">' + items.length + '</span></span>' +
+          '<span class="mh-l"><span class="chev">▾</span>' + monthLabel(k) + '</span>' +
           '<span class="mh-sum">' + sum + '</span>' +
         '</div>' +
         (open ? '<div class="month-rows">' + items.map(rowHTML).join('') + '</div>' : '') +
@@ -219,7 +238,7 @@
     for (var i = 0; i < btns.length; i++) btns[i].classList.remove('on');
     b.classList.add('on');
     if (b.dataset.type === 'custom') {
-      var asc = sortAsc(data);
+      var asc = sortAsc(md());
       if (!$('cFrom').value) {
         $('cFrom').value = asc.length ? asc[0].date : todayISO();
         $('cTo').value = todayISO();
@@ -238,9 +257,32 @@
   }
   $('cApply').onclick = applyCustom;
 
+  // ---------- mode switch (模擬 / 真實) ----------
+  (function () {
+    var bar = $('modeBar');
+    function paint() {
+      var btns = bar.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('on', btns[i].dataset.mode === mode);
+    }
+    paint();
+    bar.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || b.dataset.mode === mode) return;
+      saveMode(b.dataset.mode);
+      openMonths = null;   // 換模式後重新預設展開最新月份
+      paint();
+      renderAll();
+    });
+  })();
+
   // ---------- sheet (add / edit) ----------
-  var sheet = $('sheet'), scrim = $('scrim'), curDir = 'long', editingDate = null;
+  var sheet = $('sheet'), scrim = $('scrim'), curDir = 'long', curMode = 'sim', editingKey = null;
   var entryEl = $('entry'), exitEl = $('exit'), noteEl = $('note'), dateEl = $('date');
+
+  function setFormMode(m) {
+    curMode = m;
+    var btns = document.querySelectorAll('#modeToggle button');
+    for (var i = 0; i < btns.length; i++) btns[i].setAttribute('aria-pressed', btns[i].dataset.mode === m ? 'true' : 'false');
+  }
 
   // 面板開啟時鎖住背後主頁（避免滑動時背景跟著捲）
   var scrollLockY = 0;
@@ -263,17 +305,17 @@
   }
 
   function openSheet(dateToEdit) {
-    editingDate = dateToEdit || null;
-    var rec = editingDate ? data.filter(function (x) { return x.date === editingDate; })[0] : null;
+    var rec = dateToEdit ? md().filter(function (x) { return x.date === dateToEdit; })[0] : null;
+    editingKey = rec ? { date: rec.date, mode: rec.mode || 'sim' } : null;
     if (rec) {
       $('sheetTitle').textContent = '編輯交易';
       entryEl.value = rec.entry; exitEl.value = rec.exit; noteEl.value = rec.note || '';
-      dateEl.value = rec.date; setDir(rec.dir);
+      dateEl.value = rec.date; setDir(rec.dir); setFormMode(rec.mode || 'sim');
       $('deleteBtn').hidden = false;
     } else {
-      $('sheetTitle').textContent = '記錄今日交易';
+      $('sheetTitle').textContent = mode === 'real' ? '記錄真實交易' : '記錄今日交易';
       entryEl.value = ''; exitEl.value = ''; noteEl.value = '';
-      dateEl.value = todayISO(); setDir('long');
+      dateEl.value = todayISO(); setDir('long'); setFormMode(mode);
       $('deleteBtn').hidden = true;
     }
     updatePreview();
@@ -293,6 +335,8 @@
 
   var dirBtns = document.querySelectorAll('.dir-toggle button');
   for (var i = 0; i < dirBtns.length; i++) dirBtns[i].onclick = function () { setDir(this.dataset.dir); };
+  var modeTgBtns = document.querySelectorAll('#modeToggle button');
+  for (var mi = 0; mi < modeTgBtns.length; mi++) modeTgBtns[mi].onclick = function () { setFormMode(this.dataset.mode); };
   entryEl.oninput = updatePreview; exitEl.oninput = updatePreview;
 
   function updatePreview() {
@@ -312,20 +356,25 @@
     var entry = parseFloat(entryEl.value), exit = parseFloat(exitEl.value);
     if (isNaN(entry) || isNaN(exit)) return;
     var date = dateEl.value || todayISO(), note = noteEl.value.trim();
-    // 一天一單：移除舊的（編輯前日期）與目標日期，再寫入
-    data = data.filter(function (x) { return x.date !== date && x.date !== editingDate; });
-    data.push({ date: date, dir: curDir, entry: entry, exit: exit, note: note });
+    // 同模式一天一單：移除該模式同日期、以及編輯前的原紀錄，再寫入
+    data = data.filter(function (x) {
+      var xm = x.mode || 'sim';
+      var isTarget = x.date === date && xm === curMode;
+      var isOrig = editingKey && x.date === editingKey.date && xm === editingKey.mode;
+      return !isTarget && !isOrig;
+    });
+    data.push({ date: date, mode: curMode, dir: curDir, entry: entry, exit: exit, note: note });
     save(data);
     closeSheet(); renderAll();
-    toast(editingDate ? '已更新' : '已記錄 ✓');
-    editingDate = null;
+    toast(editingKey ? '已更新' : '已記錄 ✓');
+    editingKey = null;
   };
 
   $('deleteBtn').onclick = function () {
-    if (!editingDate) return;
-    if (!confirm('確定刪除 ' + fmtDate(editingDate) + ' 這筆交易？')) return;
-    data = data.filter(function (x) { return x.date !== editingDate; });
-    save(data); closeSheet(); renderAll(); toast('已刪除'); editingDate = null;
+    if (!editingKey) return;
+    if (!confirm('確定刪除 ' + fmtDate(editingKey.date) + ' 這筆交易？')) return;
+    data = data.filter(function (x) { return !(x.date === editingKey.date && (x.mode || 'sim') === editingKey.mode); });
+    save(data); closeSheet(); renderAll(); toast('已刪除'); editingKey = null;
   };
 
   // ---------- backup: export / import / sample ----------
@@ -346,7 +395,7 @@
         var arr = JSON.parse(reader.result);
         if (!Array.isArray(arr)) throw new Error('格式錯誤');
         if (data.length && !confirm('匯入會取代目前 ' + data.length + ' 筆資料，確定嗎？')) return;
-        data = arr.filter(function (x) { return x && x.date && x.dir; });
+        data = withMode(arr.filter(function (x) { return x && x.date && x.dir; }));
         save(data); renderAll(); toast('已匯入 ' + data.length + ' 筆');
       } catch (err) { toast('匯入失敗：檔案格式不正確'); }
     };
@@ -354,8 +403,8 @@
   };
 
   $('sampleBtn').onclick = function () {
-    if (!confirm('重設為內建的初始資料（' + SEED.length + ' 筆）？目前的資料會被取代。')) return;
-    data = SEED.slice(); save(data); renderAll(); toast('已重設為初始資料');
+    if (!confirm('重設為內建的初始資料（' + SEED.length + ' 筆，皆為模擬）？目前的資料會被取代。')) return;
+    data = withMode(SEED); save(data); renderAll(); toast('已重設為初始資料');
   };
 
   // ---------- settings (手續費) ----------

@@ -25,7 +25,7 @@
         <div class="mark">📈</div>
         <div>
           <h1>交易日誌</h1>
-          <div class="sub">微台指・模擬</div>
+          <div class="sub">微台指</div>
         </div>
       </div>
       <div class="today-chip">
@@ -33,6 +33,11 @@
         <div class="w" id="todayW">—</div>
       </div>
     </header>
+
+    <div class="modebar" id="modeBar" role="tablist">
+      <button type="button" data-mode="sim" class="on" role="tab">模擬</button>
+      <button type="button" data-mode="real" role="tab">真實操作</button>
+    </div>
 
     <section class="card summary">
       <div class="seg" id="seg">
@@ -87,6 +92,13 @@
     <div class="handle"></div>
     <h3 id="sheetTitle">記錄今日交易</h3>
     <form id="form">
+      <div class="field">
+        <label>類型</label>
+        <div class="mode-toggle" id="modeToggle">
+          <button type="button" data-mode="sim" aria-pressed="true">模擬</button>
+          <button type="button" data-mode="real" aria-pressed="false">真實操作</button>
+        </div>
+      </div>
       <div class="field">
         <label>方向</label>
         <div class="dir-toggle">
