@@ -167,8 +167,7 @@
       if (!map[k]) { map[k] = []; order.push(k); }
       map[k].push(t);
     });
-    if (openMonths === null) openMonths = {};
-    if (!order.some(function (k) { return openMonths[k]; })) openMonths[order[0]] = true; // 至少展開最新月份
+    if (openMonths === null) { openMonths = {}; openMonths[order[0]] = true; } // 初次/換模式：預設只展開最新月份
 
     $('list').innerHTML = order.map(function (k) {
       var items = map[k], w = 0, l = 0, net = 0;
