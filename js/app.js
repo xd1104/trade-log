@@ -114,19 +114,83 @@
     wire(slot);
   }
 
+  function monthKey(iso) { return iso.slice(0, 7); }
+  function monthLabel(k) { var p = k.split('-'); return p[0] + '年' + (+p[1]) + '月'; }
+
+  // 精簡單行列
+  function rowHTML(t) {
+    var r = res(t), rc = cls(r);
+    var dir = t.dir === 'long' ? '<span class="rw-dir">多</span>' : '<span class="rw-dir">空</span>';
+    var badge = r > 0 ? '<span class="badge b-win">勝</span>'
+      : r < 0 ? '<span class="badge b-loss">敗</span>'
+      : '<span class="badge b-flat">平</span>';
+    var dot = t.note ? '<span class="rw-note" title="有備註"></span>' : '<span class="rw-note ph"></span>';
+    return '<div class="trow" tabindex="0" data-date="' + t.date + '">' +
+      '<span class="rw-date">' + fmtDate(t.date) + '</span>' + dir +
+      '<span class="rw-px">' + nfmt(t.entry) + '<i>→</i>' + nfmt(t.exit) + '</span>' +
+      '<span class="rw-res r-' + rc + '">' + signed(r) + '</span>' + badge + dot +
+      '</div>';
+  }
+
+  var openMonths = null; // 展開中的月份 key 集合（null = 尚未初始化）
+
   function renderList() {
     var desc = sortAsc(data).reverse().filter(function (x) { return x.date !== todayISO(); });
     $('histCount').textContent = desc.length + ' 筆';
     if (desc.length === 0 && data.length === 0) {
       $('list').innerHTML = '<div class="card empty-card"><div class="big">還沒有任何交易紀錄</div>' +
-        '<div class="sm">每天交易完記一筆，勝率與走勢就會長出來。<br>想還原內建歷史資料？點下方「重設為初始資料」。</div></div>';
+        '<div class="sm">每天交易完記一筆，勝率就會長出來。<br>想還原內建歷史資料？點下方「重設為初始資料」。</div></div>';
       return;
     }
     if (desc.length === 0) { $('list').innerHTML = ''; return; }
-    $('list').innerHTML = desc.map(tradeHTML).join('');
-    wire($('list'));
+
+    // 依月份分組（維持新到舊順序）
+    var order = [], map = {};
+    desc.forEach(function (t) {
+      var k = monthKey(t.date);
+      if (!map[k]) { map[k] = []; order.push(k); }
+      map[k].push(t);
+    });
+    if (openMonths === null) { openMonths = {}; openMonths[order[0]] = true; } // 預設只展開最新月份
+
+    $('list').innerHTML = order.map(function (k) {
+      var items = map[k], w = 0, l = 0, net = 0;
+      items.forEach(function (t) { var r = res(t); net += r; if (r > 0) w++; else if (r < 0) l++; });
+      var open = !!openMonths[k];
+      var sum = '<span class="ms-wl"><b class="w">' + w + '</b>勝 <b class="l">' + l + '</b>敗</span>' +
+        '<span class="ms-net ' + cls(net) + '">' + signed(net) + '點</span>';
+      return '<div class="month">' +
+        '<div class="month-head' + (open ? ' open' : '') + '" data-mk="' + k + '" tabindex="0" role="button" aria-expanded="' + open + '">' +
+          '<span class="mh-l"><span class="chev">▾</span>' + monthLabel(k) + ' <span class="mh-n">' + items.length + '</span></span>' +
+          '<span class="mh-sum">' + sum + '</span>' +
+        '</div>' +
+        (open ? '<div class="month-rows">' + items.map(rowHTML).join('') + '</div>' : '') +
+        '</div>';
+    }).join('');
+    wireList();
   }
 
+  function wireList() {
+    var heads = $('list').querySelectorAll('.month-head');
+    for (var i = 0; i < heads.length; i++) {
+      (function (h) {
+        var k = h.getAttribute('data-mk');
+        var toggle = function () { openMonths[k] = !openMonths[k]; renderList(); };
+        h.onclick = toggle;
+        h.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+      })(heads[i]);
+    }
+    var rows = $('list').querySelectorAll('.trow');
+    for (var j = 0; j < rows.length; j++) {
+      (function (el) {
+        var d = el.getAttribute('data-date');
+        el.onclick = function () { openSheet(d); };
+        el.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSheet(d); } };
+      })(rows[j]);
+    }
+  }
+
+  // 「今日」卡片仍用完整卡片樣式
   function wire(root) {
     var els = root.querySelectorAll('.trade');
     for (var i = 0; i < els.length; i++) {

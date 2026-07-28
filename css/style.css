@@ -117,6 +117,31 @@ body{
 .empty-card .big{font-size:15px; color:var(--text); font-weight:600; margin-bottom:6px}
 .empty-card .sm{font-size:12.5px}
 
+/* ---- 月份分組 + 精簡列 ---- */
+.month{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm); overflow:hidden}
+.month-head{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; cursor:pointer}
+.month-head:hover{background:var(--surface-2)}
+.month-head:focus-visible{outline:2px solid var(--gold); outline-offset:-2px}
+.mh-l{display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:650}
+.chev{display:inline-block; color:var(--dim); font-size:10px; transition:transform .18s; transform:rotate(-90deg)}
+.month-head.open .chev{transform:rotate(0)}
+.mh-n{font-family:var(--font-mono); font-size:11px; color:var(--faint); font-weight:400}
+.mh-sum{display:flex; align-items:center; gap:10px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:12px; white-space:nowrap}
+.ms-wl{color:var(--dim)} .ms-wl .w{color:var(--win)} .ms-wl .l{color:var(--loss)}
+.ms-net{font-weight:700}
+.ms-net.win{color:var(--win)} .ms-net.loss{color:var(--loss)} .ms-net.flat{color:var(--flat)}
+
+.trow{display:flex; align-items:center; gap:10px; padding:11px 14px; border-top:1px solid var(--line); cursor:pointer}
+.trow:hover,.trow:active{background:var(--surface-2)}
+.trow:focus-visible{outline:2px solid var(--gold); outline-offset:-2px}
+.rw-date{font-family:var(--font-mono); font-size:12.5px; color:var(--dim); font-variant-numeric:tabular-nums; width:42px; flex:none}
+.rw-dir{font-size:11px; font-weight:700; color:var(--dim); flex:none; width:16px; text-align:center}
+.rw-px{flex:1; font-family:var(--font-mono); font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums}
+.rw-px i{color:var(--faint); font-style:normal; margin:0 3px}
+.rw-res{font-family:var(--font-mono); font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; flex:none; min-width:46px; text-align:right}
+.rw-note{width:6px; height:6px; border-radius:50%; background:var(--gold); flex:none; opacity:.85}
+.rw-note.ph{background:transparent}
+
 /* ---- FAB ---- */
 .fab{position:fixed; left:50%; transform:translateX(-50%); bottom:calc(22px + var(--safe-b)); z-index:20;
   width:min(448px,calc(100% - 32px))}
