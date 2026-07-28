@@ -242,6 +242,19 @@
   var sheet = $('sheet'), scrim = $('scrim'), curDir = 'long', editingDate = null;
   var entryEl = $('entry'), exitEl = $('exit'), noteEl = $('note'), dateEl = $('date');
 
+  // 面板開啟時鎖住背後主頁（避免滑動時背景跟著捲）
+  var scrollLockY = 0;
+  function lockScroll() {
+    scrollLockY = window.scrollY || window.pageYOffset || 0;
+    document.body.style.top = (-scrollLockY) + 'px';
+    document.body.classList.add('sheet-open');
+  }
+  function unlockScroll() {
+    document.body.classList.remove('sheet-open');
+    document.body.style.top = '';
+    window.scrollTo(0, scrollLockY);
+  }
+
   function setDir(dir) {
     curDir = dir;
     var btns = document.querySelectorAll('.dir-toggle button');
@@ -264,12 +277,14 @@
       $('deleteBtn').hidden = true;
     }
     updatePreview();
+    lockScroll();
     scrim.classList.add('show'); sheet.classList.add('show');
   }
   function closeSheet() {
     scrim.classList.remove('show');
     sheet.classList.remove('show');
     $('settingsSheet').classList.remove('show');
+    unlockScroll();
   }
 
   $('openBtn').onclick = function () { openSheet(null); };
@@ -347,6 +362,7 @@
   var settingsSheet = $('settingsSheet');
   $('settingsBtn').onclick = function () {
     $('feeInput').value = fee;
+    lockScroll();
     scrim.classList.add('show'); settingsSheet.classList.add('show');
   };
   $('feeCancelBtn').onclick = closeSheet;
