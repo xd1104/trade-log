@@ -1,6 +1,6 @@
 // 微台指交易日誌 — Service Worker
 // 改前端資源後把版本號 +1（tradelog-shell-vN）強制更新快取。
-var CACHE = 'tradelog-shell-v10';
+var CACHE = 'tradelog-shell-v11';
 var SHELL = [
   './',
   './index.html',
@@ -32,23 +32,18 @@ self.addEventListener('fetch', function (e) {
   var url = new URL(req.url);
   if (url.origin !== location.origin) return;
 
-  // 導覽請求：離線時回殼
-  if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).catch(function () { return caches.match('./index.html'); }));
-    return;
-  }
-
-  // 靜態資源：cache-first，背景更新
+  // network-first：有網路一律拿最新版（並更新快取）；離線才退回快取。
   e.respondWith(
-    caches.match(req).then(function (cached) {
-      var net = fetch(req).then(function (resp) {
-        if (resp && resp.status === 200) {
-          var copy = resp.clone();
-          caches.open(CACHE).then(function (c) { c.put(req, copy); });
-        }
-        return resp;
-      }).catch(function () { return cached; });
-      return cached || net;
+    fetch(req).then(function (resp) {
+      if (resp && resp.status === 200) {
+        var copy = resp.clone();
+        caches.open(CACHE).then(function (c) { c.put(req, copy); });
+      }
+      return resp;
+    }).catch(function () {
+      return caches.match(req).then(function (cached) {
+        return cached || (req.mode === 'navigate' ? caches.match('./index.html') : undefined);
+      });
     })
   );
 });
