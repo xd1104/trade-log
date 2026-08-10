@@ -55,6 +55,8 @@ PORT = 8770
 SESSION_OPEN = pd.Timestamp("08:45").time()
 WATCH_END = pd.Timestamp("09:30").time()
 DAY_END = pd.Timestamp("13:45").time()
+NIGHT_OPEN = pd.Timestamp("15:00").time()      # 夜盤 15:00 ~ 隔天 05:00
+NIGHT_CLOSE = pd.Timestamp("05:00").time()
 
 # 全部用「幾倍的當時日常波動」比對，不用絕對點數 ——
 # 台指期 2020 年 12,400 點、2026 年 45,000 點，同樣 40 點的意義差了三倍以上。
@@ -649,20 +651,25 @@ def main():
 
             st = session["state"]
 
-            # ---- 斷線看門狗：日盤時段沒收到 tick 就重連（VPN 切換、網路中斷都會走到這）
+            # ---- 斷線看門狗
+            # 只要「市場應該有在交易」就要盯著：日盤 08:45~13:45、夜盤 15:00~05:00。
+            # 之前只盯日盤，夜盤斷線會顯示警告卻永遠不重連 —— 那是 bug。
             in_day = SESSION_OPEN <= t < DAY_END
-            if in_day:
+            in_night = t >= NIGHT_OPEN or t < NIGHT_CLOSE
+            market_open = in_day or in_night
+
+            if market_open:
                 quiet = (time.time() - st.last_recv) if (st and st.last_recv) else None
-                lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"] \
-                       or (st is not None and st.last_recv is None and t > SESSION_OPEN)
+                lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"]
                 if lost and time.time() - last_retry > RECONNECT_EVERY:
                     last_retry = time.time()
                     CONN["ok"] = False
-                    try_reconnect(f"日盤已 {int(quiet) if quiet else '?'} 秒沒收到報價")
+                    where = "日盤" if in_day else "夜盤"
+                    try_reconnect(f"{where}已 {int(quiet) if quiet else '?'} 秒沒收到報價")
             elif CONN["ok"] is False and time.time() - last_retry > RECONNECT_EVERY * 5:
-                # 非日盤也慢慢重試，讓明天開盤前能自己恢復
+                # 休市時段（13:45~15:00、05:00~08:45）慢慢重試就好
                 last_retry = time.time()
-                try_reconnect("非交易時段定期重試")
+                try_reconnect("休市時段定期重試")
             min_idx = now.hour * 60 + now.minute
             vol_ref = vol_ref_by_min.get(min_idx, 1.0)
 
