@@ -100,20 +100,26 @@ class History:
         per_day = pool.loc[pool.groupby("date")["_d"].idxmin()].nsmallest(
             min(K_NEIGHBOURS, pool["date"].nunique()), "_d")
 
-        by_day = per_day.set_index("date")[["win_long_dt", "win_short_dt", "net_long_dt", "net_short_dt"]]
+        by_day = per_day.set_index("date")
         n_days = len(by_day)
         if n_days < 15:
             return None
 
-        def summarise(col_win, col_net, base_win):
-            p = float(by_day[col_win].mean())
-            se = float(by_day[col_win].std(ddof=1) / np.sqrt(n_days)) if n_days > 1 else 0.5
+        def summarise(side, base_win):
+            """side: 'long_dt' / 'short_dt'。「贏」= 真的吃到 +100 停利。"""
+            win = by_day[f"win_{side}"]
+            p = float(win.mean())
+            se = float(win.std(ddof=1) / np.sqrt(n_days)) if n_days > 1 else 0.5
             lo, hi = max(0.0, p - 1.96 * se), min(1.0, p + 1.96 * se)
+            outcome = by_day[f"out_{side}"]
             return {
                 "win": round(p * 100, 1),
                 "ci": [round(lo * 100, 1), round(hi * 100, 1)],
                 "edge": round((p - base_win) * 100, 1),
-                "net": round(float(by_day[col_net].mean()), 1),
+                "net": round(float(by_day[f"net_{side}"].mean()), 1),
+                "tp": round(float((outcome == "tp").mean()) * 100, 1),
+                "sl": round(float((outcome == "sl").mean()) * 100, 1),
+                "none": round(float((outcome == "none").mean()) * 100, 1),
                 # 信賴區間整段都在 50% 同一側才算有訊號
                 "meaningful": bool(lo > 0.5 or hi < 0.5),
             }
@@ -127,8 +133,8 @@ class History:
             "n_points": n_days,
             "base_long": round(base_long * 100, 1),
             "base_short": round(base_short * 100, 1),
-            "long": summarise("win_long_dt", "net_long_dt", base_long),
-            "short": summarise("win_short_dt", "net_short_dt", base_short),
+            "long": summarise("long_dt", base_long),
+            "short": summarise("short_dt", base_short),
         }
 
 
@@ -205,6 +211,10 @@ h1{font-size:17px;font-weight:600;margin-bottom:2px}
 .ci{font-size:12px;color:#8b949e;margin-top:7px;font-variant-numeric:tabular-nums}
 .edge{margin-top:11px;padding-top:11px;border-top:1px solid #30363d;font-size:13px}
 .edge b{font-size:16px;font-variant-numeric:tabular-nums}
+.split{margin-top:12px}
+.sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#21262d}
+.sbar i{display:block;height:100%}
+.slbl{display:flex;justify-content:space-between;font-size:11px;color:#8b949e;margin-top:5px}
 .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin-top:9px}
 .tag.no{background:#21262d;color:#8b949e;border:1px solid #30363d}
 .tag.yes{background:#1f6feb22;color:#58a6ff;border:1px solid #1f6feb66}
@@ -247,7 +257,8 @@ async function tick(){
  if(!r){ h+='<div class="note">樣本不足，無法比對。</div>'; body.innerHTML=h; return; }
  h+='<div class="cards">'+card('做多',r.long,'#3fb950')+card('做空',r.short,'#f85149')+'</div>';
  h+='<div class="note"><b>怎麼讀：</b>大數字是歷史上「同一時段、盤面長得像」的日子裡，'+
-    '做多／做空賺錢的比例（共 '+r.n_days+' 天）。'+
+    '<b>真的吃到 +100 停利</b>的比例（共 '+r.n_days+' 天）—— 就是你的下法。'+
+    '拖到收盤只小賺幾十點的不算贏。'+
     '<b>「vs 基準」才是這個情境真正多給你的資訊</b> —— '+
     '基準是同時段所有日子的平均（多 '+r.base_long+'% / 空 '+r.base_short+'%）。'+
     '信賴區間若跨過 50%，代表這個數字跟丟銅板分不出來。</div>';
@@ -256,9 +267,16 @@ async function tick(){
 function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 function card(name,d,col){
  const sig=d.meaningful;
- return '<div class="card"><h2>'+name+'　現在進場的歷史勝率</h2>'+
+ return '<div class="card"><h2>'+name+'　現在進場，吃到 +100 停利的機率</h2>'+
   '<div class="big" style="color:'+col+'">'+d.win.toFixed(1)+'<span>%</span></div>'+
   '<div class="ci">95% 信賴區間 '+d.ci[0].toFixed(1)+'% ~ '+d.ci[1].toFixed(1)+'%</div>'+
+  '<div class="split"><div class="sbar">'+
+   '<i style="width:'+d.tp+'%;background:#3fb950"></i>'+
+   '<i style="width:'+d.sl+'%;background:#f85149"></i>'+
+   '<i style="width:'+d.none+'%;background:#484f58"></i></div>'+
+   '<div class="slbl"><span>+100 停利 '+d.tp.toFixed(0)+'%</span>'+
+   '<span>-100 停損 '+d.sl.toFixed(0)+'%</span>'+
+   '<span>沒碰到 '+d.none.toFixed(0)+'%</span></div></div>'+
   '<div class="edge">vs 基準 <b style="color:'+(d.edge>0?'#3fb950':'#f85149')+'">'+
   (d.edge>0?'+':'')+d.edge.toFixed(1)+'%</b>　平均 '+(d.net>0?'+':'')+d.net.toFixed(1)+' 點/筆</div>'+
   '<span class="tag '+(sig?'yes':'no')+'">'+(sig?'★ 區間未跨 50%':'— 與丟銅板無法區分')+'</span></div>';

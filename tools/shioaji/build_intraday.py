@@ -56,7 +56,13 @@ FEATURES = ["mom5", "mom15", "ret_open", "gap", "rng", "pos", "vol_ratio"]
 
 def simulate(highs, lows, closes, entry, direction, drift=None):
     """
-    從 entry 進場，±100 先碰哪個算哪個，沒碰到就收盤平倉。回傳淨點數。
+    從 entry 進場，±100 先碰哪個算哪個，沒碰到就撐到 13:45 收盤平倉。
+
+    回傳 (淨點數, 結果)，結果為：
+      'tp'   吃到 +100 停利   ← Benson 定義的「贏」就是這個
+      'sl'   吃到 -100 停損
+      'none' 到收盤都沒碰到任何一邊
+
     drift 有給的話，會把「線性攤提的大盤漂移」從路徑上扣掉（去趨勢）。
     """
     tp_p = entry + direction * TP
@@ -70,13 +76,13 @@ def simulate(highs, lows, closes, entry, direction, drift=None):
         else:
             hit_tp, hit_sl = l <= tp_p, h >= sl_p
         if hit_tp and hit_sl:
-            return -SL - FEE            # 同棒模糊 → 保守算停損
+            return -SL - FEE, "sl"      # 同棒模糊 → 保守算停損
         if hit_tp:
-            return TP - FEE
+            return TP - FEE, "tp"
         if hit_sl:
-            return -SL - FEE
+            return -SL - FEE, "sl"
     final = closes[-1] - (drift if drift else 0.0)
-    return direction * (final - entry) - FEE
+    return direction * (final - entry) - FEE, "none"
 
 
 def main():
@@ -161,13 +167,17 @@ def main():
         i, cur = r["i"], r["price"]
         h, l, c = highs[i + 1:], lows[i + 1:], closes[i + 1:]
         dft = drift_by_min.get(r["minute"], 0.0)
+        nl, ol = simulate(h, l, c, cur, 1)
+        ns, os_ = simulate(h, l, c, cur, -1)
+        nld, old = simulate(h, l, c, cur, 1, drift=dft)
+        nsd, osd = simulate(h, l, c, cur, -1, drift=dft)
         rows.append({
             **{k: r[k] for k in ["date", "minute", "price", "mom5", "mom15",
                                  "ret_open", "gap", "rng", "pos", "vol_cum"]},
-            "net_long": simulate(h, l, c, cur, 1),
-            "net_short": simulate(h, l, c, cur, -1),
-            "net_long_dt": simulate(h, l, c, cur, 1, drift=dft),
-            "net_short_dt": simulate(h, l, c, cur, -1, drift=dft),
+            "net_long": nl, "out_long": ol,
+            "net_short": ns, "out_short": os_,
+            "net_long_dt": nld, "out_long_dt": old,
+            "net_short_dt": nsd, "out_short_dt": osd,
         })
 
     out = pd.DataFrame(rows)
@@ -176,8 +186,10 @@ def main():
     ref = out.groupby("minute")["vol_cum"].transform("median")
     out["vol_ratio"] = out["vol_cum"] / ref
 
-    for col in ["net_long", "net_short", "net_long_dt", "net_short_dt"]:
-        out["win" + col[3:]] = (out[col] > 0).astype(int)
+    # 「贏」= 真的吃到 +100 停利（Benson 的定義），不是收盤結算有賺就算
+    for side in ["long", "short", "long_dt", "short_dt"]:
+        out[f"win_{side}"] = (out[f"out_{side}"] == "tp").astype(int)
+        out[f"lose_{side}"] = (out[f"out_{side}"] == "sl").astype(int)
 
     out.to_csv(OUT, index=False)
 
@@ -185,18 +197,25 @@ def main():
     print(f"產出 {len(out):,} 筆（{n_days} 天 × 每天約 {len(out) // max(n_days,1)} 個時間點）")
     print(f"→ {OUT.name}\n")
 
-    print("整體基準（不分情境，每個時間點一律進場）：")
+    print("結果分布（做多、去趨勢）：")
+    vc = out["out_long_dt"].value_counts(normalize=True) * 100
+    print(f"  吃到 +100 停利  {vc.get('tp', 0):5.1f}%")
+    print(f"  吃到 -100 停損  {vc.get('sl', 0):5.1f}%")
+    print(f"  收盤都沒碰到    {vc.get('none', 0):5.1f}%")
+
+    print("\n整體基準（「贏」＝吃到 +100 停利）：")
     print(f"  【原始】做多 {out['win_long'].mean()*100:5.1f}%   做空 {out['win_short'].mean()*100:5.1f}%"
           f"   ← 含那一年大盤在漲")
     print(f"  【去趨勢】做多 {out['win_long_dt'].mean()*100:5.1f}%   做空 {out['win_short_dt'].mean()*100:5.1f}%"
           f"   ← 扣掉大盤漂移，這才是純動能")
 
-    print("\n分時段（去趨勢後）：")
+    print("\n分時段（去趨勢、吃到 +100 的比例）：")
     for m in ["08:50", "09:00", "09:05", "09:10", "09:15", "09:20", "09:30"]:
         s = out[out["minute"] == m]
         if not s.empty:
             print(f"  {m}   n={len(s):>3}   做多 {s['win_long_dt'].mean()*100:5.1f}%   "
-                  f"做空 {s['win_short_dt'].mean()*100:5.1f}%")
+                  f"做空 {s['win_short_dt'].mean()*100:5.1f}%   "
+                  f"（沒碰到 {(s['out_long_dt']=='none').mean()*100:4.1f}%）")
 
     print("\n動能延續性檢查（去趨勢、以天為單位算信賴區間）：")
     for lo, hi, name in [(-9e9, -40, "最近5分鐘跌超過40點"), (-40, -10, "小跌"),
