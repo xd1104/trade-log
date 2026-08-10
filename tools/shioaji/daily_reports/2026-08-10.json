@@ -1,0 +1,18 @@
+{
+  "date": "2026-08-10",
+  "before": {
+    "days": 241,
+    "win_long": 50.74,
+    "win_short": 43.68,
+    "up_after_drop": 63.85,
+    "up_after_rise": 43.79
+  },
+  "after": {
+    "days": 242,
+    "win_long": 50.73,
+    "win_short": 43.75,
+    "up_after_drop": 63.74,
+    "up_after_rise": 43.83
+  },
+  "ran_at": "2026-08-10T18:03:50"
+}
