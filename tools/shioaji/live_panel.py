@@ -179,24 +179,37 @@ class Today:
         self.updated = None
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
 
-    def feed(self, price, volume, when):
+    def feed(self, price, volume, when, in_session):
+        """
+        任何時候都記價格（面板要一直顯示現價與動能）；
+        只有日盤（08:45~13:45）才累積開高低與成交量 —— 那些欄位的定義是日盤專用的。
+        """
+        self.price = price
+        self.ticks += 1
+        self.updated = when
+        self.minute_close[when.hour * 60 + when.minute] = price
+        if not in_session:
+            return
         if self.open is None:
             self.open = price
             self.high = self.low = price
         self.high = max(self.high, price)
         self.low = min(self.low, price)
-        self.price = price
         self.vol += volume
-        self.ticks += 1
-        self.updated = when
-        self.minute_close[when.hour * 60 + when.minute] = price
 
     def _price_ago(self, now_idx, minutes):
-        """N 分鐘前的價格；那一分鐘沒成交就往更早找，找不到就用開盤價。"""
+        """
+        N 分鐘前的價格；那一分鐘沒成交就往更早找。
+        還是找不到就退回「已知最早的價格」，再不然就用現價（動能 = 0）。
+        夜盤時沒有日盤開盤價，所以不能拿 self.open 當 fallback。
+        """
         for m in range(now_idx - minutes, now_idx - minutes - 10, -1):
             if m in self.minute_close:
                 return self.minute_close[m]
-        return self.open
+        earlier = [m for m in self.minute_close if m <= now_idx - minutes]
+        if earlier:
+            return self.minute_close[max(earlier)]
+        return self.open if self.open is not None else self.price
 
     def features(self, vol_ref, now_idx):
         if self.open is None or self.prev_close is None:
@@ -281,21 +294,28 @@ async function tick(){
  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
  const sub=document.getElementById('sub'), body=document.getElementById('body');
  const age=s.age_sec==null?99:s.age_sec;
+ const PH={recording:['● 記錄中','#f85149','08:45~09:30 下單時段，資料會存檔'],
+           live:['◐ 顯示中','#3fb950','日盤，照常顯示但不記錄'],
+           off:['○ 夜盤','#8b949e','只顯示價格與動能']};
+ const ph=PH[s.phase]||PH.off;
  sub.innerHTML='<span class="dot '+(age>15?'stale':'')+'"></span>'+
    (s.replay?'重播模式 '+s.replay+' · ':'')+
-   '樣本 '+(s.period||'')+'（'+(s.n_days_total||0)+' 天） · 更新 '+(s.clock||'');
+   '<b style="color:'+ph[1]+'">'+ph[0]+'</b>（'+ph[2]+'） · 樣本 '+(s.n_days_total||0)+' 天 · '+(s.clock||'');
  if(s.status!=='live'){ body.innerHTML='<div class="wait">'+(s.msg||'等待中…')+'</div>'; return; }
  const c=s.chips, r=s.result;
+ const dir=v=>v>0?'up':v<0?'down':'flat';
  let h='<div class="bar">'+
-  chip('現價',f(c.price),c.chg>0?'up':c.chg<0?'down':'flat')+
-  chip('最近5分鐘',(c.mom5>0?'+':'')+f(c.mom5)+' 點',c.mom5>0?'up':c.mom5<0?'down':'flat')+
-  chip('最近15分鐘',(c.mom15>0?'+':'')+f(c.mom15)+' 點',c.mom15>0?'up':c.mom15<0?'down':'flat')+
-  chip('對開盤',(c.chg>0?'+':'')+f(c.chg)+' 點',c.chg>0?'up':c.chg<0?'down':'flat')+
-  chip('跳空',(c.gap>0?'+':'')+f(c.gap)+' 點','flat')+
-  chip('今日震幅',f(c.rng)+' 點','flat')+
-  chip('位階',f(c.pos*100)+'%','flat')+
-  chip('量能',f(c.vol_ratio,2)+' 倍','flat')+'</div>';
- if(!r){ h+='<div class="note">樣本不足，無法比對。</div>'; body.innerHTML=h; return; }
+  chip('現價',f(c.price),'flat')+
+  chip('最近5分鐘',(c.mom5>0?'+':'')+f(c.mom5)+' 點',dir(c.mom5))+
+  chip('最近15分鐘',(c.mom15>0?'+':'')+f(c.mom15)+' 點',dir(c.mom15))+
+  (c.chg==null?'':
+   chip('對開盤',(c.chg>0?'+':'')+f(c.chg)+' 點',dir(c.chg))+
+   chip('跳空',(c.gap>0?'+':'')+f(c.gap)+' 點','flat')+
+   chip('今日震幅',f(c.rng)+' 點','flat')+
+   chip('位階',f(c.pos*100)+'%','flat')+
+   chip('量能',f(c.vol_ratio,2)+' 倍','flat'))+'</div>';
+ if(!r){ h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
+         body.innerHTML=h; return; }
  h+=trendCard(r.trend);
  h+='<div class="cards">'+card('做多',r.long,'#3fb950')+card('做空',r.short,'#f85149')+'</div>';
  h+='<div class="note"><b>怎麼讀：</b>大數字是歷史上「同一時段、盤面長得像」的日子裡，'+
@@ -398,19 +418,37 @@ def prev_trading_close(api, contract, today):
     return float(day[day["ts"].dt.date == last_day]["Close"].iloc[-1])
 
 
-def update_state(hist, today_state, vol_ref, now_time, replay=None):
+def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"):
+    """
+    phase: 'recording' = 08:45~09:30 下單時段（會記錄資料）
+           'live'      = 日盤其他時間（照常顯示價格與趨勢，不記錄）
+           'off'       = 夜盤／休市（只顯示價格與動能，沒有對照樣本）
+    """
     min_idx = now_time.hour * 60 + now_time.minute
     feats = today_state.features(vol_ref, min_idx)
     with state_lock:
         STATE.update({
             "period": hist.period, "n_days_total": hist.n_days,
             "clock": now_time.strftime("%H:%M:%S"), "replay": replay,
+            "phase": phase,
             "age_sec": 0 if today_state.updated else None,
         })
-        if feats is None:
-            STATE.update({"status": "waiting", "msg": "等待 08:45 開盤第一筆成交…"})
+        if today_state.price is None:
+            STATE.update({"status": "waiting", "msg": "等待第一筆成交…"})
             return
-        result = hist.query(min_idx, feats)
+
+        # 夜盤：沒有日盤開高低，也沒有對照樣本 —— 只給價格與動能
+        if feats is None:
+            STATE.update({
+                "status": "live",
+                "chips": {"price": today_state.price,
+                          "mom5": today_state.price - today_state._price_ago(min_idx, 5),
+                          "mom15": today_state.price - today_state._price_ago(min_idx, 15)},
+                "result": None,
+                "msg": "夜盤時段 —— 只顯示價格與動能，歷史對照樣本只涵蓋日盤。",
+            })
+            return
+
         STATE.update({
             "status": "live",
             "chips": {
@@ -418,7 +456,8 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None):
                 "rng": feats["rng"], "pos": feats["pos"], "vol_ratio": feats["vol_ratio"],
                 "mom5": feats["mom5"], "mom15": feats["mom15"],
             },
-            "result": result,
+            "result": hist.query(min_idx, feats),
+            "msg": None,
         })
 
 
@@ -486,8 +525,11 @@ def main():
     def on_tick(exchange: Exchange, tick: TickFOPv1):
         ts = tick.datetime
         st = session["state"]
-        if st is not None and SESSION_OPEN <= ts.time() <= WATCH_END:
-            st.feed(float(tick.close), int(tick.volume), ts)
+        if st is None:
+            return
+        # 價格任何時候都收（面板要一直顯示）；日盤才累積開高低與量
+        st.feed(float(tick.close), int(tick.volume), ts,
+                in_session=SESSION_OPEN <= ts.time() < DAY_END)
 
     def connect():
         """（重新）登入並訂閱。每天開盤前重連一次，避免長時間掛著斷線。"""
@@ -527,22 +569,26 @@ def main():
                 start_day(today)
 
             st = session["state"]
-            if st is not None and session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
-                min_idx = now.hour * 60 + now.minute
-                update_state(hist, st, vol_ref_by_min.get(min_idx, 1.0), t)
-            elif st is not None and session["date"] == today and t > WATCH_END:
+            min_idx = now.hour * 60 + now.minute
+            vol_ref = vol_ref_by_min.get(min_idx, 1.0)
+
+            if st is None or st.price is None:
+                with state_lock:
+                    STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
+                                  "msg": "等待第一筆成交…"})
+            elif session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
+                # 下單時段：即時顯示 + 記錄資料
+                update_state(hist, st, vol_ref, t, phase="recording")
+            elif session["date"] == today and WATCH_END < t < DAY_END:
+                # 日盤其餘時間：照常顯示價格與趨勢，但不記錄
                 if not session["saved"] and st.open is not None:
                     save_today(st)
                     session["saved"] = True
-                    print(f"[{today}] 監看窗結束，已存檔。繼續等下一個交易日。")
-                with state_lock:
-                    STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
-                                  "msg": "今天的監看窗（08:45~09:30）已結束，"
-                                         "面板繼續掛著，明天 08:45 自動醒來。"})
+                    print(f"[{today}] 09:30 下單時段結束，已存檔當日資料。")
+                update_state(hist, st, vol_ref, t, phase="live")
             else:
-                with state_lock:
-                    STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
-                                  "msg": "待命中 —— 08:45 開盤自動進入即時模式。"})
+                # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）
+                update_state(hist, st, vol_ref, t, phase="off")
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n收到中止訊號，關閉中…")

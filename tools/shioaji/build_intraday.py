@@ -45,8 +45,9 @@ CSV = Path(__file__).with_name("txf_1min.csv")
 OUT = Path(__file__).with_name("intraday.csv")
 
 SESSION_OPEN = pd.Timestamp("08:45").time()
-WATCH_END = pd.Timestamp("09:30").time()
+WATCH_END = pd.Timestamp("09:30").time()      # Benson 的下單時段（只有這段會記錄資料）
 DAY_END = pd.Timestamp("13:45").time()
+MATRIX_END = pd.Timestamp("13:30").time()     # 矩陣涵蓋整個日盤，讓非下單時段也看得到趨勢
 
 TP = SL = 100.0
 FEE = 5.0                       # 來回 NT$50 ÷ 每點 NT$10
@@ -100,13 +101,14 @@ def main():
     dates = sorted(days)
     print(f"交易日 {len(dates)} 天：{dates[0]} ~ {dates[-1]}")
 
-    # 監看窗內的分鐘清單（08:45 ~ 09:30）
+    # 涵蓋整個日盤的分鐘清單（08:45 ~ 13:30）
     minutes = []
     t = pd.Timestamp("2000-01-01 08:45")
-    while t.time() <= WATCH_END:
+    while t.time() <= MATRIX_END:
         minutes.append(t.time())
         t += pd.Timedelta(minutes=1)
-    print(f"監看窗每天 {len(minutes)} 個時間點（{minutes[0]} ~ {minutes[-1]}）\n")
+    print(f"每天 {len(minutes)} 個時間點（{minutes[0]} ~ {minutes[-1]}）")
+    print(f"其中 08:45~09:30 是 Benson 的下單時段\n")
 
     # ---- 第一輪：算出每個時間點的狀態特徵，以及「到收盤的漂移」
     snaps = []
@@ -202,21 +204,26 @@ def main():
     print(f"產出 {len(out):,} 筆（{n_days} 天 × 每天約 {len(out) // max(n_days,1)} 個時間點）")
     print(f"→ {OUT.name}\n")
 
+    # 摘要一律只看下單時段 —— 全天混在一起會失真
+    # （13:00 進場只剩 45 分鐘，本來就很難摸到 ±100，跟早盤不能比）
+    win = out[out["minute"] <= WATCH_END.strftime("%H:%M")]
+    print(f"以下摘要只看下單時段 08:45~09:30（{len(win):,} 筆）：\n")
+
     print("結果分布（做多、去趨勢）：")
-    vc = out["out_long_dt"].value_counts(normalize=True) * 100
+    vc = win["out_long_dt"].value_counts(normalize=True) * 100
     print(f"  吃到 +100 停利  {vc.get('tp', 0):5.1f}%")
     print(f"  吃到 -100 停損  {vc.get('sl', 0):5.1f}%")
     print(f"  收盤都沒碰到    {vc.get('none', 0):5.1f}%")
 
     print("\n整體基準（「贏」＝吃到 +100 停利）：")
-    print(f"  【原始】做多 {out['win_long'].mean()*100:5.1f}%   做空 {out['win_short'].mean()*100:5.1f}%"
+    print(f"  【原始】做多 {win['win_long'].mean()*100:5.1f}%   做空 {win['win_short'].mean()*100:5.1f}%"
           f"   ← 含那一年大盤在漲")
-    print(f"  【去趨勢】做多 {out['win_long_dt'].mean()*100:5.1f}%   做空 {out['win_short_dt'].mean()*100:5.1f}%"
+    print(f"  【去趨勢】做多 {win['win_long_dt'].mean()*100:5.1f}%   做空 {win['win_short_dt'].mean()*100:5.1f}%"
           f"   ← 扣掉大盤漂移，這才是純動能")
 
     print("\n分時段（去趨勢、吃到 +100 的比例）：")
     for m in ["08:50", "09:00", "09:05", "09:10", "09:15", "09:20", "09:30"]:
-        s = out[out["minute"] == m]
+        s = win[win["minute"] == m]
         if not s.empty:
             print(f"  {m}   n={len(s):>3}   做多 {s['win_long_dt'].mean()*100:5.1f}%   "
                   f"做空 {s['win_short_dt'].mean()*100:5.1f}%   "
@@ -225,7 +232,7 @@ def main():
     print("\n動能延續性檢查（去趨勢、以天為單位算信賴區間）：")
     for lo, hi, name in [(-9e9, -40, "最近5分鐘跌超過40點"), (-40, -10, "小跌"),
                          (-10, 10, "幾乎沒動"), (10, 40, "小漲"), (40, 9e9, "最近5分鐘漲超過40點")]:
-        s = out[(out["mom5"] > lo) & (out["mom5"] <= hi)]
+        s = win[(win["mom5"] > lo) & (win["mom5"] <= hi)]
         if len(s) < 30:
             continue
         byday = s.groupby("date")["win_long_dt"].mean()
