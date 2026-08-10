@@ -31,10 +31,11 @@ def main():
     api = sj.Shioaji(simulation=True)          # ★ 模擬模式：不碰真錢、免憑證
     api.login(api_key=API_KEY, secret_key=API_SECRET)
     fut = api.futopt_account
-    print("① 登入成功。期貨帳戶：", fut.broker_id, fut.account_id, "／已簽署：", fut.signed)
+    print("① 登入成功。期貨帳戶：", fut.broker_id, fut.account_id, "／signed 旗標：", fut.signed)
     if not fut.signed:
-        print("⚠️ 期貨帳戶尚未簽署（signed=False），下單測試一定會被擋（406 Please sign）。")
-        print("   請先到永豐『API 專區 → 簽署中心 → 期貨簽署』完成簽署，等幾分鐘後再跑一次。")
+        # 實測（2026-08-10）：簽署完成後這個旗標仍可能回 False，但下單其實會過。
+        # 所以這裡只提示，不中斷 —— 真正的判定看第 ④ 步的委託狀態。
+        print("   （註：signed 旗標常沒即時更新，不用理它。若下單被 406 擋才是真的沒簽。）")
 
     # 期貨近月連續（大台）。測試用哪個期貨商品都可以。
     contract = api.Contracts.Futures.TXF.TXFR1
