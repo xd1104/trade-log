@@ -56,12 +56,13 @@ SESSION_OPEN = pd.Timestamp("08:45").time()
 WATCH_END = pd.Timestamp("09:30").time()
 DAY_END = pd.Timestamp("13:45").time()
 
-#                mom5  mom15 ret_open gap  rng  pos  vol_ratio
-FEATURES = ["mom5", "mom15", "ret_open", "gap", "rng", "pos", "vol_ratio"]
+# 全部用「幾倍的當時日常波動」比對，不用絕對點數 ——
+# 台指期 2020 年 12,400 點、2026 年 45,000 點，同樣 40 點的意義差了三倍以上。
+FEATURES = ["mom5_n", "mom15_n", "ret_open_n", "gap_n", "rng_n", "pos", "vol_ratio"]
 FEATURE_WEIGHT = np.array([3.0, 2.0, 1.0, 0.8, 0.8, 1.5, 0.8])
 # 「當下的趨勢」是 Benson 要的重點 → mom5 / mom15 權重最高
 MINUTE_WINDOW = 3          # 只跟前後 3 分鐘的歷史時刻比
-K_NEIGHBOURS = 80
+K_NEIGHBOURS = 150   # 樣本從 242 天增到 1453 天，取更多鄰居仍然比以前更像
 
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
@@ -83,7 +84,7 @@ class History:
         self.n_days = df["date"].nunique()
         self.period = f"{df['date'].min()} ~ {df['date'].max()}"
 
-    def query(self, min_idx, feats):
+    def query(self, min_idx, feats, dayvol):
         """
         找同一時段、狀態最像的歷史時刻，回傳統計結果。
 
@@ -113,7 +114,7 @@ class History:
         if n_days < 15:
             return None
 
-        horizons = {h: self._horizon(by_day, pool, h) for h in (5, 10, 15)}
+        horizons = {h: self._horizon(by_day, pool, h, dayvol) for h in (5, 10, 15)}
 
         # 三個時間長度都指同一邊 = 一致；一致比單一數字漂亮更值得相信
         sides = [1 if hz["prob_up"] > 50 else -1 if hz["prob_up"] < 50 else 0
@@ -143,7 +144,7 @@ class History:
         }
 
     @staticmethod
-    def _horizon(by_day, pool, h):
+    def _horizon(by_day, pool, h, dayvol):
         """
         單一時間長度的方向與強度。
 
@@ -151,7 +152,7 @@ class History:
           move      那些日子 h 分鐘後的變動中位數（點），中位數比平均耐得住極端值
           spread    變動的四分位距，讓人知道「會走多強」有多不確定
         """
-        col = f"fwd{h}"
+        col = f"fwd{h}_n"          # 正規化後的後續變動（幾倍日常波動）
         up = (by_day[col] > 0).astype(float)
         n = len(up)
         p = float(up.mean())
@@ -163,9 +164,10 @@ class History:
             "prob_up": round(p * 100, 1),
             "ci": [round(lo * 100, 1), round(hi * 100, 1)],
             "base": round(base * 100, 1),
-            "move": round(float(moves.median()), 1),
-            "q1": round(float(moves.quantile(0.25)), 1),
-            "q3": round(float(moves.quantile(0.75)), 1),
+            # 顯示時乘回「今天的」波動度 → 換成今天有意義的點數
+            "move": round(float(moves.median()) * dayvol, 1),
+            "q1": round(float(moves.quantile(0.25)) * dayvol, 1),
+            "q3": round(float(moves.quantile(0.75)) * dayvol, 1),
             "meaningful": bool(lo > 0.5 or hi < 0.5),
         }
 
@@ -173,8 +175,9 @@ class History:
 # ---------------------------------------------------------------- 今日盤面
 
 class Today:
-    def __init__(self, prev_close):
+    def __init__(self, prev_close, dayvol=1.0):
         self.prev_close = prev_close
+        self.dayvol = dayvol if dayvol and dayvol > 0 else 1.0
         self.open = None
         self.high = None
         self.low = None
@@ -228,6 +231,11 @@ class Today:
             "ret_open": self.price - self.open,
             "gap": self.open - self.prev_close,
             "rng": rng,
+            "mom5_n": (self.price - self._price_ago(now_idx, 5)) / self.dayvol,
+            "mom15_n": (self.price - self._price_ago(now_idx, 15)) / self.dayvol,
+            "ret_open_n": (self.price - self.open) / self.dayvol,
+            "gap_n": (self.open - self.prev_close) / self.dayvol,
+            "rng_n": rng / self.dayvol,
             "pos": (self.price - self.low) / rng if rng > 0 else 0.5,
             "vol_ratio": (self.vol / vol_ref) if vol_ref else 1.0,
         }
@@ -416,6 +424,20 @@ def serve():
 
 # ---------------------------------------------------------------- 主流程
 
+def current_dayvol():
+    """
+    今天的波動度基準 = 最近 20 個交易日「日盤高低幅」的中位數。
+    模型內部一律用「幾倍日常波動」比對，這個值負責把它換算回今天的點數。
+    """
+    px = pd.read_csv(HERE / "txf_1min.csv", usecols=["ts", "High", "Low"])
+    px["ts"] = pd.to_datetime(px["ts"])
+    t = px["ts"].dt.time
+    day = px[(t >= SESSION_OPEN) & (t < DAY_END)]
+    rng = day.groupby(day["ts"].dt.date).apply(
+        lambda g: g["High"].max() - g["Low"].min(), include_groups=False)
+    return float(rng.tail(20).median())
+
+
 def prev_trading_close(api, contract, today):
     """上一個交易日的日盤收盤（週六會有週五夜盤，不能當交易日）。"""
     frames = []
@@ -479,7 +501,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "rng": feats["rng"], "pos": feats["pos"], "vol_ratio": feats["vol_ratio"],
                 "mom5": feats["mom5"], "mom15": feats["mom15"],
             },
-            "result": hist.query(min_idx, feats),
+            "result": hist.query(min_idx, feats, today_state.dayvol),
             "msg": None,
         })
 
@@ -505,7 +527,7 @@ def run_replay(hist, day_str):
             break
 
     vol_ref = float(hist.df["vol_cum"].median())
-    t = Today(prev_close)
+    t = Today(prev_close, current_dayvol())
     print(f"重播 {day_str}（每秒 = 盤中 1 分鐘，共 {len(g)} 分鐘）")
     for _, row in g.iterrows():
         t.feed(float(row["Close"]), int(row["Volume"]), row["ts"], in_session=True)
@@ -541,6 +563,8 @@ def main():
 
     api_key, secret = get_credentials()
     vol_ref_by_min = hist.df.groupby("min_idx")["vol_cum"].median().to_dict()
+    dayvol = current_dayvol()
+    print(f"今天的波動度基準：{dayvol:.0f} 點（近 20 個交易日日盤高低幅的中位數）")
 
     # 可整天掛著：晚上開著 → 隔天 08:45 自動進入即時模式 → 09:30 收工存檔 → 繼續等下一天
     session = {"api": None, "contract": None, "date": None, "state": None, "saved": False}
@@ -599,7 +623,7 @@ def main():
                          "since": datetime.now().strftime("%H:%M:%S")})
             print(f"[{today}] 開盤前連線失敗：{str(e)[:200]}")
             prev_close = session["state"].prev_close if session["state"] else None
-        session.update({"date": today, "state": Today(prev_close), "saved": False})
+        session.update({"date": today, "state": Today(prev_close, dayvol), "saved": False})
         print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}，等待 08:45…")
 
     try:

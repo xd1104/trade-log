@@ -17,6 +17,15 @@ r"""
   pos        現價在今天到目前為止區間的位置（0=最低, 1=最高）
   vol_ratio  到目前為止的累計量 ÷ 歷史同一分鐘的中位數量
 
+【波動度正規化 —— 跨年份比較的必要條件】
+台指期 2020 年約 12,400 點、2026 年約 45,000 點。
+「5 分鐘漲 40 點」在 2020 年是 0.32% 的大波動，在 2026 年只是 0.09% 的小抖動。
+直接用點數把六年混在一起比較，模型會把當年的大波動誤認成今天的小抖動。
+
+所以所有點數欄位都除以 dayvol（= 前 20 個交易日「日盤高低幅」的中位數），
+變成「幾倍的當時日常波動」。dayvol 只用過去的資料算，不會偷看當天。
+帶 _n 結尾的就是正規化後的欄位，模型比對用這組；顯示給人看時再乘回 dayvol 換成點數。
+
 後續結果：從當下價格進場，停利停損 ±100 點，13:45 前沒觸及就收盤平倉，
          扣掉來回手續費 5 點，算做多與做空各自的淨點數。
 
@@ -52,7 +61,11 @@ MATRIX_END = pd.Timestamp("13:30").time()     # 矩陣涵蓋整個日盤，讓�
 TP = SL = 100.0
 FEE = 5.0                       # 來回 NT$50 ÷ 每點 NT$10
 
-FEATURES = ["mom5", "mom15", "ret_open", "gap", "rng", "pos", "vol_ratio"]
+# ±100 停利停損的逐筆模擬佔了 95% 以上的運算量，而面板已改成只顯示趨勢、不再用這組數字。
+# 需要重新檢視「吃到 ±100 的勝率」時再打開（1479 天大約要跑一小時）。
+SIMULATE_TP_SL = False
+
+FEATURES = ["mom5_n", "mom15_n", "ret_open_n", "gap_n", "rng_n", "pos", "vol_ratio"]
 
 
 def simulate(highs, lows, closes, entry, direction, drift=None):
@@ -100,6 +113,14 @@ def main():
     days = {d: g.reset_index(drop=True) for d, g in df.groupby("date", sort=True)}
     dates = sorted(days)
     print(f"交易日 {len(dates)} 天：{dates[0]} ~ {dates[-1]}")
+
+    # 每天的波動度基準 = 前 20 個交易日「日盤高低幅」的中位數（只用過去，不偷看當天）
+    day_range = pd.Series({d: float(g["High"].max() - g["Low"].min()) for d, g in days.items()})
+    day_range = day_range.sort_index()
+    dayvol = day_range.rolling(20, min_periods=10).median().shift(1)
+    print(f"波動度基準 dayvol：最早 {dayvol.dropna().iloc[0]:.0f} 點"
+          f" → 最近 {dayvol.dropna().iloc[-1]:.0f} 點"
+          f"（{dayvol.dropna().iloc[-1] / dayvol.dropna().iloc[0]:.1f} 倍，這就是為什麼要正規化）")
 
     # 涵蓋整個日盤的分鐘清單（08:45 ~ 13:30）
     minutes = []
@@ -155,6 +176,13 @@ def main():
 
     snap_df = pd.DataFrame(snaps).dropna(subset=["gap"])
 
+    # 波動度正規化：所有點數欄位換算成「幾倍的當時日常波動」
+    snap_df["dayvol"] = snap_df["day"].map(dayvol.to_dict())
+    snap_df = snap_df.dropna(subset=["dayvol"])
+    snap_df = snap_df[snap_df["dayvol"] > 0]
+    for col in ["mom5", "mom15", "ret_open", "gap", "rng", "fwd5", "fwd10", "fwd15"]:
+        snap_df[col + "_n"] = snap_df[col] / snap_df["dayvol"]
+
     # ---- 每分鐘的大盤漂移（用中位數，避免被少數暴跌日拉走）
     drift_by_min = snap_df.groupby("minute")["fwd"].median().to_dict()
     print("各時間點的大盤漂移中位數（去趨勢就是扣掉這個）：")
@@ -163,40 +191,41 @@ def main():
             print(f"  {m}  {drift_by_min[m]:+.0f} 點")
     print()
 
-    # ---- 第二輪：模擬（含原始與去趨勢兩組）
-    rows = []
-    for r in snap_df.to_dict("records"):
-        g = days[r["day"]]
-        highs = g["High"].to_numpy(dtype=float)
-        lows = g["Low"].to_numpy(dtype=float)
-        closes = g["Close"].to_numpy(dtype=float)
-        i, cur = r["i"], r["price"]
-        h, l, c = highs[i + 1:], lows[i + 1:], closes[i + 1:]
-        dft = drift_by_min.get(r["minute"], 0.0)
-        nl, ol = simulate(h, l, c, cur, 1)
-        ns, os_ = simulate(h, l, c, cur, -1)
-        nld, old = simulate(h, l, c, cur, 1, drift=dft)
-        nsd, osd = simulate(h, l, c, cur, -1, drift=dft)
-        rows.append({
-            **{k: r[k] for k in ["date", "minute", "price", "mom5", "mom15",
-                                 "ret_open", "gap", "rng", "pos", "vol_cum",
-                                 "fwd5", "fwd10", "fwd15"]},
-            "net_long": nl, "out_long": ol,
-            "net_short": ns, "out_short": os_,
-            "net_long_dt": nld, "out_long_dt": old,
-            "net_short_dt": nsd, "out_short_dt": osd,
-        })
-
-    out = pd.DataFrame(rows)
+    # ---- 第二輪：模擬 ±100 停利停損（預設關閉，見 SIMULATE_TP_SL）
+    keep = ["date", "minute", "price", "mom5", "mom15", "ret_open", "gap", "rng",
+            "pos", "vol_cum", "fwd5", "fwd10", "fwd15", "dayvol",
+            "mom5_n", "mom15_n", "ret_open_n", "gap_n", "rng_n",
+            "fwd5_n", "fwd10_n", "fwd15_n"]
+    if SIMULATE_TP_SL:
+        rows = []
+        for r in snap_df.to_dict("records"):
+            g = days[r["day"]]
+            highs = g["High"].to_numpy(dtype=float)
+            lows = g["Low"].to_numpy(dtype=float)
+            closes = g["Close"].to_numpy(dtype=float)
+            i, cur = r["i"], r["price"]
+            h, l, c = highs[i + 1:], lows[i + 1:], closes[i + 1:]
+            dft = drift_by_min.get(r["minute"], 0.0)
+            nl, ol = simulate(h, l, c, cur, 1)
+            ns, os_ = simulate(h, l, c, cur, -1)
+            nld, old = simulate(h, l, c, cur, 1, drift=dft)
+            nsd, osd = simulate(h, l, c, cur, -1, drift=dft)
+            rows.append({**{k: r[k] for k in keep},
+                         "net_long": nl, "out_long": ol,
+                         "net_short": ns, "out_short": os_,
+                         "net_long_dt": nld, "out_long_dt": old,
+                         "net_short_dt": nsd, "out_short_dt": osd})
+        out = pd.DataFrame(rows)
+        for side in ["long", "short", "long_dt", "short_dt"]:
+            out[f"win_{side}"] = (out[f"out_{side}"] == "tp").astype(int)
+    else:
+        out = snap_df[keep].copy()
+        print("（已略過 ±100 停利停損模擬 —— 面板只用趨勢欄位。"
+              "要重新分析勝率請把 SIMULATE_TP_SL 改成 True）\n")
 
     # 量能比：除以「同一分鐘、全樣本的累計量中位數」
     ref = out.groupby("minute")["vol_cum"].transform("median")
     out["vol_ratio"] = out["vol_cum"] / ref
-
-    # 「贏」= 真的吃到 +100 停利（Benson 的定義），不是收盤結算有賺就算
-    for side in ["long", "short", "long_dt", "short_dt"]:
-        out[f"win_{side}"] = (out[f"out_{side}"] == "tp").astype(int)
-        out[f"lose_{side}"] = (out[f"out_{side}"] == "sl").astype(int)
 
     out.to_csv(OUT, index=False)
 
@@ -209,36 +238,36 @@ def main():
     win = out[out["minute"] <= WATCH_END.strftime("%H:%M")]
     print(f"以下摘要只看下單時段 08:45~09:30（{len(win):,} 筆）：\n")
 
-    print("結果分布（做多、去趨勢）：")
-    vc = win["out_long_dt"].value_counts(normalize=True) * 100
-    print(f"  吃到 +100 停利  {vc.get('tp', 0):5.1f}%")
-    print(f"  吃到 -100 停損  {vc.get('sl', 0):5.1f}%")
-    print(f"  收盤都沒碰到    {vc.get('none', 0):5.1f}%")
+    if SIMULATE_TP_SL:
+        print("整體基準（「贏」＝吃到 +100 停利）：")
+        print(f"  【原始】做多 {win['win_long'].mean()*100:5.1f}%"
+              f"   做空 {win['win_short'].mean()*100:5.1f}%   ← 含當期大盤漲跌")
+        print(f"  【去趨勢】做多 {win['win_long_dt'].mean()*100:5.1f}%"
+              f"   做空 {win['win_short_dt'].mean()*100:5.1f}%   ← 扣掉大盤漂移\n")
 
-    print("\n整體基準（「贏」＝吃到 +100 停利）：")
-    print(f"  【原始】做多 {win['win_long'].mean()*100:5.1f}%   做空 {win['win_short'].mean()*100:5.1f}%"
-          f"   ← 含那一年大盤在漲")
-    print(f"  【去趨勢】做多 {win['win_long_dt'].mean()*100:5.1f}%   做空 {win['win_short_dt'].mean()*100:5.1f}%"
-          f"   ← 扣掉大盤漂移，這才是純動能")
-
-    print("\n分時段（去趨勢、吃到 +100 的比例）：")
-    for m in ["08:50", "09:00", "09:05", "09:10", "09:15", "09:20", "09:30"]:
-        s = win[win["minute"] == m]
-        if not s.empty:
-            print(f"  {m}   n={len(s):>3}   做多 {s['win_long_dt'].mean()*100:5.1f}%   "
-                  f"做空 {s['win_short_dt'].mean()*100:5.1f}%   "
-                  f"（沒碰到 {(s['out_long_dt']=='none').mean()*100:4.1f}%）")
-
-    print("\n動能延續性檢查（去趨勢、以天為單位算信賴區間）：")
-    for lo, hi, name in [(-9e9, -40, "最近5分鐘跌超過40點"), (-40, -10, "小跌"),
-                         (-10, 10, "幾乎沒動"), (10, 40, "小漲"), (40, 9e9, "最近5分鐘漲超過40點")]:
-        s = win[(win["mom5"] > lo) & (win["mom5"] <= hi)]
+    print("動能延續性（10 分鐘後上漲的比例，以天為單位算信賴區間）：")
+    for lo, hi, name in [(-9e9, -0.15, "急跌（>0.15 倍日常波動）"), (-0.15, -0.05, "小跌"),
+                         (-0.05, 0.05, "幾乎沒動"), (0.05, 0.15, "小漲"),
+                         (0.15, 9e9, "急漲（>0.15 倍日常波動）")]:
+        s = win[(win["mom5_n"] > lo) & (win["mom5_n"] <= hi)]
         if len(s) < 30:
             continue
-        byday = s.groupby("date")["win_long_dt"].mean()
+        byday = s.assign(u=(s["fwd10_n"] > 0).astype(int)).groupby("date")["u"].mean()
         p = byday.mean(); se = byday.std(ddof=1) / np.sqrt(len(byday))
         mark = "★" if (p - 1.96*se > 0.5 or p + 1.96*se < 0.5) else "—"
-        print(f"  {name:<16} n={len(byday):>3}天  做多勝率 {p*100:5.1f}%  "
+        print(f"  {name:<22} n={len(byday):>4}天  上漲 {p*100:5.1f}%  "
+              f"95%CI [{(p-1.96*se)*100:4.1f}%, {(p+1.96*se)*100:4.1f}%]  {mark}")
+
+    print("\n分年度看（急跌後 10 分鐘上漲的比例）—— 這個現象在每一年都成立嗎：")
+    yr = win[win["mom5_n"] <= -0.15].copy()
+    yr["年"] = yr["date"].str[:4]
+    for y, g in yr.groupby("年"):
+        byday = g.assign(u=(g["fwd10_n"] > 0).astype(int)).groupby("date")["u"].mean()
+        if len(byday) < 20:
+            continue
+        p = byday.mean(); se = byday.std(ddof=1) / np.sqrt(len(byday))
+        mark = "★" if (p - 1.96*se > 0.5 or p + 1.96*se < 0.5) else "—"
+        print(f"  {y}  n={len(byday):>3}天  上漲 {p*100:5.1f}%  "
               f"95%CI [{(p-1.96*se)*100:4.1f}%, {(p+1.96*se)*100:4.1f}%]  {mark}")
 
 

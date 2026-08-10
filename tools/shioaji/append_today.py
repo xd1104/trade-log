@@ -44,16 +44,19 @@ def snapshot_stats():
     w = d[d["minute"] <= "09:30"]
     if w.empty:
         return None
+
+    def up_rate(sub):
+        if sub.empty:
+            return None
+        byday = sub.assign(u=(sub["fwd10_n"] > 0).astype(int)).groupby("date")["u"].mean()
+        return round(float(byday.mean()) * 100, 2)
+
+    # 門檻用「幾倍日常波動」，不用絕對點數 —— 這樣跨年份才可比
     return {
         "days": int(d["date"].nunique()),
-        "win_long": round(float(w["win_long_dt"].mean()) * 100, 2),
-        "win_short": round(float(w["win_short_dt"].mean()) * 100, 2),
-        "up_after_drop": round(float(
-            (w[w["mom5"] <= -40].assign(u=lambda x: (x["fwd10"] > 0).astype(int))
-             .groupby("date")["u"].mean().mean()) * 100), 2),
-        "up_after_rise": round(float(
-            (w[w["mom5"] >= 40].assign(u=lambda x: (x["fwd10"] > 0).astype(int))
-             .groupby("date")["u"].mean().mean()) * 100), 2),
+        "up_after_drop": up_rate(w[w["mom5_n"] <= -0.15]),
+        "up_after_rise": up_rate(w[w["mom5_n"] >= 0.15]),
+        "up_flat": up_rate(w[w["mom5_n"].abs() < 0.05]),
     }
 
 
@@ -120,9 +123,8 @@ def main():
     if before and after:
         print("\n=== 併入前後對照 ===")
         rows = [("樣本天數", before["days"], after["days"], "天"),
-                ("做多吃到+100", before["win_long"], after["win_long"], "%"),
-                ("做空吃到+100", before["win_short"], after["win_short"], "%"),
                 ("急跌後10分鐘上漲", before["up_after_drop"], after["up_after_drop"], "%"),
+                ("橫盤後10分鐘上漲", before["up_flat"], after["up_flat"], "%"),
                 ("急漲後10分鐘上漲", before["up_after_rise"], after["up_after_rise"], "%")]
         for name, b, a, unit in rows:
             delta = a - b

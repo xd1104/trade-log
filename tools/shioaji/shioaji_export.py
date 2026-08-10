@@ -36,9 +36,11 @@ try:
 except Exception:
     pass
 
-# 想要的歷史區間（越長統計越可靠，建議至少半年～一年）
-START = date(2025, 8, 1)
-END = date(2026, 7, 31)
+# 想要的歷史區間
+# 樣本瓶頸是「獨立的交易日數」，不是筆數 —— 每天只算 1 個獨立樣本。
+# 等一年只多 250 天，但永豐的歷史至少有到 2020，直接往回抓比等有效率得多。
+START = date(2020, 8, 1)
+END = date.today()
 
 HERE = Path(__file__).parent
 CACHE = HERE / "cache"
