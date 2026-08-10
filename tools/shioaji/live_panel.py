@@ -327,7 +327,8 @@ async function tick(){
  const dead=(s.conn&&s.conn.ok===false)||age>90;
  sub.innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
    (s.replay?'重播模式 '+s.replay+' · ':'')+
-   '<b style="color:'+ph[1]+'">'+ph[0]+'</b>（'+ph[2]+'） · 樣本 '+(s.n_days_total||0)+' 天 · '+(s.clock||'');
+   '<b style="color:'+ph[1]+'">'+ph[0]+'</b>（'+ph[2]+'） · 樣本 '+(s.n_days_total||0)+' 天 · '+(s.clock||'')+
+   (age==null?'':' · 上一筆成交 '+(age<2?'剛剛':age+' 秒前'));
  let warn='';
  if(dead){
    const c=s.conn||{};
@@ -393,7 +394,7 @@ function trendCard(r){
   '<th>預期變動</th><th>常見範圍</th><th>可信</th></tr>'+rows+'</table>'+
   '</div>';
 }
-tick(); setInterval(tick,2000);
+tick(); setInterval(tick,500);
 </script></body></html>"""
 
 
@@ -690,7 +691,7 @@ def main():
             else:
                 # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）
                 update_state(hist, st, vol_ref, t, phase="off")
-            time.sleep(1)
+            time.sleep(0.25)   # 模型查詢僅 12ms，跑 4Hz 沒有負擔
     except KeyboardInterrupt:
         print("\n收到中止訊號，關閉中…")
     finally:
