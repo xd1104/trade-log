@@ -135,6 +135,33 @@ class History:
             "base_short": round(base_short * 100, 1),
             "long": summarise("long_dt", base_long),
             "short": summarise("short_dt", base_short),
+            "trend": self._trend_index(by_day, pool),
+        }
+
+    @staticmethod
+    def _trend_index(by_day, pool):
+        """
+        趨勢指數 0~100：歷史上長得像現在的日子，「10 分鐘後價格比現在高」的比例。
+
+          100 = 那些日子全部都往上走
+           50 = 一半一半（沒有傾向）
+            0 = 全部往下走
+
+        注意這是「接下來幾分鐘的方向傾向」，跟「會不會吃到 ±100」是兩件事。
+        短天期的幅度通常只有十幾二十點，遠小於 100 點。
+        """
+        up = (by_day["fwd10"] > 0).astype(float)
+        n = len(up)
+        p = float(up.mean())
+        se = float(up.std(ddof=1) / np.sqrt(n)) if n > 1 else 0.5
+        lo, hi = max(0.0, p - 1.96 * se), min(1.0, p + 1.96 * se)
+        base = float((pool.groupby("date")["fwd10"].mean() > 0).mean())
+        return {
+            "index": round(p * 100),
+            "ci": [round(lo * 100), round(hi * 100)],
+            "base": round(base * 100),
+            "avg_move": round(float(by_day["fwd10"].mean()), 1),
+            "meaningful": bool(lo > 0.5 or hi < 0.5),
         }
 
 
@@ -211,6 +238,20 @@ h1{font-size:17px;font-weight:600;margin-bottom:2px}
 .ci{font-size:12px;color:#8b949e;margin-top:7px;font-variant-numeric:tabular-nums}
 .edge{margin-top:11px;padding-top:11px;border-top:1px solid #30363d;font-size:13px}
 .edge b{font-size:16px;font-variant-numeric:tabular-nums}
+.trend{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:17px 19px;
+margin-bottom:14px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+.tleft{flex:1;min-width:260px}
+.tlabel{font-size:13px;color:#8b949e;margin-bottom:5px}
+.tval{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.tval span{font-size:16px;color:#8b949e;font-weight:400}
+.tval em{font-size:17px;font-style:normal;font-weight:600}
+.tmeta{font-size:11.5px;color:#8b949e;margin-top:7px}
+.gauge{flex:1;min-width:230px}
+.gtrack{position:relative;height:9px;background:#21262d;border-radius:5px}
+.gfill{position:absolute;top:0;height:100%;opacity:.35;border-radius:5px}
+.gmid{position:absolute;left:50%;top:-3px;width:1px;height:15px;background:#484f58}
+.gpin{position:absolute;top:-3px;width:3px;height:15px;border-radius:2px;margin-left:-1px}
+.glbl{display:flex;justify-content:space-between;font-size:10.5px;color:#6e7681;margin-top:6px}
 .split{margin-top:12px}
 .sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#21262d}
 .sbar i{display:block;height:100%}
@@ -255,6 +296,7 @@ async function tick(){
   chip('位階',f(c.pos*100)+'%','flat')+
   chip('量能',f(c.vol_ratio,2)+' 倍','flat')+'</div>';
  if(!r){ h+='<div class="note">樣本不足，無法比對。</div>'; body.innerHTML=h; return; }
+ h+=trendCard(r.trend);
  h+='<div class="cards">'+card('做多',r.long,'#3fb950')+card('做空',r.short,'#f85149')+'</div>';
  h+='<div class="note"><b>怎麼讀：</b>大數字是歷史上「同一時段、盤面長得像」的日子裡，'+
     '<b>真的吃到 +100 停利</b>的比例（共 '+r.n_days+' 天）—— 就是你的下法。'+
@@ -265,6 +307,25 @@ async function tick(){
  body.innerHTML=h;
 }
 function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
+function trendCard(t){
+ if(!t) return '';
+ const i=t.index;
+ const col = i>=60?'#3fb950' : i<=40?'#f85149' : '#8b949e';
+ const word = i>=65?'偏漲（強）' : i>=55?'偏漲' : i<=35?'偏跌（強）' : i<=45?'偏跌' : '沒有方向';
+ return '<div class="trend"><div class="tleft">'+
+  '<div class="tlabel">趨勢指數　<span style="font-size:11px">接下來 10 分鐘的方向傾向</span></div>'+
+  '<div class="tval" style="color:'+col+'">'+i+'<span> / 100</span>　'+
+  '<em style="color:'+col+'">'+word+'</em></div>'+
+  '<div class="tmeta">95% 區間 '+t.ci[0]+' ~ '+t.ci[1]+'　·　同時段基準 '+t.base+
+  '　·　平均變動 '+(t.avg_move>0?'+':'')+t.avg_move+' 點　'+
+  (t.meaningful?'<b style="color:#58a6ff">★ 有傾向</b>':'<span style="color:#8b949e">— 與丟銅板無法區分</span>')+
+  '</div></div>'+
+  '<div class="gauge"><div class="gtrack"><div class="gfill" style="left:'+Math.min(i,50)+
+  '%;width:'+Math.abs(i-50)+'%;background:'+col+'"></div><div class="gmid"></div>'+
+  '<div class="gpin" style="left:'+i+'%;background:'+col+'"></div></div>'+
+  '<div class="glbl"><span>0 全跌</span><span>50 沒方向</span><span>100 全漲</span></div>'+
+  '</div></div>';
+}
 function card(name,d,col){
  const sig=d.meaningful;
  return '<div class="card"><h2>'+name+'　現在進場，吃到 +100 停利的機率</h2>'+
@@ -417,56 +478,80 @@ def main():
     from _config import get_credentials
 
     api_key, secret = get_credentials()
-    api = sj.Shioaji()
-    api.login(api_key=api_key, secret_key=secret)
-    contract = api.Contracts.Futures.TXF.TXFR1
-
-    today = date.today()
-    prev_close = prev_trading_close(api, contract, today)
-    print(f"上一交易日日盤收盤：{prev_close}")
-
-    # 量能基準：歷史同時段累計量的中位數（依分鐘查表）
     vol_ref_by_min = hist.df.groupby("min_idx")["vol_cum"].median().to_dict()
 
-    t_state = Today(prev_close)
+    # 可整天掛著：晚上開著 → 隔天 08:45 自動進入即時模式 → 09:30 收工存檔 → 繼續等下一天
+    session = {"api": None, "contract": None, "date": None, "state": None, "saved": False}
 
     def on_tick(exchange: Exchange, tick: TickFOPv1):
         ts = tick.datetime
-        if SESSION_OPEN <= ts.time() <= WATCH_END:
-            t_state.feed(float(tick.close), int(tick.volume), ts)
+        st = session["state"]
+        if st is not None and SESSION_OPEN <= ts.time() <= WATCH_END:
+            st.feed(float(tick.close), int(tick.volume), ts)
 
-    api.set_on_tick_fop_v1_callback(on_tick)
-    api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
-                        version=sj.constant.QuoteVersion.v1)
+    def connect():
+        """（重新）登入並訂閱。每天開盤前重連一次，避免長時間掛著斷線。"""
+        if session["api"] is not None:
+            try:
+                session["api"].logout()
+            except Exception:
+                pass
+        api = sj.Shioaji()
+        api.login(api_key=api_key, secret_key=secret)
+        contract = api.Contracts.Futures.TXF.TXFR1
+        api.set_on_tick_fop_v1_callback(on_tick)
+        api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
+                            version=sj.constant.QuoteVersion.v1)
+        session["api"], session["contract"] = api, contract
+        return api, contract
 
+    def start_day(today):
+        api, contract = connect()
+        prev_close = prev_trading_close(api, contract, today)
+        session.update({"date": today, "state": Today(prev_close), "saved": False})
+        print(f"[{today}] 已連線，上一交易日日盤收盤 {prev_close}，等待 08:45…")
+
+    connect()
     with state_lock:
         STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
                       "period": hist.period, "n_days_total": hist.n_days})
+    print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
-    print("已連線。等待 08:45~09:30 監看窗…（Ctrl+C 結束）")
     try:
         while True:
             now = datetime.now()
-            if SESSION_OPEN <= now.time() <= WATCH_END:
+            today, t = now.date(), now.time()
+
+            # 每天 08:30 重新建立當日連線與狀態
+            if session["date"] != today and t >= pd.Timestamp("08:30").time():
+                start_day(today)
+
+            st = session["state"]
+            if st is not None and session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
                 min_idx = now.hour * 60 + now.minute
-                update_state(hist, t_state, vol_ref_by_min.get(min_idx, 1.0), now.time())
-            elif now.time() > WATCH_END:
+                update_state(hist, st, vol_ref_by_min.get(min_idx, 1.0), t)
+            elif st is not None and session["date"] == today and t > WATCH_END:
+                if not session["saved"] and st.open is not None:
+                    save_today(st)
+                    session["saved"] = True
+                    print(f"[{today}] 監看窗結束，已存檔。繼續等下一個交易日。")
                 with state_lock:
-                    STATE.update({"status": "waiting",
-                                  "msg": "今天的監看窗（08:45~09:30）已結束。"})
-                if t_state.open is not None:
-                    save_today(t_state)
-                    print("已存檔今日開盤資料。結束。")
-                    break
+                    STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
+                                  "msg": "今天的監看窗（08:45~09:30）已結束，"
+                                         "面板繼續掛著，明天 08:45 自動醒來。"})
             else:
                 with state_lock:
-                    STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
-                                  "clock": now.strftime("%H:%M:%S")})
+                    STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
+                                  "msg": "待命中 —— 08:45 開盤自動進入即時模式。"})
             time.sleep(1)
     except KeyboardInterrupt:
-        pass
+        print("\n收到中止訊號，關閉中…")
     finally:
-        api.logout()
+        if session["api"] is not None:
+            try:
+                session["api"].logout()
+            except Exception:
+                pass
 
 
 def save_today(t):

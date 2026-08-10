@@ -144,6 +144,10 @@ def main():
                 "pos": (cur - lo) / (hi - lo) if hi > lo else 0.5,
                 "vol_cum": vols[: i + 1].sum(),
                 "fwd": closes[-1] - cur,          # 到 13:45 的漂移
+                # 短天期後續走勢 → 趨勢指數用（接下來幾分鐘漲還是跌）
+                "fwd5": closes[min(i + 5, len(closes) - 1)] - cur,
+                "fwd10": closes[min(i + 10, len(closes) - 1)] - cur,
+                "fwd15": closes[min(i + 15, len(closes) - 1)] - cur,
             })
         prev_close = closes[-1]
 
@@ -173,7 +177,8 @@ def main():
         nsd, osd = simulate(h, l, c, cur, -1, drift=dft)
         rows.append({
             **{k: r[k] for k in ["date", "minute", "price", "mom5", "mom15",
-                                 "ret_open", "gap", "rng", "pos", "vol_cum"]},
+                                 "ret_open", "gap", "rng", "pos", "vol_cum",
+                                 "fwd5", "fwd10", "fwd15"]},
             "net_long": nl, "out_long": ol,
             "net_short": ns, "out_short": os_,
             "net_long_dt": nld, "out_long_dt": old,

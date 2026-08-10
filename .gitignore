@@ -12,3 +12,5 @@ tools/shioaji/.env
 
 # shioaji 執行時產生的 log
 shioaji.log
+
+panel.log
