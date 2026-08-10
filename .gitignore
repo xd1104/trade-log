@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 機密：API Key / Secret 只留本機
+.env
+tools/shioaji/.env
+
+# 匯出的行情資料（檔案很大，不進版控）
+*.csv
+
+# shioaji 執行時產生的 log
+shioaji.log

@@ -18,25 +18,34 @@ Benson 每天早上 9:00 台股開盤只做**一單微台指**，看第一根 5 
 - [x] 已有永豐證券帳戶（證券戶 python 測試已通過）
 - [x] 已建立 API Key（權限：行情/資料＋帳務＋交易＋正式環境；有綁 IP）
 - [x] 憑證(.pfx)已下載 —— **但現階段用不到**（模擬測試與讀資料都免憑證，只有真實下單才要）
-- [ ] **期貨戶** python 測試：**未測試** ← 卡在這裡
-- [ ] 電腦尚未安裝 Python
+- [x] Python 環境已就緒（2026-08-10）：repo 內 `.venv`（Python 3.12），已裝 shioaji 1.7.2 + pandas
+- [x] 金鑰改從 `tools/shioaji/.env` 讀取，不再寫死在程式碼裡（repo 是 public）
+- [ ] **期貨戶** python 測試：**未測試** ← 卡在這裡（等 Benson 填 `.env`）
 - [ ] 抓歷史 K 線
 - [ ] 回測
 
 ## 接下來要做的事（依序）
 
-### 1. 安裝 Python
+### 1. 環境（已完成）
+Python 3.12 venv 在 repo 根目錄 `.venv`，已安裝 shioaji 1.7.2 與 pandas。
+執行腳本一律用這個直譯器：
 ```
-python --version          # 先確認有沒有
-winget install Python.Python.3.12    # 沒有就裝，裝完重開 cmd
-pip install shioaji       # 版本需 >= 1.2
+.venv\Scripts\python.exe tools\shioaji\shioaji_futures_test.py
 ```
+> 註：系統 PATH 上的 `python` 是 Microsoft Store 的空殼，不能用；要用 `py -3.12` 或上面的 venv。
+> Python 3.14 也裝了，但 shioaji 沒有 3.14 的 wheel，所以固定用 3.12。
+
+### 1.5 填入金鑰（只有 Benson 能做）
+複製 `tools/shioaji/.env.example` → 同資料夾的 `.env`，填入 API Key 與 Secret。
+`.env` 已被 `.gitignore` 擋掉，不會上傳。**金鑰不要貼進對話。**
 
 ### 2. 通過期貨 API 測試
 跑 `tools/shioaji/shioaji_futures_test.py`（**模擬模式 simulation=True，不碰真錢、免憑證**）。
 
-- 先在檔案頂端填入 API Key / Secret（**由 Benson 自己填，不要幫他把金鑰貼進對話或檔案 commit**）
-- 可測試時間：週一~五 08:00–20:00（18:00 後限台灣 IP）；腳本會抓現價，建議盤中 8:45–13:45 跑
+- 金鑰見上面 1.5（**由 Benson 自己填，不要幫他把金鑰貼進對話或檔案 commit**）
+- 可測試時間：週一~五 08:00–20:00（18:00 後限台灣 IP）；腳本會抓現價，
+  日盤 8:45–13:45 或夜盤 15:00 後都有現價
+- API Key 有綁 IP：**若對外 IP 換過，login 會失敗**，要先去永豐後台更新 IP
 - 委託狀態出現 `PendingSubmit` 或 `Submitted` = 通過
 - 跑完到「簽署中心 → 期貨簽署」等約 5 分鐘，看「python 測試」是否變「已測試」
 - 官方文件：https://sinotrade.github.io/zh/tutor/prepare/terms/

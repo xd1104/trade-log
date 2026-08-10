@@ -11,16 +11,15 @@
 - 測試時間：週一~週五 08:00~20:00（18:00 後限台灣 IP）
 - pip install shioaji   （版本需 >= 1.2）
 
-【安全】API Key / Secret 只填在自己電腦，別外流、別上傳。
+【安全】API Key / Secret 填在同資料夾的 .env（已被 .gitignore 擋掉），不寫進程式碼、不上傳。
 """
 import time
 import shioaji as sj
 
-# ↓↓↓ 換成你自己的 ↓↓↓
-API_KEY    = "貼上你的_API_KEY"
-API_SECRET = "貼上你的_SECRET_KEY"
+from _config import get_credentials
 
 def main():
+    API_KEY, API_SECRET = get_credentials()
     api = sj.Shioaji(simulation=True)          # ★ 模擬模式：不碰真錢、免憑證
     accounts = api.login(api_key=API_KEY, secret_key=API_SECRET)
     print("① 登入成功：", accounts)
