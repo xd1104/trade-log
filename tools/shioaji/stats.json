@@ -1,0 +1,225 @@
+{
+  "period": "2025-08-01 ~ 2026-07-31",
+  "n_days": 242,
+  "tp": 100.0,
+  "sl": 100.0,
+  "fee_points": 5.0,
+  "buckets": [
+    {
+      "name": "全部（首根K有方向就順勢做）",
+      "n": 240,
+      "enough": true,
+      "win_rate": 50.8,
+      "win_ci": [
+        44.5,
+        57.2
+      ],
+      "exp": -4.6,
+      "exp_ci": [
+        -17.1,
+        7.8
+      ],
+      "significant": false,
+      "avg_max_fav": 233.0
+    },
+    {
+      "name": "首根K收紅 → 做多",
+      "n": 137,
+      "enough": true,
+      "win_rate": 52.6,
+      "win_ci": [
+        44.2,
+        60.9
+      ],
+      "exp": -0.6,
+      "exp_ci": [
+        -17.1,
+        15.9
+      ],
+      "significant": false,
+      "avg_max_fav": 224.0
+    },
+    {
+      "name": "首根K收黑 → 做空",
+      "n": 103,
+      "enough": true,
+      "win_rate": 48.5,
+      "win_ci": [
+        38.9,
+        58.2
+      ],
+      "exp": -10.0,
+      "exp_ci": [
+        -29.0,
+        9.1
+      ],
+      "significant": false,
+      "avg_max_fav": 244.0
+    },
+    {
+      "name": "跳空開高 > 20 點",
+      "n": 138,
+      "enough": true,
+      "win_rate": 49.3,
+      "win_ci": [
+        40.9,
+        57.6
+      ],
+      "exp": -8.2,
+      "exp_ci": [
+        -24.6,
+        8.3
+      ],
+      "significant": false,
+      "avg_max_fav": 234.0
+    },
+    {
+      "name": "幾乎平盤開（±20 點內）",
+      "n": 10,
+      "enough": true,
+      "win_rate": 50.0,
+      "win_ci": [
+        19.0,
+        81.0
+      ],
+      "exp": -18.3,
+      "exp_ci": [
+        -76.9,
+        40.3
+      ],
+      "significant": false,
+      "avg_max_fav": 102.0
+    },
+    {
+      "name": "跳空開低 > 20 點",
+      "n": 91,
+      "enough": true,
+      "win_rate": 52.7,
+      "win_ci": [
+        42.5,
+        63.0
+      ],
+      "exp": 1.2,
+      "exp_ci": [
+        -19.1,
+        21.5
+      ],
+      "significant": false,
+      "avg_max_fav": 245.0
+    },
+    {
+      "name": "首根K實體 < 20 點（小K）",
+      "n": 69,
+      "enough": true,
+      "win_rate": 40.6,
+      "win_ci": [
+        29.0,
+        52.2
+      ],
+      "exp": -27.6,
+      "exp_ci": [
+        -49.9,
+        -5.3
+      ],
+      "significant": true,
+      "avg_max_fav": 160.0
+    },
+    {
+      "name": "首根K實體 20~50 點",
+      "n": 56,
+      "enough": true,
+      "win_rate": 60.7,
+      "win_ci": [
+        47.9,
+        73.5
+      ],
+      "exp": 14.3,
+      "exp_ci": [
+        -10.8,
+        39.4
+      ],
+      "significant": false,
+      "avg_max_fav": 188.0
+    },
+    {
+      "name": "首根K實體 ≥ 50 點（大K）",
+      "n": 115,
+      "enough": true,
+      "win_rate": 52.2,
+      "win_ci": [
+        43.0,
+        61.3
+      ],
+      "exp": -0.1,
+      "exp_ci": [
+        -18.3,
+        18.2
+      ],
+      "significant": false,
+      "avg_max_fav": 298.0
+    },
+    {
+      "name": "首根K放量（≥ 近20日中位數 1.2 倍）",
+      "n": 57,
+      "enough": true,
+      "win_rate": 52.6,
+      "win_ci": [
+        39.7,
+        65.6
+      ],
+      "exp": 0.0,
+      "exp_ci": [
+        -25.4,
+        25.5
+      ],
+      "significant": false,
+      "avg_max_fav": 249.0
+    },
+    {
+      "name": "首根K量能持平",
+      "n": 108,
+      "enough": true,
+      "win_rate": 44.4,
+      "win_ci": [
+        35.1,
+        53.8
+      ],
+      "exp": -16.9,
+      "exp_ci": [
+        -35.6,
+        1.8
+      ],
+      "significant": false,
+      "avg_max_fav": 261.0
+    },
+    {
+      "name": "首根K縮量（≤ 0.8 倍）",
+      "n": 55,
+      "enough": true,
+      "win_rate": 58.2,
+      "win_ci": [
+        45.1,
+        71.2
+      ],
+      "exp": 9.0,
+      "exp_ci": [
+        -16.9,
+        35.0
+      ],
+      "significant": false,
+      "avg_max_fav": 201.0
+    }
+  ],
+  "any_significant": true,
+  "significant_names": [
+    "首根K實體 < 20 點（小K）"
+  ],
+  "descriptive": {
+    "gap_abs_median": 251.0,
+    "gap_abs_p80": 617.0,
+    "body_median": 47.0,
+    "body_p80": 96.0,
+    "range_median": 104.0,
+    "vol5_median": 3057.0
+  }
+}
