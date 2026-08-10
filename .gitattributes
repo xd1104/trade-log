@@ -5,4 +5,6 @@
 *.html text eol=lf
 *.json text eol=lf
 *.webmanifest text eol=lf
+*.py   text eol=lf
+*.bat  text eol=crlf
 *.png  binary
