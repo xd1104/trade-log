@@ -64,6 +64,12 @@ K_NEIGHBOURS = 80
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
 
+# 連線健康狀態（VPN 切換／網路中斷時會反映在這裡）
+CONN = {"ok": True, "since": None, "retries": 0, "last_error": None}
+
+STALE_SECONDS = 90          # 日盤超過這麼久沒收到 tick 就視為斷線
+RECONNECT_EVERY = 60        # 斷線後每隔多久重試一次
+
 
 # ---------------------------------------------------------------- 歷史矩陣
 
@@ -177,6 +183,7 @@ class Today:
         self.vol = 0
         self.ticks = 0
         self.updated = None
+        self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
 
     def feed(self, price, volume, when, in_session):
@@ -187,6 +194,7 @@ class Today:
         self.price = price
         self.ticks += 1
         self.updated = when
+        self.last_recv = time.time()
         self.minute_close[when.hour * 60 + when.minute] = price
         if not in_session:
             return
@@ -279,6 +287,10 @@ border-radius:7px;padding:13px 15px;font-size:12.5px;color:#c9d1d9;margin-bottom
 .wait{text-align:center;padding:56px 20px;color:#8b949e}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#3fb950;margin-right:5px}
 .stale{background:#d29922}
+.dead{background:#f85149}
+.alert{background:#f8514915;border:1px solid #f85149;border-left:4px solid #f85149;
+border-radius:8px;padding:13px 16px;font-size:13px;color:#ffc1bd;margin-bottom:14px;line-height:1.65}
+.alert b{color:#ff9d97}
 </style></head><body><div class="wrap">
 <h1>台指期 早盤勝率面板</h1>
 <div class="sub" id="sub">連線中…</div>
@@ -298,13 +310,24 @@ async function tick(){
            live:['◐ 顯示中','#3fb950','日盤，照常顯示但不記錄'],
            off:['○ 夜盤','#8b949e','只顯示價格與動能']};
  const ph=PH[s.phase]||PH.off;
- sub.innerHTML='<span class="dot '+(age>15?'stale':'')+'"></span>'+
+ const dead=(s.conn&&s.conn.ok===false)||age>90;
+ sub.innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
    (s.replay?'重播模式 '+s.replay+' · ':'')+
    '<b style="color:'+ph[1]+'">'+ph[0]+'</b>（'+ph[2]+'） · 樣本 '+(s.n_days_total||0)+' 天 · '+(s.clock||'');
- if(s.status!=='live'){ body.innerHTML='<div class="wait">'+(s.msg||'等待中…')+'</div>'; return; }
+ let warn='';
+ if(dead){
+   const c=s.conn||{};
+   warn='<div class="alert"><b>⚠ 報價已中斷 —— 畫面上的數字是舊的，不要當作現況</b><br>'+
+     '最後收到報價：'+(age==null?'尚未收到':age+' 秒前')+
+     (c.since?'　·　中斷起始 '+c.since:'')+
+     (c.retries?'　·　已重試 '+c.retries+' 次':'')+
+     (c.last_error?'<br>錯誤：'+c.last_error:'')+
+     '<br>常見原因：切換 VPN 或網路中斷。程式每分鐘會自動重連。</div>';
+ }
+ if(s.status!=='live'){ body.innerHTML=warn+'<div class="wait">'+(s.msg||'等待中…')+'</div>'; return; }
  const c=s.chips, r=s.result;
  const dir=v=>v>0?'up':v<0?'down':'flat';
- let h='<div class="bar">'+
+ let h=warn+'<div class="bar">'+
   chip('現價',f(c.price),'flat')+
   chip('最近5分鐘',(c.mom5>0?'+':'')+f(c.mom5)+' 點',dir(c.mom5))+
   chip('最近15分鐘',(c.mom15>0?'+':'')+f(c.mom15)+' 點',dir(c.mom15))+
@@ -426,12 +449,14 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
     """
     min_idx = now_time.hour * 60 + now_time.minute
     feats = today_state.features(vol_ref, min_idx)
+    age = None if today_state.last_recv is None else round(time.time() - today_state.last_recv)
     with state_lock:
         STATE.update({
             "period": hist.period, "n_days_total": hist.n_days,
             "clock": now_time.strftime("%H:%M:%S"), "replay": replay,
             "phase": phase,
-            "age_sec": 0 if today_state.updated else None,
+            "age_sec": 0 if replay else age,
+            "conn": CONN.copy(),
         })
         if today_state.price is None:
             STATE.update({"status": "waiting", "msg": "等待第一筆成交…"})
@@ -532,7 +557,7 @@ def main():
                 in_session=SESSION_OPEN <= ts.time() < DAY_END)
 
     def connect():
-        """（重新）登入並訂閱。每天開盤前重連一次，避免長時間掛著斷線。"""
+        """（重新）登入並訂閱。開盤前、以及偵測到斷線時都會呼叫。"""
         if session["api"] is not None:
             try:
                 session["api"].logout()
@@ -545,20 +570,52 @@ def main():
         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
                             version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
+        CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None})
         return api, contract
 
-    def start_day(today):
-        api, contract = connect()
-        prev_close = prev_trading_close(api, contract, today)
-        session.update({"date": today, "state": Today(prev_close), "saved": False})
-        print(f"[{today}] 已連線，上一交易日日盤收盤 {prev_close}，等待 08:45…")
+    def try_reconnect(reason):
+        """斷線重連。失敗不會讓程式死掉，會留下錯誤訊息顯示在面板上。"""
+        CONN["retries"] += 1
+        if CONN["since"] is None:
+            CONN["since"] = datetime.now().strftime("%H:%M:%S")
+        print(f"[{datetime.now():%H:%M:%S}] {reason} → 第 {CONN['retries']} 次重連…")
+        try:
+            connect()
+            print(f"[{datetime.now():%H:%M:%S}] 重連成功。")
+            return True
+        except Exception as e:
+            msg = str(e)
+            CONN.update({"ok": False, "last_error": msg[:200]})
+            # API Key 綁 IP，VPN 換 IP 後登入會被擋 —— 這種錯要講清楚，別讓人以為只是網路慢
+            if any(k in msg.lower() for k in ("ip", "unauthorized", "403", "401")):
+                CONN["last_error"] = f"登入被拒（很可能是 IP 變了，例如開了 VPN）：{msg[:150]}"
+            print(f"[{datetime.now():%H:%M:%S}] 重連失敗：{msg[:200]}")
+            return False
 
-    connect()
+    def start_day(today):
+        try:
+            api, contract = connect()
+            prev_close = prev_trading_close(api, contract, today)
+        except Exception as e:
+            CONN.update({"ok": False, "last_error": str(e)[:200],
+                         "since": datetime.now().strftime("%H:%M:%S")})
+            print(f"[{today}] 開盤前連線失敗：{str(e)[:200]}")
+            prev_close = session["state"].prev_close if session["state"] else None
+        session.update({"date": today, "state": Today(prev_close), "saved": False})
+        print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}，等待 08:45…")
+
+    try:
+        connect()
+    except Exception as e:
+        CONN.update({"ok": False, "last_error": str(e)[:200],
+                     "since": datetime.now().strftime("%H:%M:%S")})
+        print(f"啟動時連線失敗（會持續重試）：{str(e)[:200]}")
     with state_lock:
         STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
                       "period": hist.period, "n_days_total": hist.n_days})
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
+    last_retry = 0.0
     try:
         while True:
             now = datetime.now()
@@ -569,6 +626,21 @@ def main():
                 start_day(today)
 
             st = session["state"]
+
+            # ---- 斷線看門狗：日盤時段沒收到 tick 就重連（VPN 切換、網路中斷都會走到這）
+            in_day = SESSION_OPEN <= t < DAY_END
+            if in_day:
+                quiet = (time.time() - st.last_recv) if (st and st.last_recv) else None
+                lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"] \
+                       or (st is not None and st.last_recv is None and t > SESSION_OPEN)
+                if lost and time.time() - last_retry > RECONNECT_EVERY:
+                    last_retry = time.time()
+                    CONN["ok"] = False
+                    try_reconnect(f"日盤已 {int(quiet) if quiet else '?'} 秒沒收到報價")
+            elif CONN["ok"] is False and time.time() - last_retry > RECONNECT_EVERY * 5:
+                # 非日盤也慢慢重試，讓明天開盤前能自己恢復
+                last_retry = time.time()
+                try_reconnect("非交易時段定期重試")
             min_idx = now.hour * 60 + now.minute
             vol_ref = vol_ref_by_min.get(min_idx, 1.0)
 
