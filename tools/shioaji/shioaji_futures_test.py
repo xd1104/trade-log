@@ -13,16 +13,28 @@
 
 【安全】API Key / Secret 填在同資料夾的 .env（已被 .gitignore 擋掉），不寫進程式碼、不上傳。
 """
+import sys
 import time
 import shioaji as sj
 
 from _config import get_credentials
 
+# Windows 主控台預設不是 UTF-8，中文會變亂碼
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 def main():
     API_KEY, API_SECRET = get_credentials()
     api = sj.Shioaji(simulation=True)          # ★ 模擬模式：不碰真錢、免憑證
-    accounts = api.login(api_key=API_KEY, secret_key=API_SECRET)
-    print("① 登入成功：", accounts)
+    api.login(api_key=API_KEY, secret_key=API_SECRET)
+    fut = api.futopt_account
+    print("① 登入成功。期貨帳戶：", fut.broker_id, fut.account_id, "／已簽署：", fut.signed)
+    if not fut.signed:
+        print("⚠️ 期貨帳戶尚未簽署（signed=False），下單測試一定會被擋（406 Please sign）。")
+        print("   請先到永豐『API 專區 → 簽署中心 → 期貨簽署』完成簽署，等幾分鐘後再跑一次。")
 
     # 期貨近月連續（大台）。測試用哪個期貨商品都可以。
     contract = api.Contracts.Futures.TXF.TXFR1
@@ -49,7 +61,15 @@ def main():
         octype=sj.FuturesOCType.Auto,
         account=api.futopt_account,
     )
-    trade = api.place_order(contract, order)
+    try:
+        trade = api.place_order(contract, order)
+    except sj.ServerError as e:
+        msg = str(e)
+        print("④ 下單被伺服器擋下：", msg)
+        if "sign" in msg.lower() or "406" in msg:
+            print("   → 原因：期貨帳戶還沒完成 API 簽署。")
+            print("   → 做法：永豐『API 專區 → 簽署中心 → 期貨簽署』簽完，等幾分鐘再跑一次本腳本。")
+        api.logout(); return
     time.sleep(1)
     api.update_status(api.futopt_account)
     print("④ 委託狀態：", trade.status.status)
