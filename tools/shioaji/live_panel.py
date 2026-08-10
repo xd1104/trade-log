@@ -1,5 +1,5 @@
 r"""
-早盤趨勢面板（全時段顯示，08:45~09:30 記錄）— 本機網頁版
+早盤趨勢面板（微台即時報價 + 大台歷史模型）— 本機網頁版
 =============================================================================
 即時接收台指期價格跳動，顯示「現在的趨勢往哪走、會走多強」。
 
@@ -63,6 +63,16 @@ NIGHT_CLOSE = pd.Timestamp("05:00").time()
 FEATURES = ["mom5_n", "mom15_n", "ret_open_n", "gap_n", "rng_n", "pos", "vol_ratio"]
 FEATURE_WEIGHT = np.array([3.0, 2.0, 1.0, 0.8, 0.8, 1.5, 0.8])
 # 「當下的趨勢」是 Benson 要的重點 → mom5 / mom15 權重最高
+# 即時報價訂閱「微型臺指期貨」TMF —— Benson 實際交易、也是他在大戶投看的商品。
+# 大台 TXF 與微台 TMF 是不同的委託簿，價格會差個幾點，看錯商品會跟下單畫面對不起來。
+LIVE_PRODUCT = "TMF"
+
+# 歷史模型仍用大台 TXF：
+#   - TMF 2024 年才有資料，TXF 有到 2020（1453 天 vs 約 500 天）
+#   - 兩者追蹤同一個加權指數，價差只有幾點，對「方向傾向」沒有影響
+#   - TXF 流動性深、資料乾淨
+HISTORY_PRODUCT = "TXF"
+
 MINUTE_WINDOW = 3          # 只跟前後 3 分鐘的歷史時刻比
 K_NEIGHBOURS = 150   # 樣本從 242 天增到 1453 天，取更多鄰居仍然比以前更像
 
@@ -189,6 +199,7 @@ class Today:
         self.vol = 0
         self.ticks = 0
         self.quotes = 0
+        self.price_is_mid = False
         self.updated = None
         self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
@@ -197,11 +208,17 @@ class Today:
         """
         五檔買賣價變動。實測每分鐘 400+ 筆（成交才 25 筆），
         大戶投那種「一直在跳」的感覺就是來自這個。
-        只更新顯示與存活時間，不進模型 —— 模型的歷史資料是成交價。
+        不進模型 —— 模型的歷史資料是成交價。
+
+        但「還沒有任何成交」時（例如凌晨微台很冷清）要拿中價頂著，
+        否則面板會一直卡在「等待第一筆成交…」，明明報價是活的。
         """
         self.bid, self.ask = bid, ask
         self.last_recv = time.time()
         self.quotes += 1
+        if self.price is None and bid and ask:
+            self.price = (bid + ask) / 2
+            self.price_is_mid = True
 
     def feed(self, price, volume, when, in_session):
         """
@@ -209,6 +226,7 @@ class Today:
         只有日盤（08:45~13:45）才累積開高低與成交量 —— 那些欄位的定義是日盤專用的。
         """
         self.price = price
+        self.price_is_mid = False
         self.ticks += 1
         self.updated = when
         self.last_recv = time.time()
@@ -340,6 +358,7 @@ async function tick(){
  const dead=(s.conn&&s.conn.ok===false)||age>90;
  sub.innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
    (s.replay?'重播模式 '+s.replay+' · ':'')+
+   ((s.conn&&s.conn.contract)?'<b>'+(s.conn.contract_name||s.conn.contract)+'</b> · ':'')+
    '<b style="color:'+ph[1]+'">'+ph[0]+'</b>（'+ph[2]+'） · 樣本 '+(s.n_days_total||0)+' 天 · '+(s.clock||'')+
    (age==null?'':' · 上一筆成交 '+(age<2?'剛剛':age+' 秒前'));
  let warn='';
@@ -356,7 +375,7 @@ async function tick(){
  const c=s.chips, r=s.result;
  const dir=v=>v>0?'up':v<0?'down':'flat';
  let h=warn+'<div class="bar">'+
-  chip('成交價',f(c.price),'flat')+
+  chip(c.is_mid?'中價（尚無成交）':'成交價',f(c.price),'flat')+
   (c.bid==null?'':chip('買/賣',f(c.bid)+' / '+f(c.ask),'flat'))+
   chip('最近5分鐘',(c.mom5>0?'+':'')+f(c.mom5)+' 點',dir(c.mom5))+
   chip('最近15分鐘',(c.mom15>0?'+':'')+f(c.mom15)+' 點',dir(c.mom15))+
@@ -505,6 +524,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "status": "live",
                 "chips": {"price": today_state.price,
                           "bid": today_state.bid, "ask": today_state.ask,
+                          "is_mid": today_state.price_is_mid,
                           "mom5": today_state.price - today_state._price_ago(min_idx, 5),
                           "mom15": today_state.price - today_state._price_ago(min_idx, 15)},
                 "result": None,
@@ -519,6 +539,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "rng": feats["rng"], "pos": feats["pos"], "vol_ratio": feats["vol_ratio"],
                 "mom5": feats["mom5"], "mom15": feats["mom15"],
                 "bid": today_state.bid, "ask": today_state.ask,
+                "is_mid": today_state.price_is_mid,
             },
             "result": hist.query(min_idx, feats, today_state.dayvol),
             "msg": None,
@@ -614,8 +635,10 @@ def main():
         實測即時訂閱 60 秒收到 0 筆，同時間真正的當月合約 TXFH6 有 25 筆。
         用成交量挑，可以自動處理結算日換月（不必自己算第三個星期三）。
         """
-        cands = [c for c in api.Contracts.Futures.TXF
-                 if not c.code.startswith("TXFR") and getattr(c, "delivery_month", "")]
+        cat = getattr(api.Contracts.Futures, LIVE_PRODUCT)
+        cands = [c for c in cat
+                 if not c.code.startswith(LIVE_PRODUCT + "R")
+                 and getattr(c, "delivery_month", "")]
         cands.sort(key=lambda c: c.delivery_month)
         near = cands[:3]
         try:
@@ -644,8 +667,10 @@ def main():
                             version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
         CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None,
-                     "contract": contract.code})
-        print(f"訂閱合約：{contract.code}（交割月 {contract.delivery_month}）")
+                     "contract": contract.code,
+                     "contract_name": getattr(contract, "name", "")})
+        print(f"訂閱合約：{contract.code} {getattr(contract,'name','')}"
+              f"（交割月 {contract.delivery_month}）")
         return api, contract
 
     def try_reconnect(reason):
@@ -674,17 +699,15 @@ def main():
         except Exception as e:
             CONN.update({"ok": False, "last_error": str(e)[:200],
                          "since": datetime.now().strftime("%H:%M:%S")})
-            print(f"[{today}] 開盤前連線失敗：{str(e)[:200]}")
+            print(f"[{today}] 連線失敗：{str(e)[:200]}")
             prev_close = session["state"].prev_close if session["state"] else None
         session.update({"date": today, "state": Today(prev_close, dayvol), "saved": False})
-        print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}，等待 08:45…")
+        print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}")
 
-    try:
-        connect()
-    except Exception as e:
-        CONN.update({"ok": False, "last_error": str(e)[:200],
-                     "since": datetime.now().strftime("%H:%M:%S")})
-        print(f"啟動時連線失敗（會持續重試）：{str(e)[:200]}")
+    # 啟動時一定要建立狀態，不能等到 08:30 ——
+    # 否則半夜啟動的話 session["state"] 是 None，收到的報價全部被丟掉。
+    start_day(date.today())
+    session["opened"] = datetime.now().time() >= pd.Timestamp("08:30").time()
     with state_lock:
         STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
                       "period": hist.period, "n_days_total": hist.n_days})
@@ -696,9 +719,17 @@ def main():
             now = datetime.now()
             today, t = now.date(), now.time()
 
-            # 每天 08:30 重新建立當日連線與狀態
-            if session["date"] != today and t >= pd.Timestamp("08:30").time():
+            # 每天 08:30 重新建立當日連線與狀態。
+            # 兩種情況要重建：跨到新的一天，或今天還沒做過開盤前的重建
+            # （例如面板是半夜啟動的，那次建立的狀態算不上「當日開盤狀態」）。
+            if t >= pd.Timestamp("08:30").time() and (
+                    session["date"] != today or not session.get("opened")):
                 start_day(today)
+                session["opened"] = True
+            elif session["date"] != today and t < pd.Timestamp("08:30").time():
+                # 過了午夜但還沒到 08:30：沿用現有連線，只標記今天尚未開盤重建
+                session["date"] = today
+                session["opened"] = False
 
             st = session["state"]
 
