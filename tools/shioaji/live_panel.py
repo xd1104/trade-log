@@ -184,15 +184,28 @@ class Today:
         self.high = None
         self.low = None
         self.price = None
+        self.bid = None
+        self.ask = None
         self.vol = 0
         self.ticks = 0
+        self.quotes = 0
         self.updated = None
         self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
 
+    def feed_quote(self, bid, ask, when):
+        """
+        五檔買賣價變動。實測每分鐘 400+ 筆（成交才 25 筆），
+        大戶投那種「一直在跳」的感覺就是來自這個。
+        只更新顯示與存活時間，不進模型 —— 模型的歷史資料是成交價。
+        """
+        self.bid, self.ask = bid, ask
+        self.last_recv = time.time()
+        self.quotes += 1
+
     def feed(self, price, volume, when, in_session):
         """
-        任何時候都記價格（面板要一直顯示現價與動能）；
+        成交。任何時候都記價格（面板要一直顯示現價與動能）；
         只有日盤（08:45~13:45）才累積開高低與成交量 —— 那些欄位的定義是日盤專用的。
         """
         self.price = price
@@ -343,7 +356,8 @@ async function tick(){
  const c=s.chips, r=s.result;
  const dir=v=>v>0?'up':v<0?'down':'flat';
  let h=warn+'<div class="bar">'+
-  chip('現價',f(c.price),'flat')+
+  chip('成交價',f(c.price),'flat')+
+  (c.bid==null?'':chip('買/賣',f(c.bid)+' / '+f(c.ask),'flat'))+
   chip('最近5分鐘',(c.mom5>0?'+':'')+f(c.mom5)+' 點',dir(c.mom5))+
   chip('最近15分鐘',(c.mom15>0?'+':'')+f(c.mom15)+' 點',dir(c.mom15))+
   (c.chg==null?'':
@@ -490,6 +504,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
             STATE.update({
                 "status": "live",
                 "chips": {"price": today_state.price,
+                          "bid": today_state.bid, "ask": today_state.ask,
                           "mom5": today_state.price - today_state._price_ago(min_idx, 5),
                           "mom15": today_state.price - today_state._price_ago(min_idx, 15)},
                 "result": None,
@@ -503,6 +518,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "price": today_state.price, "chg": feats["ret_open"], "gap": feats["gap"],
                 "rng": feats["rng"], "pos": feats["pos"], "vol_ratio": feats["vol_ratio"],
                 "mom5": feats["mom5"], "mom15": feats["mom15"],
+                "bid": today_state.bid, "ask": today_state.ask,
             },
             "result": hist.query(min_idx, feats, today_state.dayvol),
             "msg": None,
@@ -561,7 +577,7 @@ def main():
         return
 
     import shioaji as sj
-    from shioaji import Exchange, TickFOPv1
+    from shioaji import BidAskFOPv1, Exchange, TickFOPv1
     from _config import get_credentials
 
     api_key, secret = get_credentials()
@@ -581,6 +597,34 @@ def main():
         st.feed(float(tick.close), int(tick.volume), ts,
                 in_session=SESSION_OPEN <= ts.time() < DAY_END)
 
+    def on_bidask(exchange: Exchange, ba: BidAskFOPv1):
+        st = session["state"]
+        if st is None:
+            return
+        try:
+            st.feed_quote(float(ba.bid_price[0]), float(ba.ask_price[0]), ba.datetime)
+        except Exception:
+            pass
+
+    def pick_live_contract(api):
+        """
+        挑真正在交易的當月合約。
+
+        【踩過的坑】TXFR1 是「近月連續」的合成代碼，只適合抓歷史資料 ——
+        實測即時訂閱 60 秒收到 0 筆，同時間真正的當月合約 TXFH6 有 25 筆。
+        用成交量挑，可以自動處理結算日換月（不必自己算第三個星期三）。
+        """
+        cands = [c for c in api.Contracts.Futures.TXF
+                 if not c.code.startswith("TXFR") and getattr(c, "delivery_month", "")]
+        cands.sort(key=lambda c: c.delivery_month)
+        near = cands[:3]
+        try:
+            snaps = api.snapshots(near)
+            best = max(zip(near, snaps), key=lambda p: p[1].total_volume or 0)[0]
+            return best
+        except Exception:
+            return near[0]
+
     def connect():
         """（重新）登入並訂閱。開盤前、以及偵測到斷線時都會呼叫。"""
         if session["api"] is not None:
@@ -590,12 +634,18 @@ def main():
                 pass
         api = sj.Shioaji()
         api.login(api_key=api_key, secret_key=secret)
-        contract = api.Contracts.Futures.TXF.TXFR1
+        contract = pick_live_contract(api)
         api.set_on_tick_fop_v1_callback(on_tick)
+        api.set_on_bidask_fop_v1_callback(on_bidask)
+        # 成交 + 五檔都訂：成交價進模型，五檔負責讓畫面跟得上市場
         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
                             version=sj.constant.QuoteVersion.v1)
+        api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
+                            version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
-        CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None})
+        CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None,
+                     "contract": contract.code})
+        print(f"訂閱合約：{contract.code}（交割月 {contract.delivery_month}）")
         return api, contract
 
     def try_reconnect(reason):
