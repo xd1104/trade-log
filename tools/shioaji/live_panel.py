@@ -1,24 +1,26 @@
 r"""
-早盤即時勝率面板（08:45~09:30）— 本機網頁版
+早盤趨勢面板（全時段顯示，08:45~09:30 記錄）— 本機網頁版
 =============================================================================
-即時接收台指期價格跳動，算出「現在這一刻進場」的歷史同情境勝率。
+即時接收台指期價格跳動，顯示「現在的趨勢往哪走、會走多強」。
 
 做法：
   1. 即時算出當下盤面狀態（最近 5/15 分鐘動能、相對開盤、跳空、震幅、位階、量能）
-  2. 到 241 天歷史裡，找「同一分鐘、狀態最像」的時刻
-  3. 看那些時刻後來到 13:45 為止，做多／做空各是贏是輸
+  2. 到歷史裡找「同一時段、走勢長得最像」的日子（每天只取最像的一刻）
+  3. 看那些日子接下來 5 / 10 / 15 分鐘怎麼走 → 方向機率 + 預期變動點數
 
-畫面上每個勝率都會標三件事：
-  - 用了幾天的樣本
-  - 95% 信賴區間
-  - 對比「同期基準」多給了幾 %  ← 這才是情境真正提供的資訊
+【為什麼只給趨勢，不給勝率】
+原本有「做多／做空吃到 ±100 的勝率」，已移除。實測結果：
+  - 方向確實可預測：急跌後 10 分鐘上漲 63.7%、急漲後 43.9%，統計顯著，
+    且 5/10/15 分鐘三個時間長度一致 —— 這部分是真的。
+  - 但照這個方向下單賺不到錢：九種停損停利組合（100/100、50/100、25/75…）
+    每筆都是負的，因為方向猜錯時賠得比猜對時賺得多。
+所以面板只呈現「方向傾向」這個站得住腳的部分，不謊稱它能賺錢。
 
-【兩個必要的修正，缺一數字就會虛高】
+【兩個必要的統計修正，缺一數字就會虛高】
 1. 一天只算一筆：每個歷史日只取「最像現在」的那一分鐘。
    若讓同一天貢獻多筆，等於假設你能在同一波行情裡反覆進場，
-   實測會把勝率灌水到 15 個百分點（60% vs 45%）。
-2. 去趨勢：樣本期間台指期漲 81.7%，日盤中位漂移約 +25 點。
-   在 ±100 點的框架下這會讓做多勝率虛胖，所以outcome 已扣掉這段漂移。
+   實測會把數字灌水到 15 個百分點（60% vs 45%）。
+2. 去趨勢：樣本期間台指期漲 81.7%，日盤中位漂移約 +25 點，已從結果扣除。
    剩下的才是「當下動能會不會延續」。
 
 【這不是投資建議】只呈現歷史統計，不預測、不給買賣訊號。
@@ -111,62 +113,59 @@ class History:
         if n_days < 15:
             return None
 
-        def summarise(side, base_win):
-            """side: 'long_dt' / 'short_dt'。「贏」= 真的吃到 +100 停利。"""
-            win = by_day[f"win_{side}"]
-            p = float(win.mean())
-            se = float(win.std(ddof=1) / np.sqrt(n_days)) if n_days > 1 else 0.5
-            lo, hi = max(0.0, p - 1.96 * se), min(1.0, p + 1.96 * se)
-            outcome = by_day[f"out_{side}"]
-            return {
-                "win": round(p * 100, 1),
-                "ci": [round(lo * 100, 1), round(hi * 100, 1)],
-                "edge": round((p - base_win) * 100, 1),
-                "net": round(float(by_day[f"net_{side}"].mean()), 1),
-                "tp": round(float((outcome == "tp").mean()) * 100, 1),
-                "sl": round(float((outcome == "sl").mean()) * 100, 1),
-                "none": round(float((outcome == "none").mean()) * 100, 1),
-                # 信賴區間整段都在 50% 同一側才算有訊號
-                "meaningful": bool(lo > 0.5 or hi < 0.5),
-            }
+        horizons = {h: self._horizon(by_day, pool, h) for h in (5, 10, 15)}
 
-        base = pool.groupby("date")[["win_long_dt", "win_short_dt"]].mean()
-        base_long = float(base["win_long_dt"].mean())
-        base_short = float(base["win_short_dt"].mean())
+        # 三個時間長度都指同一邊 = 一致；一致比單一數字漂亮更值得相信
+        sides = [1 if hz["prob_up"] > 50 else -1 if hz["prob_up"] < 50 else 0
+                 for hz in horizons.values()]
+        consistent = abs(sum(sides)) == 3
+
+        idx = horizons[10]["prob_up"]
+        if idx >= 60:
+            direction, strength = "偏漲", "強"
+        elif idx >= 55:
+            direction, strength = "偏漲", "弱"
+        elif idx <= 40:
+            direction, strength = "偏跌", "強"
+        elif idx <= 45:
+            direction, strength = "偏跌", "弱"
+        else:
+            direction, strength = "沒方向", ""
 
         return {
             "n_days": n_days,
-            "n_points": n_days,
-            "base_long": round(base_long * 100, 1),
-            "base_short": round(base_short * 100, 1),
-            "long": summarise("long_dt", base_long),
-            "short": summarise("short_dt", base_short),
-            "trend": self._trend_index(by_day, pool),
+            "index": idx,
+            "direction": direction,
+            "strength": strength,
+            "consistent": consistent,
+            "any_meaningful": any(hz["meaningful"] for hz in horizons.values()),
+            "horizons": [{"h": h, **hz} for h, hz in horizons.items()],
         }
 
     @staticmethod
-    def _trend_index(by_day, pool):
+    def _horizon(by_day, pool, h):
         """
-        趨勢指數 0~100：歷史上長得像現在的日子，「10 分鐘後價格比現在高」的比例。
+        單一時間長度的方向與強度。
 
-          100 = 那些日子全部都往上走
-           50 = 一半一半（沒有傾向）
-            0 = 全部往下走
-
-        注意這是「接下來幾分鐘的方向傾向」，跟「會不會吃到 ±100」是兩件事。
-        短天期的幅度通常只有十幾二十點，遠小於 100 點。
+          prob_up   歷史上長得像現在的日子，h 分鐘後價格比現在高的比例（0~100）
+          move      那些日子 h 分鐘後的變動中位數（點），中位數比平均耐得住極端值
+          spread    變動的四分位距，讓人知道「會走多強」有多不確定
         """
-        up = (by_day["fwd10"] > 0).astype(float)
+        col = f"fwd{h}"
+        up = (by_day[col] > 0).astype(float)
         n = len(up)
         p = float(up.mean())
         se = float(up.std(ddof=1) / np.sqrt(n)) if n > 1 else 0.5
         lo, hi = max(0.0, p - 1.96 * se), min(1.0, p + 1.96 * se)
-        base = float((pool.groupby("date")["fwd10"].mean() > 0).mean())
+        moves = by_day[col].astype(float)
+        base = float((pool[col] > 0).mean())
         return {
-            "index": round(p * 100),
-            "ci": [round(lo * 100), round(hi * 100)],
-            "base": round(base * 100),
-            "avg_move": round(float(by_day["fwd10"].mean()), 1),
+            "prob_up": round(p * 100, 1),
+            "ci": [round(lo * 100, 1), round(hi * 100, 1)],
+            "base": round(base * 100, 1),
+            "move": round(float(moves.median()), 1),
+            "q1": round(float(moves.quantile(0.25)), 1),
+            "q3": round(float(moves.quantile(0.75)), 1),
             "meaningful": bool(lo > 0.5 or hi < 0.5),
         }
 
@@ -238,7 +237,7 @@ class Today:
 
 PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>早盤勝率面板</title><style>
+<title>早盤趨勢面板</title><style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,"Segoe UI","Microsoft JhengHei",sans-serif;
 background:#0d1117;color:#e6edf3;padding:18px;line-height:1.5}
@@ -259,11 +258,11 @@ h1{font-size:17px;font-weight:600;margin-bottom:2px}
 .ci{font-size:12px;color:#8b949e;margin-top:7px;font-variant-numeric:tabular-nums}
 .edge{margin-top:11px;padding-top:11px;border-top:1px solid #30363d;font-size:13px}
 .edge b{font-size:16px;font-variant-numeric:tabular-nums}
-.trend{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:17px 19px;
+.trend{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:19px 21px;
 margin-bottom:14px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
 .tleft{flex:1;min-width:260px}
 .tlabel{font-size:13px;color:#8b949e;margin-bottom:5px}
-.tval{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.tval{font-size:38px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
 .tval span{font-size:16px;color:#8b949e;font-weight:400}
 .tval em{font-size:17px;font-style:normal;font-weight:600}
 .tmeta{font-size:11.5px;color:#8b949e;margin-top:7px}
@@ -273,6 +272,12 @@ margin-bottom:14px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
 .gmid{position:absolute;left:50%;top:-3px;width:1px;height:15px;background:#484f58}
 .gpin{position:absolute;top:-3px;width:3px;height:15px;border-radius:2px;margin-left:-1px}
 .glbl{display:flex;justify-content:space-between;font-size:10.5px;color:#6e7681;margin-top:6px}
+.ht{width:100%;border-collapse:collapse;margin-top:15px;font-size:12.5px;
+font-variant-numeric:tabular-nums}
+.ht th{text-align:left;color:#8b949e;font-weight:500;padding:6px 8px;
+border-bottom:1px solid #30363d;font-size:11.5px}
+.ht td{padding:7px 8px;border-bottom:1px solid #21262d;color:#c9d1d9}
+.ht tr:last-child td{border-bottom:none}
 .split{margin-top:12px}
 .sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#21262d}
 .sbar i{display:block;height:100%}
@@ -292,13 +297,12 @@ border-radius:7px;padding:13px 15px;font-size:12.5px;color:#c9d1d9;margin-bottom
 border-radius:8px;padding:13px 16px;font-size:13px;color:#ffc1bd;margin-bottom:14px;line-height:1.65}
 .alert b{color:#ff9d97}
 </style></head><body><div class="wrap">
-<h1>台指期 早盤勝率面板</h1>
+<h1>台指期 早盤趨勢面板</h1>
 <div class="sub" id="sub">連線中…</div>
 <div id="body"><div class="wait">等待資料…</div></div>
 <div class="foot">
 歷史統計，不是預測，也不是投資建議。進場與否由你決定。<br>
-數字已扣掉大盤漂移（去趨勢），反映的是「當下動能」而非「那一年大盤在漲」。<br>
-每個歷史日只取最相似的一刻計為一筆，對應你每天只下一單的實況。
+已扣掉大盤漂移，反映的是「當下動能」而非「那一年大盤在漲」；每個歷史日只取最相似的一刻計為一筆。
 </div></div>
 <script>
 const f=(n,d=0)=>n==null?'—':n.toFixed(d);
@@ -339,51 +343,45 @@ async function tick(){
    chip('量能',f(c.vol_ratio,2)+' 倍','flat'))+'</div>';
  if(!r){ h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
          body.innerHTML=h; return; }
- h+=trendCard(r.trend);
- h+='<div class="cards">'+card('做多',r.long,'#3fb950')+card('做空',r.short,'#f85149')+'</div>';
- h+='<div class="note"><b>怎麼讀：</b>大數字是歷史上「同一時段、盤面長得像」的日子裡，'+
-    '<b>真的吃到 +100 停利</b>的比例（共 '+r.n_days+' 天）—— 就是你的下法。'+
-    '拖到收盤只小賺幾十點的不算贏。'+
-    '<b>「vs 基準」才是這個情境真正多給你的資訊</b> —— '+
-    '基準是同時段所有日子的平均（多 '+r.base_long+'% / 空 '+r.base_short+'%）。'+
-    '信賴區間若跨過 50%，代表這個數字跟丟銅板分不出來。</div>';
+ h+=trendCard(r);
+ h+='<div class="note"><b>怎麼讀：</b>拿現在的盤面，去歷史裡找 '+r.n_days+
+    ' 個「同一時段、走勢長得最像」的日子（每天只取最像的一刻），看那些日子接下來怎麼走。'+
+    '<br><b>這是方向傾向，不是賺賠預測。</b>實測過：方向猜對大約六成四，'+
+    '但照這個方向下單、九種停損停利組合全部是賠的 —— 因為猜錯的時候賠得比較多。'+
+    '請當看盤參考，不要當進場訊號。</div>';
  body.innerHTML=h;
 }
 function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
-function trendCard(t){
- if(!t) return '';
- const i=t.index;
+function trendCard(r){
+ if(!r) return '';
+ const i=r.index;
  const col = i>=60?'#3fb950' : i<=40?'#f85149' : '#8b949e';
- const word = i>=65?'偏漲（強）' : i>=55?'偏漲' : i<=35?'偏跌（強）' : i<=45?'偏跌' : '沒有方向';
+ const arrow = r.direction==='偏漲'?'▲' : r.direction==='偏跌'?'▼' : '—';
+ let rows='';
+ r.horizons.forEach(function(z){
+   const c2 = z.prob_up>=55?'#3fb950' : z.prob_up<=45?'#f85149' : '#8b949e';
+   rows+='<tr><td>'+z.h+' 分鐘後</td>'+
+     '<td style="color:'+c2+';font-weight:600">'+z.prob_up.toFixed(0)+'%</td>'+
+     '<td>'+z.ci[0].toFixed(0)+'~'+z.ci[1].toFixed(0)+'%</td>'+
+     '<td style="color:'+c2+'">'+(z.move>0?'+':'')+z.move.toFixed(0)+' 點</td>'+
+     '<td>'+(z.q1>0?'+':'')+z.q1.toFixed(0)+' ~ '+(z.q3>0?'+':'')+z.q3.toFixed(0)+'</td>'+
+     '<td>'+(z.meaningful?'<b style="color:#58a6ff">★</b>':'—')+'</td></tr>';
+ });
  return '<div class="trend"><div class="tleft">'+
-  '<div class="tlabel">趨勢指數　<span style="font-size:11px">接下來 10 分鐘的方向傾向</span></div>'+
-  '<div class="tval" style="color:'+col+'">'+i+'<span> / 100</span>　'+
-  '<em style="color:'+col+'">'+word+'</em></div>'+
-  '<div class="tmeta">95% 區間 '+t.ci[0]+' ~ '+t.ci[1]+'　·　同時段基準 '+t.base+
-  '　·　平均變動 '+(t.avg_move>0?'+':'')+t.avg_move+' 點　'+
-  (t.meaningful?'<b style="color:#58a6ff">★ 有傾向</b>':'<span style="color:#8b949e">— 與丟銅板無法區分</span>')+
+  '<div class="tlabel">現在的趨勢</div>'+
+  '<div class="tval" style="color:'+col+'">'+arrow+' '+r.direction+
+  (r.strength?'<em style="color:'+col+'">（'+r.strength+'）</em>':'')+'</div>'+
+  '<div class="tmeta">趨勢指數 <b style="color:'+col+'">'+i+'</b> / 100　·　樣本 '+r.n_days+' 天　·　'+
+  (r.consistent?'<b style="color:#58a6ff">5/10/15 分鐘都指同一邊</b>':'<span>各時間長度方向不一致</span>')+
   '</div></div>'+
   '<div class="gauge"><div class="gtrack"><div class="gfill" style="left:'+Math.min(i,50)+
   '%;width:'+Math.abs(i-50)+'%;background:'+col+'"></div><div class="gmid"></div>'+
   '<div class="gpin" style="left:'+i+'%;background:'+col+'"></div></div>'+
   '<div class="glbl"><span>0 全跌</span><span>50 沒方向</span><span>100 全漲</span></div>'+
-  '</div></div>';
-}
-function card(name,d,col){
- const sig=d.meaningful;
- return '<div class="card"><h2>'+name+'　現在進場，吃到 +100 停利的機率</h2>'+
-  '<div class="big" style="color:'+col+'">'+d.win.toFixed(1)+'<span>%</span></div>'+
-  '<div class="ci">95% 信賴區間 '+d.ci[0].toFixed(1)+'% ~ '+d.ci[1].toFixed(1)+'%</div>'+
-  '<div class="split"><div class="sbar">'+
-   '<i style="width:'+d.tp+'%;background:#3fb950"></i>'+
-   '<i style="width:'+d.sl+'%;background:#f85149"></i>'+
-   '<i style="width:'+d.none+'%;background:#484f58"></i></div>'+
-   '<div class="slbl"><span>+100 停利 '+d.tp.toFixed(0)+'%</span>'+
-   '<span>-100 停損 '+d.sl.toFixed(0)+'%</span>'+
-   '<span>沒碰到 '+d.none.toFixed(0)+'%</span></div></div>'+
-  '<div class="edge">vs 基準 <b style="color:'+(d.edge>0?'#3fb950':'#f85149')+'">'+
-  (d.edge>0?'+':'')+d.edge.toFixed(1)+'%</b>　平均 '+(d.net>0?'+':'')+d.net.toFixed(1)+' 點/筆</div>'+
-  '<span class="tag '+(sig?'yes':'no')+'">'+(sig?'★ 區間未跨 50%':'— 與丟銅板無法區分')+'</span></div>';
+  '</div>'+
+  '<table class="ht"><tr><th>時間</th><th>上漲機率</th><th>95% 區間</th>'+
+  '<th>預期變動</th><th>常見範圍</th><th>可信</th></tr>'+rows+'</table>'+
+  '</div>';
 }
 tick(); setInterval(tick,2000);
 </script></body></html>"""
@@ -510,7 +508,7 @@ def run_replay(hist, day_str):
     t = Today(prev_close)
     print(f"重播 {day_str}（每秒 = 盤中 1 分鐘，共 {len(g)} 分鐘）")
     for _, row in g.iterrows():
-        t.feed(float(row["Close"]), int(row["Volume"]), row["ts"])
+        t.feed(float(row["Close"]), int(row["Volume"]), row["ts"], in_session=True)
         update_state(hist, t, vol_ref, row["ts"].time(), replay=day_str)
         time.sleep(1)
     print("重播結束（面板停在最後狀態）。Ctrl+C 關閉。")
