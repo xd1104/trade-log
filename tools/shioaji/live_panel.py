@@ -48,6 +48,8 @@ except Exception:
     pass
 
 HERE = Path(__file__).parent
+REPO = HERE.parent.parent                       # trade-log/ 根目錄
+SYNC_FILE = REPO / "data" / "practice.json"     # 練習紀錄的雲端同步檔
 MATRIX = HERE / "intraday.csv"
 CALIB = HERE / "calibration.json"     # 走查驗證產出的分段命中率
 LOG_DIR = HERE / "morning_logs"
@@ -342,6 +344,8 @@ def close_position(price, reason):
     TODAY_TRADES.append(rec)
     POSITION = None
     save_trades()
+    # 背景同步，不讓 git 的網路延遲卡住面板
+    threading.Thread(target=sync_to_cloud, daemon=True).start()
     label = {"tp": "停利", "sl": "停損", "manual": "手動平倉", "close": "收盤平倉"}.get(reason, reason)
     print(f"[練習] {label} @ {price}　{points:+.0f} 點（扣費後 {points - FEE_POINTS:+.1f}）")
     return rec
@@ -413,6 +417,44 @@ def practice_stats():
                    for r in recs[-12:]][::-1],
         "total": len(recs),
     }
+
+
+def sync_to_cloud():
+    """
+    把練習紀錄寫進 data/practice.json 並推上 GitHub。
+
+    手機常不在同一個網路，所以拿 GitHub Pages 當中間人：
+    面板推上去 → 手機開 App 時自動抓下來合併。
+
+    【只同步練習（sim）】真實交易不上傳 —— repo 是公開的，
+    那是 Benson 明確的決定。
+
+    推送失敗（沒網路、git 沒設定）不會影響面板運作，只留訊息。
+    """
+    trades = all_practice_trades()
+    if not trades:
+        return False, "沒有練習紀錄可同步"
+    SYNC_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"updated": datetime.now().isoformat(timespec="seconds"),
+               "count": len(trades), "trades": trades}
+    SYNC_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    import subprocess
+    def git(*args):
+        return subprocess.run(["git"] + list(args), cwd=str(REPO), capture_output=True,
+                              text=True, timeout=60)
+    try:
+        git("add", str(SYNC_FILE.relative_to(REPO)).replace("\\", "/"))
+        st = git("status", "--porcelain", "--", "data/practice.json")
+        if not st.stdout.strip():
+            return True, f"已是最新（{len(trades)} 筆）"
+        git("commit", "-m", f"chore: 同步練習紀錄（{len(trades)} 筆）")
+        r = git("push", "origin", "HEAD")
+        if r.returncode != 0:
+            return False, "推送失敗：" + (r.stderr or "")[-120:]
+        return True, f"已同步 {len(trades)} 筆到雲端"
+    except Exception as e:
+        return False, f"同步失敗：{str(e)[:120]}"
 
 
 def all_practice_trades():
@@ -686,6 +728,10 @@ class Handler(BaseHTTPRequestHandler):
             r = close_position(price, "manual")
             return self._json(200, {"ok": r is not None,
                                     "msg": "已平倉" if r else "目前沒有持倉"})
+
+        if self.path == "/api/sync":
+            ok, msg = sync_to_cloud()
+            return self._json(200, {"ok": ok, "msg": msg})
 
         if self.path == "/api/undo":
             # 誤按時可以撤銷最後一筆（只在剛平倉沒多久時合理）
@@ -1070,6 +1116,8 @@ def main():
                     save_today(st)
                     session["saved"] = True
                     print(f"[{today}] 09:30 下單時段結束，已存檔當日資料。")
+                    ok, msg = sync_to_cloud()
+                    print(f"[{today}] 雲端同步：{msg}")
                 update_state(hist, st, vol_ref, t, phase="live")
             else:
                 # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）

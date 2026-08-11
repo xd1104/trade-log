@@ -393,9 +393,17 @@
       try {
         var arr = JSON.parse(reader.result);
         if (!Array.isArray(arr)) throw new Error('格式錯誤');
-        if (data.length && !confirm('匯入會取代目前 ' + data.length + ' 筆資料，確定嗎？')) return;
-        data = withMode(arr.filter(function (x) { return x && x.date && x.dir; }));
-        save(data); renderAll(); toast('已匯入 ' + data.length + ' 筆');
+        var incoming = withMode(arr.filter(function (x) { return x && x.date && x.dir; }));
+        // 合併而非覆蓋 —— 原本是整個取代，同步一次就會蓋掉手機上原有的紀錄
+        var seen = {};
+        data.forEach(function (x) { seen[x.date + '|' + (x.mode || 'sim')] = 1; });
+        var added = 0;
+        incoming.forEach(function (x) {
+          var k = x.date + '|' + (x.mode || 'sim');
+          if (!seen[k]) { data.push(x); seen[k] = 1; added++; }
+        });
+        save(data); renderAll();
+        toast(added ? '已合併 ' + added + ' 筆新紀錄' : '沒有新紀錄（已是最新）');
       } catch (err) { toast('匯入失敗：檔案格式不正確'); }
     };
     reader.readAsText(f); this.value = '';
@@ -427,9 +435,41 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.classList.remove('show'); }, 1800);
   }
 
+  // ---------- 自動同步：拉回電腦面板推上來的練習紀錄 ----------
+  // 手機常不在家裡的網路，所以用 GitHub Pages 當中間人：
+  // 面板推 data/practice.json → 手機開 App 時自動抓下來合併。
+  // 只有練習（sim）會同步；真實交易不上傳，只存在這台裝置。
+  var PULLED_KEY = 'trade-log-pulled';
+  function pullPractice() {
+    fetch('./data/practice.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (p) {
+        if (!p || !p.trades || !p.trades.length) return;
+        var pulled = {};
+        try { pulled = JSON.parse(localStorage.getItem(PULLED_KEY) || '{}'); } catch (e) {}
+        var seen = {};
+        data.forEach(function (x) { seen[x.date + '|' + (x.mode || 'sim')] = 1; });
+        var added = 0;
+        p.trades.forEach(function (t) {
+          if (!t || !t.date || !t.dir) return;
+          var k = t.date + '|sim';
+          // 已經在本機、或使用者曾經刪掉（拉過就記著）→ 不重複塞回來
+          if (seen[k] || pulled[k]) return;
+          data.push({ date: t.date, mode: 'sim', dir: t.dir, entry: Number(t.entry),
+                      exit: Number(t.exit), time: t.time || '', note: t.note || '' });
+          seen[k] = 1; pulled[k] = 1; added++;
+        });
+        p.trades.forEach(function (t) { if (t && t.date) pulled[t.date + '|sim'] = 1; });
+        try { localStorage.setItem(PULLED_KEY, JSON.stringify(pulled)); } catch (e) {}
+        if (added) { save(data); renderAll(); toast('已同步 ' + added + ' 筆練習紀錄'); }
+      })
+      .catch(function () {});   // 沒網路或還沒有這個檔案 —— 正常，不吵使用者
+  }
+  pullPractice();
+
   // ---------- 版本顯示 + 強制更新 ----------
   // 手機 PWA 的快取很黏，沒有版本號時根本看不出自己在哪一版。
-  var APP_VER = 'v15';
+  var APP_VER = 'v16';
   var vl = $('verLabel'); if (vl) vl.textContent = '版本 ' + APP_VER;
   var fu = $('forceUpdBtn');
   if (fu) fu.onclick = function () {
