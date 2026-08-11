@@ -285,7 +285,7 @@ class Today:
 
 PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>早盤趨勢面板</title><style>
+<title>早盤盤面儀表板</title><style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,"Segoe UI","Microsoft JhengHei",sans-serif;
 background:#0d1117;color:#e6edf3;padding:18px;line-height:1.5}
@@ -351,12 +351,11 @@ border-radius:7px;padding:13px 15px;font-size:12.5px;color:#c9d1d9;margin-bottom
 border-radius:8px;padding:13px 16px;font-size:13px;color:#ffc1bd;margin-bottom:14px;line-height:1.65}
 .alert b{color:#ff9d97}
 </style></head><body><div class="wrap">
-<h1>台指期 早盤趨勢面板</h1>
+<h1>台指期 早盤盤面儀表板</h1>
 <div class="sub" id="sub">連線中…</div>
 <div id="body"><div class="wait">等待資料…</div></div>
 <div class="foot">
-歷史統計，不是預測，也不是投資建議。進場與否由你決定。<br>
-已扣掉大盤漂移，反映的是「當下動能」而非「那一年大盤在漲」；每個歷史日只取最相似的一刻計為一筆。
+這裡只顯示當下的客觀盤面數字，不做任何預測、不給買賣訊號。
 </div></div>
 <script>
 const f=(n,d=0)=>n==null?'—':n.toFixed(d);
@@ -401,49 +400,16 @@ async function tick(){
  if(!r){ h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
          body.innerHTML=h; return; }
  h+=trendCard(r);
- h+='<div class="note"><b>怎麼讀：</b>拿現在的盤面，去歷史裡找 '+r.n_days+
-    ' 個「同一時段、走勢長得最像」的日子（每天只取最像的一刻），看那些日子接下來怎麼走。'+
-    '<br><b>這是方向傾向，不是賺賠預測。</b>走查驗證（'+r.n_days+' 天比對、334 天實測）確認：'+
-    '指數在兩端時方向判斷有效，但照它下單、扣掉手續費之後仍然是賠的。'+
-    '請當看盤參考，不要當進場訊號。</div>';
  body.innerHTML=h;
 }
 function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 function trendCard(r){
- if(!r) return '';
- const i=r.index, v=r.verified;
- const col = r.regime==='bull'?'#3fb950' : r.regime==='bear'?'#f85149' : '#8b949e';
- const arrow = r.regime==='bull'?'▲' : r.regime==='bear'?'▼' : '—';
- let rows='';
- r.horizons.forEach(function(z){
-   rows+='<tr><td>'+z.h+' 分鐘後</td>'+
-     '<td>'+z.prob_up.toFixed(0)+'%</td>'+
-     '<td>'+(z.move>0?'+':'')+z.move.toFixed(0)+' 點</td>'+
-     '<td>'+(z.q1>0?'+':'')+z.q1.toFixed(0)+' ~ '+(z.q3>0?'+':'')+z.q3.toFixed(0)+'</td></tr>';
- });
- let verdict;
- if(r.regime==='flat'){
-   verdict='<div class="vbox flat"><b>目前沒有訊號。</b>走查驗證顯示指數在 40~60 之間時，'+
-     '預測與實際結果沒有可靠關聯（斜率信賴區間跨過 0）—— 這區間的數字是雜訊，別當依據。</div>';
- } else {
-   verdict='<div class="vbox '+r.regime+'"><b>走查驗證：</b>歷史上指數落在這個區間時，'+
-     '10 分鐘後實際'+(r.regime==='bull'?'上漲':'下跌')+'的比例是 <b>'+
-     (r.regime==='bull'?v.rate:(100-v.rate)).toFixed(1)+'%</b>'+
-     '（95% 區間 '+(r.regime==='bull'?v.ci[0]:100-v.ci[1]).toFixed(1)+'~'+
-     (r.regime==='bull'?v.ci[1]:100-v.ci[0]).toFixed(1)+'%，'+v.n_days+' 天）</div>';
- }
- return '<div class="trend"><div class="tleft">'+
-  '<div class="tlabel">現在的趨勢</div>'+
-  '<div class="tval" style="color:'+col+'">'+arrow+' '+r.direction+'</div>'+
-  '<div class="tmeta">趨勢指數 <b style="color:'+col+'">'+i+'</b> / 100　·　比對 '+r.n_days+' 天　·　'+
-  (r.consistent?'<b style="color:#58a6ff">5/10/15 分鐘都指同一邊</b>':'各時間長度方向不一致')+
-  '</div>'+verdict+'</div>'+
-  '<div class="gauge"><div class="gtrack">'+
-  '<div class="gzone" style="left:40%;width:20%"></div>'+
-  '<div class="gpin" style="left:'+i+'%;background:'+col+'"></div></div>'+
-  '<div class="glbl"><span>0 全跌</span><span>40~60 沒訊號</span><span>100 全漲</span></div>'+
-  '<table class="ht"><tr><th>時間</th><th>上漲比例</th><th>預期變動</th><th>常見範圍</th></tr>'+rows+'</table>'+
-  '</div></div>';
+ return '<div class="note"><b>為什麼這裡沒有趨勢預測？</b><br>'+
+  '曾經有一個 0~100 的「趨勢指數」，已移除。用 Benson 真正的規則（±100 點先碰哪個）'+
+  '做走查驗證後，它的預測力等於丟銅板（AUC 0.46~0.49），換成邏輯迴歸與梯度提升樹也一樣。'+
+  '急跌後 10 分鐘的漲幅中位數只有 +1 點，而停利需要 100 點 —— 方向猜對也摸不到。'+
+  '<br>留一個看起來可信卻無效的數字，只會讓人更敢下手，所以拿掉。'+
+  '上面那排是<b>當下的事實</b>，不是預測，可以放心看。</div>';
 }
 tick(); setInterval(tick,500);
 </script></body></html>"""
