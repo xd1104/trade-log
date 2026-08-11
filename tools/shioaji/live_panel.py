@@ -210,6 +210,7 @@ class Today:
         self.updated = None
         self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
+        self.snapshots = {}        # 分鐘索引 → 該分鐘的完整盤面（事後跟交易紀錄對帳用）
 
     def feed_quote(self, bid, ask, when):
         """
@@ -516,6 +517,18 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
             })
             return
 
+        # 下單時段逐分鐘留存完整盤面 —— 這樣事後可用「日期＋時間」跟 trade-log
+        # 的交易紀錄對起來，回答「他在什麼盤面下進場、判斷準不準」
+        if phase == "recording":
+            today_state.snapshots[min_idx] = {
+                "time": now_time.strftime("%H:%M"),
+                "price": today_state.price, "bid": today_state.bid, "ask": today_state.ask,
+                "mom5": round(feats["mom5"], 1), "mom15": round(feats["mom15"], 1),
+                "ret_open": round(feats["ret_open"], 1), "gap": round(feats["gap"], 1),
+                "rng": round(feats["rng"], 1), "pos": round(feats["pos"], 3),
+                "vol_ratio": round(feats["vol_ratio"], 3), "vol_cum": today_state.vol,
+            }
+
         STATE.update({
             "status": "live",
             "chips": {
@@ -768,12 +781,33 @@ def main():
 
 
 def save_today(t):
+    """
+    存下當天 08:45~09:30 的逐分鐘完整盤面。
+
+    用途：Benson 的 trade-log App 記的是「日期＋時間＋方向＋進出場價」，
+    這裡補上「那一分鐘的盤面長什麼樣」。兩邊用 (date, time) 對起來，
+    累積到約 100 筆之後就能檢驗：他在什麼盤面下判斷特別準、手癢都發生在什麼情況。
+
+    不需要 App 與面板連動 —— 手機連不到電腦的 localhost，硬串很脆弱；
+    靠時間對帳反而穩，而且他什麼都不用多做。
+    """
     LOG_DIR.mkdir(exist_ok=True)
-    rec = {"date": str(date.today()), "open": t.open, "high": t.high, "low": t.low,
-           "close": t.price, "volume": t.vol, "prev_close": t.prev_close,
-           "ticks": t.ticks, "saved_at": datetime.now().isoformat(timespec="seconds")}
+    rec = {
+        "date": str(date.today()),
+        "contract": (session_contract() or ""),
+        "prev_close": t.prev_close, "dayvol": t.dayvol,
+        "open": t.open, "high": t.high, "low": t.low, "close": t.price,
+        "volume": t.vol, "ticks": t.ticks, "quotes": t.quotes,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "minutes": [t.snapshots[k] for k in sorted(t.snapshots)],
+    }
     (LOG_DIR / f"{date.today()}-live.json").write_text(
         json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  已存 {len(rec['minutes'])} 分鐘的完整盤面")
+
+
+def session_contract():
+    return CONN.get("contract")
 
 
 if __name__ == "__main__":
