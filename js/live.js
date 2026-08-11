@@ -8,7 +8,10 @@
  *  - 【鐵律】只做模擬練習，不會送任何委託到永豐。真實下單由 Benson 自己操作。
  */
 (function () {
-  var PANEL = 'http://127.0.0.1:8770';
+  // 兩種情況都要能運作：
+  //   1) App 由面板本身供應（手機連電腦 IP）→ 同源，用相對路徑
+  //   2) App 由 GitHub Pages 供應（在電腦上開）→ 打本機的 127.0.0.1
+  var PANEL = (location.port === '8770') ? '' : 'http://127.0.0.1:8770';
   var POLL_ON = 700;      // 連得到時的更新頻率
   var POLL_OFF = 15000;   // 連不到時放慢，不要一直打
   var timer = null, lastPos = null, alive = false;
