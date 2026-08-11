@@ -1,6 +1,6 @@
 // 微台指交易日誌 — Service Worker
 // 改前端資源後把版本號 +1（tradelog-shell-vN）強制更新快取。
-var CACHE = 'tradelog-shell-v13';
+var CACHE = 'tradelog-shell-v14';
 var SHELL = [
   './',
   './index.html',
@@ -34,8 +34,15 @@ self.addEventListener('fetch', function (e) {
   if (url.origin !== location.origin) return;
 
   // network-first：有網路一律拿最新版（並更新快取）；離線才退回快取。
+  //
+  // 【手機一直開到舊版的元凶】原本直接 fetch(req)，瀏覽器自己那層 HTTP 快取
+  // 會先回舊檔，SW 拿到舊的又存進 CACHE，於是永遠更新不了。
+  // 對自家的 HTML/JS/CSS 一律用 no-store 重新抓，繞過那層快取。
+  var bust = req.mode === 'navigate' || /\.(html|js|css|webmanifest)$/.test(url.pathname);
+  var hit = bust ? new Request(req.url, { cache: 'no-store', credentials: 'same-origin' }) : req;
+
   e.respondWith(
-    fetch(req).then(function (resp) {
+    fetch(hit).then(function (resp) {
       if (resp && resp.status === 200) {
         var copy = resp.clone();
         caches.open(CACHE).then(function (c) { c.put(req, copy); });

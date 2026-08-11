@@ -450,5 +450,28 @@
     toast: toast
   };
 
+  // ---------- 版本顯示 + 強制更新 ----------
+  // 手機 PWA 的快取很黏，沒有版本號時根本看不出自己在哪一版。
+  var APP_VER = 'v14';
+  var vl = $('verLabel'); if (vl) vl.textContent = '版本 ' + APP_VER;
+  var fu = $('forceUpdBtn');
+  if (fu) fu.onclick = function () {
+    toast('更新中…');
+    var jobs = [];
+    if ('serviceWorker' in navigator) {
+      jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+        return Promise.all(rs.map(function (r) { return r.unregister(); }));
+      }));
+    }
+    if (window.caches) {
+      jobs.push(caches.keys().then(function (ks) {
+        return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+      }));
+    }
+    Promise.all(jobs).then(function () {
+      location.replace(location.pathname + '?u=' + Date.now());
+    });
+  };
+
   renderAll();
 })();

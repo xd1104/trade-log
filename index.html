@@ -90,7 +90,8 @@
     <footer class="foot">
       <a id="settingsBtn">⚙︎ 每筆手續費 NT$<span id="feeLabel">50</span></a><br>
       資料僅存在此裝置 · 記得定期<a id="exportBtn">匯出備份</a><br>
-      <a id="importBtn">匯入備份</a> · <a id="sampleBtn">重設為初始資料</a>
+      <a id="importBtn">匯入備份</a> · <a id="sampleBtn">重設為初始資料</a><br>
+      <span id="verLabel" style="opacity:.6">版本 —</span> · <a id="forceUpdBtn">強制更新</a>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
     </footer>
   </div>
@@ -165,7 +166,16 @@
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function () {});
+        navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' })
+          .then(function (reg) {
+            reg.update();                       // 每次開啟主動檢查有沒有新版
+            // 新版接手後自動重載一次，不用手動清快取
+            var refreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', function () {
+              if (refreshing) return; refreshing = true; location.reload();
+            });
+          })
+          .catch(function () {});
       });
     }
   </script>
