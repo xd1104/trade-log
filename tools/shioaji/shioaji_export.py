@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 r"""
-永豐 Shioaji：匯出台指期歷史 1 分 K → CSV（給回測用）
+永豐 Shioaji：匯出微台指歷史 1 分 K → CSV（給趨勢模型用）
 =============================================================
-用途：拉一段歷史的 1 分 K 線，存成 txf_1min.csv。
+用途：拉一段歷史的 1 分 K 線，存成 tmf_1min.csv。
 
 【為什麼一週一週抓】
 實測（2026-08-10）：kbars 的區間端點只要碰到非交易日（週末、假日），
@@ -15,7 +15,7 @@ r"""
 【安全第一】
 - API Key / Secret 只填在同資料夾的 .env（已被 .gitignore 擋掉）。
 - 不要把 Key/Secret 貼給 Claude、也不要上傳到 GitHub。
-- 跑出來的 txf_1min.csv 只是行情數字，不敏感。
+- 跑出來的 tmf_1min.csv 只是行情數字，不敏感。
 
 【執行】
   ..\..\.venv\Scripts\python.exe shioaji_export.py
@@ -37,14 +37,15 @@ except Exception:
     pass
 
 # 想要的歷史區間
-# 樣本瓶頸是「獨立的交易日數」，不是筆數 —— 每天只算 1 個獨立樣本。
-# 等一年只多 250 天，但永豐的歷史至少有到 2020，直接往回抓比等有效率得多。
-START = date(2020, 8, 1)
+# 樣本瓶頸是「獨立的交易日數」，不是筆數 —— 每天只算 1 個獨立樣本，
+# 所以直接往回抓歷史，比每天等一筆有效率得多。
+PRODUCT = "TMF"          # 微型臺指期貨（Benson 實際交易的商品）
+START = date(2024, 7, 1)  # 微台約 2024 下半年才上線，更早沒有資料
 END = date.today()
 
 HERE = Path(__file__).parent
-CACHE = HERE / "cache"
-OUT = HERE / "txf_1min.csv"
+CACHE = HERE / "cache" / PRODUCT
+OUT = HERE / f"{PRODUCT.lower()}_1min.csv"
 
 
 def week_ranges(start: date, end: date):
@@ -73,7 +74,7 @@ def _fetch(api, contract, a: date, b: date) -> pd.DataFrame:
 
 def fetch_week(api, contract, w_start: date, w_end: date) -> pd.DataFrame:
     """抓一週 1 分 K；有 cache 就直接讀。整週失敗就退回逐日抓、跳過休市日。"""
-    cache_file = CACHE / f"txf_1min_{w_start:%Y-%m-%d}.csv"
+    cache_file = CACHE / f"{PRODUCT.lower()}_1min_{w_start:%Y-%m-%d}.csv"
     if cache_file.exists():
         return pd.read_csv(cache_file)
 
@@ -100,7 +101,7 @@ def fetch_week(api, contract, w_start: date, w_end: date) -> pd.DataFrame:
         return df
 
     df = df.sort_values("ts")
-    cache_file.parent.mkdir(exist_ok=True)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(cache_file, index=False)
     print(f"  {w_start:%Y-%m-%d}  {len(df):>6} 根 K（{df['ts'].dt.date.nunique()} 個交易日）")
     return df
@@ -110,10 +111,10 @@ def main():
     API_KEY, API_SECRET = get_credentials()
     api = sj.Shioaji()  # 正式環境（只讀資料、免憑證）
     api.login(api_key=API_KEY, secret_key=API_SECRET)
-    print(f"登入成功。抓取 {START} ~ {END} 的台指期 1 分 K…\n")
+    print(f"登入成功。抓取 {START} ~ {END} 的 {PRODUCT} 1 分 K…\n")
 
-    # 台指期近月連續（大台，最活躍、資料最乾淨；開盤首根K方向與微台一致）
-    contract = api.Contracts.Futures.TXF.TXFR1
+    # 近月連續合約：只有它才沒有換月斷點，適合拿來建歷史
+    contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
 
     frames = []
     for w_start, w_end in week_ranges(START, END):

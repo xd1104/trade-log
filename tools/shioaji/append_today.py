@@ -5,7 +5,7 @@ r"""
 
 流程：
   1. 抓今天的 1 分 K
-  2. 併進 txf_1min.csv（已經有就跳過，不會重複）
+  2. 併進 tmf_1min.csv（已經有就跳過，不會重複）
   3. 重新產生 intraday.csv（模型的歷史矩陣）
   4. 印出前後對照，讓人一眼看出樣本多了幾天、關鍵數字有沒有變
 
@@ -27,7 +27,7 @@ except Exception:
     pass
 
 HERE = Path(__file__).parent
-PX = HERE / "txf_1min.csv"
+PX = HERE / "tmf_1min.csv"
 MATRIX = HERE / "intraday.csv"
 REPORT = HERE / "daily_reports"
 
@@ -80,7 +80,7 @@ def main():
     api_key, secret = get_credentials()
     api = sj.Shioaji()
     api.login(api_key=api_key, secret_key=secret)
-    contract = api.Contracts.Futures.TXF.TXFR1
+    contract = api.Contracts.Futures.TMF["TMFR1"]
     try:
         new = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
     except Exception as e:
@@ -108,7 +108,7 @@ def main():
     merged = merged.drop_duplicates(subset="ts").sort_values("ts")
     merged.to_csv(PX, index=False)
     print(f"併入 {len(new)} 根 K 線（其中日盤 {len(day_bars)} 根）")
-    print(f"txf_1min.csv 現在共 {len(merged):,} 根\n")
+    print(f"tmf_1min.csv 現在共 {len(merged):,} 根\n")
 
     print("重算模型中…")
     r = subprocess.run([sys.executable, str(HERE / "build_intraday.py")],

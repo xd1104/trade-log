@@ -63,15 +63,15 @@ NIGHT_CLOSE = pd.Timestamp("05:00").time()
 FEATURES = ["mom5_n", "mom15_n", "ret_open_n", "gap_n", "rng_n", "pos", "vol_ratio"]
 FEATURE_WEIGHT = np.array([3.0, 2.0, 1.0, 0.8, 0.8, 1.5, 0.8])
 # 「當下的趨勢」是 Benson 要的重點 → mom5 / mom15 權重最高
-# 即時報價訂閱「微型臺指期貨」TMF —— Benson 實際交易、也是他在大戶投看的商品。
-# 大台 TXF 與微台 TMF 是不同的委託簿，價格會差個幾點，看錯商品會跟下單畫面對不起來。
-LIVE_PRODUCT = "TMF"
-
-# 歷史模型仍用大台 TXF：
-#   - TMF 2024 年才有資料，TXF 有到 2020（1453 天 vs 約 500 天）
-#   - 兩者追蹤同一個加權指數，價差只有幾點，對「方向傾向」沒有影響
-#   - TXF 流動性深、資料乾淨
-HISTORY_PRODUCT = "TXF"
+# 全部使用「微型臺指期貨」TMF —— Benson 實際交易、也是他在大戶投看的商品。
+#
+# 曾經考慮「歷史用大台 TXF、即時顯示用微台」來換取更長的樣本（1453 天 vs 約 450 天），
+# 但混用兩個商品立刻出事：同一時刻 TXF 今日量 25,045 口、TMF 167,521 口，差 6 倍以上，
+# 拿 TMF 的量去比對 TXF 的量能基準會讓模型一直誤判成「今天爆量」；跳空、動能同理。
+#
+# 兩者的走勢在統計上是同一個東西（同一天 1 分鐘變動中位數都是 22.0 點），
+# 所以改成全部用微台：樣本少一些，但沒有任何混用風險，而且模型描述的就是他真正交易的商品。
+PRODUCT = "TMF"
 
 MINUTE_WINDOW = 3          # 只跟前後 3 分鐘的歷史時刻比
 K_NEIGHBOURS = 150   # 樣本從 242 天增到 1453 天，取更多鄰居仍然比以前更像
@@ -635,9 +635,9 @@ def main():
         實測即時訂閱 60 秒收到 0 筆，同時間真正的當月合約 TXFH6 有 25 筆。
         用成交量挑，可以自動處理結算日換月（不必自己算第三個星期三）。
         """
-        cat = getattr(api.Contracts.Futures, LIVE_PRODUCT)
+        cat = getattr(api.Contracts.Futures, PRODUCT)
         cands = [c for c in cat
-                 if not c.code.startswith(LIVE_PRODUCT + "R")
+                 if not c.code.startswith(PRODUCT + "R")
                  and getattr(c, "delivery_month", "")]
         cands.sort(key=lambda c: c.delivery_month)
         near = cands[:3]
