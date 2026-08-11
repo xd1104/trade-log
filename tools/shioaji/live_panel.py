@@ -364,6 +364,57 @@ def save_trades():
         json.dumps(TODAY_TRADES, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def practice_stats():
+    """
+    練習成績統計，比照 trade-log App 的呈現方式（近 N 筆的勝率／勝敗／淨點數）。
+    若同資料夾放了 my_trades.json（App 匯出檔），會一併算進來，
+    這樣面板就是「一個地方看完全部」。
+    """
+    recs = []
+    if TRADE_DIR.exists():
+        for f in sorted(TRADE_DIR.glob("*.json")):
+            try:
+                recs += json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    imported = HERE / "my_trades.json"
+    if imported.exists():
+        try:
+            for r in json.loads(imported.read_text(encoding="utf-8")):
+                d = 1 if r.get("dir") == "long" else -1
+                pts = d * (float(r["exit"]) - float(r["entry"]))
+                recs.append({**r, "_points": round(pts, 1),
+                             "_net": round(pts - FEE_POINTS, 1), "_source": "app"})
+        except Exception:
+            pass
+
+    for r in recs:
+        r.setdefault("_source", "panel")
+    recs.sort(key=lambda r: (r.get("date", ""), r.get("time", "")))
+
+    def agg(sub):
+        if not sub:
+            return None
+        net = [r["_net"] for r in sub]
+        w = sum(1 for x in net if x > 0)
+        return {"n": len(sub), "wins": w, "losses": len(sub) - w,
+                "win_rate": round(w / len(sub) * 100, 1),
+                "total": round(sum(net), 1),
+                "avg": round(sum(net) / len(sub), 1),
+                "ntd": round(sum(net) * 10)}          # 微台每點 NT$10
+
+    return {
+        "windows": [{"label": lab, **(agg(recs[-n:]) or {})}
+                    for lab, n in [("近 7 筆", 7), ("近 10 筆", 10),
+                                   ("近 30 筆", 30), ("全部", 10 ** 6)]
+                    if agg(recs[-n:])],
+        "recent": [{k: r.get(k) for k in
+                    ("date", "time", "dir", "entry", "exit", "_net", "_reason", "_source")}
+                   for r in recs[-12:]][::-1],
+        "total": len(recs),
+    }
+
+
 def all_practice_trades():
     """把所有練習紀錄整理成 trade-log App 可以匯入的格式。"""
     out = []
@@ -448,6 +499,18 @@ font-size:15px;font-weight:600;cursor:pointer;background:#21262d;color:#e6edf3}
 .trow2{font-size:12.5px;color:#c9d1d9;font-variant-numeric:tabular-nums;padding:3px 0}
 .dl{display:inline-block;margin-top:10px;font-size:12px;color:#58a6ff;text-decoration:none}
 .dl:hover{text-decoration:underline}
+.scards{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:14px}
+.scard{background:#0d1117;border:1px solid #30363d;border-radius:9px;padding:12px 14px}
+.sl{font-size:11.5px;color:#8b949e}
+.sw{font-size:27px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2;margin-top:2px}
+.sw span{font-size:14px;color:#8b949e;font-weight:400}
+.sd{font-size:11.5px;color:#8b949e}
+.sp{font-size:13.5px;font-weight:600;margin-top:5px;font-variant-numeric:tabular-nums}
+.sp .dim{font-weight:400;font-size:11px}
+.dim{color:#6e7681}
+.rt td{padding:6px 8px;font-size:12.5px}
+.tag2{font-size:10px;color:#58a6ff;border:1px solid #1f6feb66;border-radius:20px;padding:1px 6px}
+.note2{font-size:11.5px;color:#6e7681;margin-top:11px;line-height:1.6}
 .split{margin-top:12px}
 .sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#21262d}
 .sbar i{display:block;height:100%}
@@ -476,7 +539,8 @@ border-radius:8px;padding:13px 16px;font-size:13px;color:#ffc1bd;margin-bottom:1
 <script>
 const f=(n,d=0)=>n==null?'—':n.toFixed(d);
 async function tick(){
- let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
+ let s,ST; try{ s=await (await fetch('/api/state')).json();
+   ST=await (await fetch('/api/stats')).json(); }catch(e){ return; }
  const sub=document.getElementById('sub'), body=document.getElementById('body');
  const age=s.age_sec==null?99:s.age_sec;
  const PH={recording:['● 記錄中','#f85149','08:45~09:30 下單時段，資料會存檔'],
@@ -513,9 +577,10 @@ async function tick(){
    chip('今日震幅',f(c.rng)+' 點','flat')+
    chip('位階',f(c.pos*100)+'%','flat')+
    chip('量能',f(c.vol_ratio,2)+' 倍','flat'))+'</div>';
- if(!r){ h+=tradeBox(s); h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
+ if(!r){ h+=tradeBox(s); h+=statsBox(ST); h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
          body.innerHTML=h; return; }
  h+=tradeBox(s);
+ h+=statsBox(ST);
  h+=trendCard(r);
  body.innerHTML=h;
 }
@@ -554,6 +619,35 @@ function tradeBox(s){
    h+='</div>';
  }
  return h+'</div>';
+}
+function statsBox(st){
+ if(!st||!st.windows||!st.windows.length) return '';
+ let cards='';
+ st.windows.forEach(function(w){
+   const col=w.total>0?'#3fb950':w.total<0?'#f85149':'#8b949e';
+   cards+='<div class="scard"><div class="sl">'+w.label+'　<span class="dim">'+w.n+' 筆</span></div>'+
+     '<div class="sw">'+w.win_rate.toFixed(0)+'<span>%</span></div>'+
+     '<div class="sd">'+w.wins+' 勝 '+w.losses+' 敗</div>'+
+     '<div class="sp" style="color:'+col+'">'+(w.total>0?'+':'')+w.total.toFixed(0)+' 點'+
+     '<span class="dim">（'+(w.ntd>0?'+':'')+'NT$'+w.ntd.toLocaleString()+'）</span></div></div>';
+ });
+ let rows='';
+ (st.recent||[]).forEach(function(t){
+   const c=t._net>0?'#3fb950':'#f85149';
+   const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'—';
+   const src=t._source==='app'?'<span class="tag2">App</span>':'';
+   rows+='<tr><td>'+t.date.slice(5)+'</td><td>'+(t.time||'')+'</td>'+
+     '<td>'+(t.dir==='long'?'<span style="color:#3fb950">多</span>':'<span style="color:#f85149">空</span>')+'</td>'+
+     '<td>'+t.entry+'</td><td>'+t.exit+'</td><td class="dim">'+rs+'</td>'+
+     '<td style="color:'+c+';font-weight:600">'+(t._net>0?'+':'')+t._net.toFixed(0)+'</td>'+
+     '<td>'+src+'</td></tr>';
+ });
+ return '<div class="tbox"><div class="thead">練習成績　<span class="dim">共 '+st.total+' 筆</span></div>'+
+   '<div class="scards">'+cards+'</div>'+
+   (rows?'<table class="ht rt"><tr><th>日期</th><th>時間</th><th>方向</th><th>進場</th><th>出場</th>'+
+     '<th>出場原因</th><th>淨點數</th><th></th></tr>'+rows+'</table>':'')+
+   '<div class="note2">勝率是「扣掉手續費 5 點之後還有賺」的比例，跟 App 的算法一致。'+
+   '把 App 匯出的 my_trades.json 放到 tools/shioaji/ 就會一起算進來。</div></div>';
 }
 async function enter(d){
  await fetch('/api/enter',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -630,6 +724,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_GET(self):
+        if self.path.startswith("/api/stats"):
+            return self._json(200, practice_stats())
         if self.path.startswith("/api/export"):
             data = all_practice_trades()
             b = json.dumps(data, ensure_ascii=False, indent=2).encode()
