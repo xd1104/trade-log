@@ -433,239 +433,217 @@ def all_practice_trades():
 PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>早盤盤面儀表板</title><style>
+/* 配色與版型對齊 trade-log App（css/style.css）。
+   含台股慣例：紅色=漲/贏、綠色=跌/輸 —— 跟 App 一致，避免看反方向。 */
+:root{
+  --bg:#0F1218; --surface:#171C25; --surface-2:#1F2530; --line:#262D39;
+  --text:#E7E9ED; --dim:#8B92A0; --faint:#5A616E;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14);
+  --up:#EE5A54; --up-soft:rgba(238,90,84,.16);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.16);
+  --radius:16px; --radius-sm:11px;
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,"Segoe UI","Microsoft JhengHei",sans-serif;
-background:#0d1117;color:#e6edf3;padding:18px;line-height:1.5}
-.wrap{max-width:940px;margin:0 auto}
-h1{font-size:17px;font-weight:600;margin-bottom:2px}
-.sub{font-size:12px;color:#8b949e;margin-bottom:16px}
-.bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
-.chip{background:#161b22;border:1px solid #30363d;border-radius:7px;padding:9px 13px;flex:1;min-width:112px}
-.chip .l{font-size:11px;color:#8b949e}
-.chip .v{font-size:19px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
-.up{color:#3fb950}.down{color:#f85149}.flat{color:#e6edf3}
-.cards{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
-@media(max-width:640px){.cards{grid-template-columns:1fr}}
-.card{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:17px}
-.card h2{font-size:13px;color:#8b949e;font-weight:500;margin-bottom:9px}
-.big{font-size:44px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
-.big span{font-size:19px;color:#8b949e;font-weight:400}
-.ci{font-size:12px;color:#8b949e;margin-top:7px;font-variant-numeric:tabular-nums}
-.edge{margin-top:11px;padding-top:11px;border-top:1px solid #30363d;font-size:13px}
-.edge b{font-size:16px;font-variant-numeric:tabular-nums}
-.trend{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:19px 21px;
-margin-bottom:14px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
-.tleft{flex:1;min-width:260px}
-.tlabel{font-size:13px;color:#8b949e;margin-bottom:5px}
-.tval{font-size:38px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
-.tval span{font-size:16px;color:#8b949e;font-weight:400}
-.tval em{font-size:17px;font-style:normal;font-weight:600}
-.tmeta{font-size:11.5px;color:#8b949e;margin-top:7px}
-.gauge{flex:1;min-width:230px}
-.gtrack{position:relative;height:9px;background:#21262d;border-radius:5px}
-.gzone{position:absolute;top:0;height:100%;background:#484f58;opacity:.45;border-radius:3px}
-.vbox{margin-top:13px;padding:11px 13px;border-radius:8px;font-size:12.5px;line-height:1.6;
-border:1px solid #30363d;background:#0d1117}
-.vbox.flat{border-left:3px solid #8b949e;color:#8b949e}
-.vbox.bull{border-left:3px solid #3fb950;color:#c9d1d9}
-.vbox.bear{border-left:3px solid #f85149;color:#c9d1d9}
-.vbox b{color:#e6edf3}
-.gmid{position:absolute;left:50%;top:-3px;width:1px;height:15px;background:#484f58}
-.gpin{position:absolute;top:-3px;width:3px;height:15px;border-radius:2px;margin-left:-1px}
-.glbl{display:flex;justify-content:space-between;font-size:10.5px;color:#6e7681;margin-top:6px}
-.ht{width:100%;border-collapse:collapse;margin-top:15px;font-size:12.5px;
-font-variant-numeric:tabular-nums}
-.ht th{text-align:left;color:#8b949e;font-weight:500;padding:6px 8px;
-border-bottom:1px solid #30363d;font-size:11.5px}
-.ht td{padding:7px 8px;border-bottom:1px solid #21262d;color:#c9d1d9}
-.ht tr:last-child td{border-bottom:none}
-.tbox{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:16px 18px;margin-bottom:14px}
-.thead{font-size:13px;color:#8b949e;margin-bottom:12px}
-.warn{font-size:11px;color:#d29922;border:1px solid #d2992255;border-radius:20px;padding:2px 9px}
-.btns{display:flex;gap:10px;flex-wrap:wrap}
-.btn{flex:1;min-width:120px;padding:13px 18px;border-radius:9px;border:1px solid #30363d;
-font-size:15px;font-weight:600;cursor:pointer;background:#21262d;color:#e6edf3}
-.btn.long{background:#238636;border-color:#2ea043}
-.btn.short{background:#a5232d;border-color:#c9313d}
-.btn.flat{background:#30363d}
-.btn.ghost{flex:0 0 auto;min-width:0;background:transparent;color:#8b949e;font-weight:400;font-size:13px}
-.btn:hover{filter:brightness(1.15)}
-.pos{margin-bottom:12px}
-.pline{font-size:13px;color:#c9d1d9}
-.pline.dim{color:#8b949e;font-size:12px;margin-top:4px}
-.pnl{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin:4px 0}
-.tlist{margin-top:14px;padding-top:12px;border-top:1px solid #30363d}
-.tsum{font-size:12.5px;color:#8b949e;margin-bottom:7px}
-.trow2{font-size:12.5px;color:#c9d1d9;font-variant-numeric:tabular-nums;padding:3px 0}
-.dl{display:inline-block;margin-top:10px;font-size:12px;color:#58a6ff;text-decoration:none}
-.dl:hover{text-decoration:underline}
-.scards{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:14px}
-.scard{background:#0d1117;border:1px solid #30363d;border-radius:9px;padding:12px 14px}
-.sl{font-size:11.5px;color:#8b949e}
-.sw{font-size:27px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2;margin-top:2px}
-.sw span{font-size:14px;color:#8b949e;font-weight:400}
-.sd{font-size:11.5px;color:#8b949e}
-.sp{font-size:13.5px;font-weight:600;margin-top:5px;font-variant-numeric:tabular-nums}
-.sp .dim{font-weight:400;font-size:11px}
-.dim{color:#6e7681}
-.rt td{padding:6px 8px;font-size:12.5px}
-.tag2{font-size:10px;color:#58a6ff;border:1px solid #1f6feb66;border-radius:20px;padding:1px 6px}
-.note2{font-size:11.5px;color:#6e7681;margin-top:11px;line-height:1.6}
-.split{margin-top:12px}
-.sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#21262d}
-.sbar i{display:block;height:100%}
-.slbl{display:flex;justify-content:space-between;font-size:11px;color:#8b949e;margin-top:5px}
-.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin-top:9px}
-.tag.no{background:#21262d;color:#8b949e;border:1px solid #30363d}
-.tag.yes{background:#1f6feb22;color:#58a6ff;border:1px solid #1f6feb66}
-.note{background:#161b22;border:1px solid #30363d;border-left:3px solid #d29922;
-border-radius:7px;padding:13px 15px;font-size:12.5px;color:#c9d1d9;margin-bottom:12px}
-.note b{color:#e6edf3}
-.foot{font-size:11.5px;color:#6e7681;text-align:center;margin-top:18px;line-height:1.7}
-.wait{text-align:center;padding:56px 20px;color:#8b949e}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#3fb950;margin-right:5px}
-.stale{background:#d29922}
-.dead{background:#f85149}
-.alert{background:#f8514915;border:1px solid #f85149;border-left:4px solid #f85149;
-border-radius:8px;padding:13px 16px;font-size:13px;color:#ffc1bd;margin-bottom:14px;line-height:1.65}
-.alert b{color:#ff9d97}
-</style></head><body><div class="wrap">
-<h1>台指期 早盤盤面儀表板</h1>
-<div class="sub" id="sub">連線中…</div>
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
+  background-image:radial-gradient(1200px 500px at 50% -8%, rgba(227,169,81,.06), transparent 70%);
+  background-repeat:no-repeat; min-height:100vh}
+.app{max-width:480px; margin:0 auto; padding:0 16px 60px}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px}
+.brand{display:flex; align-items:center; gap:10px}
+.brand .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+  background:var(--gold-soft); color:var(--gold); font-size:17px}
+.brand .nm{font-size:15px; font-weight:650}
+.brand .sub{font-size:11px; color:var(--faint); letter-spacing:1.2px; margin-top:1px}
+.clock{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.clock .d{font-size:13.5px; font-weight:600}
+.clock .w{font-size:11px; color:var(--faint)}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  padding:16px 17px; margin-bottom:12px}
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:20px 4px 10px}
+.sec-head h2{font-size:12.5px; margin:0; color:var(--dim); letter-spacing:1.5px; font-weight:600}
+.sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
+.grid{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line);
+  border-radius:var(--radius-sm); overflow:hidden}
+.cell{background:var(--surface); padding:11px 13px}
+.cell .l{font-size:11px; color:var(--dim)}
+.cell .v{font-size:19px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; margin-top:2px}
+.up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text)}
+.px{grid-column:1/-1; text-align:center; padding:16px}
+.px .v{font-size:38px; letter-spacing:-1px}
+.btns{display:flex; gap:10px}
+.btn{flex:1; padding:15px; border-radius:12px; cursor:pointer;
+  font-family:var(--font-sans); font-size:16px; font-weight:700; letter-spacing:1px}
+.btn.long{background:var(--up-soft); color:var(--up); border:1px solid rgba(238,90,84,.4)}
+.btn.short{background:var(--down-soft); color:var(--down); border:1px solid rgba(52,179,126,.4)}
+.btn.flat2{background:var(--surface-2); color:var(--text); border:1px solid var(--line)}
+.btn.ghost{flex:0 0 auto; background:transparent; color:var(--faint); font-size:13px;
+  font-weight:400; border:1px solid var(--line)}
+.btn:active{transform:scale(.99)}
+.warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:20px; padding:2px 9px; font-weight:600}
+.pnl{text-align:center; padding:6px 0 10px}
+.pnl .v{font-size:44px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1}
+.pnl .l{font-size:12px; color:var(--dim); margin-top:6px}
+.plimit{display:flex; justify-content:center; gap:14px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); margin-bottom:12px}
+.seg{display:flex; gap:4px; background:var(--surface-2); border-radius:10px; padding:3px; margin-bottom:16px}
+.seg button{flex:1; border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:12.5px; font-weight:600; padding:8px 4px; border-radius:8px}
+.seg button.on{background:var(--gold-soft); color:var(--gold)}
+.rate-row{display:flex; align-items:flex-end; gap:16px}
+.rate-big{line-height:1}
+.rate-big .num{font-family:var(--font-mono); font-size:52px; font-weight:680; letter-spacing:-1px;
+  color:var(--gold); font-variant-numeric:tabular-nums}
+.rate-big .pct{font-size:22px; color:var(--gold); font-family:var(--font-mono); margin-left:2px}
+.rate-big .lab{font-size:12px; color:var(--dim); letter-spacing:2px; margin-top:6px}
+.rate-meta{flex:1; display:flex; flex-direction:column; gap:8px; align-items:flex-end; padding-bottom:4px}
+.wl{font-family:var(--font-mono); font-size:14px; font-variant-numeric:tabular-nums}
+.wl .w{color:var(--up)} .wl .l{color:var(--down)}
+.net{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.net .v{font-size:19px; font-weight:700}
+.net .u{font-size:11px; color:var(--dim)}
+.cash{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
+.list{display:flex; flex-direction:column; gap:8px; margin-top:14px}
+.trade{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:11px 13px}
+.tr-top{display:flex; align-items:center; gap:9px}
+.tr-date{font-family:var(--font-mono); font-size:12.5px; color:var(--dim); width:44px; flex:none}
+.dir{font-size:11px; font-weight:700; padding:2px 7px; border-radius:6px; flex:none}
+.dir.l{background:var(--up-soft); color:var(--up)}
+.dir.s{background:var(--down-soft); color:var(--down)}
+.tr-px{flex:1; font-family:var(--font-mono); font-size:12.5px; font-variant-numeric:tabular-nums}
+.tr-px .arrow{color:var(--faint); margin:0 3px}
+.tr-res{font-family:var(--font-mono); font-size:15px; font-weight:700; text-align:right;
+  min-width:52px; flex:none; font-variant-numeric:tabular-nums}
+.r-win{color:var(--up)} .r-loss{color:var(--down)}
+.tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
+.alert{background:var(--up-soft); border:1px solid var(--up); border-radius:var(--radius-sm);
+  padding:12px 14px; font-size:12.5px; margin-bottom:12px; line-height:1.6}
+.note{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:13px 15px; font-size:12px; color:var(--dim); margin-bottom:12px; line-height:1.65}
+.note b{color:var(--text)}
+.wait{text-align:center; padding:48px 20px; color:var(--dim)}
+.foot{font-size:11px; color:var(--faint); text-align:center; margin-top:20px; line-height:1.7}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--down);margin-right:5px}
+.dot.stale{background:var(--gold)} .dot.dead{background:var(--up)}
+.dl{display:inline-block; margin-top:12px; font-size:12px; color:var(--gold); text-decoration:none}
+</style></head><body><div class="app">
+<div class="topbar">
+  <div class="brand"><div class="mark">&#9702;</div>
+    <div><div class="nm">早盤儀表板</div><div class="sub" id="sub">連線中…</div></div></div>
+  <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
+</div>
 <div id="body"><div class="wait">等待資料…</div></div>
-<div class="foot">
-這裡只顯示當下的客觀盤面數字，不做任何預測、不給買賣訊號。
-</div></div>
+<div class="foot">只顯示當下的客觀盤面數字，不做預測、不給買賣訊號。<br>練習下單為模擬，不會送單到永豐。</div>
+</div>
 <script>
-const f=(n,d=0)=>n==null?'—':n.toFixed(d);
+var WIN=7;
+const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
+const sgn=v=>v>0?'up':v<0?'down':'flat';
+const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
+
 async function tick(){
  let s,ST; try{ s=await (await fetch('/api/state')).json();
    ST=await (await fetch('/api/stats')).json(); }catch(e){ return; }
- const sub=document.getElementById('sub'), body=document.getElementById('body');
- const age=s.age_sec==null?99:s.age_sec;
- const PH={recording:['● 記錄中','#f85149','08:45~09:30 下單時段，資料會存檔'],
-           live:['◐ 顯示中','#3fb950','日盤，照常顯示但不記錄'],
-           off:['○ 夜盤','#8b949e','只顯示價格與動能']};
- const ph=PH[s.phase]||PH.off;
+ const PH={recording:['記錄中','var(--up)'],live:['顯示中','var(--down)'],off:['夜盤','var(--faint)']};
+ const ph=PH[s.phase]||PH.off, age=s.age_sec==null?99:s.age_sec;
  const dead=(s.conn&&s.conn.ok===false)||age>90;
- sub.innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
-   (s.replay?'重播模式 '+s.replay+' · ':'')+
-   ((s.conn&&s.conn.contract)?'<b>'+(s.conn.contract_name||s.conn.contract)+'</b> · ':'')+
-   '<b style="color:'+ph[1]+'">'+ph[0]+'</b>（'+ph[2]+'） · 樣本 '+(s.n_days_total||0)+' 天 · '+(s.clock||'')+
-   (age==null?'':' · 上一筆成交 '+(age<2?'剛剛':age+' 秒前'));
- let warn='';
- if(dead){
-   const c=s.conn||{};
-   warn='<div class="alert"><b>⚠ 報價已中斷 —— 畫面上的數字是舊的，不要當作現況</b><br>'+
-     '最後收到報價：'+(age==null?'尚未收到':age+' 秒前')+
-     (c.since?'　·　中斷起始 '+c.since:'')+
-     (c.retries?'　·　已重試 '+c.retries+' 次':'')+
-     (c.last_error?'<br>錯誤：'+c.last_error:'')+
-     '<br>常見原因：切換 VPN 或網路中斷。程式每分鐘會自動重連。</div>';
- }
- if(s.status!=='live'){ body.innerHTML=warn+'<div class="wait">'+(s.msg||'等待中…')+'</div>'; return; }
- const c=s.chips, r=s.result;
- const dir=v=>v>0?'up':v<0?'down':'flat';
- let h=warn+'<div class="bar">'+
-  chip(c.is_mid?'中價（尚無成交）':'成交價',f(c.price),'flat')+
-  (c.bid==null?'':chip('買/賣',f(c.bid)+' / '+f(c.ask),'flat'))+
-  chip('最近5分鐘',(c.mom5>0?'+':'')+f(c.mom5)+' 點',dir(c.mom5))+
-  chip('最近15分鐘',(c.mom15>0?'+':'')+f(c.mom15)+' 點',dir(c.mom15))+
-  (c.chg==null?'':
-   chip('對開盤',(c.chg>0?'+':'')+f(c.chg)+' 點',dir(c.chg))+
-   chip('跳空',(c.gap>0?'+':'')+f(c.gap)+' 點','flat')+
-   chip('今日震幅',f(c.rng)+' 點','flat')+
-   chip('位階',f(c.pos*100)+'%','flat')+
-   chip('量能',f(c.vol_ratio,2)+' 倍','flat'))+'</div>';
- if(!r){ h+=tradeBox(s); h+=statsBox(ST); h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
-         body.innerHTML=h; return; }
+ document.getElementById('clk').textContent=(s.clock||'').slice(0,5);
+ document.getElementById('ph').innerHTML='<span style="color:'+ph[1]+'">'+ph[0]+'</span>';
+ document.getElementById('sub').innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
+   ((s.conn&&s.conn.contract_name)||'微台')+(s.replay?'・重播':'');
+ const body=document.getElementById('body');
+ let h='';
+ if(dead) h+='<div class="alert"><b>&#9888; 報價已中斷</b><br>畫面上的數字是舊的（'+
+   (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>';
+ if(s.status!=='live'){ body.innerHTML=h+'<div class="wait">'+(s.msg||'等待中…')+'</div>'; return; }
+ const c=s.chips;
+ h+='<div class="card"><div class="grid">'+
+   '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
+   cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
+   cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+
+   (c.chg==null?'':
+     cell('對開盤',pm(c.chg)+' 點',sgn(c.chg))+
+     cell('跳空',pm(c.gap)+' 點',sgn(c.gap))+
+     cell('今日震幅',f(c.rng)+' 點','flat')+
+     cell('位階',f(c.pos*100)+'%','flat')+
+     cell('量能',f(c.vol_ratio,2)+' 倍','flat')+
+     cell('買 / 賣',f(c.bid)+' / '+f(c.ask),'flat'))+
+   '</div></div>';
  h+=tradeBox(s);
  h+=statsBox(ST);
- h+=trendCard(r);
  body.innerHTML=h;
 }
-function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
+function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
+
 function tradeBox(s){
  const P=s.position, T=s.today_trades||[];
- let h='<div class="tbox">';
- h+='<div class="thead">練習下單　<span class="warn">模擬，不會真的送單到永豐</span></div>';
+ let h='<div class="sec-head"><h2>練習下單</h2><span class="warn">模擬・不會送單</span></div><div class="card">';
  if(P){
-   const f=P.float_pts, col=f>0?'#3fb950':f<0?'#f85149':'#e6edf3';
-   const side=P.dir==='long'?'做多':'做空';
-   h+='<div class="pos"><div class="pline"><b>持倉中：'+side+'</b>　進場 '+P.entry.toFixed(0)+
-      '　'+P.entry_time+'</div>'+
-      '<div class="pnl" style="color:'+col+'">'+(f>0?'+':'')+f.toFixed(0)+' 點</div>'+
-      '<div class="pline dim">停利 '+P.tp.toFixed(0)+'　停損 '+P.sl.toFixed(0)+
-      '　（碰到自動平倉）</div></div>';
-   h+='<div class="btns"><button class="btn flat" onclick="act(\'close\')">手動平倉</button>'+
-      '<button class="btn ghost" onclick="act(\'undo\')">取消這筆</button></div>';
+   h+='<div class="pnl"><div class="v '+sgn(P.float_pts)+'">'+pm(P.float_pts)+'</div>'+
+      '<div class="l">'+(P.dir==='long'?'做多':'做空')+'　進場 '+f(P.entry)+'　'+P.entry_time+'</div></div>'+
+      '<div class="plimit"><span>停利 '+f(P.tp)+'</span><span>停損 '+f(P.sl)+'</span></div>'+
+      '<div class="btns"><button class="btn flat2" onclick="act(\'close\')">手動平倉</button>'+
+      '<button class="btn ghost" onclick="act(\'undo\')">取消</button></div>';
  } else {
-   h+='<div class="btns">'+
-      '<button class="btn long" onclick="enter(\'long\')">▲ 做多</button>'+
-      '<button class="btn short" onclick="enter(\'short\')">▼ 做空</button></div>';
+   h+='<div class="btns"><button class="btn long" onclick="enter(\'long\')">&#9650; 做多</button>'+
+      '<button class="btn short" onclick="enter(\'short\')">&#9660; 做空</button></div>';
  }
  if(T.length){
-   let sum=0; T.forEach(function(t){sum+=t._net;});
-   h+='<div class="tlist"><div class="tsum">今天 '+T.length+' 筆　合計 '+
-      (sum>0?'+':'')+sum.toFixed(0)+' 點（扣費後）</div>';
-   T.forEach(function(t){
-     const c=t._net>0?'#3fb950':'#f85149';
-     const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||t._reason;
-     h+='<div class="trow2">'+t.time+'　'+(t.dir==='long'?'多':'空')+'　'+
-        t.entry+' → '+t.exit+'　'+rs+
-        '　<b style="color:'+c+'">'+(t._net>0?'+':'')+t._net.toFixed(0)+'</b></div>';
-   });
-   h+='<a class="dl" href="/api/export" download>下載全部練習紀錄（可匯入 trade-log App）</a>';
-   h+='</div>';
+   let sum=0; T.forEach(t=>sum+=t._net);
+   h+='<div class="list">';
+   T.slice().reverse().forEach(t=>h+=row(t));
+   h+='</div><div class="plimit" style="margin:12px 0 0">今天 '+T.length+' 筆　合計 '+pm(sum)+' 點</div>';
  }
  return h+'</div>';
 }
-function statsBox(st){
- if(!st||!st.windows||!st.windows.length) return '';
- let cards='';
- st.windows.forEach(function(w){
-   const col=w.total>0?'#3fb950':w.total<0?'#f85149':'#8b949e';
-   cards+='<div class="scard"><div class="sl">'+w.label+'　<span class="dim">'+w.n+' 筆</span></div>'+
-     '<div class="sw">'+w.win_rate.toFixed(0)+'<span>%</span></div>'+
-     '<div class="sd">'+w.wins+' 勝 '+w.losses+' 敗</div>'+
-     '<div class="sp" style="color:'+col+'">'+(w.total>0?'+':'')+w.total.toFixed(0)+' 點'+
-     '<span class="dim">（'+(w.ntd>0?'+':'')+'NT$'+w.ntd.toLocaleString()+'）</span></div></div>';
+function row(t){
+ const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'';
+ return '<div class="trade"><div class="tr-top">'+
+  '<span class="tr-date">'+(t.date?t.date.slice(5):'')+'</span>'+
+  '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+  '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
+  (rs?' <span class="tag">'+rs+'</span>':'')+(t._source==='app'?' <span class="tag">App</span>':'')+'</span>'+
+  '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div></div>';
+}
+function statsBox(ST){
+ if(!ST||!ST.windows||!ST.windows.length) return '';
+ let w=ST.windows.find(x=>x.n===WIN)||ST.windows.find(x=>x.label.indexOf(String(WIN))>=0);
+ if(!w) w=ST.windows[ST.windows.length-1];
+ let seg='<div class="seg">';
+ ST.windows.forEach((x,i)=>{
+   const k=parseInt(x.label.replace(/[^0-9]/g,''))||0;
+   seg+='<button class="'+(x===w?'on':'')+'" onclick="WIN='+k+';tick()">'+x.label+'</button>';
  });
- let rows='';
- (st.recent||[]).forEach(function(t){
-   const c=t._net>0?'#3fb950':'#f85149';
-   const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'—';
-   const src=t._source==='app'?'<span class="tag2">App</span>':'';
-   rows+='<tr><td>'+t.date.slice(5)+'</td><td>'+(t.time||'')+'</td>'+
-     '<td>'+(t.dir==='long'?'<span style="color:#3fb950">多</span>':'<span style="color:#f85149">空</span>')+'</td>'+
-     '<td>'+t.entry+'</td><td>'+t.exit+'</td><td class="dim">'+rs+'</td>'+
-     '<td style="color:'+c+';font-weight:600">'+(t._net>0?'+':'')+t._net.toFixed(0)+'</td>'+
-     '<td>'+src+'</td></tr>';
- });
- return '<div class="tbox"><div class="thead">練習成績　<span class="dim">共 '+st.total+' 筆</span></div>'+
-   '<div class="scards">'+cards+'</div>'+
-   (rows?'<table class="ht rt"><tr><th>日期</th><th>時間</th><th>方向</th><th>進場</th><th>出場</th>'+
-     '<th>出場原因</th><th>淨點數</th><th></th></tr>'+rows+'</table>':'')+
-   '<div class="note2">勝率是「扣掉手續費 5 點之後還有賺」的比例，跟 App 的算法一致。'+
-   '把 App 匯出的 my_trades.json 放到 tools/shioaji/ 就會一起算進來。</div></div>';
+ seg+='</div>';
+ const cls=w.total>0?'up':w.total<0?'down':'flat';
+ let h='<div class="sec-head"><h2>練習成績</h2><span class="count">共 '+ST.total+' 筆</span></div>'+
+  '<div class="card">'+seg+
+  '<div class="rate-row"><div class="rate-big"><span class="num">'+w.win_rate.toFixed(0)+
+  '</span><span class="pct">%</span><div class="lab">勝率</div></div>'+
+  '<div class="rate-meta"><div class="wl"><b class="w">'+w.wins+'</b> 勝　<b class="l">'+w.losses+'</b> 敗</div>'+
+  '<div class="net"><span class="v '+cls+'">'+pm(w.total)+'</span> <span class="u">點</span></div>'+
+  '<div class="cash">'+(w.ntd<0?'-':'+')+'NT$'+Math.abs(w.ntd).toLocaleString()+'</div>'+
+  '</div></div>';
+ if(ST.recent&&ST.recent.length){
+   h+='<div class="list">';
+   ST.recent.forEach(t=>h+=row(t));
+   h+='</div><a class="dl" href="/api/export" download>下載練習紀錄（可匯入 App）</a>';
+ }
+ return h+'</div>';
 }
 async function enter(d){
- await fetch('/api/enter',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({dir:d})}).then(r=>r.json()).then(r=>{if(!r.ok)alert(r.msg);});
- tick();
+ const r=await (await fetch('/api/enter',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({dir:d})})).json();
+ if(!r.ok) alert(r.msg); tick();
 }
 async function act(a){
- await fetch('/api/'+a,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-   .then(r=>r.json()).then(r=>{if(!r.ok&&r.msg)alert(r.msg);});
- tick();
-}
-function trendCard(r){
- return '<div class="note"><b>為什麼這裡沒有趨勢預測？</b><br>'+
-  '曾經有一個 0~100 的「趨勢指數」，已移除。用 Benson 真正的規則（±100 點先碰哪個）'+
-  '做走查驗證後，它的預測力等於丟銅板（AUC 0.46~0.49），換成邏輯迴歸與梯度提升樹也一樣。'+
-  '急跌後 10 分鐘的漲幅中位數只有 +1 點，而停利需要 100 點 —— 方向猜對也摸不到。'+
-  '<br>留一個看起來可信卻無效的數字，只會讓人更敢下手，所以拿掉。'+
-  '上面那排是<b>當下的事實</b>，不是預測，可以放心看。</div>';
+ const r=await (await fetch('/api/'+a,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+ if(!r.ok&&r.msg) alert(r.msg); tick();
 }
 tick(); setInterval(tick,500);
 </script></body></html>"""
