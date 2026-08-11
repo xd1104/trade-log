@@ -223,9 +223,18 @@ def main():
         print("（已略過 ±100 停利停損模擬 —— 面板只用趨勢欄位。"
               "要重新分析勝率請把 SIMULATE_TP_SL 改成 True）\n")
 
-    # 量能比：除以「同一分鐘、全樣本的累計量中位數」
-    ref = out.groupby("minute")["vol_cum"].transform("median")
+    # 量能比：除以「同一分鐘、前 20 個交易日的累計量中位數」
+    #
+    # 【原本是 bug】舊版用 groupby("minute").transform("median") 取全樣本中位數，
+    # 那等於讓 2025 年的資料看到 2026 年的量能水準 —— 偷看未來。
+    # 走查驗證會因此高估模型表現。改成只用過去 20 天，並 shift(1) 排除當天。
+    out = out.sort_values(["minute", "date"])
+    ref = (out.groupby("minute")["vol_cum"]
+              .transform(lambda s: s.rolling(20, min_periods=10).median().shift(1)))
     out["vol_ratio"] = out["vol_cum"] / ref
+    # 最早的幾天沒有足夠的過去可以參考，用 1.0（中性）頂著
+    out["vol_ratio"] = out["vol_ratio"].fillna(1.0)
+    out = out.sort_values(["date", "minute"])
 
     out.to_csv(OUT, index=False)
 

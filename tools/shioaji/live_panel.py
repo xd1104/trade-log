@@ -49,6 +49,7 @@ except Exception:
 
 HERE = Path(__file__).parent
 MATRIX = HERE / "intraday.csv"
+CALIB = HERE / "calibration.json"     # 走查驗證產出的分段命中率
 LOG_DIR = HERE / "morning_logs"
 PORT = 8770
 
@@ -75,6 +76,12 @@ PRODUCT = "TMF"
 
 MINUTE_WINDOW = 3          # 只跟前後 3 分鐘的歷史時刻比
 K_NEIGHBOURS = 150   # 樣本從 242 天增到 1453 天，取更多鄰居仍然比以前更像
+
+# 走查驗證的分段命中率：面板不再拿未經檢驗的 kNN 百分比當機率用
+try:
+    CALIBRATION = json.loads(CALIB.read_text(encoding="utf-8"))
+except Exception:
+    CALIBRATION = {}
 
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
@@ -133,23 +140,23 @@ class History:
                  for hz in horizons.values()]
         consistent = abs(sum(sides)) == 3
 
+        # 門檻來自走查驗證（walkforward.py）：只有指數 <40 或 >60 才真的有訊號，
+        # 40~60 之間經檢驗是雜訊（斜率 -0.077，信賴區間 [-0.69, +0.53]，不顯著）。
+        # 所以中間一律報「沒訊號」，不再分「弱偏漲/弱偏跌」誤導人。
         idx = horizons[10]["prob_up"]
-        if idx >= 60:
-            direction, strength = "偏漲", "強"
-        elif idx >= 55:
-            direction, strength = "偏漲", "弱"
-        elif idx <= 40:
-            direction, strength = "偏跌", "強"
-        elif idx <= 45:
-            direction, strength = "偏跌", "弱"
+        if idx > 60:
+            direction, regime = "偏漲", "bull"
+        elif idx < 40:
+            direction, regime = "偏跌", "bear"
         else:
-            direction, strength = "沒方向", ""
+            direction, regime = "沒訊號", "flat"
 
         return {
             "n_days": n_days,
             "index": idx,
             "direction": direction,
-            "strength": strength,
+            "regime": regime,
+            "verified": CALIBRATION.get(regime),
             "consistent": consistent,
             "any_meaningful": any(hz["meaningful"] for hz in horizons.values()),
             "horizons": [{"h": h, **hz} for h, hz in horizons.items()],
@@ -309,7 +316,13 @@ margin-bottom:14px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
 .tmeta{font-size:11.5px;color:#8b949e;margin-top:7px}
 .gauge{flex:1;min-width:230px}
 .gtrack{position:relative;height:9px;background:#21262d;border-radius:5px}
-.gfill{position:absolute;top:0;height:100%;opacity:.35;border-radius:5px}
+.gzone{position:absolute;top:0;height:100%;background:#484f58;opacity:.45;border-radius:3px}
+.vbox{margin-top:13px;padding:11px 13px;border-radius:8px;font-size:12.5px;line-height:1.6;
+border:1px solid #30363d;background:#0d1117}
+.vbox.flat{border-left:3px solid #8b949e;color:#8b949e}
+.vbox.bull{border-left:3px solid #3fb950;color:#c9d1d9}
+.vbox.bear{border-left:3px solid #f85149;color:#c9d1d9}
+.vbox b{color:#e6edf3}
 .gmid{position:absolute;left:50%;top:-3px;width:1px;height:15px;background:#484f58}
 .gpin{position:absolute;top:-3px;width:3px;height:15px;border-radius:2px;margin-left:-1px}
 .glbl{display:flex;justify-content:space-between;font-size:10.5px;color:#6e7681;margin-top:6px}
@@ -390,42 +403,47 @@ async function tick(){
  h+=trendCard(r);
  h+='<div class="note"><b>怎麼讀：</b>拿現在的盤面，去歷史裡找 '+r.n_days+
     ' 個「同一時段、走勢長得最像」的日子（每天只取最像的一刻），看那些日子接下來怎麼走。'+
-    '<br><b>這是方向傾向，不是賺賠預測。</b>實測過：方向猜對大約六成四，'+
-    '但照這個方向下單、九種停損停利組合全部是賠的 —— 因為猜錯的時候賠得比較多。'+
+    '<br><b>這是方向傾向，不是賺賠預測。</b>走查驗證（'+r.n_days+' 天比對、334 天實測）確認：'+
+    '指數在兩端時方向判斷有效，但照它下單、扣掉手續費之後仍然是賠的。'+
     '請當看盤參考，不要當進場訊號。</div>';
  body.innerHTML=h;
 }
 function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 function trendCard(r){
  if(!r) return '';
- const i=r.index;
- const col = i>=60?'#3fb950' : i<=40?'#f85149' : '#8b949e';
- const arrow = r.direction==='偏漲'?'▲' : r.direction==='偏跌'?'▼' : '—';
+ const i=r.index, v=r.verified;
+ const col = r.regime==='bull'?'#3fb950' : r.regime==='bear'?'#f85149' : '#8b949e';
+ const arrow = r.regime==='bull'?'▲' : r.regime==='bear'?'▼' : '—';
  let rows='';
  r.horizons.forEach(function(z){
-   const c2 = z.prob_up>=55?'#3fb950' : z.prob_up<=45?'#f85149' : '#8b949e';
    rows+='<tr><td>'+z.h+' 分鐘後</td>'+
-     '<td style="color:'+c2+';font-weight:600">'+z.prob_up.toFixed(0)+'%</td>'+
-     '<td>'+z.ci[0].toFixed(0)+'~'+z.ci[1].toFixed(0)+'%</td>'+
-     '<td style="color:'+c2+'">'+(z.move>0?'+':'')+z.move.toFixed(0)+' 點</td>'+
-     '<td>'+(z.q1>0?'+':'')+z.q1.toFixed(0)+' ~ '+(z.q3>0?'+':'')+z.q3.toFixed(0)+'</td>'+
-     '<td>'+(z.meaningful?'<b style="color:#58a6ff">★</b>':'—')+'</td></tr>';
+     '<td>'+z.prob_up.toFixed(0)+'%</td>'+
+     '<td>'+(z.move>0?'+':'')+z.move.toFixed(0)+' 點</td>'+
+     '<td>'+(z.q1>0?'+':'')+z.q1.toFixed(0)+' ~ '+(z.q3>0?'+':'')+z.q3.toFixed(0)+'</td></tr>';
  });
+ let verdict;
+ if(r.regime==='flat'){
+   verdict='<div class="vbox flat"><b>目前沒有訊號。</b>走查驗證顯示指數在 40~60 之間時，'+
+     '預測與實際結果沒有可靠關聯（斜率信賴區間跨過 0）—— 這區間的數字是雜訊，別當依據。</div>';
+ } else {
+   verdict='<div class="vbox '+r.regime+'"><b>走查驗證：</b>歷史上指數落在這個區間時，'+
+     '10 分鐘後實際'+(r.regime==='bull'?'上漲':'下跌')+'的比例是 <b>'+
+     (r.regime==='bull'?v.rate:(100-v.rate)).toFixed(1)+'%</b>'+
+     '（95% 區間 '+(r.regime==='bull'?v.ci[0]:100-v.ci[1]).toFixed(1)+'~'+
+     (r.regime==='bull'?v.ci[1]:100-v.ci[0]).toFixed(1)+'%，'+v.n_days+' 天）</div>';
+ }
  return '<div class="trend"><div class="tleft">'+
   '<div class="tlabel">現在的趨勢</div>'+
-  '<div class="tval" style="color:'+col+'">'+arrow+' '+r.direction+
-  (r.strength?'<em style="color:'+col+'">（'+r.strength+'）</em>':'')+'</div>'+
-  '<div class="tmeta">趨勢指數 <b style="color:'+col+'">'+i+'</b> / 100　·　樣本 '+r.n_days+' 天　·　'+
-  (r.consistent?'<b style="color:#58a6ff">5/10/15 分鐘都指同一邊</b>':'<span>各時間長度方向不一致</span>')+
-  '</div></div>'+
-  '<div class="gauge"><div class="gtrack"><div class="gfill" style="left:'+Math.min(i,50)+
-  '%;width:'+Math.abs(i-50)+'%;background:'+col+'"></div><div class="gmid"></div>'+
+  '<div class="tval" style="color:'+col+'">'+arrow+' '+r.direction+'</div>'+
+  '<div class="tmeta">趨勢指數 <b style="color:'+col+'">'+i+'</b> / 100　·　比對 '+r.n_days+' 天　·　'+
+  (r.consistent?'<b style="color:#58a6ff">5/10/15 分鐘都指同一邊</b>':'各時間長度方向不一致')+
+  '</div>'+verdict+'</div>'+
+  '<div class="gauge"><div class="gtrack">'+
+  '<div class="gzone" style="left:40%;width:20%"></div>'+
   '<div class="gpin" style="left:'+i+'%;background:'+col+'"></div></div>'+
-  '<div class="glbl"><span>0 全跌</span><span>50 沒方向</span><span>100 全漲</span></div>'+
-  '</div>'+
-  '<table class="ht"><tr><th>時間</th><th>上漲機率</th><th>95% 區間</th>'+
-  '<th>預期變動</th><th>常見範圍</th><th>可信</th></tr>'+rows+'</table>'+
-  '</div>';
+  '<div class="glbl"><span>0 全跌</span><span>40~60 沒訊號</span><span>100 全漲</span></div>'+
+  '<table class="ht"><tr><th>時間</th><th>上漲比例</th><th>預期變動</th><th>常見範圍</th></tr>'+rows+'</table>'+
+  '</div></div>';
 }
 tick(); setInterval(tick,500);
 </script></body></html>"""
