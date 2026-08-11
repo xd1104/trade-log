@@ -17,3 +17,4 @@ panel.log
 
 # 你的交易紀錄匯出檔（個人資料，不進版控）
 tools/shioaji/my_trades.json
+tools/shioaji/practice_trades/

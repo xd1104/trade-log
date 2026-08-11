@@ -51,6 +51,11 @@ HERE = Path(__file__).parent
 MATRIX = HERE / "intraday.csv"
 CALIB = HERE / "calibration.json"     # 走查驗證產出的分段命中率
 LOG_DIR = HERE / "morning_logs"
+TRADE_DIR = HERE / "practice_trades"     # 模擬練習的交易紀錄
+
+TP_POINTS = 100.0        # Benson 固定 ±100
+SL_POINTS = 100.0
+FEE_POINTS = 5.0         # 來回 NT$50 ÷ 每點 NT$10
 PORT = 8770
 
 SESSION_OPEN = pd.Timestamp("08:45").time()
@@ -82,6 +87,12 @@ try:
     CALIBRATION = json.loads(CALIB.read_text(encoding="utf-8"))
 except Exception:
     CALIBRATION = {}
+
+# 模擬練習的持倉與當日已平倉紀錄。
+# 【鐵律】這裡只做紙上練習，不會送任何委託到永豐 —— 真實下單必須由 Benson 自己操作。
+POSITION = None
+TODAY_TRADES = []
+CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
 
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
@@ -282,6 +293,90 @@ class Today:
         }
 
 
+# ------------------------------------------------------- 模擬練習（不會真的下單）
+
+def open_position(direction, price, snapshot, note=""):
+    """開一筆模擬單。direction: 'long' / 'short'。"""
+    global POSITION
+    if POSITION is not None:
+        return False, "已經有持倉了，先平倉才能再進場"
+    if price is None:
+        return False, "還沒有報價，無法進場"
+    d = 1 if direction == "long" else -1
+    POSITION = {
+        "dir": direction,
+        "entry": float(price),
+        "entry_time": datetime.now().strftime("%H:%M:%S"),
+        "tp": float(price) + d * TP_POINTS,
+        "sl": float(price) - d * SL_POINTS,
+        "snapshot": snapshot or {},
+        "note": note,
+    }
+    print(f"[練習] 進場 {direction} @ {price}　停利 {POSITION['tp']:.0f}　停損 {POSITION['sl']:.0f}")
+    return True, "已進場"
+
+
+def close_position(price, reason):
+    """平倉並記錄。reason: 'tp' / 'sl' / 'manual' / 'close'。"""
+    global POSITION
+    if POSITION is None:
+        return None
+    p = POSITION
+    d = 1 if p["dir"] == "long" else -1
+    points = d * (float(price) - p["entry"])
+    rec = {
+        "date": str(date.today()),
+        "dir": p["dir"],
+        "entry": round(p["entry"]),
+        "exit": round(float(price)),
+        "time": p["entry_time"][:5],
+        "note": p.get("note", ""),
+        "mode": "sim",
+        # 以下是 trade-log App 沒有、但事後分析很有用的欄位
+        "_exit_time": datetime.now().strftime("%H:%M:%S"),
+        "_reason": reason,
+        "_points": round(points, 1),
+        "_net": round(points - FEE_POINTS, 1),
+        "_snapshot": p.get("snapshot", {}),
+    }
+    TODAY_TRADES.append(rec)
+    POSITION = None
+    save_trades()
+    label = {"tp": "停利", "sl": "停損", "manual": "手動平倉", "close": "收盤平倉"}.get(reason, reason)
+    print(f"[練習] {label} @ {price}　{points:+.0f} 點（扣費後 {points - FEE_POINTS:+.1f}）")
+    return rec
+
+
+def check_position(price):
+    """每次報價更新時檢查有沒有觸及 ±100。"""
+    if POSITION is None or price is None:
+        return
+    d = 1 if POSITION["dir"] == "long" else -1
+    if d * (float(price) - POSITION["tp"]) >= 0:
+        close_position(POSITION["tp"], "tp")
+    elif d * (float(price) - POSITION["sl"]) <= 0:
+        close_position(POSITION["sl"], "sl")
+
+
+def save_trades():
+    TRADE_DIR.mkdir(exist_ok=True)
+    (TRADE_DIR / f"{date.today()}.json").write_text(
+        json.dumps(TODAY_TRADES, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def all_practice_trades():
+    """把所有練習紀錄整理成 trade-log App 可以匯入的格式。"""
+    out = []
+    if TRADE_DIR.exists():
+        for f in sorted(TRADE_DIR.glob("*.json")):
+            try:
+                for r in json.loads(f.read_text(encoding="utf-8")):
+                    out.append({k: v for k, v in r.items() if not k.startswith("_")})
+            except Exception:
+                pass
+    return out
+
+
 # ---------------------------------------------------------------- 網頁
 
 PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
@@ -333,6 +428,26 @@ font-variant-numeric:tabular-nums}
 border-bottom:1px solid #30363d;font-size:11.5px}
 .ht td{padding:7px 8px;border-bottom:1px solid #21262d;color:#c9d1d9}
 .ht tr:last-child td{border-bottom:none}
+.tbox{background:#161b22;border:1px solid #30363d;border-radius:11px;padding:16px 18px;margin-bottom:14px}
+.thead{font-size:13px;color:#8b949e;margin-bottom:12px}
+.warn{font-size:11px;color:#d29922;border:1px solid #d2992255;border-radius:20px;padding:2px 9px}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.btn{flex:1;min-width:120px;padding:13px 18px;border-radius:9px;border:1px solid #30363d;
+font-size:15px;font-weight:600;cursor:pointer;background:#21262d;color:#e6edf3}
+.btn.long{background:#238636;border-color:#2ea043}
+.btn.short{background:#a5232d;border-color:#c9313d}
+.btn.flat{background:#30363d}
+.btn.ghost{flex:0 0 auto;min-width:0;background:transparent;color:#8b949e;font-weight:400;font-size:13px}
+.btn:hover{filter:brightness(1.15)}
+.pos{margin-bottom:12px}
+.pline{font-size:13px;color:#c9d1d9}
+.pline.dim{color:#8b949e;font-size:12px;margin-top:4px}
+.pnl{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin:4px 0}
+.tlist{margin-top:14px;padding-top:12px;border-top:1px solid #30363d}
+.tsum{font-size:12.5px;color:#8b949e;margin-bottom:7px}
+.trow2{font-size:12.5px;color:#c9d1d9;font-variant-numeric:tabular-nums;padding:3px 0}
+.dl{display:inline-block;margin-top:10px;font-size:12px;color:#58a6ff;text-decoration:none}
+.dl:hover{text-decoration:underline}
 .split{margin-top:12px}
 .sbar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:#21262d}
 .sbar i{display:block;height:100%}
@@ -398,12 +513,58 @@ async function tick(){
    chip('今日震幅',f(c.rng)+' 點','flat')+
    chip('位階',f(c.pos*100)+'%','flat')+
    chip('量能',f(c.vol_ratio,2)+' 倍','flat'))+'</div>';
- if(!r){ h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
+ if(!r){ h+=tradeBox(s); h+='<div class="note">'+(s.msg||'目前沒有可比對的歷史樣本。')+'</div>';
          body.innerHTML=h; return; }
+ h+=tradeBox(s);
  h+=trendCard(r);
  body.innerHTML=h;
 }
 function chip(l,v,cls){return '<div class="chip"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
+function tradeBox(s){
+ const P=s.position, T=s.today_trades||[];
+ let h='<div class="tbox">';
+ h+='<div class="thead">練習下單　<span class="warn">模擬，不會真的送單到永豐</span></div>';
+ if(P){
+   const f=P.float_pts, col=f>0?'#3fb950':f<0?'#f85149':'#e6edf3';
+   const side=P.dir==='long'?'做多':'做空';
+   h+='<div class="pos"><div class="pline"><b>持倉中：'+side+'</b>　進場 '+P.entry.toFixed(0)+
+      '　'+P.entry_time+'</div>'+
+      '<div class="pnl" style="color:'+col+'">'+(f>0?'+':'')+f.toFixed(0)+' 點</div>'+
+      '<div class="pline dim">停利 '+P.tp.toFixed(0)+'　停損 '+P.sl.toFixed(0)+
+      '　（碰到自動平倉）</div></div>';
+   h+='<div class="btns"><button class="btn flat" onclick="act(\'close\')">手動平倉</button>'+
+      '<button class="btn ghost" onclick="act(\'undo\')">取消這筆</button></div>';
+ } else {
+   h+='<div class="btns">'+
+      '<button class="btn long" onclick="enter(\'long\')">▲ 做多</button>'+
+      '<button class="btn short" onclick="enter(\'short\')">▼ 做空</button></div>';
+ }
+ if(T.length){
+   let sum=0; T.forEach(function(t){sum+=t._net;});
+   h+='<div class="tlist"><div class="tsum">今天 '+T.length+' 筆　合計 '+
+      (sum>0?'+':'')+sum.toFixed(0)+' 點（扣費後）</div>';
+   T.forEach(function(t){
+     const c=t._net>0?'#3fb950':'#f85149';
+     const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||t._reason;
+     h+='<div class="trow2">'+t.time+'　'+(t.dir==='long'?'多':'空')+'　'+
+        t.entry+' → '+t.exit+'　'+rs+
+        '　<b style="color:'+c+'">'+(t._net>0?'+':'')+t._net.toFixed(0)+'</b></div>';
+   });
+   h+='<a class="dl" href="/api/export" download>下載全部練習紀錄（可匯入 trade-log App）</a>';
+   h+='</div>';
+ }
+ return h+'</div>';
+}
+async function enter(d){
+ await fetch('/api/enter',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({dir:d})}).then(r=>r.json()).then(r=>{if(!r.ok)alert(r.msg);});
+ tick();
+}
+async function act(a){
+ await fetch('/api/'+a,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+   .then(r=>r.json()).then(r=>{if(!r.ok&&r.msg)alert(r.msg);});
+ tick();
+}
 function trendCard(r){
  return '<div class="note"><b>為什麼這裡沒有趨勢預測？</b><br>'+
   '曾經有一個 0~100 的「趨勢指數」，已移除。用 Benson 真正的規則（±100 點先碰哪個）'+
@@ -420,7 +581,66 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _json(self, code, obj):
+        b = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            body = {}
+        st = CURRENT_STATE.get("today")
+        price = st.price if st else None
+
+        if self.path == "/api/enter":
+            d = body.get("dir")
+            if d not in ("long", "short"):
+                return self._json(400, {"error": "方向要是 long 或 short"})
+            snap = None
+            if st is not None:
+                idx = datetime.now().hour * 60 + datetime.now().minute
+                snap = st.snapshots.get(idx)
+            ok, msg = open_position(d, price, snap, body.get("note", ""))
+            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
+
+        if self.path == "/api/close":
+            r = close_position(price, "manual")
+            return self._json(200, {"ok": r is not None,
+                                    "msg": "已平倉" if r else "目前沒有持倉"})
+
+        if self.path == "/api/undo":
+            # 誤按時可以撤銷最後一筆（只在剛平倉沒多久時合理）
+            global POSITION
+            if POSITION is not None:
+                POSITION = None
+                return self._json(200, {"ok": True, "msg": "已取消未平倉的那筆"})
+            if TODAY_TRADES:
+                TODAY_TRADES.pop()
+                save_trades()
+                return self._json(200, {"ok": True, "msg": "已刪除最後一筆紀錄"})
+            return self._json(200, {"ok": False, "msg": "今天沒有紀錄可刪"})
+
+        return self._json(404, {"error": "not found"})
+
     def do_GET(self):
+        if self.path.startswith("/api/export"):
+            data = all_practice_trades()
+            b = json.dumps(data, ensure_ascii=False, indent=2).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition",
+                             'attachment; filename="practice-trades.json"')
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
         if self.path.startswith("/api/state"):
             with state_lock:
                 payload = json.dumps(STATE, ensure_ascii=False).encode()
@@ -490,12 +710,20 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
     """
     min_idx = now_time.hour * 60 + now_time.minute
     feats = today_state.features(vol_ref, min_idx)
+    CURRENT_STATE["today"] = today_state
+    check_position(today_state.price)          # 每次更新都檢查有沒有觸及 ±100
     age = None if today_state.last_recv is None else round(time.time() - today_state.last_recv)
     with state_lock:
         STATE.update({
             "period": hist.period, "n_days_total": hist.n_days,
             "clock": now_time.strftime("%H:%M:%S"), "replay": replay,
             "phase": phase,
+            "position": (dict(POSITION, float_pts=round(
+                (1 if POSITION["dir"] == "long" else -1)
+                * ((today_state.price or POSITION["entry"]) - POSITION["entry"]), 1))
+                if POSITION else None),
+            "today_trades": [{k: v for k, v in t.items() if k != "_snapshot"}
+                             for t in TODAY_TRADES],
             "age_sec": 0 if replay else age,
             "conn": CONN.copy(),
         })
