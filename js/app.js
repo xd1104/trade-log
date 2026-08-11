@@ -427,5 +427,28 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.classList.remove('show'); }, 1800);
   }
 
+  // ---------- 對外接口：給 js/live.js（即時盤面）寫入練習紀錄用 ----------
+  // 面板那邊平倉後，會呼叫這裡把交易寫進同一份 localStorage，
+  // 這樣練習紀錄跟手動記錄的交易完全共用統計、月份分組與匯出。
+  window.TradeLog = {
+    addTrade: function (t) {
+      if (!t || !t.date) return false;
+      var m = t.mode || 'sim';
+      // 同一天同模式已經有紀錄就不覆蓋（App 一天一筆的設計）
+      var dup = data.some(function (x) {
+        return x.date === t.date && (x.mode || 'sim') === m;
+      });
+      if (dup) return false;
+      data.push({
+        date: t.date, mode: m, dir: t.dir === 'short' ? 'short' : 'long',
+        entry: Number(t.entry), exit: Number(t.exit),
+        time: t.time || '', note: t.note || ''
+      });
+      save(data); renderAll();
+      return true;
+    },
+    toast: toast
+  };
+
   renderAll();
 })();

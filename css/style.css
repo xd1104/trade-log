@@ -214,3 +214,34 @@ input::placeholder,textarea::placeholder{color:var(--faint)}
 .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+
+/* ---- 即時盤面（與 live_panel.py 連動；面板沒開就整區隱藏） ---- */
+.live{padding:14px 15px}
+.live-grid{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line);
+  border-radius:var(--radius-sm); overflow:hidden; margin-bottom:13px}
+.live-grid .cell{background:var(--surface); padding:10px 12px}
+.live-grid .cell.px{grid-column:1/-1; text-align:center; padding:15px}
+.live-grid .l{font-size:11px; color:var(--dim)}
+.live-grid .v{font-size:18px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; margin-top:2px}
+.live-grid .cell.px .v{font-size:36px; letter-spacing:-1px}
+.live-grid .up{color:var(--win)} .live-grid .down{color:var(--loss)}
+.live-btns{display:flex; gap:9px}
+.live-btns button{flex:1; padding:14px; border-radius:12px; cursor:pointer;
+  font-family:var(--font-sans); font-size:15.5px; font-weight:700; letter-spacing:1px}
+.live-btns .lg{background:var(--win-soft); color:var(--win); border:1px solid rgba(238,90,84,.4)}
+.live-btns .sh{background:var(--loss-soft); color:var(--loss); border:1px solid rgba(52,179,126,.4)}
+.live-btns .fl{background:var(--surface-2); color:var(--text); border:1px solid var(--line)}
+.live-btns .gh{flex:0 0 auto; background:transparent; color:var(--faint);
+  border:1px solid var(--line); font-size:13px; font-weight:400}
+.live-pnl{text-align:center; padding:2px 0 10px}
+.live-pnl .v{font-size:40px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1}
+.live-pnl .l{font-size:12px; color:var(--dim); margin-top:5px}
+.live-lim{display:flex; justify-content:center; gap:14px; font-size:11.5px;
+  color:var(--faint); font-family:var(--font-mono); margin-bottom:11px}
+.live-warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:20px; padding:2px 9px; font-weight:600}
+.live-dead{background:var(--win-soft); border:1px solid var(--win); border-radius:var(--radius-sm);
+  padding:10px 12px; font-size:12px; margin-bottom:11px; line-height:1.6}

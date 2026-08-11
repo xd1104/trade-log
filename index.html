@@ -39,6 +39,16 @@
       <button type="button" data-mode="real" role="tab">真實操作</button>
     </div>
 
+    <!-- 即時盤面：只有在同一台電腦、且早盤面板（live_panel.py）有跑的時候才會出現。
+         手機上或面板沒開時整區自動隱藏，App 其餘功能完全不受影響。 -->
+    <section id="liveWrap" hidden>
+      <div class="sec-head"><h2>即時盤面</h2><span class="count" id="liveMeta"></span></div>
+      <section class="card live">
+        <div class="live-grid" id="liveGrid"></div>
+        <div class="live-act" id="liveAct"></div>
+      </section>
+    </section>
+
     <section class="card summary">
       <div class="seg" id="seg">
         <button data-type="days" data-n="7">7 日</button>
@@ -151,6 +161,7 @@
 
   <script src="js/seed-data.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/live.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
