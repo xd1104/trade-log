@@ -48,7 +48,6 @@ except Exception:
     pass
 
 HERE = Path(__file__).parent
-APP_ROOT = HERE.parent.parent          # trade-log/ 的根目錄（index.html 所在）
 MATRIX = HERE / "intraday.csv"
 CALIB = HERE / "calibration.json"     # 走查驗證產出的分段命中率
 LOG_DIR = HERE / "morning_logs"
@@ -654,23 +653,9 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _cors(self):
-        # trade-log App 掛在 GitHub Pages，要跨來源讀這台面板 ——
-        # 只開放 GET/POST 與 Content-Type，本機服務不涉及任何憑證
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self._cors()
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
     def _json(self, code, obj):
         b = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code)
-        self._cors()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(b)))
@@ -734,67 +719,25 @@ class Handler(BaseHTTPRequestHandler):
             with state_lock:
                 payload = json.dumps(STATE, ensure_ascii=False).encode()
             self.send_response(200)
-            self._cors()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
             return
-        # /panel 保留原本的純面板；其餘路徑供應 trade-log App 本身，
-        # 這樣手機連這台電腦的 IP 就能拿到「App + 即時報價」同源的完整版本。
-        if self.path.split("?")[0] in ("/panel", "/panel/"):
-            body = PAGE.encode("utf-8")
-            self.send_response(200)
-            self._cors()
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        self.serve_app()
-
-    MIME = {".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
-            ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
-            ".webmanifest": "application/manifest+json; charset=utf-8",
-            ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
-
-    def serve_app(self):
-        rel = self.path.split("?")[0].lstrip("/") or "index.html"
-        target = (APP_ROOT / rel).resolve()
-        # 只准讀 App 目錄底下的東西，擋掉 ../ 之類的路徑穿越
-        if not str(target).startswith(str(APP_ROOT.resolve())) or not target.is_file():
-            target = APP_ROOT / "index.html"
-        if not target.is_file():
-            return self._json(404, {"error": "not found"})
-        data = target.read_bytes()
+        body = PAGE.encode("utf-8")
         self.send_response(200)
-        self._cors()
-        self.send_header("Content-Type", self.MIME.get(target.suffix, "application/octet-stream"))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(data)
-
-
-def lan_ip():
-    """取得這台電腦在區網的 IP，讓手機連得到。"""
-    import socket
-    try:
-        sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sk.connect(("8.8.8.8", 80))
-        ip = sk.getsockname()[0]
-        sk.close()
-        return ip
-    except Exception:
-        return None
+        self.wfile.write(body)
 
 
 def serve():
-    # 綁 0.0.0.0 而非 127.0.0.1：手機要連得到這台電腦。
-    # 代價是同一個區網（家裡 wifi）的裝置都能開，但這裡只有模擬練習，
-    # 不會送真實委託，風險有限。
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    # 只綁 127.0.0.1：面板是給這台電腦自己用的。
+    # （曾短暫改成 0.0.0.0 讓手機連，但 Benson 的手機常不在同一個網路，
+    #   用不到卻多開一個對外的口，所以退回本機。）
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 
 # ---------------------------------------------------------------- 主流程
@@ -946,11 +889,7 @@ def main():
 
     threading.Thread(target=serve, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}/"
-    ip = lan_ip()
-    print(f"這台電腦：{url}")
-    if ip:
-        print(f"手機（同一個 wifi）：http://{ip}:{PORT}/")
-    print("（只有 /panel 是純面板版；根目錄是完整的 trade-log App）")
+    print(f"面板網址：{url}")
     try:
         webbrowser.open(url)
     except Exception:
