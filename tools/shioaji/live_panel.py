@@ -69,6 +69,9 @@ WATCH_END = pd.Timestamp("09:30").time()
 DAY_END = pd.Timestamp("13:45").time()
 NIGHT_OPEN = pd.Timestamp("15:00").time()      # 夜盤 15:00 ~ 隔天 05:00
 NIGHT_CLOSE = pd.Timestamp("05:00").time()
+CHART_TF = 5        # K 線圖用 5 分 K（Benson 看盤的習慣）
+# 圖顯示整個日盤 08:45~13:45：5 分 K 共 60 根，剛好是一張看得舒服的圖；
+# 他的下單時段 08:45~09:30 會在圖上以底色標出來。
 
 # 全部用「幾倍的當時日常波動」比對，不用絕對點數 ——
 # 台指期 2020 年 12,400 點、2026 年 45,000 點，同樣 40 點的意義差了三倍以上。
@@ -99,6 +102,7 @@ except Exception:
 POSITION = None
 TODAY_TRADES = []
 CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
+SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
@@ -479,6 +483,64 @@ def sync_to_cloud():
         return False, f"同步失敗：{str(e)[:120]}"
 
 
+def day_bars(day=None):
+    """
+    取某一天 08:45~09:45 的 1 分 K，附上那天的練習交易（給 K 線圖標記用）。
+
+    盤中即時抓得到當天的 K 棒（實測 0 分鐘延遲），所以不必自己從 tick 拼；
+    直接跟永豐要，資料跟大戶投同源，也就不會對不起來。
+    """
+    api = SESSION_REF.get("api")
+    if api is None:
+        return {"error": "尚未連線"}
+    d = day or date.today()
+    try:
+        contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
+        df = pd.DataFrame({**api.kbars(contract, start=str(d), end=str(d))})
+        if df.empty:
+            return {"date": str(d), "bars": [], "trades": []}
+        df["ts"] = pd.to_datetime(df["ts"])
+        g = df[(df["ts"].dt.time >= SESSION_OPEN)
+               & (df["ts"].dt.time < DAY_END)].sort_values("ts")
+        bars = to_timeframe(g, CHART_TF)
+    except Exception as e:
+        return {"error": str(e)[:120]}
+
+    # 那天的練習交易（今天的用記憶體，過去的讀檔）
+    if d == date.today():
+        trades = list(TODAY_TRADES)
+    else:
+        f = TRADE_DIR / f"{d}.json"
+        trades = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
+    return {"date": str(d), "bars": bars, "trades": trades}
+
+
+def to_timeframe(g, minutes):
+    """把 1 分 K 合成 N 分 K。以每根的起始時間標示，跟看盤軟體一致。"""
+    if g.empty:
+        return []
+    g = g.copy()
+    # 從 08:45 起算，每 N 分鐘一根
+    base = pd.Timestamp.combine(g["ts"].iloc[0].date(), SESSION_OPEN)
+    g["slot"] = ((g["ts"] - base).dt.total_seconds() // (minutes * 60)).astype(int)
+    out = []
+    for _, blk in g.groupby("slot", sort=True):
+        start = base + pd.Timedelta(minutes=minutes * int(blk["slot"].iloc[0]))
+        out.append({"t": start.strftime("%H:%M"),
+                    "o": float(blk["Open"].iloc[0]), "h": float(blk["High"].max()),
+                    "l": float(blk["Low"].min()), "c": float(blk["Close"].iloc[-1]),
+                    "v": float(blk["Volume"].sum())})
+    return out
+
+
+def traded_days():
+    """有練習紀錄的日子，給重播用。"""
+    if not TRADE_DIR.exists():
+        return []
+    return sorted([f.stem for f in TRADE_DIR.glob("*.json")
+                   if json.loads(f.read_text(encoding="utf-8") or "[]")], reverse=True)
+
+
 def all_practice_trades():
     """把所有練習紀錄整理成 trade-log App 可以匯入的格式。"""
     out = []
@@ -513,8 +575,12 @@ PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
   background-image:radial-gradient(1200px 500px at 50% -8%, rgba(227,169,81,.06), transparent 70%);
   background-repeat:no-repeat; min-height:100vh}
-.app{max-width:480px; margin:0 auto; padding:0 16px 60px}
-.topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px}
+/* 電腦大螢幕：左邊大圖、右邊操作區。Benson 只在電腦上開這個面板。 */
+.app{max-width:1500px; margin:0 auto; padding:0 24px 40px}
+.cols{display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:18px; align-items:start}
+@media(max-width:1100px){ .cols{grid-template-columns:minmax(0,1fr)} }
+.right{display:flex; flex-direction:column; gap:12px}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:20px 4px 16px}
 .brand{display:flex; align-items:center; gap:10px}
 .brand .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
   background:var(--gold-soft); color:var(--gold); font-size:17px}
@@ -524,8 +590,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .clock .d{font-size:13.5px; font-weight:600}
 .clock .w{font-size:11px; color:var(--faint)}
 .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
-  padding:16px 17px; margin-bottom:12px}
-.sec-head{display:flex; align-items:center; justify-content:space-between; margin:20px 4px 10px}
+  padding:18px 20px; margin-bottom:12px}
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 4px 8px}
 .sec-head h2{font-size:12.5px; margin:0; color:var(--dim); letter-spacing:1.5px; font-weight:600}
 .sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
 .grid{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line);
@@ -537,6 +603,22 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text)}
 .px{grid-column:1/-1; text-align:center; padding:16px}
 .px .v{font-size:38px; letter-spacing:-1px}
+.chart{position:relative}
+.chart svg{display:block; width:100%; height:auto}
+.chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px}
+.cpx{font-size:44px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1}
+.cchg{font-size:17px; font-weight:600; font-family:var(--font-mono)}
+.cdate{font-size:12.5px; color:var(--gold); cursor:pointer; border:1px solid var(--line);
+  border-radius:20px; padding:3px 11px; background:var(--surface-2)}
+.cdate:hover{border-color:var(--gold)}
+.daypick{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
+.daypick button{font-size:11.5px; padding:5px 10px; border-radius:7px; cursor:pointer;
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
+.daypick button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.mini{display:flex; flex-wrap:wrap; gap:0 20px; font-size:12.5px; color:var(--dim);
+  font-family:var(--font-mono); margin-top:12px; padding-top:11px; border-top:1px solid var(--line)}
+.mini b{color:var(--text); font-weight:600}
 .btns{display:flex; gap:10px}
 .btn{flex:1; padding:15px; border-radius:12px; cursor:pointer;
   font-family:var(--font-sans); font-size:16px; font-weight:700; letter-spacing:1px}
@@ -560,7 +642,7 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .seg button.on{background:var(--gold-soft); color:var(--gold)}
 .rate-row{display:flex; align-items:flex-end; gap:16px}
 .rate-big{line-height:1}
-.rate-big .num{font-family:var(--font-mono); font-size:52px; font-weight:680; letter-spacing:-1px;
+.rate-big .num{font-family:var(--font-mono); font-size:46px; font-weight:680; letter-spacing:-1px;
   color:var(--gold); font-variant-numeric:tabular-nums}
 .rate-big .pct{font-size:22px; color:var(--gold); font-family:var(--font-mono); margin-left:2px}
 .rate-big .lab{font-size:12px; color:var(--dim); letter-spacing:2px; margin-top:6px}
@@ -571,7 +653,11 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .net .v{font-size:19px; font-weight:700}
 .net .u{font-size:11px; color:var(--dim)}
 .cash{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
-.list{display:flex; flex-direction:column; gap:8px; margin-top:14px}
+/* 交易列表自己捲動，整個儀表板才能一眼看完、不用捲整頁 */
+.list{display:flex; flex-direction:column; gap:8px; margin-top:14px;
+  max-height:290px; overflow-y:auto; padding-right:4px}
+.list::-webkit-scrollbar{width:6px}
+.list::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
 .trade{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm);
   padding:11px 13px}
 .tr-top{display:flex; align-items:center; gap:9px}
@@ -602,7 +688,7 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
 </div>
 <div id="wait" class="wait">等待資料…</div>
-<div id="mkt"></div><div id="trade"></div><div id="stats"></div>
+<div class="cols"><div id="mkt"></div><div class="right"><div id="trade"></div><div id="stats"></div></div></div>
 <div class="foot">只顯示當下的客觀盤面數字，不做預測、不給買賣訊號。<br>練習下單為模擬，不會送單到永豐。</div>
 </div>
 <script>
@@ -633,22 +719,16 @@ async function tick(){
    setHTML('mkt',''); setHTML('trade',''); setHTML('stats',''); return; }
  W.hidden=true;
 
+fetchBars(false);
  const c=s.chips;
  let m='';
  if(dead) m+='<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
    (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>';
- m+='<div class="card"><div class="grid">'+
+ const ch=chartCard(s);
+ m += ch || ('<div class="card"><div class="grid">'+
    '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
    cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
-   cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+
-   (c.chg==null?'':
-     cell('對開盤',pm(c.chg)+' 點',sgn(c.chg))+
-     cell('跳空',pm(c.gap)+' 點',sgn(c.gap))+
-     cell('今日震幅',f(c.rng)+' 點','flat')+
-     cell('位階',f(c.pos*100)+'%','flat')+
-     cell('量能',f(c.vol_ratio,2)+' 倍','flat')+
-     cell('買 / 賣',f(c.bid)+' / '+f(c.ask),'flat'))+
-   '</div></div>';
+   cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+'</div></div>');
  setHTML('mkt',m);
  setHTML('trade',tradeBox(s));
  setHTML('stats',statsBox(statsCache));
@@ -661,6 +741,129 @@ function setHTML(id,html){
  if(window[box]===html) return;
  window[box]=html;
  document.getElementById(id).innerHTML=html;
+}
+
+
+// ---------------- K 線圖（純 SVG，不用外部套件） ----------------
+var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastChart='';
+
+function fetchBars(force){
+ if(!force && Date.now()-barsAt<3000) return;
+ barsAt=Date.now();
+ fetch('/api/bars'+(viewDate?('?date='+viewDate):''))
+  .then(r=>r.json()).then(x=>{ barsCache=x; }).catch(()=>{});
+}
+
+function chartCard(s){
+ if(!barsCache||!barsCache.bars||!barsCache.bars.length) return '';
+ const B=barsCache.bars, T=barsCache.trades||[], P=s.position;
+ const live=!viewDate;
+ const last=B[B.length-1], first=B[0];
+ const px = live && s.chips && s.chips.price!=null ? s.chips.price : last.c;
+ const chg = px-first.o, pct=(chg/first.o*100);
+
+ // 價格範圍：K 棒 + 進出場 + 停利停損都要看得到
+ let hi=Math.max(...B.map(b=>b.h)), lo=Math.min(...B.map(b=>b.l));
+ T.forEach(t=>{ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit); });
+ if(P&&live){ hi=Math.max(hi,P.tp,P.sl); lo=Math.min(lo,P.tp,P.sl); }
+ const pad=(hi-lo)*0.08||10; hi+=pad; lo-=pad;
+
+ const W=1040,H=440,L=0,R=64,TOP=12,BOT=26;   // R 留給右側價格刻度
+ const cw=(W-R)/B.length, bw=Math.max(3,Math.min(16,cw*0.6));
+ const y=v=>TOP+(hi-v)/(hi-lo)*(H-TOP-BOT);
+ const x=i=>L+i*cw+cw/2;
+
+ let g='';
+ // 他的下單時段 08:45~09:30 用底色標出來，一眼知道自己在哪個區間操作
+ {
+   let a=-1,b=-1;
+   B.forEach((bar,i)=>{ if(bar.t>='08:45'&&bar.t<'09:30'){ if(a<0)a=i; b=i; } });
+   if(a>=0){
+     const x0=L+a*cw, x1=L+(b+1)*cw;
+     g+='<rect x="'+x0.toFixed(1)+'" y="'+TOP+'" width="'+(x1-x0).toFixed(1)+
+        '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>'+
+        '<text x="'+(x0+6)+'" y="'+(TOP+15)+'" fill="#5A616E" font-size="11">下單時段</text>';
+   }
+ }
+ // 水平參考線
+ for(let k=0;k<=5;k++){
+   const v=lo+(hi-lo)*k/5, yy=y(v);
+   g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+      '" stroke="#262D39" stroke-width="1"/>'+
+      '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5A616E" font-size="12" '+
+      'font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
+ }
+ // K 棒（台股慣例：紅漲綠跌）
+ B.forEach((b,i)=>{
+   const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E', X=x(i);
+   g+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+
+      '" y2="'+y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
+   const yo=y(b.o), yc=y(b.c), top=Math.min(yo,yc), h=Math.max(1.2,Math.abs(yc-yo));
+   g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+
+      '" height="'+h.toFixed(1)+'" fill="'+col+'"/>';
+ });
+ // 停利／停損（持倉中才畫）
+ if(P&&live){
+   [[P.tp,'#EE5A54','停利'],[P.sl,'#34B37E','停損']].forEach(z=>{
+     const yy=y(z[0]);
+     if(yy<TOP||yy>H-BOT) return;
+     g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+        '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".8"/>'+
+        '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
+   });
+ }
+ // 進出場標記
+ // 交易時間要對到「所屬的那根 5 分 K」，不是剛好等於開始時間
+ const idxOf=t=>{ let r=-1; for(let i=0;i<B.length;i++){ if(B[i].t<=t) r=i; else break; } return r; };
+ T.forEach(t=>{
+   const i=idxOf(t.time); if(i<0) return;
+   const X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?'#EE5A54':'#34B37E';
+   g+='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(W-R)+'" y2="'+Y.toFixed(1)+
+      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".55"/>';
+   g+=long
+     ? '<path d="M'+(X-8)+' '+(Y+20)+' L'+X+' '+(Y+6)+' L'+(X+8)+' '+(Y+20)+' Z" fill="'+col+'"/>'
+     : '<path d="M'+(X-8)+' '+(Y-20)+' L'+X+' '+(Y-6)+' L'+(X+8)+' '+(Y-20)+' Z" fill="'+col+'"/>';
+   // 出場點：用 _exit_time，沒有就標在最後
+   const j=t._exit_time?idxOf(t._exit_time.slice(0,5)):-1;
+   const XE=j>=0?x(j):x(B.length-1), YE=y(t.exit), w=t._net>0;
+   const ec=w?'#EE5A54':'#34B37E';
+   g+='<line x1="'+(XE-6)+'" y1="'+(YE-6)+'" x2="'+(XE+6)+'" y2="'+(YE+6)+'" stroke="'+ec+'" stroke-width="2.5"/>'+
+      '<line x1="'+(XE-6)+'" y1="'+(YE+6)+'" x2="'+(XE+6)+'" y2="'+(YE-6)+'" stroke="'+ec+'" stroke-width="2.5"/>';
+ });
+ // 時間刻度
+ ['08:45','09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30','13:00','13:30'].forEach(tm=>{
+   const i=idxOf(tm); if(i<0) return;
+   g+='<text x="'+x(i).toFixed(1)+'" y="'+(H-7)+'" fill="#5A616E" font-size="11.5" '+
+      'text-anchor="middle" font-family="ui-monospace,monospace">'+tm+'</text>';
+ });
+
+ const c=s.chips||{};
+ let mini='';
+ if(live&&c.chg!=null){
+   mini='<div class="mini">'+
+     '<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>'+
+     '<span>15分 <b class="'+sgn(c.mom15)+'">'+pm(c.mom15)+'</b></span>'+
+     '<span>跳空 <b>'+pm(c.gap)+'</b></span>'+
+     '<span>震幅 <b>'+f(c.rng)+'</b></span>'+
+     '<span>位階 <b>'+f(c.pos*100)+'%</b></span>'+
+     '<span>量能 <b>'+f(c.vol_ratio,2)+'倍</b></span>'+
+     '<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span></div>';
+ }
+ let pick='';
+ if(pickOpen){
+   pick='<div class="daypick"><button class="'+(viewDate?'':'on')+'" data-day="">今天（即時）</button>';
+   (barsCache.days||[]).forEach(d=>{
+     if(d===new Date().toISOString().slice(0,10)) return;
+     pick+='<button class="'+(viewDate===d?'on':'')+'" data-day="'+d+'">'+d.slice(5)+'</button>';
+   });
+   pick+='</div>';
+ }
+ const sumTxt=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
+ return '<div class="card chart">'+
+  '<div class="chead"><div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
+  ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
+  '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sumTxt+' ▾</span></div>'+
+  '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">'+g+'</svg>'+pick+mini+'</div>';
 }
 
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
@@ -736,6 +939,10 @@ document.addEventListener('click', function(e){
   .then(()=>{ b.disabled=false; });
 });
 document.addEventListener('click', function(e){
+ if(e.target.closest('[data-pick]')){ pickOpen=!pickOpen; lastMkt=''; tick(); return; }
+ const d=e.target.closest('[data-day]');
+ if(d){ viewDate=d.getAttribute('data-day'); pickOpen=false; lastMkt=''; fetchBars(true);
+        setTimeout(tick,300); return; }
  const b=e.target.closest('[data-win]');
  if(!b) return;
  WIN=parseInt(b.getAttribute('data-win'))||0;
@@ -798,6 +1005,18 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_GET(self):
+        if self.path.startswith("/api/bars"):
+            q = self.path.split("?", 1)[1] if "?" in self.path else ""
+            want = None
+            for kv in q.split("&"):
+                if kv.startswith("date="):
+                    try:
+                        want = datetime.strptime(kv[5:], "%Y-%m-%d").date()
+                    except Exception:
+                        want = None
+            out = day_bars(want)
+            out["days"] = traded_days()
+            return self._json(200, out)
         if self.path.startswith("/api/stats"):
             return self._json(200, practice_stats())
         if self.path.startswith("/api/export"):
@@ -1051,6 +1270,7 @@ def main():
         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
                             version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
+        SESSION_REF["api"] = api
         CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None,
                      "contract": contract.code,
                      "contract_name": getattr(contract, "name", "")})
@@ -1077,6 +1297,39 @@ def main():
             print(f"[{datetime.now():%H:%M:%S}] 重連失敗：{msg[:200]}")
             return False
 
+    def seed_from_bars(st, today):
+        """
+        盤中啟動時，用當天已經發生的 1 分 K 把開盤價／最高／最低／量補起來。
+
+        【沒有這段數字會是錯的】Today 只從「面板啟動的那一刻」開始累積，
+        所以中午重開面板，對開盤／震幅／位階／量能全部會從那一刻重算 ——
+        實測顯示過「震幅 20 點、量能 0.01 倍」這種明顯不合理的值。
+        """
+        api = SESSION_REF.get("api")
+        now_t = datetime.now().time()
+        if api is None or not (SESSION_OPEN <= now_t < DAY_END):
+            return
+        try:
+            contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
+            df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
+            if df.empty:
+                return
+            df["ts"] = pd.to_datetime(df["ts"])
+            g = df[(df["ts"].dt.time >= SESSION_OPEN)
+                   & (df["ts"].dt.time <= now_t)].sort_values("ts")
+            if g.empty:
+                return
+            st.open = float(g["Open"].iloc[0])
+            st.high = float(g["High"].max())
+            st.low = float(g["Low"].min())
+            st.vol = float(g["Volume"].sum())
+            st.price = float(g["Close"].iloc[-1])
+            for r in g.itertuples():
+                st.minute_close[r.ts.hour * 60 + r.ts.minute] = float(r.Close)
+            print(f"  已用當日 {len(g)} 根 K 棒補齊開高低與量（開 {st.open:.0f}）")
+        except Exception as e:
+            print(f"  補齊當日資料失敗：{str(e)[:100]}")
+
     def start_day(today):
         try:
             api, contract = connect()
@@ -1087,7 +1340,9 @@ def main():
             print(f"[{today}] 連線失敗：{str(e)[:200]}")
             prev_close = session["state"].prev_close if session["state"] else None
         load_today_trades()
-        session.update({"date": today, "state": Today(prev_close, dayvol), "saved": False})
+        st = Today(prev_close, dayvol)
+        seed_from_bars(st, today)          # 盤中重啟時把當天已發生的部分補回來
+        session.update({"date": today, "state": st, "saved": False})
         print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}")
 
     # 啟動時一定要建立狀態，不能等到 08:30 ——
