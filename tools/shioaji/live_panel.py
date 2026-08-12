@@ -579,7 +579,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
     <div><div class="nm">早盤儀表板</div><div class="sub" id="sub">連線中…</div></div></div>
   <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
 </div>
-<div id="body"><div class="wait">等待資料…</div></div>
+<div id="wait" class="wait">等待資料…</div>
+<div id="mkt"></div><div id="trade"></div><div id="stats"></div>
 <div class="foot">只顯示當下的客觀盤面數字，不做預測、不給買賣訊號。<br>練習下單為模擬，不會送單到永豐。</div>
 </div>
 <script>
@@ -588,9 +589,15 @@ const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
 const sgn=v=>v>0?'up':v<0?'down':'flat';
 const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
 
+var lastMkt='', lastTrade='', lastStats='', statsCache=null, statsAt=0;
+
 async function tick(){
- let s,ST; try{ s=await (await fetch('/api/state')).json();
-   ST=await (await fetch('/api/stats')).json(); }catch(e){ return; }
+ let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
+ // 成績每 5 秒抓一次就好 —— 它會讀所有紀錄檔，沒必要跟著報價跳
+ if(Date.now()-statsAt>5000){
+   statsAt=Date.now();
+   fetch('/api/stats').then(r=>r.json()).then(x=>{statsCache=x;}).catch(()=>{});
+ }
  const PH={recording:['記錄中','var(--up)'],live:['顯示中','var(--down)'],off:['夜盤','var(--faint)']};
  const ph=PH[s.phase]||PH.off, age=s.age_sec==null?99:s.age_sec;
  const dead=(s.conn&&s.conn.ok===false)||age>90;
@@ -598,13 +605,17 @@ async function tick(){
  document.getElementById('ph').innerHTML='<span style="color:'+ph[1]+'">'+ph[0]+'</span>';
  document.getElementById('sub').innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
    ((s.conn&&s.conn.contract_name)||'微台')+(s.replay?'・重播':'');
- const body=document.getElementById('body');
- let h='';
- if(dead) h+='<div class="alert"><b>&#9888; 報價已中斷</b><br>畫面上的數字是舊的（'+
-   (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>';
- if(s.status!=='live'){ body.innerHTML=h+'<div class="wait">'+(s.msg||'等待中…')+'</div>'; return; }
+
+ const W=document.getElementById('wait');
+ if(s.status!=='live'){ W.hidden=false; W.textContent=s.msg||'等待中…';
+   setHTML('mkt',''); setHTML('trade',''); setHTML('stats',''); return; }
+ W.hidden=true;
+
  const c=s.chips;
- h+='<div class="card"><div class="grid">'+
+ let m='';
+ if(dead) m+='<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
+   (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>';
+ m+='<div class="card"><div class="grid">'+
    '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
    cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
    cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+
@@ -616,10 +627,20 @@ async function tick(){
      cell('量能',f(c.vol_ratio,2)+' 倍','flat')+
      cell('買 / 賣',f(c.bid)+' / '+f(c.ask),'flat'))+
    '</div></div>';
- h+=tradeBox(s);
- h+=statsBox(ST);
- body.innerHTML=h;
+ setHTML('mkt',m);
+ setHTML('trade',tradeBox(s));
+ setHTML('stats',statsBox(statsCache));
 }
+
+// 只有內容真的變了才動 DOM。否則每 0.5 秒重建一次，
+// 使用者剛好在那一瞬間按下去，按鈕會連同事件一起被換掉 → 第一下沒反應。
+function setHTML(id,html){
+ const box={mkt:'lastMkt',trade:'lastTrade',stats:'lastStats'}[id];
+ if(window[box]===html) return;
+ window[box]=html;
+ document.getElementById(id).innerHTML=html;
+}
+
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 
 function tradeBox(s){
@@ -629,11 +650,11 @@ function tradeBox(s){
    h+='<div class="pnl"><div class="v '+sgn(P.float_pts)+'">'+pm(P.float_pts)+'</div>'+
       '<div class="l">'+(P.dir==='long'?'做多':'做空')+'　進場 '+f(P.entry)+'　'+P.entry_time+'</div></div>'+
       '<div class="plimit"><span>停利 '+f(P.tp)+'</span><span>停損 '+f(P.sl)+'</span></div>'+
-      '<div class="btns"><button class="btn flat2" onclick="act(\'close\')">手動平倉</button>'+
-      '<button class="btn ghost" onclick="act(\'undo\')">取消</button></div>';
+      '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
+      '<button class="btn ghost" data-act="undo">取消</button></div>';
  } else {
-   h+='<div class="btns"><button class="btn long" onclick="enter(\'long\')">&#9650; 做多</button>'+
-      '<button class="btn short" onclick="enter(\'short\')">&#9660; 做空</button></div>';
+   h+='<div class="btns"><button class="btn long" data-act="long">&#9650; 做多</button>'+
+      '<button class="btn short" data-act="short">&#9660; 做空</button></div>';
  }
  if(T.length){
    let sum=0; T.forEach(t=>sum+=t._net);
@@ -659,7 +680,7 @@ function statsBox(ST){
  let seg='<div class="seg">';
  ST.windows.forEach((x,i)=>{
    const k=parseInt(x.label.replace(/[^0-9]/g,''))||0;
-   seg+='<button class="'+(x===w?'on':'')+'" onclick="WIN='+k+';tick()">'+x.label+'</button>';
+   seg+='<button class="'+(x===w?'on':'')+'" data-win="'+k+'">'+x.label+'</button>';
  });
  seg+='</div>';
  const cls=w.total>0?'up':w.total<0?'down':'flat';
@@ -678,15 +699,26 @@ function statsBox(ST){
  }
  return h+'</div>';
 }
-async function enter(d){
- const r=await (await fetch('/api/enter',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({dir:d})})).json();
- if(!r.ok) alert(r.msg); tick();
-}
-async function act(a){
- const r=await (await fetch('/api/'+a,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
- if(!r.ok&&r.msg) alert(r.msg); tick();
-}
+// 事件委派：掛在 document 上，就算某一區重繪也不會掉事件
+document.addEventListener('click', function(e){
+ const b=e.target.closest('[data-act]');
+ if(!b||b.disabled) return;
+ const a=b.getAttribute('data-act');
+ const url=(a==='long'||a==='short')?'/api/enter':'/api/'+a;
+ const body=(a==='long'||a==='short')?JSON.stringify({dir:a}):'{}';
+ b.disabled=true;
+ fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body})
+  .then(r=>r.json())
+  .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); statsAt=0; tick(); })
+  .catch(()=>{})
+  .then(()=>{ b.disabled=false; });
+});
+document.addEventListener('click', function(e){
+ const b=e.target.closest('[data-win]');
+ if(!b) return;
+ WIN=parseInt(b.getAttribute('data-win'))||0;
+ lastStats=''; tick();
+});
 tick(); setInterval(tick,500);
 </script></body></html>"""
 

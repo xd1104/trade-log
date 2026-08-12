@@ -1,15 +1,5 @@
 {
-  "updated": "2026-08-12T10:21:14",
-  "count": 1,
-  "trades": [
-    {
-      "date": "2026-08-12",
-      "dir": "long",
-      "entry": 45294,
-      "exit": 45292,
-      "time": "10:21",
-      "note": "",
-      "mode": "sim"
-    }
-  ]
+  "updated": "",
+  "count": 0,
+  "trades": []
 }
