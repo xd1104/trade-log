@@ -614,10 +614,11 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .chart{position:relative}
 /* 用瀏覽器原生的縮放把手：右下角可拖曳改變寬高，尺寸記在 localStorage。
    preserveAspectRatio="none" 讓 K 線跟著容器拉伸，跟看盤軟體一樣。 */
-.cwrap{resize:both; overflow:hidden; min-width:420px; min-height:220px;
-  max-width:100%; border-radius:8px}
-.cwrap svg{display:block; width:100%; height:100%}
-.chint{font-size:10.5px; color:var(--faint); text-align:right; margin-top:2px}
+.cwrap{overflow:hidden; border-radius:8px}
+.cwrap svg{display:block; width:100%; height:auto; cursor:grab; touch-action:none;
+  user-select:none}
+.chint{font-size:11px; color:var(--faint); text-align:right; margin-top:4px}
+.chint #cinfo{color:var(--dim)}
 .chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px}
 .cpx{font-size:44px; font-weight:700; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; line-height:1}
@@ -761,12 +762,12 @@ function setHTML(id,html){
 }
 
 
-// ---------------- K 線圖（純 SVG，不用外部套件） ----------------
+// ---------------- K 線圖（純 SVG，TradingView 式操作） ----------------
+// 滾輪＝縮放疏密（以游標位置為中心）、按住拖曳＝左右移動時間、雙擊＝還原。
+// 價格軸自動貼合「畫面上看得到的那幾根」，跟看盤軟體一樣。
 var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastMktFallback='';
-// 圖的尺寸記在 localStorage —— 每次重繪都套回去，拖過的大小不會被洗掉
-var CW=+(localStorage.getItem('panel-cw')||1040);
-var CH=+(localStorage.getItem('panel-ch')||440);
-
+var VIEW={n:60, end:null};        // n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
+var DRAG=null;
 
 function fetchBars(force){
  if(!force && Date.now()-barsAt<3000) return;
@@ -775,38 +776,41 @@ function fetchBars(force){
   .then(r=>r.json()).then(x=>{ barsCache=x; }).catch(()=>{});
 }
 
-function chartCard(s){
- if(!barsCache||!barsCache.bars||!barsCache.bars.length) return '';
- const B=barsCache.bars, T=barsCache.trades||[], P=s.position;
- const live=!viewDate;
- const last=B[B.length-1], first=B[0];
- const px = live && s.chips && s.chips.price!=null ? s.chips.price : last.c;
- const chg = px-first.o, pct=(chg/first.o*100);
+function chartGeom(){
+ const all=(barsCache&&barsCache.bars)||[];
+ if(!all.length) return null;
+ const n=Math.max(8,Math.min(VIEW.n,all.length));
+ const end=VIEW.end==null?all.length:Math.max(n,Math.min(VIEW.end,all.length));
+ return {all:all, from:end-n, to:end, n:n, live:VIEW.end==null};
+}
 
- // 價格範圍：K 棒 + 進出場 + 停利停損都要看得到
+function chartSVG(s){
+ const G=chartGeom(); if(!G) return null;
+ const B=G.all.slice(G.from,G.to), T=(barsCache.trades)||[], P=s.position;
+ const live=!viewDate;
+ const first=G.all[0], last=G.all[G.all.length-1];
+ const px = live && s.chips && s.chips.price!=null ? s.chips.price : last.c;
+ const chg=px-first.o, pct=chg/first.o*100;
+
+ // 價格軸只貼合看得到的那幾根
  let hi=Math.max(...B.map(b=>b.h)), lo=Math.min(...B.map(b=>b.l));
- T.forEach(t=>{ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit); });
- if(P&&live){ hi=Math.max(hi,P.tp,P.sl); lo=Math.min(lo,P.tp,P.sl); }
+ const inView=t=>{ const i=idxAll(t); return i>=G.from&&i<G.to; };
+ T.forEach(t=>{ if(inView(t.time)){ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit);} });
+ if(P&&live&&G.live){ hi=Math.max(hi,P.tp); lo=Math.min(lo,P.sl); }
  const pad=(hi-lo)*0.08||10; hi+=pad; lo-=pad;
 
- const W=1040,H=440,L=0,R=64,TOP=12,BOT=26;   // R 留給右側價格刻度
- const cw=(W-R)/B.length, bw=Math.max(3,Math.min(16,cw*0.6));
+ const W=1040,H=440,R=64,TOP=12,BOT=26;
+ const cw=(W-R)/B.length, bw=Math.max(1.5,Math.min(18,cw*0.62));
  const y=v=>TOP+(hi-v)/(hi-lo)*(H-TOP-BOT);
- const x=i=>L+i*cw+cw/2;
+ const x=i=>i*cw+cw/2;
 
  let g='';
- // 他的下單時段 08:45~09:30 用底色標出來，一眼知道自己在哪個區間操作
- {
-   let a=-1,b=-1;
+ // 下單時段底色
+ { let a=-1,b=-1;
    B.forEach((bar,i)=>{ if(bar.t>='08:45'&&bar.t<'09:30'){ if(a<0)a=i; b=i; } });
-   if(a>=0){
-     const x0=L+a*cw, x1=L+(b+1)*cw;
-     g+='<rect x="'+x0.toFixed(1)+'" y="'+TOP+'" width="'+(x1-x0).toFixed(1)+
-        '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>'+
-        '<text x="'+(x0+6)+'" y="'+(TOP+15)+'" fill="#5A616E" font-size="11">下單時段</text>';
-   }
+   if(a>=0) g+='<rect x="'+(a*cw).toFixed(1)+'" y="'+TOP+'" width="'+((b+1-a)*cw).toFixed(1)+
+     '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>';
  }
- // 水平參考線
  for(let k=0;k<=5;k++){
    const v=lo+(hi-lo)*k/5, yy=y(v);
    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
@@ -814,61 +818,54 @@ function chartCard(s){
       '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5A616E" font-size="12" '+
       'font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
  }
- // K 棒（台股慣例：紅漲綠跌）
  B.forEach((b,i)=>{
    const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E', X=x(i);
    g+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+
       '" y2="'+y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
-   const yo=y(b.o), yc=y(b.c), top=Math.min(yo,yc), h=Math.max(1.2,Math.abs(yc-yo));
+   const yo=y(b.o), yc=y(b.c), top=Math.min(yo,yc), hh=Math.max(1.2,Math.abs(yc-yo));
    g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+
-      '" height="'+h.toFixed(1)+'" fill="'+col+'"/>';
+      '" height="'+hh.toFixed(1)+'" fill="'+col+'"/>';
  });
- // 停利／停損（持倉中才畫）
- if(P&&live){
+ if(P&&live&&G.live){
    [[P.tp,'#EE5A54','停利'],[P.sl,'#34B37E','停損']].forEach(z=>{
-     const yy=y(z[0]);
-     if(yy<TOP||yy>H-BOT) return;
+     const yy=y(z[0]); if(yy<TOP||yy>H-BOT) return;
      g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
         '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".8"/>'+
         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
    });
  }
- // 進出場標記
- // 交易時間要對到「所屬的那根 5 分 K」，不是剛好等於開始時間
- const idxOf=t=>{ let r=-1; for(let i=0;i<B.length;i++){ if(B[i].t<=t) r=i; else break; } return r; };
  T.forEach(t=>{
-   const i=idxOf(t.time); if(i<0) return;
-   const X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?'#EE5A54':'#34B37E';
+   const ia=idxAll(t.time); if(ia<G.from||ia>=G.to) return;
+   const i=ia-G.from, X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?'#EE5A54':'#34B37E';
    g+='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(W-R)+'" y2="'+Y.toFixed(1)+
       '" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".55"/>';
    g+=long
      ? '<path d="M'+(X-8)+' '+(Y+20)+' L'+X+' '+(Y+6)+' L'+(X+8)+' '+(Y+20)+' Z" fill="'+col+'"/>'
      : '<path d="M'+(X-8)+' '+(Y-20)+' L'+X+' '+(Y-6)+' L'+(X+8)+' '+(Y-20)+' Z" fill="'+col+'"/>';
-   // 出場點：用 _exit_time，沒有就標在最後
-   const j=t._exit_time?idxOf(t._exit_time.slice(0,5)):-1;
-   const XE=j>=0?x(j):x(B.length-1), YE=y(t.exit), w=t._net>0;
-   const ec=w?'#EE5A54':'#34B37E';
-   g+='<line x1="'+(XE-6)+'" y1="'+(YE-6)+'" x2="'+(XE+6)+'" y2="'+(YE+6)+'" stroke="'+ec+'" stroke-width="2.5"/>'+
-      '<line x1="'+(XE-6)+'" y1="'+(YE+6)+'" x2="'+(XE+6)+'" y2="'+(YE-6)+'" stroke="'+ec+'" stroke-width="2.5"/>';
+   const je=t._exit_time?idxAll(t._exit_time.slice(0,5)):-1;
+   if(je>=G.from&&je<G.to){
+     const XE=x(je-G.from), YE=y(t.exit), ec=t._net>0?'#EE5A54':'#34B37E';
+     g+='<line x1="'+(XE-6)+'" y1="'+(YE-6)+'" x2="'+(XE+6)+'" y2="'+(YE+6)+'" stroke="'+ec+'" stroke-width="2.5"/>'+
+        '<line x1="'+(XE-6)+'" y1="'+(YE+6)+'" x2="'+(XE+6)+'" y2="'+(YE-6)+'" stroke="'+ec+'" stroke-width="2.5"/>';
+   }
  });
- // 時間刻度
- ['08:45','09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30','13:00','13:30'].forEach(tm=>{
-   const i=idxOf(tm); if(i<0) return;
+ // 時間刻度：依疏密自動決定間隔
+ const step=Math.max(1,Math.ceil(B.length/8));
+ B.forEach((b,i)=>{ if(i%step) return;
    g+='<text x="'+x(i).toFixed(1)+'" y="'+(H-7)+'" fill="#5A616E" font-size="11.5" '+
-      'text-anchor="middle" font-family="ui-monospace,monospace">'+tm+'</text>';
+      'text-anchor="middle" font-family="ui-monospace,monospace">'+b.t+'</text>';
  });
 
  const c=s.chips||{};
  let mini='';
  if(live&&c.chg!=null){
-   mini='<div class="mini">'+
-     '<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>'+
+   mini='<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>'+
      '<span>15分 <b class="'+sgn(c.mom15)+'">'+pm(c.mom15)+'</b></span>'+
      '<span>跳空 <b>'+pm(c.gap)+'</b></span>'+
      '<span>震幅 <b>'+f(c.rng)+'</b></span>'+
      '<span>位階 <b>'+f(c.pos*100)+'%</b></span>'+
      '<span>量能 <b>'+f(c.vol_ratio,2)+'倍</b></span>'+
-     '<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span></div>';
+     '<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span>';
  }
  let pick='';
  if(pickOpen){
@@ -879,67 +876,77 @@ function chartCard(s){
    });
    pick+='</div>';
  }
- const sumTxt=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
+ const sum=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
  return {
+   svg:g, vb:'0 0 '+W+' '+H,
    head:'<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
         ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
-        '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sumTxt+' ▾</span>',
-   svg:g, vb:'0 0 '+W+' '+H, pick:pick, mini:mini
+        '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sum+' ▾</span>',
+   pick:pick, mini:mini,
+   info:B.length+' / '+G.all.length+' 根'+(G.live?'':'（已平移，雙擊還原）')
  };
 }
 
-/* 圖的外框只建一次。之後只換 <svg> 裡面的線條與標題文字 ——
-   若整塊重繪，使用者拖曳出來的尺寸會被洗掉，而且畫面會閃。 */
+function idxAll(t){
+ const all=(barsCache&&barsCache.bars)||[];
+ let r=-1; for(let i=0;i<all.length;i++){ if(all[i].t<=t) r=i; else break; } return r;
+}
+
+/* 外框只建一次，之後只換 svg 內容 —— 重繪不會打斷你的縮放與拖曳 */
 function paintChart(s){
- const d=chartCard(s);
- const box=document.getElementById('mkt');
- if(!d){ return false; }
- if(!document.getElementById('cwrap')){
-   box.innerHTML='<div class="card chart">'+
+ const d=chartSVG(s); if(!d) return false;
+ if(!document.getElementById('csvg')){
+   document.getElementById('mkt').innerHTML='<div class="card chart">'+
      '<div class="chead" id="chead"></div>'+
-     '<div class="cwrap" id="cwrap" style="width:'+CW+'px;height:'+CH+'px">'+
-     '<svg id="csvg" preserveAspectRatio="none"></svg></div>'+
-     '<div class="chint">右下角可拖曳縮放</div>'+
-     '<div id="cpick"></div><div id="cmini"></div></div>';
-   watchResize();
+     '<div class="cwrap"><svg id="csvg" preserveAspectRatio="none"></svg></div>'+
+     '<div class="chint"><span id="cinfo"></span>　滾輪縮放・拖曳平移・雙擊還原</div>'+
+     '<div id="cpick"></div><div class="mini" id="cmini"></div></div>';
+   bindChart();
  }
- const hd=document.getElementById('chead');
- if(hd.innerHTML!==d.head) hd.innerHTML=d.head;
- const sv=document.getElementById('csvg');
- if(sv.getAttribute('viewBox')!==d.vb) sv.setAttribute('viewBox',d.vb);
- if(sv.innerHTML!==d.svg) sv.innerHTML=d.svg;
- const pk=document.getElementById('cpick');
- if(pk.innerHTML!==d.pick) pk.innerHTML=d.pick;
- const mn=document.getElementById('cmini');
- if(mn.innerHTML!==d.mini) mn.innerHTML=d.mini;
+ const set=(id,html,attr)=>{ const e=document.getElementById(id);
+   if(attr){ if(e.getAttribute(attr)!==html) e.setAttribute(attr,html); }
+   else if(e.innerHTML!==html) e.innerHTML=html; };
+ set('chead',d.head); set('csvg',d.vb,'viewBox'); set('csvg',d.svg);
+ set('cpick',d.pick); set('cmini',d.mini); set('cinfo',d.info);
  return true;
 }
 
-function saveSize(){
- const w=document.getElementById('cwrap');
- if(!w) return;
- const r=w.getBoundingClientRect();
- if(r.width<50||r.height<50) return;         // 視窗隱藏時量到 0，不要存進去
- CW=Math.round(r.width); CH=Math.round(r.height);
- localStorage.setItem('panel-cw',CW); localStorage.setItem('panel-ch',CH);
-}
+function bindChart(){
+ const sv=document.getElementById('csvg');
+ const total=()=>((barsCache&&barsCache.bars)||[]).length;
 
-function watchResize(){
- const w=document.getElementById('cwrap');
- if(!w||w._watched) return;
- w._watched=true;
- // 兩道保險：ResizeObserver 為主，放開滑鼠時再存一次。
- // 有些環境（例如視窗沒顯示）ResizeObserver 不會觸發，光靠它會漏。
- let t=null;
- try{
-   new ResizeObserver(function(){
-     clearTimeout(t); t=setTimeout(saveSize,250);
-   }).observe(w);
- }catch(e){}
- w.addEventListener('mouseup',function(){ setTimeout(saveSize,60); });
- window.addEventListener('mouseup',function(){ setTimeout(saveSize,60); });
-}
+ sv.addEventListener('wheel',function(e){
+   e.preventDefault();
+   const G=chartGeom(); if(!G) return;
+   const r=sv.getBoundingClientRect();
+   const frac=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));   // 游標在圖上的相對位置
+   const anchor=G.from+frac*G.n;                                    // 以游標處那根為中心縮放
+   const n=Math.round(Math.min(total(),Math.max(8,G.n*(e.deltaY>0?1.18:0.85))));
+   let end=Math.round(anchor+(1-frac)*n);
+   end=Math.max(n,Math.min(total(),end));
+   VIEW.n=n; VIEW.end=(end>=total())?null:end;
+   tick();
+ },{passive:false});
 
+ sv.addEventListener('mousedown',function(e){
+   const G=chartGeom(); if(!G) return;
+   DRAG={x:e.clientX, end:G.to, n:G.n, w:sv.getBoundingClientRect().width};
+   sv.style.cursor='grabbing';
+ });
+ window.addEventListener('mousemove',function(e){
+   if(!DRAG) return;
+   const perBar=DRAG.w/DRAG.n;
+   const moved=Math.round((e.clientX-DRAG.x)/perBar);
+   let end=DRAG.end-moved;
+   end=Math.max(DRAG.n,Math.min(total(),end));
+   VIEW.end=(end>=total())?null:end;
+   tick();
+ });
+ window.addEventListener('mouseup',function(){
+   if(!DRAG) return; DRAG=null; sv.style.cursor='';
+ });
+ sv.addEventListener('dblclick',function(){ VIEW={n:60,end:null}; tick(); });
+}
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 
 function tradeBox(s){
