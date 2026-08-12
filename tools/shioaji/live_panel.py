@@ -231,6 +231,7 @@ class Today:
         self.updated = None
         self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
+        self.minute_bar = {}       # 分鐘索引 → 該分鐘的 OHLCV（給最新那根 K 棒即時累加用）
 
     def feed_quote(self, bid, ask, when):
         """
@@ -258,7 +259,14 @@ class Today:
         self.ticks += 1
         self.updated = when
         self.last_recv = time.time()
-        self.minute_close[when.hour * 60 + when.minute] = price
+        mi = when.hour * 60 + when.minute
+        self.minute_close[mi] = price
+        b = self.minute_bar.get(mi)
+        if b is None:
+            self.minute_bar[mi] = {"o": price, "h": price, "l": price, "c": price, "v": 0.0}
+            b = self.minute_bar[mi]
+        b["h"] = max(b["h"], price); b["l"] = min(b["l"], price)
+        b["c"] = price; b["v"] += float(volume)
         if not in_session:
             return
         if self.open is None:
@@ -503,6 +511,8 @@ def day_bars(day=None):
         g = df[(df["ts"].dt.time >= SESSION_OPEN)
                & (df["ts"].dt.time < DAY_END)].sort_values("ts")
         bars = to_timeframe(g, CHART_TF)
+        if d == date.today():
+            bars = merge_live_tail(bars, CHART_TF)
     except Exception as e:
         return {"error": str(e)[:120]}
 
@@ -538,6 +548,48 @@ def to_timeframe(g, minutes):
                     "o": float(blk["Open"].iloc[0]), "h": float(blk["High"].max()),
                     "l": float(blk["Low"].min()), "c": float(blk["Close"].iloc[-1]),
                     "v": float(blk["Volume"].sum())})
+    return out
+
+
+def merge_live_tail(bars, tf):
+    """
+    用即時 tick 補完「還在形成中」的那根 K 棒。
+
+    永豐的 kbars 是一分鐘給一次，所以最新那根的量每分鐘才跳一次，
+    看起來像卡住不動；大戶投是用即時成交累加的，才會一直在跑。
+    這裡把「kbars 還沒涵蓋到的那幾分鐘」用 tick 累積的資料補上去。
+    """
+    st = CURRENT_STATE.get("today")
+    if st is None or not st.minute_bar:
+        return bars
+    open_min = SESSION_OPEN.hour * 60 + SESSION_OPEN.minute
+    covered = 0
+    if bars:
+        last_t = bars[-1]["t"]
+        covered = int(last_t[:2]) * 60 + int(last_t[3:]) + tf      # kbars 已完成到這一刻
+    extra = {mi: b for mi, b in st.minute_bar.items()
+             if mi >= max(covered, open_min) and mi < DAY_END.hour * 60 + DAY_END.minute}
+    if not extra:
+        return bars
+    # 把多出來的分鐘照 tf 分組，接到後面
+    out = list(bars)
+    slots = {}
+    for mi in sorted(extra):
+        slot = open_min + ((mi - open_min) // tf) * tf
+        slots.setdefault(slot, []).append(extra[mi])
+    for slot in sorted(slots):
+        ms = slots[slot]
+        t = f"{slot // 60:02d}:{slot % 60:02d}"
+        bar = {"t": t, "o": ms[0]["o"], "h": max(m["h"] for m in ms),
+               "l": min(m["l"] for m in ms), "c": ms[-1]["c"],
+               "v": sum(m["v"] for m in ms)}
+        if out and out[-1]["t"] == t:          # 同一根 → 合併
+            prev = out[-1]
+            out[-1] = {"t": t, "o": prev["o"], "h": max(prev["h"], bar["h"]),
+                       "l": min(prev["l"], bar["l"]), "c": bar["c"],
+                       "v": prev["v"] + bar["v"]}
+        else:
+            out.append(bar)
     return out
 
 
