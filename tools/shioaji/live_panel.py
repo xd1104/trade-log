@@ -766,7 +766,10 @@ function setHTML(id,html){
 // 滾輪＝縮放疏密（以游標位置為中心）、按住拖曳＝左右移動時間、雙擊＝還原。
 // 價格軸自動貼合「畫面上看得到的那幾根」，跟看盤軟體一樣。
 var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastMktFallback='';
-var VIEW={n:60, end:null};        // n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
+// n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
+// vz＝價格軸縮放倍率（>1 放大、<1 壓縮）；voff＝價格軸平移量（單位：點）
+var VIEW={n:60, end:null, vz:1, voff:0};
+var lastSpan=0;   // 目前畫面的價格跨度（直向平移換算用）
 var DRAG=null;
 
 function fetchBars(force){
@@ -798,7 +801,11 @@ function chartSVG(s){
  T.forEach(t=>{ if(inView(t.time)){ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit);} });
  if(P&&live&&G.live){ hi=Math.max(hi,P.tp); lo=Math.min(lo,P.sl); }
  const pad=(hi-lo)*0.08||10; hi+=pad; lo-=pad;
+ // 直向縮放／平移：以自動範圍的中心為基準伸縮，再整體上下位移
+ { const mid=(hi+lo)/2+VIEW.voff, half=((hi-lo)/2)/VIEW.vz;
+   hi=mid+half; lo=mid-half; }
 
+ lastSpan=hi-lo;
  const W=1040,H=440,R=64,TOP=12,BOT=26;
  const cw=(W-R)/B.length, bw=Math.max(1.5,Math.min(18,cw*0.62));
  const y=v=>TOP+(hi-v)/(hi-lo)*(H-TOP-BOT);
@@ -811,6 +818,7 @@ function chartSVG(s){
    if(a>=0) g+='<rect x="'+(a*cw).toFixed(1)+'" y="'+TOP+'" width="'+((b+1-a)*cw).toFixed(1)+
      '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>';
  }
+ g+='<rect x="'+(W-R)+'" y="0" width="'+R+'" height="'+H+'" fill="#1F2530" opacity=".45"/>';
  for(let k=0;k<=5;k++){
    const v=lo+(hi-lo)*k/5, yy=y(v);
    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
@@ -883,7 +891,9 @@ function chartSVG(s){
         ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
         '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sum+' ▾</span>',
    pick:pick, mini:mini,
-   info:B.length+' / '+G.all.length+' 根'+(G.live?'':'（已平移，雙擊還原）')
+   info:B.length+' / '+G.all.length+' 根'+
+        (Math.abs(VIEW.vz-1)>0.02?'　直向 '+VIEW.vz.toFixed(1)+'x':'')+
+        ((G.live&&Math.abs(VIEW.vz-1)<=0.02&&Math.abs(VIEW.voff)<1)?'':'　雙擊還原')
  };
 }
 
@@ -915,8 +925,18 @@ function bindChart(){
  const sv=document.getElementById('csvg');
  const total=()=>((barsCache&&barsCache.bars)||[]).length;
 
+ // 價格軸在圖的最右邊（SVG 座標 W-R 之後），換算成畫面比例
+ const AXIS=64/1040;
+ const onAxis=e=>{ const r=sv.getBoundingClientRect();
+                   return (e.clientX-r.left)/r.width > 1-AXIS; };
+
  sv.addEventListener('wheel',function(e){
    e.preventDefault();
+   // Shift＋滾輪、或游標在價格軸上 → 直向縮放
+   if(e.shiftKey||onAxis(e)){
+     VIEW.vz=Math.min(12,Math.max(0.25,VIEW.vz*(e.deltaY>0?0.88:1.14)));
+     tick(); return;
+   }
    const G=chartGeom(); if(!G) return;
    const r=sv.getBoundingClientRect();
    const frac=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));   // 游標在圖上的相對位置
@@ -930,22 +950,39 @@ function bindChart(){
 
  sv.addEventListener('mousedown',function(e){
    const G=chartGeom(); if(!G) return;
-   DRAG={x:e.clientX, end:G.to, n:G.n, w:sv.getBoundingClientRect().width};
-   sv.style.cursor='grabbing';
+   const r=sv.getBoundingClientRect();
+   DRAG={x:e.clientX, y:e.clientY, end:G.to, n:G.n, w:r.width, h:r.height,
+         vz:VIEW.vz, voff:VIEW.voff, span:lastSpan,
+         axis:onAxis(e)};                       // 在價格軸上按下 → 拖曳＝直向縮放
+   sv.style.cursor=DRAG.axis?'ns-resize':'grabbing';
+   e.preventDefault();
  });
  window.addEventListener('mousemove',function(e){
    if(!DRAG) return;
+   if(DRAG.axis){
+     // 往下拉＝壓縮（看更大範圍），往上拉＝放大
+     const k=Math.exp(-(e.clientY-DRAG.y)/220);
+     VIEW.vz=Math.min(12,Math.max(0.25,DRAG.vz*k));
+     tick(); return;
+   }
    const perBar=DRAG.w/DRAG.n;
    const moved=Math.round((e.clientX-DRAG.x)/perBar);
    let end=DRAG.end-moved;
    end=Math.max(DRAG.n,Math.min(total(),end));
    VIEW.end=(end>=total())?null:end;
+   // 上下拖曳＝價格軸平移（換算成點數）
+   if(DRAG.span>0) VIEW.voff=DRAG.voff+(e.clientY-DRAG.y)/DRAG.h*DRAG.span;
    tick();
  });
  window.addEventListener('mouseup',function(){
    if(!DRAG) return; DRAG=null; sv.style.cursor='';
  });
- sv.addEventListener('dblclick',function(){ VIEW={n:60,end:null}; tick(); });
+ sv.addEventListener('dblclick',function(e){
+   // 在價格軸上雙擊＝只還原直向；在圖上雙擊＝全部還原
+   if(onAxis(e)){ VIEW.vz=1; VIEW.voff=0; }
+   else VIEW={n:60,end:null,vz:1,voff:0};
+   tick();
+ });
 }
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 
