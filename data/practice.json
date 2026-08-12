@@ -1,13 +1,13 @@
 {
-  "updated": "2026-08-12T10:40:58",
+  "updated": "2026-08-12T10:42:05",
   "count": 1,
   "trades": [
     {
       "date": "2026-08-12",
-      "dir": "short",
-      "entry": 45404,
-      "exit": 45405,
-      "time": "10:40",
+      "dir": "long",
+      "entry": 45401,
+      "exit": 45501,
+      "time": "09:02",
       "note": "",
       "mode": "sim"
     }
