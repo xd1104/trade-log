@@ -95,6 +95,7 @@ except Exception:
 POSITION = None
 TODAY_TRADES = []
 CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
+SESSION_REF = {"api": None}          # 收工重建當日盤面時要用到 API
 
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
@@ -1046,6 +1047,7 @@ def main():
         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
                             version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
+        SESSION_REF["api"] = api
         CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None,
                      "contract": contract.code,
                      "contract_name": getattr(contract, "name", "")})
@@ -1173,10 +1175,16 @@ def save_today(t):
     這裡補上「那一分鐘的盤面長什麼樣」。兩邊用 (date, time) 對起來，
     累積到約 100 筆之後就能檢驗：他在什麼盤面下判斷特別準、手癢都發生在什麼情況。
 
-    不需要 App 與面板連動 —— 手機連不到電腦的 localhost，硬串很脆弱；
-    靠時間對帳反而穩，而且他什麼都不用多做。
+    【2026-08-12 修正】原本只寫記憶體裡累積的 snapshots，
+    只要早上有任何一刻沒進入「記錄中」（例如面板中途重啟、或 prev_close
+    抓失敗導致特徵算不出來），就會靜靜地存出 0 分鐘、完全不報錯 ——
+    當天真的發生了。改成收工時直接跟永豐要當天的 1 分 K 重建，
+    不依賴面板整個早上不中斷；記憶體版本只當作補充。
     """
     LOG_DIR.mkdir(exist_ok=True)
+    minutes = rebuild_minutes(date.today(), t)
+    if not minutes:      # 連重建都失敗才退回記憶體版本
+        minutes = [t.snapshots[k] for k in sorted(t.snapshots)]
     rec = {
         "date": str(date.today()),
         "contract": (session_contract() or ""),
@@ -1184,15 +1192,69 @@ def save_today(t):
         "open": t.open, "high": t.high, "low": t.low, "close": t.price,
         "volume": t.vol, "ticks": t.ticks, "quotes": t.quotes,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "minutes": [t.snapshots[k] for k in sorted(t.snapshots)],
+        "minutes": minutes,
     }
     (LOG_DIR / f"{date.today()}-live.json").write_text(
         json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"  已存 {len(rec['minutes'])} 分鐘的完整盤面")
+    if minutes:
+        print(f"  已存 {len(minutes)} 分鐘的完整盤面")
+    else:
+        print("  ⚠️ 一分鐘都沒存到 —— 事後就無法對照這天的進場盤面，請查原因")
+
+
+def rebuild_minutes(day, t):
+    """
+    收工後跟永豐要當天的 1 分 K，重建 08:45~09:30 的逐分鐘盤面。
+    比記憶體累積可靠：面板中途重啟、或早上某段沒進入記錄狀態都不影響。
+    """
+    api = session_api()
+    if api is None:
+        return []
+    try:
+        import shioaji as sj
+        contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
+        df = pd.DataFrame({**api.kbars(contract, start=str(day), end=str(day))})
+        if df.empty:
+            return []
+        df["ts"] = pd.to_datetime(df["ts"])
+        g = df[(df["ts"].dt.time >= SESSION_OPEN)
+               & (df["ts"].dt.time <= WATCH_END)].sort_values("ts")
+        if g.empty:
+            return []
+        day_all = df[(df["ts"].dt.time >= SESSION_OPEN)
+                     & (df["ts"].dt.time < DAY_END)].sort_values("ts")
+        day_open = float(day_all["Open"].iloc[0])
+        c = g["Close"].to_numpy(dtype=float)
+        hi = g["High"].cummax().to_numpy(dtype=float)
+        lo = g["Low"].cummin().to_numpy(dtype=float)
+        vol = g["Volume"].cumsum().to_numpy(dtype=float)
+        out = []
+        for i, ts in enumerate(g["ts"]):
+            rng = hi[i] - lo[i]
+            out.append({
+                "time": ts.strftime("%H:%M"),
+                "price": float(c[i]),
+                "mom5": round(float(c[i] - c[max(0, i - 5)]), 1),
+                "mom15": round(float(c[i] - c[max(0, i - 15)]), 1),
+                "ret_open": round(float(c[i] - day_open), 1),
+                "gap": round(float(day_open - t.prev_close), 1) if t.prev_close else None,
+                "rng": round(float(rng), 1),
+                "pos": round(float((c[i] - lo[i]) / rng), 3) if rng > 0 else 0.5,
+                "vol_cum": float(vol[i]),
+                "rebuilt": True,
+            })
+        return out
+    except Exception as e:
+        print(f"  重建當日盤面失敗：{str(e)[:120]}")
+        return []
 
 
 def session_contract():
     return CONN.get("contract")
+
+
+def session_api():
+    return SESSION_REF.get("api")
 
 
 if __name__ == "__main__":
