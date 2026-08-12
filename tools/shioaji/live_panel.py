@@ -516,13 +516,21 @@ def day_bars(day=None):
 
 
 def to_timeframe(g, minutes):
-    """把 1 分 K 合成 N 分 K。以每根的起始時間標示，跟看盤軟體一致。"""
+    """
+    把 1 分 K 合成 N 分 K，並以每根的「起始時間」標示（跟看盤軟體一致）。
+
+    【關鍵：永豐的 1 分 K 用結束時間標記】
+    日盤 08:45 開盤，但第一根的標籤是 08:46 —— 它涵蓋的是 08:45~08:46。
+    若直接照標籤切 5 分鐘，第一根只會包到 08:46~08:49（四分鐘），
+    08:50 那根會被推到下一格，整串往前偏一格，看起來就比大戶投「快一根」。
+    所以先把時間往回挪一分鐘還原成「起始時間」，再分組。
+    """
     if g.empty:
         return []
     g = g.copy()
-    # 從 08:45 起算，每 N 分鐘一根
+    start_ts = g["ts"] - pd.Timedelta(minutes=1)          # 還原成該根的起始時間
     base = pd.Timestamp.combine(g["ts"].iloc[0].date(), SESSION_OPEN)
-    g["slot"] = ((g["ts"] - base).dt.total_seconds() // (minutes * 60)).astype(int)
+    g["slot"] = ((start_ts - base).dt.total_seconds() // (minutes * 60)).astype(int)
     out = []
     for _, blk in g.groupby("slot", sort=True):
         start = base + pd.Timedelta(minutes=minutes * int(blk["slot"].iloc[0]))
@@ -604,7 +612,12 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .px{grid-column:1/-1; text-align:center; padding:16px}
 .px .v{font-size:38px; letter-spacing:-1px}
 .chart{position:relative}
-.chart svg{display:block; width:100%; height:auto}
+/* 用瀏覽器原生的縮放把手：右下角可拖曳改變寬高，尺寸記在 localStorage。
+   preserveAspectRatio="none" 讓 K 線跟著容器拉伸，跟看盤軟體一樣。 */
+.cwrap{resize:both; overflow:hidden; min-width:420px; min-height:220px;
+  max-width:100%; border-radius:8px}
+.cwrap svg{display:block; width:100%; height:100%}
+.chint{font-size:10.5px; color:var(--faint); text-align:right; margin-top:2px}
 .chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px}
 .cpx{font-size:44px; font-weight:700; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; line-height:1}
@@ -688,6 +701,7 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
 </div>
 <div id="wait" class="wait">等待資料…</div>
+<div id="warn"></div>
 <div class="cols"><div id="mkt"></div><div class="right"><div id="trade"></div><div id="stats"></div></div></div>
 <div class="foot">只顯示當下的客觀盤面數字，不做預測、不給買賣訊號。<br>練習下單為模擬，不會送單到永豐。</div>
 </div>
@@ -697,7 +711,7 @@ const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
 const sgn=v=>v>0?'up':v<0?'down':'flat';
 const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
 
-var lastMkt='', lastTrade='', lastStats='', statsCache=null, statsAt=0;
+var lastMkt='', lastTrade='', lastStats='', lastWarn='', statsCache=null, statsAt=0;
 
 async function tick(){
  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
@@ -721,15 +735,18 @@ async function tick(){
 
 fetchBars(false);
  const c=s.chips;
- let m='';
- if(dead) m+='<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
-   (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>';
- const ch=chartCard(s);
- m += ch || ('<div class="card"><div class="grid">'+
-   '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
-   cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
-   cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+'</div></div>');
- setHTML('mkt',m);
+ const warn = dead ? '<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
+   (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>' : '';
+ setHTML('warn',warn);
+ if(!paintChart(s)){
+   // 還沒有 K 棒（例如夜盤）→ 退回簡單的數字卡
+   lastMktFallback = '<div class="card"><div class="grid">'+
+     '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
+     cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
+     cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+'</div></div>';
+   if(document.getElementById('mkt').innerHTML!==lastMktFallback)
+     document.getElementById('mkt').innerHTML=lastMktFallback;
+ }
  setHTML('trade',tradeBox(s));
  setHTML('stats',statsBox(statsCache));
 }
@@ -737,7 +754,7 @@ fetchBars(false);
 // 只有內容真的變了才動 DOM。否則每 0.5 秒重建一次，
 // 使用者剛好在那一瞬間按下去，按鈕會連同事件一起被換掉 → 第一下沒反應。
 function setHTML(id,html){
- const box={mkt:'lastMkt',trade:'lastTrade',stats:'lastStats'}[id];
+ const box={mkt:'lastMkt',trade:'lastTrade',stats:'lastStats',warn:'lastWarn'}[id];
  if(window[box]===html) return;
  window[box]=html;
  document.getElementById(id).innerHTML=html;
@@ -745,7 +762,11 @@ function setHTML(id,html){
 
 
 // ---------------- K 線圖（純 SVG，不用外部套件） ----------------
-var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastChart='';
+var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastMktFallback='';
+// 圖的尺寸記在 localStorage —— 每次重繪都套回去，拖過的大小不會被洗掉
+var CW=+(localStorage.getItem('panel-cw')||1040);
+var CH=+(localStorage.getItem('panel-ch')||440);
+
 
 function fetchBars(force){
  if(!force && Date.now()-barsAt<3000) return;
@@ -859,11 +880,64 @@ function chartCard(s){
    pick+='</div>';
  }
  const sumTxt=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
- return '<div class="card chart">'+
-  '<div class="chead"><div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
-  ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
-  '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sumTxt+' ▾</span></div>'+
-  '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">'+g+'</svg>'+pick+mini+'</div>';
+ return {
+   head:'<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
+        ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
+        '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sumTxt+' ▾</span>',
+   svg:g, vb:'0 0 '+W+' '+H, pick:pick, mini:mini
+ };
+}
+
+/* 圖的外框只建一次。之後只換 <svg> 裡面的線條與標題文字 ——
+   若整塊重繪，使用者拖曳出來的尺寸會被洗掉，而且畫面會閃。 */
+function paintChart(s){
+ const d=chartCard(s);
+ const box=document.getElementById('mkt');
+ if(!d){ return false; }
+ if(!document.getElementById('cwrap')){
+   box.innerHTML='<div class="card chart">'+
+     '<div class="chead" id="chead"></div>'+
+     '<div class="cwrap" id="cwrap" style="width:'+CW+'px;height:'+CH+'px">'+
+     '<svg id="csvg" preserveAspectRatio="none"></svg></div>'+
+     '<div class="chint">右下角可拖曳縮放</div>'+
+     '<div id="cpick"></div><div id="cmini"></div></div>';
+   watchResize();
+ }
+ const hd=document.getElementById('chead');
+ if(hd.innerHTML!==d.head) hd.innerHTML=d.head;
+ const sv=document.getElementById('csvg');
+ if(sv.getAttribute('viewBox')!==d.vb) sv.setAttribute('viewBox',d.vb);
+ if(sv.innerHTML!==d.svg) sv.innerHTML=d.svg;
+ const pk=document.getElementById('cpick');
+ if(pk.innerHTML!==d.pick) pk.innerHTML=d.pick;
+ const mn=document.getElementById('cmini');
+ if(mn.innerHTML!==d.mini) mn.innerHTML=d.mini;
+ return true;
+}
+
+function saveSize(){
+ const w=document.getElementById('cwrap');
+ if(!w) return;
+ const r=w.getBoundingClientRect();
+ if(r.width<50||r.height<50) return;         // 視窗隱藏時量到 0，不要存進去
+ CW=Math.round(r.width); CH=Math.round(r.height);
+ localStorage.setItem('panel-cw',CW); localStorage.setItem('panel-ch',CH);
+}
+
+function watchResize(){
+ const w=document.getElementById('cwrap');
+ if(!w||w._watched) return;
+ w._watched=true;
+ // 兩道保險：ResizeObserver 為主，放開滑鼠時再存一次。
+ // 有些環境（例如視窗沒顯示）ResizeObserver 不會觸發，光靠它會漏。
+ let t=null;
+ try{
+   new ResizeObserver(function(){
+     clearTimeout(t); t=setTimeout(saveSize,250);
+   }).observe(w);
+ }catch(e){}
+ w.addEventListener('mouseup',function(){ setTimeout(saveSize,60); });
+ window.addEventListener('mouseup',function(){ setTimeout(saveSize,60); });
 }
 
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
@@ -939,9 +1013,9 @@ document.addEventListener('click', function(e){
   .then(()=>{ b.disabled=false; });
 });
 document.addEventListener('click', function(e){
- if(e.target.closest('[data-pick]')){ pickOpen=!pickOpen; lastMkt=''; tick(); return; }
+ if(e.target.closest('[data-pick]')){ pickOpen=!pickOpen; tick(); return; }
  const d=e.target.closest('[data-day]');
- if(d){ viewDate=d.getAttribute('data-day'); pickOpen=false; lastMkt=''; fetchBars(true);
+ if(d){ viewDate=d.getAttribute('data-day'); pickOpen=false; fetchBars(true);
         setTimeout(tick,300); return; }
  const b=e.target.closest('[data-win]');
  if(!b) return;
