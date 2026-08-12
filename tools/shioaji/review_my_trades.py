@@ -7,8 +7,9 @@ r"""
 這支程式把兩份資料對起來：
 
   trade-log App 的交易紀錄   date / time / dir / entry / exit / note
-  面板存的逐分鐘盤面         morning_logs/YYYY-MM-DD-live.json
-                              （沒有當天的即時存檔時，退而用 tmf_1min.csv 重建）
+  歷史 1 分 K                tmf_1min.csv（排程每天自動累積）
+
+進場當下的盤面一律用 (日期, 時間) 從 1 分 K 重建 —— 不需要另外存檔。
 
 用 (日期, 進場時間) 對帳 —— 所以 App 與面板不需要連動，Benson 什麼都不用多做。
 
@@ -38,7 +39,6 @@ except Exception:
 
 HERE = Path(__file__).parent
 TRADES = HERE / "my_trades.json"
-LOGS = HERE / "morning_logs"
 PX = HERE / "tmf_1min.csv"
 
 POINT_VALUE = 10          # 微台每點 NT$10
@@ -59,13 +59,7 @@ def load_trades():
 
 
 def market_at(d, hhmm):
-    """先找面板存檔；沒有就用歷史 1 分 K 重建。"""
-    f = LOGS / f"{d}-live.json"
-    if f.exists():
-        rec = json.loads(f.read_text(encoding="utf-8"))
-        for m in rec.get("minutes", []):
-            if m["time"] == hhmm:
-                return m
+    """用歷史 1 分 K 重建那一刻的盤面。"""
     if not PX.exists():
         return None
     px = getattr(market_at, "_px", None)

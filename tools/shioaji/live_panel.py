@@ -23,6 +23,11 @@ r"""
 2. 去趨勢：樣本期間台指期漲 81.7%，日盤中位漂移約 +25 點，已從結果扣除。
    剩下的才是「當下動能會不會延續」。
 
+【為什麼沒有逐分鐘盤面存檔】
+曾經每天存一份 08:45~09:30 的完整盤面，後來拿掉了：
+那份資料可以用「日期＋時間」從 tmf_1min.csv 完整重建（排程每天自動累積），
+存檔完全多餘，卻多一個會靜默失敗的零件 —— 2026-08-12 就真的存出了 0 分鐘還不報錯。
+
 【這不是投資建議】只呈現歷史統計，不預測、不給買賣訊號。
 
 執行：
@@ -52,7 +57,6 @@ REPO = HERE.parent.parent                       # trade-log/ 根目錄
 SYNC_FILE = REPO / "data" / "practice.json"     # 練習紀錄的雲端同步檔
 MATRIX = HERE / "intraday.csv"
 CALIB = HERE / "calibration.json"     # 走查驗證產出的分段命中率
-LOG_DIR = HERE / "morning_logs"
 TRADE_DIR = HERE / "practice_trades"     # 模擬練習的交易紀錄
 
 TP_POINTS = 100.0        # Benson 固定 ±100
@@ -95,7 +99,6 @@ except Exception:
 POSITION = None
 TODAY_TRADES = []
 CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
-SESSION_REF = {"api": None}          # 收工重建當日盤面時要用到 API
 
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
@@ -224,7 +227,6 @@ class Today:
         self.updated = None
         self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
-        self.snapshots = {}        # 分鐘索引 → 該分鐘的完整盤面（事後跟交易紀錄對帳用）
 
     def feed_quote(self, bid, ask, when):
         """
@@ -298,7 +300,7 @@ class Today:
 
 # ------------------------------------------------------- 模擬練習（不會真的下單）
 
-def open_position(direction, price, snapshot, note=""):
+def open_position(direction, price, note=""):
     """開一筆模擬單。direction: 'long' / 'short'。"""
     global POSITION
     if POSITION is not None:
@@ -312,7 +314,6 @@ def open_position(direction, price, snapshot, note=""):
         "entry_time": datetime.now().strftime("%H:%M:%S"),
         "tp": float(price) + d * TP_POINTS,
         "sl": float(price) - d * SL_POINTS,
-        "snapshot": snapshot or {},
         "note": note,
     }
     print(f"[練習] 進場 {direction} @ {price}　停利 {POSITION['tp']:.0f}　停損 {POSITION['sl']:.0f}")
@@ -340,7 +341,6 @@ def close_position(price, reason):
         "_reason": reason,
         "_points": round(points, 1),
         "_net": round(points - FEE_POINTS, 1),
-        "_snapshot": p.get("snapshot", {}),
     }
     TODAY_TRADES.append(rec)
     POSITION = None
@@ -367,6 +367,27 @@ def save_trades():
     TRADE_DIR.mkdir(exist_ok=True)
     (TRADE_DIR / f"{date.today()}.json").write_text(
         json.dumps(TODAY_TRADES, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_today_trades():
+    """
+    啟動與跨日時把當天已有的紀錄讀回記憶體。
+
+    【沒有這段會弄丟資料】TODAY_TRADES 原本只存在記憶體，面板一重啟就變空；
+    接著再下一單、save_trades() 一寫，當天稍早的紀錄就被整個覆蓋掉。
+    早上下過單、中途重開面板、再下一單 —— 早上那些就沒了。
+    """
+    global TODAY_TRADES
+    f = TRADE_DIR / f"{date.today()}.json"
+    if not f.exists():
+        TODAY_TRADES = []
+        return
+    try:
+        TODAY_TRADES = json.loads(f.read_text(encoding="utf-8")) or []
+        if TODAY_TRADES:
+            print(f"  讀回今天已有的 {len(TODAY_TRADES)} 筆練習紀錄")
+    except Exception:
+        TODAY_TRADES = []
 
 
 def practice_stats():
@@ -750,11 +771,7 @@ class Handler(BaseHTTPRequestHandler):
             d = body.get("dir")
             if d not in ("long", "short"):
                 return self._json(400, {"error": "方向要是 long 或 short"})
-            snap = None
-            if st is not None:
-                idx = datetime.now().hour * 60 + datetime.now().minute
-                snap = st.snapshots.get(idx)
-            ok, msg = open_position(d, price, snap, body.get("note", ""))
+            ok, msg = open_position(d, price, body.get("note", ""))
             return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
 
         if self.path == "/api/close":
@@ -878,8 +895,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 (1 if POSITION["dir"] == "long" else -1)
                 * ((today_state.price or POSITION["entry"]) - POSITION["entry"]), 1))
                 if POSITION else None),
-            "today_trades": [{k: v for k, v in t.items() if k != "_snapshot"}
-                             for t in TODAY_TRADES],
+            "today_trades": list(TODAY_TRADES),
             "age_sec": 0 if replay else age,
             "conn": CONN.copy(),
         })
@@ -900,18 +916,6 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "msg": "夜盤時段 —— 只顯示價格與動能，歷史對照樣本只涵蓋日盤。",
             })
             return
-
-        # 下單時段逐分鐘留存完整盤面 —— 這樣事後可用「日期＋時間」跟 trade-log
-        # 的交易紀錄對起來，回答「他在什麼盤面下進場、判斷準不準」
-        if phase == "recording":
-            today_state.snapshots[min_idx] = {
-                "time": now_time.strftime("%H:%M"),
-                "price": today_state.price, "bid": today_state.bid, "ask": today_state.ask,
-                "mom5": round(feats["mom5"], 1), "mom15": round(feats["mom15"], 1),
-                "ret_open": round(feats["ret_open"], 1), "gap": round(feats["gap"], 1),
-                "rng": round(feats["rng"], 1), "pos": round(feats["pos"], 3),
-                "vol_ratio": round(feats["vol_ratio"], 3), "vol_cum": today_state.vol,
-            }
 
         STATE.update({
             "status": "live",
@@ -1047,7 +1051,6 @@ def main():
         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
                             version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
-        SESSION_REF["api"] = api
         CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None,
                      "contract": contract.code,
                      "contract_name": getattr(contract, "name", "")})
@@ -1083,6 +1086,7 @@ def main():
                          "since": datetime.now().strftime("%H:%M:%S")})
             print(f"[{today}] 連線失敗：{str(e)[:200]}")
             prev_close = session["state"].prev_close if session["state"] else None
+        load_today_trades()
         session.update({"date": today, "state": Today(prev_close, dayvol), "saved": False})
         print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}")
 
@@ -1147,11 +1151,9 @@ def main():
             elif session["date"] == today and WATCH_END < t < DAY_END:
                 # 日盤其餘時間：照常顯示價格與趨勢，但不記錄
                 if not session["saved"] and st.open is not None:
-                    save_today(st)
                     session["saved"] = True
-                    print(f"[{today}] 09:30 下單時段結束，已存檔當日資料。")
                     ok, msg = sync_to_cloud()
-                    print(f"[{today}] 雲端同步：{msg}")
+                    print(f"[{today}] 09:30 下單時段結束。雲端同步：{msg}")
                 update_state(hist, st, vol_ref, t, phase="live")
             else:
                 # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）
@@ -1167,94 +1169,8 @@ def main():
                 pass
 
 
-def save_today(t):
-    """
-    存下當天 08:45~09:30 的逐分鐘完整盤面。
-
-    用途：Benson 的 trade-log App 記的是「日期＋時間＋方向＋進出場價」，
-    這裡補上「那一分鐘的盤面長什麼樣」。兩邊用 (date, time) 對起來，
-    累積到約 100 筆之後就能檢驗：他在什麼盤面下判斷特別準、手癢都發生在什麼情況。
-
-    【2026-08-12 修正】原本只寫記憶體裡累積的 snapshots，
-    只要早上有任何一刻沒進入「記錄中」（例如面板中途重啟、或 prev_close
-    抓失敗導致特徵算不出來），就會靜靜地存出 0 分鐘、完全不報錯 ——
-    當天真的發生了。改成收工時直接跟永豐要當天的 1 分 K 重建，
-    不依賴面板整個早上不中斷；記憶體版本只當作補充。
-    """
-    LOG_DIR.mkdir(exist_ok=True)
-    minutes = rebuild_minutes(date.today(), t)
-    if not minutes:      # 連重建都失敗才退回記憶體版本
-        minutes = [t.snapshots[k] for k in sorted(t.snapshots)]
-    rec = {
-        "date": str(date.today()),
-        "contract": (session_contract() or ""),
-        "prev_close": t.prev_close, "dayvol": t.dayvol,
-        "open": t.open, "high": t.high, "low": t.low, "close": t.price,
-        "volume": t.vol, "ticks": t.ticks, "quotes": t.quotes,
-        "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "minutes": minutes,
-    }
-    (LOG_DIR / f"{date.today()}-live.json").write_text(
-        json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-    if minutes:
-        print(f"  已存 {len(minutes)} 分鐘的完整盤面")
-    else:
-        print("  ⚠️ 一分鐘都沒存到 —— 事後就無法對照這天的進場盤面，請查原因")
-
-
-def rebuild_minutes(day, t):
-    """
-    收工後跟永豐要當天的 1 分 K，重建 08:45~09:30 的逐分鐘盤面。
-    比記憶體累積可靠：面板中途重啟、或早上某段沒進入記錄狀態都不影響。
-    """
-    api = session_api()
-    if api is None:
-        return []
-    try:
-        import shioaji as sj
-        contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
-        df = pd.DataFrame({**api.kbars(contract, start=str(day), end=str(day))})
-        if df.empty:
-            return []
-        df["ts"] = pd.to_datetime(df["ts"])
-        g = df[(df["ts"].dt.time >= SESSION_OPEN)
-               & (df["ts"].dt.time <= WATCH_END)].sort_values("ts")
-        if g.empty:
-            return []
-        day_all = df[(df["ts"].dt.time >= SESSION_OPEN)
-                     & (df["ts"].dt.time < DAY_END)].sort_values("ts")
-        day_open = float(day_all["Open"].iloc[0])
-        c = g["Close"].to_numpy(dtype=float)
-        hi = g["High"].cummax().to_numpy(dtype=float)
-        lo = g["Low"].cummin().to_numpy(dtype=float)
-        vol = g["Volume"].cumsum().to_numpy(dtype=float)
-        out = []
-        for i, ts in enumerate(g["ts"]):
-            rng = hi[i] - lo[i]
-            out.append({
-                "time": ts.strftime("%H:%M"),
-                "price": float(c[i]),
-                "mom5": round(float(c[i] - c[max(0, i - 5)]), 1),
-                "mom15": round(float(c[i] - c[max(0, i - 15)]), 1),
-                "ret_open": round(float(c[i] - day_open), 1),
-                "gap": round(float(day_open - t.prev_close), 1) if t.prev_close else None,
-                "rng": round(float(rng), 1),
-                "pos": round(float((c[i] - lo[i]) / rng), 3) if rng > 0 else 0.5,
-                "vol_cum": float(vol[i]),
-                "rebuilt": True,
-            })
-        return out
-    except Exception as e:
-        print(f"  重建當日盤面失敗：{str(e)[:120]}")
-        return []
-
-
 def session_contract():
     return CONN.get("contract")
-
-
-def session_api():
-    return SESSION_REF.get("api")
 
 
 if __name__ == "__main__":
