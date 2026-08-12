@@ -617,6 +617,10 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .cwrap{overflow:hidden; border-radius:8px}
 .cwrap svg{display:block; width:100%; height:auto; cursor:grab; touch-action:none;
   user-select:none}
+.legend{display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; color:var(--dim);
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; margin:2px 0 8px}
+.legend b{color:var(--text); font-weight:600}
+.legend .lt{color:var(--faint)}
 .chint{font-size:11px; color:var(--faint); text-align:right; margin-top:4px}
 .chint #cinfo{color:var(--dim)}
 .chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px}
@@ -770,6 +774,7 @@ var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastMktFallback='';
 // vz＝價格軸縮放倍率（>1 放大、<1 壓縮）；voff＝價格軸平移量（單位：點）
 var VIEW={n:60, end:null, vz:1, voff:0};
 var lastSpan=0;   // 目前畫面的價格跨度（直向平移換算用）
+var HOVER={i:null};   // 游標對到的 K 棒（全域索引），null＝顯示最新那根
 var DRAG=null;
 
 function fetchBars(force){
@@ -873,6 +878,15 @@ function chartSVG(s){
         '<line x1="'+(XE-6)+'" y1="'+(YE+6)+'" x2="'+(XE+6)+'" y2="'+(YE-6)+'" stroke="'+ec+'" stroke-width="2.5"/>';
    }
  });
+ // ---- 游標所在那根：畫垂直參考線 ----
+ let legendBar=B[B.length-1], legendIdx=G.to-1, hovering=false;
+ if(HOVER.i!=null && HOVER.i>=G.from && HOVER.i<G.to){
+   legendIdx=HOVER.i; legendBar=G.all[HOVER.i]; hovering=true;
+   const X=x(HOVER.i-G.from);
+   g+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+      '" stroke="#8B92A0" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
+ }
+
  // 時間刻度：依疏密自動決定間隔
  const step=Math.max(1,Math.ceil(B.length/8));
  B.forEach((b,i)=>{ if(i%step) return;
@@ -907,6 +921,17 @@ function chartSVG(s){
         ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
         '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sum+' ▾</span>',
    pick:pick, mini:mini,
+   legend:(function(b,hv){
+     const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E';
+     const vol=b.v>=10000?(b.v/1000).toFixed(1)+'k':b.v.toFixed(0);
+     return '<span class="lt">'+b.t+'</span>'+
+       '<span>開 <b>'+b.o.toFixed(0)+'</b></span>'+
+       '<span>高 <b>'+b.h.toFixed(0)+'</b></span>'+
+       '<span>低 <b>'+b.l.toFixed(0)+'</b></span>'+
+       '<span>收 <b style="color:'+col+'">'+b.c.toFixed(0)+'</b></span>'+
+       '<span>量 <b>'+vol+'</b></span>'+
+       (hv?'':'<span class="lt">（最新）</span>');
+   })(legendBar,hovering),
    info:B.length+' / '+G.all.length+' 根'+
         (Math.abs(VIEW.vz-1)>0.02?'　直向 '+VIEW.vz.toFixed(1)+'x':'')+
         ((G.live&&Math.abs(VIEW.vz-1)<=0.02&&Math.abs(VIEW.voff)<1)?'':'　雙擊還原')
@@ -924,6 +949,7 @@ function paintChart(s){
  if(!document.getElementById('csvg')){
    document.getElementById('mkt').innerHTML='<div class="card chart">'+
      '<div class="chead" id="chead"></div>'+
+     '<div class="legend" id="clegend"></div>'+
      '<div class="cwrap"><svg id="csvg" preserveAspectRatio="none"></svg></div>'+
      '<div class="chint"><span id="cinfo"></span>　滾輪縮放・拖曳平移・雙擊還原</div>'+
      '<div id="cpick"></div><div class="mini" id="cmini"></div></div>';
@@ -932,7 +958,8 @@ function paintChart(s){
  const set=(id,html,attr)=>{ const e=document.getElementById(id);
    if(attr){ if(e.getAttribute(attr)!==html) e.setAttribute(attr,html); }
    else if(e.innerHTML!==html) e.innerHTML=html; };
- set('chead',d.head); set('csvg',d.vb,'viewBox'); set('csvg',d.svg);
+ set('chead',d.head); set('clegend',d.legend);
+ set('csvg',d.vb,'viewBox'); set('csvg',d.svg);
  set('cpick',d.pick); set('cmini',d.mini); set('cinfo',d.info);
  return true;
 }
@@ -993,6 +1020,21 @@ function bindChart(){
  window.addEventListener('mouseup',function(){
    if(!DRAG) return; DRAG=null; sv.style.cursor='';
  });
+ // 游標移動 → 對到最近的那根 K 棒
+ sv.addEventListener('mousemove',function(e){
+   if(DRAG) return;
+   const G=chartGeom(); if(!G) return;
+   const r=sv.getBoundingClientRect();
+   const frac=(e.clientX-r.left)/r.width;
+   if(frac<0||frac>1-64/1040){ if(HOVER.i!=null){HOVER.i=null; tick();} return; }
+   const i=G.from+Math.floor(frac/(1-64/1040)*G.n);
+   const ni=Math.max(G.from,Math.min(G.to-1,i));
+   if(ni!==HOVER.i){ HOVER.i=ni; tick(); }
+ });
+ sv.addEventListener('mouseleave',function(){
+   if(HOVER.i!=null){ HOVER.i=null; tick(); }
+ });
+
  sv.addEventListener('dblclick',function(e){
    // 在價格軸上雙擊＝只還原直向；在圖上雙擊＝全部還原
    if(onAxis(e)){ VIEW.vz=1; VIEW.voff=0; }
