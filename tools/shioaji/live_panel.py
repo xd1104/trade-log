@@ -806,9 +806,13 @@ function chartSVG(s){
    hi=mid+half; lo=mid-half; }
 
  lastSpan=hi-lo;
- const W=1040,H=440,R=64,TOP=12,BOT=26;
+ const W=1040,H=470,R=64,TOP=12,BOT=26;
+ const VOLH=86, GAP=14;                 // 量能區高度、與價格區的間距
+ const PB=H-BOT-VOLH-GAP;               // 價格區底部
  const cw=(W-R)/B.length, bw=Math.max(1.5,Math.min(18,cw*0.62));
- const y=v=>TOP+(hi-v)/(hi-lo)*(H-TOP-BOT);
+ const y=v=>TOP+(hi-v)/(hi-lo)*(PB-TOP);
+ const vmax=Math.max(1,...B.map(b=>b.v));
+ const vy=v=>H-BOT-(v/vmax)*VOLH;       // 量柱由下往上長
  const x=i=>i*cw+cw/2;
 
  let g='';
@@ -834,9 +838,21 @@ function chartSVG(s){
    g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+
       '" height="'+hh.toFixed(1)+'" fill="'+col+'"/>';
  });
+ // ---- 成交量（同樣紅漲綠跌，跟 K 棒對齊）----
+ g+='<line x1="0" y1="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" x2="'+(W-R)+
+    '" y2="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" stroke="#262D39" stroke-width="1"/>';
+ B.forEach((b,i)=>{
+   const col=b.c>=b.o?'#EE5A54':'#34B37E', X=x(i), yy=vy(b.v);
+   g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+
+      '" height="'+Math.max(0.8,H-BOT-yy).toFixed(1)+'" fill="'+col+'" opacity=".55"/>';
+ });
+ g+='<text x="'+(W-R+8)+'" y="'+(H-BOT-VOLH+10)+'" fill="#5A616E" font-size="11" '+
+    'font-family="ui-monospace,monospace">'+(vmax>=10000?(vmax/1000).toFixed(0)+'k':vmax.toFixed(0))+'</text>'+
+    '<text x="'+(W-R+8)+'" y="'+(H-BOT-2)+'" fill="#5A616E" font-size="11">量</text>';
+
  if(P&&live&&G.live){
    [[P.tp,'#EE5A54','停利'],[P.sl,'#34B37E','停損']].forEach(z=>{
-     const yy=y(z[0]); if(yy<TOP||yy>H-BOT) return;
+     const yy=y(z[0]); if(yy<TOP||yy>PB) return;
      g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
         '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".8"/>'+
         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
