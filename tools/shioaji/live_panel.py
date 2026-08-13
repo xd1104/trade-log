@@ -1276,6 +1276,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def port_taken():
+    """已經有一個面板在跑就別再開第二個 —— 否則搶不到 port，看門狗會無限重試。"""
+    import socket
+    sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sk.settimeout(0.5)
+    try:
+        return sk.connect_ex(("127.0.0.1", PORT)) == 0
+    finally:
+        sk.close()
+
+
 def serve():
     # 只綁 127.0.0.1：面板是給這台電腦自己用的。
     # （曾短暫改成 0.0.0.0 讓手機連，但 Benson 的手機常不在同一個網路，
@@ -1414,6 +1425,11 @@ def main():
     if not MATRIX.exists():
         print("找不到 intraday.csv，請先跑 build_intraday.py")
         return
+    if port_taken():
+        print(f"連接埠 {PORT} 已被占用 —— 面板應該已經在跑了。")
+        print(f"直接開 http://127.0.0.1:{PORT}/ 即可；要重開請先關掉原本那個。")
+        sys.exit(2)          # 2 = 已在執行，start-panel.bat 看到就不再重試
+
     hist = History()
     print(f"歷史矩陣：{hist.n_days} 天（{hist.period}）")
 
