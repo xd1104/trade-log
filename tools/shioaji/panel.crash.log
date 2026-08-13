@@ -1,0 +1,52 @@
+Response Code: 0 | Event Code: 0 | Info: host '210.59.255.161:80', hostname '210.59.255.161:80' IP 210.59.255.161:80 (host 1 of 1) (host connection attempt 1 of 1) (total connection attempt 1 of 2) | Event: Session up
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1492: DeprecationWarning: api.Contracts is deprecated and backed by contracts v2; use api.contracts instead.
+  contract = pick_live_contract(api)
+Response Code: 200 | Event Code: 16 | Info: APISUB/V2/SYS/CONTRACT/TW/FUT | Event: Subscribe or Unsubscribe ok
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1563: DeprecationWarning: 2-argument callback (exchange, data) for set_on_tick_fop_v1_callback is deprecated, use a 1-argument callback (data) instead
+  api, contract = connect()
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1563: DeprecationWarning: 2-argument callback (exchange, data) for set_on_bidask_fop_v1_callback is deprecated, use a 1-argument callback (data) instead
+  api, contract = connect()
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1496: DeprecationWarning: api.quote.subscribe is deprecated, use api.subscribe directly
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1496: DeprecationWarning: shioaji.constant.QuoteType is deprecated, use sj.QuoteType
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1497: DeprecationWarning: shioaji.constant.QuoteVersion is deprecated, use sj.QuoteVersion
+  version=sj.constant.QuoteVersion.v1)
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1498: DeprecationWarning: api.quote.subscribe is deprecated, use api.subscribe directly
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1498: DeprecationWarning: shioaji.constant.QuoteType is deprecated, use sj.QuoteType
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1499: DeprecationWarning: shioaji.constant.QuoteVersion is deprecated, use sj.QuoteVersion
+  version=sj.constant.QuoteVersion.v1)
+Response Code: 200 | Event Code: 16 | Info: TIC/v1/FOP/*/TFE/TMFH6 | Event: Subscribe or Unsubscribe ok
+Response Code: 200 | Event Code: 16 | Info: QUO/v1/FOP/*/TFE/TMFH6 | Event: Subscribe or Unsubscribe ok
+SDK NOTICE Wed Aug 12 19:16:48.816 2026 solClientOS.c:5988                   (00009ba4) TCP: Could not read from socket 2240, error = Connection reset by peer (10054)
+SDK NOTICE Wed Aug 12 19:16:48.819 2026 solClientSmf.c:7791                  (00009ba4) Read failed from transport 'compression' of session '(c0,s1)_sinopac' due to 'TCP: Could not read from socket 2240, error = Connection reset by peer (10054)', client name 'PYAPI/S125190430/0812/003001/219704100/123.252.107.88', VPN name 'sinopac', peer host '210.59.255.161:80' address 'IP 210.59.255.161', connection 'tcp_TxRx' local address 'IP 192.168.30.11:51176'
+Response Code: 0 | Event Code: 12 | Info: TCP: Could not read from socket 2240, error = Connection reset by peer (10054) | Event: Session reconnecting
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1492: DeprecationWarning: api.Contracts is deprecated and backed by contracts v2; use api.contracts instead.
+  contract = pick_live_contract(api)
+Response Code: 0 | Event Code: 0 | Info: host '210.59.255.161:80', hostname '210.59.255.161:80' IP 210.59.255.161:80 (host 1 of 1) (host connection attempt 1 of 1) (total connection attempt 1 of 2) | Event: Session up
+Response Code: 200 | Event Code: 18 | Info: #P2P/v:bcsolace01/Oryfkqqm/PYAPI/S125190430/0812/111651/082524700/123.252.107.88/> | Event: Session Property modification ok
+Response Code: 200 | Event Code: 16 | Info: APISUB/V2/SYS/CONTRACT/TW/FUT | Event: Subscribe or Unsubscribe ok
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1516: DeprecationWarning: 2-argument callback (exchange, data) for set_on_tick_fop_v1_callback is deprecated, use a 1-argument callback (data) instead
+  connect()
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1516: DeprecationWarning: 2-argument callback (exchange, data) for set_on_bidask_fop_v1_callback is deprecated, use a 1-argument callback (data) instead
+  connect()
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1496: DeprecationWarning: api.quote.subscribe is deprecated, use api.subscribe directly
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1496: DeprecationWarning: shioaji.constant.QuoteType is deprecated, use sj.QuoteType
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.Tick,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1497: DeprecationWarning: shioaji.constant.QuoteVersion is deprecated, use sj.QuoteVersion
+  version=sj.constant.QuoteVersion.v1)
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1498: DeprecationWarning: api.quote.subscribe is deprecated, use api.subscribe directly
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1498: DeprecationWarning: shioaji.constant.QuoteType is deprecated, use sj.QuoteType
+  api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
+C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji\live_panel.py:1499: DeprecationWarning: shioaji.constant.QuoteVersion is deprecated, use sj.QuoteVersion
+  version=sj.constant.QuoteVersion.v1)
+Response Code: 200 | Event Code: 16 | Info: TIC/v1/FOP/*/TFE/TMFH6 | Event: Subscribe or Unsubscribe ok
+Response Code: 200 | Event Code: 16 | Info: QUO/v1/FOP/*/TFE/TMFH6 | Event: Subscribe or Unsubscribe ok
+SDK NOTICE Wed Aug 12 19:17:14.100 2026 solClientOS.c:5988                   (000036c4) TCP: Could not read from socket 6496, error = Connection reset by peer (10054)
+SDK NOTICE Wed Aug 12 19:17:14.100 2026 solClientSmf.c:7791                  (000036c4) Read failed from transport 'compression' of session '(c1,s1)_sinopac' due to 'TCP: Could not read from socket 6496, error = Connection reset by peer (10054)', client name 'PYAPI/S125190430/0812/111651/082524700/123.252.107.88', VPN name 'sinopac', peer host '210.59.255.161:80' address 'IP 210.59.255.161', connection 'tcp_TxRx' local address 'IP 192.168.0.156:63912'
+Response Code: 0 | Event Code: 12 | Info: TCP: Could not read from socket 6496, error = Connection reset by peer (10054) | Event: Session reconnecting
+Response Code: 0 | Event Code: 13 | Info: host '210.59.255.161:80', hostname '210.59.255.161:80' IP 210.59.255.161:80 (host 1 of 1) (host connection attempt 1 of 1) (total reconnection attempt 1 of 10) | Event: Session reconnected
