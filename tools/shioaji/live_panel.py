@@ -498,14 +498,26 @@ def day_bars(day=None):
     盤中即時抓得到當天的 K 棒（實測 0 分鐘延遲），所以不必自己從 tick 拼；
     直接跟永豐要，資料跟大戶投同源，也就不會對不起來。
     """
-    api = SESSION_REF.get("api")
-    if api is None:
-        return {"error": "尚未連線"}
     d = day or date.today()
+    df = None
+
+    # 過去的日子優先讀本機的 tmf_1min.csv（排程每天累積，永久留著）——
+    # 回顧不該依賴永豐的 API 還活著，也快得多。
+    if d != date.today():
+        df = local_bars(d)
+
+    if df is None:
+        api = SESSION_REF.get("api")
+        if api is None:
+            return {"error": "尚未連線，且本機沒有這天的資料"}
+        try:
+            contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
+            df = pd.DataFrame({**api.kbars(contract, start=str(d), end=str(d))})
+        except Exception as e:
+            return {"error": str(e)[:120]}
+
     try:
-        contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
-        df = pd.DataFrame({**api.kbars(contract, start=str(d), end=str(d))})
-        if df.empty:
+        if df is None or df.empty:
             return {"date": str(d), "bars": [], "trades": []}
         df["ts"] = pd.to_datetime(df["ts"])
         g = df[(df["ts"].dt.time >= SESSION_OPEN)
@@ -523,6 +535,24 @@ def day_bars(day=None):
         f = TRADE_DIR / f"{d}.json"
         trades = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
     return {"date": str(d), "bars": bars, "trades": trades}
+
+
+_LOCAL_PX = {"df": None, "mtime": None}
+
+
+def local_bars(d):
+    """從本機的 tmf_1min.csv 取某一天的 1 分 K；沒有就回 None。"""
+    f = HERE / "tmf_1min.csv"
+    if not f.exists():
+        return None
+    m = f.stat().st_mtime
+    if _LOCAL_PX["df"] is None or _LOCAL_PX["mtime"] != m:
+        px = pd.read_csv(f)
+        px["ts"] = pd.to_datetime(px["ts"])
+        _LOCAL_PX.update({"df": px, "mtime": m})
+    px = _LOCAL_PX["df"]
+    g = px[px["ts"].dt.date == d]
+    return g.copy() if len(g) else None
 
 
 def to_timeframe(g, minutes):
@@ -594,11 +624,27 @@ def merge_live_tail(bars, tf):
 
 
 def traded_days():
-    """有練習紀錄的日子，給重播用。"""
-    if not TRADE_DIR.exists():
-        return []
-    return sorted([f.stem for f in TRADE_DIR.glob("*.json")
-                   if json.loads(f.read_text(encoding="utf-8") or "[]")], reverse=True)
+    """
+    回顧用的日期清單。有練習紀錄的排前面（那些才是他想回顧的），
+    後面補上本機有資料的最近交易日，方便看沒下單的日子長什麼樣。
+    """
+    traded = []
+    if TRADE_DIR.exists():
+        traded = sorted([f.stem for f in TRADE_DIR.glob("*.json")
+                         if json.loads(f.read_text(encoding="utf-8") or "[]")], reverse=True)
+    others = []
+    f = HERE / "tmf_1min.csv"
+    if f.exists():
+        try:
+            if _LOCAL_PX["df"] is None or _LOCAL_PX["mtime"] != f.stat().st_mtime:
+                local_bars(date.today())        # 觸發載入
+            px = _LOCAL_PX["df"]
+            if px is not None:
+                all_days = sorted({str(x) for x in px["ts"].dt.date}, reverse=True)
+                others = [x for x in all_days if x not in traded][:20]
+        except Exception:
+            pass
+    return {"traded": traded, "others": others}
 
 
 def all_practice_trades():
@@ -686,6 +732,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .daypick button{font-size:11.5px; padding:5px 10px; border-radius:7px; cursor:pointer;
   background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
 .daypick button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.daypick.dim2{margin-top:6px}
+.daypick .dl2{font-size:11px; color:var(--faint); align-self:center; margin-right:2px}
 .mini{display:flex; flex-wrap:wrap; gap:0 20px; font-size:12.5px; color:var(--dim);
   font-family:var(--font-mono); margin-top:12px; padding-top:11px; border-top:1px solid var(--line)}
 .mini b{color:var(--text); font-weight:600}
@@ -959,12 +1007,21 @@ function chartSVG(s){
  }
  let pick='';
  if(pickOpen){
+   const today=new Date().toISOString().slice(0,10);
    pick='<div class="daypick"><button class="'+(viewDate?'':'on')+'" data-day="">今天（即時）</button>';
-   (barsCache.days||[]).forEach(d=>{
-     if(d===new Date().toISOString().slice(0,10)) return;
-     pick+='<button class="'+(viewDate===d?'on':'')+'" data-day="'+d+'">'+d.slice(5)+'</button>';
+   (barsCache.traded||[]).forEach(d=>{
+     if(d===today) return;
+     pick+='<button class="'+(viewDate===d?'on':'')+'" data-day="'+d+'">▲ '+d.slice(5)+'</button>';
    });
    pick+='</div>';
+   if((barsCache.others||[]).length){
+     pick+='<div class="daypick dim2"><span class="dl2">沒下單的日子</span>';
+     (barsCache.others||[]).forEach(d=>{
+       if(d===today) return;
+       pick+='<button class="'+(viewDate===d?'on':'')+'" data-day="'+d+'">'+d.slice(5)+'</button>';
+     });
+     pick+='</div>';
+   }
  }
  const sum=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
  return {
@@ -1243,7 +1300,7 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         want = None
             out = day_bars(want)
-            out["days"] = traded_days()
+            out.update(traded_days())
             return self._json(200, out)
         if self.path.startswith("/api/stats"):
             return self._json(200, practice_stats())
