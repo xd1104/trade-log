@@ -1353,9 +1353,13 @@ function fetchBars(force){
 function chartGeom(){
  const all=(barsCache&&barsCache.bars)||[];
  if(!all.length) return null;
+ // n 有「至少 8 根」的下限（避免縮太近），但總根數可能比 8 少 ——
+ // 早盤 09:25 之前 5 分 K 不滿 8 根。此時 end-n 會是負數，
+ // 而 Array.slice(負數) 會被當成「從尾端算起」，畫面只剩最後兩根（踩過）。
+ // 所以 from 一定要夾在 0 以上。
  const n=Math.max(8,Math.min(VIEW.n,all.length));
  const end=VIEW.end==null?all.length:Math.max(n,Math.min(VIEW.end,all.length));
- return {all:all, from:end-n, to:end, n:n, live:VIEW.end==null};
+ return {all:all, from:Math.max(0,end-n), to:end, n:n, live:VIEW.end==null};
 }
 
 function chartSVG(s){
@@ -1380,7 +1384,13 @@ function chartSVG(s){
  const W=1040,H=470,R=64,TOP=12,BOT=26;
  const VOLH=86, GAP=14;                 // 量能區高度、與價格區的間距
  const PB=H-BOT-VOLH-GAP;               // 價格區底部
- const cw=(W-R)/B.length, bw=Math.max(1.5,Math.min(18,cw*0.62));
+ // K 棒寬度由「縮放倍率」決定，不是由「現有幾根」決定 ——
+ // 否則開盤沒多久只有 6 根時，會被拉開成 6 支橫跨整個畫面的粗棒子。
+ // 跟看盤軟體一樣：棒寬固定、不夠的部分右邊留白。
+ const slots=Math.max(B.length, Math.min(VIEW.n, G.all.length) || B.length);
+ // 再加間距上限：早盤只有幾根時，若讓它們平均攤滿整個畫面，
+ // 會變成幾支孤零零的粗棒子橫跨全圖。夾住之後就是「盤在進行、右邊慢慢填滿」的樣子。
+ const cw=Math.min((W-R)/slots, 40), bw=Math.max(1.5,Math.min(18,cw*0.62));
  const y=v=>TOP+(hi-v)/(hi-lo)*(PB-TOP);
  const vmax=Math.max(1,...B.map(b=>b.v));
  const vy=v=>H-BOT-(v/vmax)*VOLH;       // 量柱由下往上長
