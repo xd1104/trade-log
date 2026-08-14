@@ -1,0 +1,1098 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>早盤儀表板 · 【回顧】分頁設計 Demo</title><style>
+/* ==========================================================================
+   設計 Demo：【回顧】分頁
+   - 配色／圓角／字體全部沿用 live_panel.py 的 PAGE 常數，不另立一套。
+   - 台股慣例：紅色 = 漲／賺，綠色 = 跌／賠。
+   - 純原生 HTML/CSS/JS + 手繪 SVG，零外部相依，雙擊即可打開。
+   - 資料是寫死的示範資料（08-12 / 08-13 兩筆為 Benson 的真實紀錄）。
+   ========================================================================== */
+:root{
+  --bg:#0F1218; --surface:#171C25; --surface-2:#1F2530; --line:#262D39;
+  --text:#E7E9ED; --dim:#8B92A0; --faint:#5A616E;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14);
+  --up:#EE5A54; --up-soft:rgba(238,90,84,.16);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.16);
+  --radius:16px; --radius-sm:11px;
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
+  background-image:radial-gradient(1200px 500px at 50% -8%, rgba(227,169,81,.06), transparent 70%);
+  background-repeat:no-repeat; min-height:100vh}
+.app{max-width:1560px; margin:0 auto; padding:0 22px 24px}
+.cols{display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:16px; align-items:start}
+.right{display:flex; flex-direction:column; gap:10px}
+
+/* ---------- 頂列 + 分頁 ---------- */
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:14px 4px 12px; gap:20px}
+.brand{display:flex; align-items:center; gap:10px}
+.brand .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+  background:var(--gold-soft); color:var(--gold); font-size:17px}
+.brand .nm{font-size:15px; font-weight:650}
+.brand .sub{font-size:11px; color:var(--faint); letter-spacing:1.2px; margin-top:1px}
+.tabs{display:flex; gap:4px; background:var(--surface-2); border-radius:11px; padding:3px}
+.tabs button{border:0; background:transparent; color:var(--dim); cursor:pointer; min-width:104px;
+  font-family:var(--font-sans); font-size:13.5px; font-weight:650; padding:9px 18px; border-radius:9px}
+.tabs button.on{background:var(--gold-soft); color:var(--gold)}
+.clock{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.clock .d{font-size:13.5px; font-weight:600}
+.clock .w{font-size:11px; color:var(--faint)}
+.demo-badge{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:20px; padding:3px 10px; font-weight:700; letter-spacing:.5px}
+
+.card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  padding:16px 18px; margin-bottom:10px}
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 4px 8px}
+.sec-head h2{font-size:12.5px; margin:0; color:var(--dim); letter-spacing:1.5px; font-weight:600}
+.sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
+.up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text)}
+
+/* ---------- K 線圖 ---------- */
+.chart{position:relative; padding:14px 16px 12px}
+.cwrap{overflow:hidden; border-radius:8px}
+.cwrap svg{display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; user-select:none}
+.chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px; gap:14px}
+.cpx{font-size:34px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1}
+.cchg{font-size:15px; font-weight:600; font-family:var(--font-mono)}
+.cday{font-size:13px; color:var(--dim); font-family:var(--font-mono)}
+.ctag{font-size:11px; color:var(--faint); border:1px solid var(--line); border-radius:6px;
+  padding:2px 8px; margin-left:6px}
+.tfsw{display:flex; gap:3px; background:var(--surface-2); border-radius:9px; padding:3px}
+.tfsw button{border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:11.5px; font-weight:600; padding:5px 12px; border-radius:7px}
+.tfsw button.on{background:var(--gold-soft); color:var(--gold)}
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--dim);
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; margin:2px 0 6px; min-height:18px}
+.legend b{color:var(--text); font-weight:600}
+.legend .lt{color:var(--faint)}
+.chint{font-size:11px; color:var(--faint); text-align:right; margin-top:5px}
+.chint #cinfo{color:var(--dim)}
+
+/* ---------- 重播控制列 ---------- */
+.rpbar{display:flex; align-items:center; gap:8px; margin-top:9px; padding:9px 10px;
+  background:var(--surface-2); border:1px solid var(--line); border-radius:12px}
+.rpbtn{border:1px solid var(--line); background:var(--surface); color:var(--text); cursor:pointer;
+  font-family:var(--font-sans); font-size:13px; font-weight:600; padding:8px 13px; border-radius:9px;
+  min-width:42px}
+.rpbtn:hover{border-color:var(--gold)}
+.rpbtn.play{background:var(--gold-soft); color:var(--gold); border-color:transparent; min-width:96px}
+.rpbtn:disabled{opacity:.35; cursor:default}
+.rpbtn:disabled:hover{border-color:var(--line)}
+.rpsp{display:flex; gap:2px; background:var(--surface); border-radius:9px; padding:3px;
+  border:1px solid var(--line)}
+.rpsp button{border:0; background:transparent; color:var(--faint); cursor:pointer;
+  font-family:var(--font-mono); font-size:11.5px; font-weight:600; padding:5px 9px; border-radius:6px}
+.rpsp button.on{background:var(--gold-soft); color:var(--gold)}
+.rppos{flex:1; font-family:var(--font-mono); font-size:12.5px; color:var(--dim);
+  font-variant-numeric:tabular-nums; text-align:right}
+.rppos b{color:var(--text)}
+.kbd{font-family:var(--font-mono); font-size:10.5px; color:var(--faint);
+  border:1px solid var(--line); border-radius:5px; padding:1px 5px; background:var(--surface)}
+
+/* ---------- 進場當下盤面 ---------- */
+.fstrip{display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--line);
+  border-radius:var(--radius-sm); overflow:hidden; margin-top:10px}
+.fcell{background:var(--surface); padding:9px 11px}
+.fcell .l{font-size:10.5px; color:var(--dim); white-space:nowrap}
+.fcell .v{font-size:17px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; margin-top:1px}
+.ftitle{font-size:11px; color:var(--faint); margin:12px 4px 0}
+
+/* ---------- 右欄：翻紀錄 ---------- */
+.seg{display:flex; gap:4px; background:var(--surface-2); border-radius:10px; padding:3px}
+.seg button{flex:1; border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:13px; font-weight:650; padding:9px 4px; border-radius:8px}
+.seg button.on{background:var(--gold-soft); color:var(--gold)}
+.chips{display:flex; gap:6px; flex-wrap:wrap; margin:12px 0 4px}
+.chips button{font-size:11.5px; padding:5px 11px; border-radius:20px; cursor:pointer;
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line);
+  font-family:var(--font-sans)}
+.chips button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.list{display:flex; flex-direction:column; gap:7px; margin-top:10px;
+  max-height:268px; overflow-y:auto; padding-right:4px}
+.list::-webkit-scrollbar{width:6px}
+.list::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+.trade{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:10px 12px; cursor:pointer}
+.trade:hover{border-color:var(--faint)}
+.trade.sel{border-color:var(--gold); background:var(--gold-soft)}
+.tr-top{display:flex; align-items:center; gap:9px}
+.tr-date{font-family:var(--font-mono); font-size:12.5px; color:var(--dim); width:40px; flex:none}
+.dir{font-size:11px; font-weight:700; padding:2px 7px; border-radius:6px; flex:none}
+.dir.l{background:var(--up-soft); color:var(--up)}
+.dir.s{background:var(--down-soft); color:var(--down)}
+.tr-px{flex:1; font-family:var(--font-mono); font-size:12.5px; font-variant-numeric:tabular-nums}
+.tr-px .arrow{color:var(--faint); margin:0 3px}
+.tr-res{font-family:var(--font-mono); font-size:15px; font-weight:700; text-align:right;
+  min-width:50px; flex:none; font-variant-numeric:tabular-nums}
+.r-win{color:var(--up)} .r-loss{color:var(--down)}
+.tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
+.tr-note{font-size:11.5px; color:var(--faint); margin-top:5px; padding-left:49px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.dt{display:flex; flex-direction:column; gap:9px}
+.dt-row{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px}
+.dt-row .k{color:var(--dim)}
+.dt-row .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13.5px}
+.dt-big{text-align:center; padding:2px 0 8px}
+.dt-big .v{font-size:40px; font-weight:700; font-family:var(--font-mono); line-height:1;
+  font-variant-numeric:tabular-nums}
+.dt-big .l{font-size:12px; color:var(--dim); margin-top:5px}
+.hr{height:1px; background:var(--line); margin:2px 0}
+.noteline{font-size:12.5px; color:var(--text); background:var(--surface-2);
+  border:1px solid var(--line); border-radius:9px; padding:9px 11px; line-height:1.6}
+.noteline.empty{color:var(--faint)}
+.btns{display:flex; gap:9px}
+.btn{flex:1; padding:13px; border-radius:12px; cursor:pointer; border:1px solid var(--line);
+  font-family:var(--font-sans); font-size:15px; font-weight:700; letter-spacing:1px;
+  background:var(--surface-2); color:var(--text)}
+.btn.long{background:var(--up-soft); color:var(--up); border-color:rgba(238,90,84,.4)}
+.btn.short{background:var(--down-soft); color:var(--down); border-color:rgba(52,179,126,.4)}
+.btn.gold{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.btn.ghost{background:transparent; color:var(--dim); font-size:13px; font-weight:500}
+.btn:active{transform:scale(.99)}
+.btn:disabled{opacity:.4; cursor:default}
+.note{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:11px 13px; font-size:12px; color:var(--dim); line-height:1.65}
+.note b{color:var(--text)}
+.empty{text-align:center; padding:36px 16px; color:var(--faint); font-size:12.5px; line-height:1.8}
+
+/* ---------- 右欄：重播練習 ---------- */
+.daysel{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
+.daysel button{font-size:12px; padding:7px 10px; border-radius:8px; cursor:pointer;
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line);
+  font-family:var(--font-mono)}
+.daysel button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.daysel button .m{font-size:9.5px; color:var(--faint); margin-left:4px}
+.jinput{width:100%; background:var(--surface-2); border:1px solid var(--line); border-radius:9px;
+  color:var(--text); font-family:var(--font-sans); font-size:13px; padding:10px 11px; margin-top:9px}
+.jinput::placeholder{color:var(--faint)}
+.jinput:focus{outline:none; border-color:var(--gold)}
+.hold{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm);
+  padding:12px 14px}
+.hold .v{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1;
+  font-variant-numeric:tabular-nums; text-align:center}
+.hold .l{font-size:12px; color:var(--dim); text-align:center; margin-top:5px}
+.cmp{display:flex; flex-direction:column; gap:8px}
+.cmp .side{background:var(--surface-2); border:1px solid var(--line); border-radius:10px;
+  padding:10px 12px}
+.cmp .side.mine{border-color:rgba(227,169,81,.45)}
+.cmp .side .h{font-size:11px; color:var(--dim); margin-bottom:4px; letter-spacing:.5px}
+.cmp .side .b{display:flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:13px}
+.cmp .side .b .res{margin-left:auto; font-size:16px; font-weight:700}
+.verdict{border-radius:10px; padding:10px 12px; font-size:12.5px; line-height:1.6; text-align:center;
+  font-weight:600}
+.verdict.same{background:var(--gold-soft); color:var(--gold)}
+.verdict.diff{background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
+.tally{display:flex; gap:14px; justify-content:center; font-family:var(--font-mono); font-size:12px;
+  color:var(--faint); padding-top:4px}
+.tally b{color:var(--text); font-size:14px}
+.foot{font-size:11px; color:var(--faint); text-align:center; margin-top:14px; line-height:1.7}
+.hide{display:none !important}
+</style></head><body><div class="app">
+
+<div class="topbar">
+  <div class="brand"><div class="mark">&#9702;</div>
+    <div><div class="nm">早盤儀表板</div><div class="sub">TMF 微型臺指</div></div></div>
+  <div class="tabs">
+    <button data-tab="live">即時</button>
+    <button data-tab="review" class="on">回顧</button>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="demo-badge">設計 DEMO・示範資料</span>
+    <div class="clock"><div class="d" id="clk">--:--</div><div class="w">星期三</div></div>
+  </div>
+</div>
+
+<!-- ===================== 即時分頁（維持現狀，這裡只做切換示意） ===================== -->
+<div id="tab-live" class="hide">
+  <div class="cols">
+    <div>
+      <div class="card" style="text-align:center;padding:60px 20px">
+        <div style="font-size:52px;font-weight:700;font-family:var(--font-mono)" class="up">46,238</div>
+        <div style="font-size:17px;margin-top:6px" class="up">+188 (+0.41%)</div>
+        <div style="color:var(--faint);font-size:12.5px;margin-top:22px;line-height:1.8">
+          （這一頁就是你現在在用的即時面板，本次設計完全不動它）<br>
+          即時報價・K 線圖・練習下單・練習成績
+        </div>
+      </div>
+    </div>
+    <div class="right">
+      <div class="note"><b>分頁只是切換顯示</b><br>
+        切到【回顧】時，即時報價、持倉監控、±100 自動停利停損<b>照常在背景運作</b>，
+        不會重新載入頁面、不會中斷。切回來時持倉還在。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 回顧分頁 ===================== -->
+<div id="tab-review">
+<div class="cols">
+  <!-- 左：圖 -->
+  <div>
+    <div class="card chart">
+      <div class="chead" id="chead"></div>
+      <div class="legend" id="clegend"></div>
+      <div class="cwrap"><svg id="csvg" preserveAspectRatio="none"></svg></div>
+      <div id="cctrl"></div>
+    </div>
+    <div class="ftitle" id="ftitle">進場當下的客觀盤面</div>
+    <div class="fstrip" id="fstrip"></div>
+  </div>
+  <!-- 右：操作 -->
+  <div class="right">
+    <div class="seg">
+      <button data-mode="review" class="on">翻紀錄</button>
+      <button data-mode="replay">重播練習</button>
+    </div>
+    <div id="pane"></div>
+  </div>
+</div>
+</div>
+
+<div class="foot">
+  只顯示已經發生的客觀數字，不做預測、不給買賣訊號。<br>
+  這是設計 Demo：K 棒為示範資料；08-12 與 08-13 兩筆練習紀錄取自真實檔案。
+</div>
+</div>
+
+<script>
+/* ============================================================================
+   1. 假資料產生器
+   ---------------------------------------------------------------------------
+   全部在 5 分 K 這一層定義故事（關鍵日子手寫 OHLC），再展開成 1 分 K，
+   保證兩個週期互相對得起來。正式版是跟後端要真資料，這裡只是為了能玩。
+   ============================================================================ */
+function hash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const OPEN_MIN=525;                       // 08:45
+const pad=n=>String(n).padStart(2,'0');
+const tm=m=>pad(Math.floor(m/60))+':'+pad(m%60);
+const mt=t=>parseInt(t.slice(0,2))*60+parseInt(t.slice(3,5));
+const T5=i=>tm(OPEN_MIN+5*i);
+
+/* 一天 60 根 5 分 K：pin 指定的照抄，其餘用種子亂數往 anchors 走 */
+function genDay5(seed,open,anchors,pin,volb){
+  const r=mulberry32(hash(seed));
+  const A=[[0,open]].concat(anchors);
+  const tgt=[];
+  for(let i=0;i<60;i++){
+    let a=A[0],b=A[A.length-1];
+    for(let k=0;k<A.length-1;k++){ if(i>=A[k][0]&&i<=A[k+1][0]){a=A[k];b=A[k+1];break;} }
+    const f=b[0]===a[0]?0:(i-a[0])/(b[0]-a[0]);
+    tgt.push(a[1]+(b[1]-a[1])*f);
+  }
+  const prof=i=>1.75*Math.exp(-i/7)+0.30+(i>=3&&i<=7?0.22:0)+(i>=56?0.45:0);
+  const out=[]; let prevC=open;
+  for(let i=0;i<60;i++){
+    if(pin[i]){ const p=Object.assign({t:T5(i)},pin[i]); out.push(p); prevC=p.c; continue; }
+    const o=Math.round(prevC);
+    let c=Math.round(prevC+(tgt[i]-prevC)*0.5+(r()-0.5)*24);
+    const h=Math.round(Math.max(o,c)+r()*13+2), l=Math.round(Math.min(o,c)-(r()*13+2));
+    out.push({t:T5(i),o:o,h:h,l:l,c:c,v:Math.round(volb*prof(i)*(0.7+r()*0.6))});
+    prevC=c;
+  }
+  return out;
+}
+
+/* 5 分 K → 5 根 1 分 K。上漲棒＝低點先出現、高點最後；下跌棒相反。 */
+function expand5(b,r){
+  const up=b.c>=b.o, ext=up?b.l:b.h, other=up?b.h:b.l;
+  const cs=[];
+  const w=[0.55,0.25,0.55,0.82,1.0];
+  for(let i=0;i<4;i++){
+    let base=i===0? b.o+(ext-b.o)*w[0] : ext+(b.c-ext)*w[i];
+    base+=(r()-0.5)*Math.max(2,Math.abs(b.h-b.l)*0.07);
+    cs.push(Math.round(Math.min(b.h,Math.max(b.l,base))));
+  }
+  cs.push(b.c);
+  const out=[]; const m0=mt(b.t);
+  for(let i=0;i<5;i++){
+    const o=i===0?b.o:cs[i-1], c=cs[i];
+    let h=Math.max(o,c)+Math.round(r()*3), l=Math.min(o,c)-Math.round(r()*3);
+    if(up){ if(i===0)l=b.l; if(i===4)h=b.h; } else { if(i===0)h=b.h; if(i===4)l=b.l; }
+    if(i===2){ if(up)h=Math.max(h,Math.round(ext+(other-ext)*0.55)); }
+    h=Math.min(b.h,Math.max(h,o,c)); l=Math.max(b.l,Math.min(l,o,c));
+    out.push({t:tm(m0+i),o:o,h:h,l:l,c:c,v:Math.max(1,Math.round(b.v/5*(0.65+r()*0.7)))});
+  }
+  out[0].o=b.o; out[4].c=b.c;
+  return out;
+}
+function build1(b5,seed){
+  const r=mulberry32(hash(seed+'|1m')); let out=[];
+  b5.forEach(b=>{ out=out.concat(expand5(b,r)); });
+  return out;
+}
+/* 讓某個時間點的那根 K 一定包得住某個價位（進出場標記才不會浮在棒子外） */
+function forceCover(bars,t,px){
+  const i=idxAt(bars,t); if(i<0)return;
+  bars[i].h=Math.max(bars[i].h,px); bars[i].l=Math.min(bars[i].l,px);
+}
+function idxAt(bars,t){ let r=-1; for(let i=0;i<bars.length;i++){ if(bars[i].t<=t)r=i; else break; } return r; }
+
+/* ---------------------------------------------------------------- 每日設定 */
+const DAYCFG=[
+ {d:'2026-08-04',prev:44610,open:44650,volb:4100,volref:52000,pin:{},
+  anch:[[6,44718],[12,44688],[20,44762],[35,44802],[59,44776]]},
+
+ {d:'2026-08-05',prev:44775,open:44780,volb:4300,volref:55000,
+  pin:{0:{o:44780,h:44830,l:44762,c:44822,v:6100},1:{o:44822,h:44845,l:44800,c:44806,v:4800},
+       2:{o:44806,h:44838,l:44795,c:44800,v:4300},3:{o:44800,h:44805,l:44740,c:44748,v:5200},
+       4:{o:44748,h:44760,l:44722,c:44730,v:4600},5:{o:44730,h:44742,l:44715,c:44718,v:3900},
+       6:{o:44718,h:44725,l:44695,c:44700,v:4100}},
+  anch:[[12,44742],[24,44700],[40,44762],[59,44738]]},
+
+ {d:'2026-08-06',prev:44740,open:44690,volb:3800,volref:49000,
+  pin:{0:{o:44690,h:44700,l:44640,c:44652,v:5600},1:{o:44652,h:44668,l:44630,c:44662,v:4200},
+       2:{o:44662,h:44690,l:44655,c:44685,v:3800},3:{o:44685,h:44712,l:44680,c:44706,v:4100},
+       4:{o:44706,h:44715,l:44688,c:44692,v:3400},5:{o:44692,h:44706,l:44686,c:44700,v:3100},
+       6:{o:44700,h:44710,l:44694,c:44705,v:2900},7:{o:44705,h:44714,l:44692,c:44696,v:3000},
+       8:{o:44696,h:44700,l:44668,c:44672,v:3300},9:{o:44672,h:44684,l:44660,c:44678,v:2800},
+       10:{o:44678,h:44686,l:44662,c:44666,v:2600},11:{o:44666,h:44680,l:44658,c:44670,v:2700}},
+  anch:[[18,44700],[32,44658],[46,44700],[59,44686]]},
+
+ {d:'2026-08-07',prev:44820,open:44860,volb:4400,volref:56000,
+  pin:{0:{o:44860,h:44898,l:44845,c:44880,v:6400},1:{o:44880,h:44905,l:44872,c:44876,v:4700},
+       2:{o:44876,h:44890,l:44860,c:44884,v:4200},3:{o:44884,h:44902,l:44878,c:44896,v:4500},
+       4:{o:44896,h:44908,l:44872,c:44878,v:4800},5:{o:44878,h:44884,l:44840,c:44846,v:5100},
+       6:{o:44846,h:44852,l:44812,c:44818,v:4900},7:{o:44818,h:44824,l:44782,c:44796,v:5200}},
+  anch:[[14,44822],[26,44862],[42,44828],[59,44850]]},
+
+ {d:'2026-08-10',prev:44900,open:44990,volb:4600,volref:58000,
+  pin:{0:{o:44990,h:45032,l:44962,c:45006,v:6900},1:{o:45006,h:45028,l:44996,c:45000,v:4600},
+       2:{o:45000,h:45012,l:44970,c:44974,v:4400},3:{o:44974,h:44982,l:44944,c:44950,v:4800},
+       4:{o:44950,h:44962,l:44930,c:44936,v:4300},5:{o:44936,h:44944,l:44902,c:44912,v:5000}},
+  anch:[[12,44932],[24,44962],[38,44928],[59,44944]]},
+
+ {d:'2026-08-11',prev:45100,open:45150,volb:4500,volref:57000,
+  pin:{0:{o:45150,h:45178,l:45120,c:45162,v:6600},1:{o:45162,h:45170,l:45140,c:45146,v:4500},
+       2:{o:45146,h:45166,l:45142,c:45160,v:4000},3:{o:45160,h:45184,l:45156,c:45176,v:4600},
+       4:{o:45176,h:45190,l:45166,c:45172,v:4200},5:{o:45172,h:45192,l:45168,c:45188,v:4400},
+       6:{o:45188,h:45214,l:45182,c:45208,v:4900},7:{o:45208,h:45242,l:45204,c:45238,v:5300},
+       8:{o:45238,h:45286,l:45232,c:45276,v:6100}},
+  anch:[[16,45262],[28,45300],[42,45268],[59,45290]]},
+
+ /* ---- 真實紀錄日：08-12（多 45401 → 45501 停利）---- */
+ {d:'2026-08-12',prev:45280,open:45350,volb:4700,volref:59000,
+  pin:{0:{o:45350,h:45410,l:45298,c:45365,v:5521},1:{o:45366,h:45369,l:45288,c:45289,v:4380},
+       2:{o:45288,h:45350,l:45285,c:45310,v:3960},3:{o:45309,h:45460,l:45288,c:45458,v:6840},
+       4:{o:45458,h:45530,l:45440,c:45505,v:7120},5:{o:45505,h:45518,l:45470,c:45482,v:5240}},
+  anch:[[12,45520],[22,45472],[34,45610],[46,45700],[59,45884]]},
+
+ /* ---- 真實紀錄日：08-13（多 46101 → 46201 停利，抱到 09:34）---- */
+ {d:'2026-08-13',prev:45884,open:46050,volb:5000,volref:62000,
+  pin:{0:{o:46050,h:46092,l:46012,c:46035,v:7100},1:{o:46035,h:46068,l:46028,c:46060,v:5100},
+       2:{o:46060,h:46090,l:46052,c:46085,v:4600},3:{o:46085,h:46098,l:46070,c:46090,v:4400},
+       4:{o:46090,h:46130,l:46082,c:46120,v:5200},5:{o:46120,h:46138,l:46096,c:46104,v:4700},
+       6:{o:46104,h:46126,l:46072,c:46080,v:4900},7:{o:46080,h:46118,l:46068,c:46112,v:4500},
+       8:{o:46112,h:46164,l:46106,c:46158,v:5600},9:{o:46158,h:46212,l:46150,c:46196,v:6400}},
+  anch:[[16,46180],[28,46232],[40,46196],[59,46258]]}
+];
+
+const TRADES=[
+ {date:'2026-08-05',dir:'short',entry:44810,exit:44710,time:'08:58',_exit_time:'09:17',
+  _reason:'tp',_points:100,_net:95,note:'開盤衝高後量縮，賭一段回檔'},
+ {date:'2026-08-06',dir:'long',entry:44700,exit:44675,time:'09:20',_exit_time:'09:41',
+  _reason:'manual',_points:-25,_net:-30,note:'等太久沒動，覺得沒力先出'},
+ {date:'2026-08-07',dir:'short',entry:44890,exit:44790,time:'09:05',_exit_time:'09:23',
+  _reason:'tp',_points:100,_net:95,note:''},
+ {date:'2026-08-10',dir:'long',entry:45010,exit:44910,time:'08:52',_exit_time:'09:14',
+  _reason:'sl',_points:-100,_net:-105,note:'跳空往上追，追高了'},
+ {date:'2026-08-11',dir:'short',entry:45180,exit:45280,time:'09:12',_exit_time:'09:26',
+  _reason:'sl',_points:-100,_net:-105,note:''},
+ {date:'2026-08-12',dir:'long',entry:45401,exit:45501,time:'09:02',_exit_time:'09:05',
+  _reason:'tp',_points:100,_net:95,note:'',real:true},
+ {date:'2026-08-13',dir:'long',entry:46101,exit:46201,time:'09:05',_exit_time:'09:34:00',
+  _reason:'tp',_points:100,_net:95,note:'',real:true}
+];
+
+/* ---- 組資料 ---- */
+const DATA={}; const DAYS=[];
+DAYCFG.forEach(c=>{
+  const b5=genDay5(c.d,c.open,c.anch,c.pin,c.volb);
+  const b1=build1(b5,c.d);
+  DATA[c.d]={date:c.d,prev:c.prev,open:c.open,volref:c.volref,b5:b5,b1:b1};
+  DAYS.push(c.d);
+});
+TRADES.forEach(t=>{
+  const D=DATA[t.date], xt=t._exit_time.slice(0,5);
+  [D.b1,D.b5].forEach(bs=>{ forceCover(bs,t.time,t.entry); forceCover(bs,xt,t.exit); });
+});
+
+/* ============================================================================
+   2. 客觀盤面數字（跟即時面板同一組欄位，回顧時才對得起來）
+   ============================================================================ */
+function featAt(day,i1){
+  const D=DATA[day], B=D.b1, cur=B[i1].c;
+  const back=k=>B[Math.max(0,i1-k)].c;
+  let hi=-1e9,lo=1e9,cum=0;
+  for(let i=0;i<=i1;i++){ hi=Math.max(hi,B[i].h); lo=Math.min(lo,B[i].l); cum+=B[i].v; }
+  const rng=hi-lo, el=i1+1;
+  const exp=D.volref*0.55*(1-Math.exp(-el/16)); // 到這一刻「正常」該有的累積量
+  return {price:cur,mom5:cur-back(5),mom15:cur-back(15),ret_open:cur-D.open,
+          gap:D.open-D.prev,rng:rng,pos:rng>0?(cur-lo)/rng:0.5,
+          vol:exp>0?cum/exp:1, hi:hi, lo:lo, t:B[i1].t};
+}
+function tradeMeta(t){
+  const D=DATA[t.date], B=D.b1;
+  const ei=idxAt(B,t.time), xi=idxAt(B,t._exit_time.slice(0,5));
+  const d=t.dir==='long'?1:-1;
+  let mfe=0,mae=0;
+  // 從進場的「下一根」算起 —— 進場那一分鐘的低點多半發生在進場之前，算進去會誤導
+  for(let i=Math.min(ei+1,xi);i<=xi;i++){
+    mfe=Math.max(mfe,d*(B[i].h-t.entry),d*(B[i].l-t.entry));
+    mae=Math.min(mae,d*(B[i].l-t.entry),d*(B[i].h-t.entry));
+  }
+  return {ei:ei,xi:xi,mins:xi-ei,mfe:Math.round(mfe),mae:Math.round(mae),f:featAt(t.date,ei)};
+}
+const META={}; TRADES.forEach((t,i)=>META[i]=tradeMeta(t));
+
+/* ============================================================================
+   3. 狀態
+   ============================================================================ */
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
+const sgn=v=>v>0?'up':v<0?'down':'flat';
+const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
+const REASON={tp:'停利',sl:'停損',manual:'手動',close:'收盤'};
+
+var TAB='review', MODE='review';
+var FILTER='all', SEL=0, TF=5;
+var VIEW={n:60,end:null,vz:1,voff:0};
+var HOVER={i:null}, DRAG=null;
+var RP={date:'2026-08-13',state:'idle',rev:0,speed:1,timer:null,end:null,
+        judge:null,note:'',result:null,axis:null,n:48,tally:{n:0,tp:0,sl:0,same:0}};
+const SPEEDS=[[0.5,1200],[1,600],[2,300],[4,150]];
+const FUT=10;                                  // 重播時右邊留幾格空白
+
+function filtered(){
+  return TRADES.map((t,i)=>({t:t,i:i})).filter(x=>{
+    if(FILTER==='win')return x.t._net>0; if(FILTER==='loss')return x.t._net<=0;
+    if(FILTER==='long')return x.t.dir==='long'; if(FILTER==='short')return x.t.dir==='short';
+    return true;
+  }).reverse();                                 // 新的在上面
+}
+function selTrade(){ const L=filtered(); if(!L.length)return null;
+  const hit=L.find(x=>x.i===SEL); return hit||L[0]; }
+
+/* 目前圖上是哪一天、哪個週期 */
+function ctx(){
+  if(MODE==='replay') return {day:RP.date,tf:1,bars:DATA[RP.date].b1};
+  const s=selTrade();
+  const day=s?s.t.date:DAYS[DAYS.length-1];
+  return {day:day,tf:TF,bars:TF===1?DATA[day].b1:DATA[day].b5};
+}
+
+/* ============================================================================
+   4. K 線圖（純 SVG）
+   ============================================================================ */
+const W=1040,H=430,R=64,TOP=10,BOT=24,VOLH=64,GAP=12;
+const PB=H-BOT-VOLH-GAP;
+
+function geom(){
+  const C=ctx(), all=C.bars;
+  if(MODE==='replay'){
+    const n=Math.max(16,Math.min(RP.n,all.length));
+    // RP.end＝null 時視窗跟著揭曉進度走；揭曉後才改成固定視窗（對準判斷的那一段）
+    const end=Math.min(all.length,RP.end!=null?RP.end:RP.rev+1+FUT);
+    return {C:C,all:all,from:Math.max(0,end-n),to:end,n:n,rev:RP.rev};
+  }
+  const n=Math.max(8,Math.min(VIEW.n,all.length));
+  const end=VIEW.end==null?all.length:Math.max(n,Math.min(VIEW.end,all.length));
+  return {C:C,all:all,from:end-n,to:end,n:n,rev:all.length-1};
+}
+
+function drawChart(){
+  const G=geom(); const C=G.C, all=G.all;
+  const B=all.slice(G.from,G.to);
+  const vis=B.filter((b,i)=>G.from+i<=G.rev);         // 重播時只有揭曉過的才算數
+  if(!vis.length) return;
+  const trade=MODE==='review'?(selTrade()||null):null;
+  const T=trade?trade.t:null, TM=trade?META[trade.i]:null;
+
+  /* ---- 價格軸 ---- */
+  let hi,lo;
+  if(MODE==='replay'){
+    let h=Math.max(...vis.map(b=>b.h)), l=Math.min(...vis.map(b=>b.l));
+    if(RP.judge){ h=Math.max(h,RP.judge.tp); l=Math.min(l,RP.judge.sl); }
+    const pad0=Math.max(40,(h-l)*0.28); h+=pad0; l-=pad0;
+    // 只擴不縮：避免每揭曉一根就整個跳動，也避免用「未來的範圍」洩漏答案
+    if(RP.axis){ hi=Math.max(RP.axis.hi,h); lo=Math.min(RP.axis.lo,l); } else { hi=h; lo=l; }
+    RP.axis={hi:hi,lo:lo};
+  } else {
+    hi=Math.max(...B.map(b=>b.h)); lo=Math.min(...B.map(b=>b.l));
+    // 選到的那一筆在畫面內時，價格軸要容得下它的停利／停損線
+    if(T){ const ei=idxAt(all,T.time);
+      if(ei>=G.from&&ei<G.to){ hi=Math.max(hi,T.entry+110); lo=Math.min(lo,T.entry-110); } }
+    const p=(hi-lo)*0.08||10; hi+=p; lo-=p;
+    const mid=(hi+lo)/2+VIEW.voff, half=((hi-lo)/2)/VIEW.vz; hi=mid+half; lo=mid-half;
+  }
+  const y=v=>TOP+(hi-v)/(hi-lo)*(PB-TOP);
+  const cw=(W-R)/B.length, bw=Math.max(1.5,Math.min(16,cw*0.62));
+  const x=i=>i*cw+cw/2;
+  const vmax=Math.max(1,...vis.map(b=>b.v));
+  const vy=v=>H-BOT-(v/vmax)*VOLH;
+  const gi=i=>i-G.from;                                // 全域索引 → 畫面索引
+
+  let g='<defs><pattern id="hatch" width="9" height="9" patternUnits="userSpaceOnUse" '+
+        'patternTransform="rotate(45)"><rect width="9" height="9" fill="#141922"/>'+
+        '<line x1="0" y1="0" x2="0" y2="9" stroke="#1D2430" stroke-width="4"/></pattern></defs>';
+
+  /* 下單時段 08:45~09:30 底色 */
+  { let a=-1,b=-1; B.forEach((bar,i)=>{ if(bar.t>='08:45'&&bar.t<'09:30'){ if(a<0)a=i; b=i; } });
+    if(a>=0) g+='<rect x="'+(a*cw).toFixed(1)+'" y="'+TOP+'" width="'+((b+1-a)*cw).toFixed(1)+
+      '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>'; }
+
+  /* 進出場之間的區間著色（賺紅賠綠）——在 K 棒底下 */
+  if(T){
+    const a=gi(C.tf===1?TM.ei:idxAt(all,T.time)), b=gi(C.tf===1?TM.xi:idxAt(all,T._exit_time.slice(0,5)));
+    if(b>=0&&a<B.length){
+      const x0=Math.max(0,a*cw), x1=Math.min(W-R,(b+1)*cw);
+      const col=T._net>0?'#EE5A54':'#34B37E';
+      const yA=y(T.entry), yB=y(T.exit);
+      g+='<rect x="'+x0.toFixed(1)+'" y="'+Math.min(yA,yB).toFixed(1)+'" width="'+(x1-x0).toFixed(1)+
+         '" height="'+Math.abs(yB-yA).toFixed(1)+'" fill="'+col+'" opacity=".16"/>'+
+         '<rect x="'+x0.toFixed(1)+'" y="'+TOP+'" width="'+(x1-x0).toFixed(1)+'" height="'+(PB-TOP)+
+         '" fill="#E7E9ED" opacity=".025"/>';
+    }
+  }
+
+  /* 價格格線 */
+  g+='<rect x="'+(W-R)+'" y="0" width="'+R+'" height="'+H+'" fill="#1F2530" opacity=".45"/>';
+  for(let k=0;k<=5;k++){
+    const v=lo+(hi-lo)*k/5, yy=y(v);
+    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+       '" stroke="#262D39" stroke-width="1"/><text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+
+       '" fill="#5A616E" font-size="12" font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
+  }
+
+  /* 停利／停損線 */
+  const lines=[];
+  if(T) lines.push([T.entry+ (T.dir==='long'?100:-100),'#EE5A54','停利'],
+                   [T.entry+ (T.dir==='long'?-100:100),'#34B37E','停損']);
+  if(RP.judge&&MODE==='replay') lines.push([RP.judge.tp,'#EE5A54','停利'],[RP.judge.sl,'#34B37E','停損']);
+  lines.forEach(z=>{ const yy=y(z[0]); if(yy<TOP||yy>PB)return;
+    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+       '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".75"/>'+
+       '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>'; });
+
+  /* K 棒（重播時只畫揭曉過的） */
+  B.forEach((b,i)=>{
+    if(G.from+i>G.rev) return;
+    const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E', X=x(i);
+    g+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+
+       y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
+    const yo=y(b.o),yc=y(b.c),tp=Math.min(yo,yc),hh=Math.max(1.2,Math.abs(yc-yo));
+    g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+tp.toFixed(1)+'" width="'+bw.toFixed(1)+
+       '" height="'+hh.toFixed(1)+'" fill="'+col+'"/>';
+  });
+
+  /* 未揭曉區（重播） */
+  if(MODE==='replay'&&G.rev<G.to-1){
+    const x0=(gi(G.rev)+0.5)*cw+cw*0.2;
+    g+='<rect x="'+x0.toFixed(1)+'" y="'+TOP+'" width="'+(W-R-x0).toFixed(1)+'" height="'+(H-TOP-BOT)+
+       '" fill="url(#hatch)" opacity=".85"/>'+
+       '<text x="'+(x0+(W-R-x0)/2).toFixed(1)+'" y="'+(TOP+26)+'" fill="#5A616E" font-size="12.5" '+
+       'text-anchor="middle">後面還沒揭曉</text>';
+  }
+
+  /* 成交量 */
+  g+='<line x1="0" y1="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" x2="'+(W-R)+'" y2="'+
+     (H-BOT-VOLH-GAP/2).toFixed(1)+'" stroke="#262D39" stroke-width="1"/>';
+  B.forEach((b,i)=>{ if(G.from+i>G.rev)return;
+    const col=b.c>=b.o?'#EE5A54':'#34B37E', X=x(i), yy=vy(b.v);
+    g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+
+       '" height="'+Math.max(0.8,H-BOT-yy).toFixed(1)+'" fill="'+col+'" opacity=".5"/>'; });
+  g+='<text x="'+(W-R+8)+'" y="'+(H-BOT-VOLH+10)+'" fill="#5A616E" font-size="11" '+
+     'font-family="ui-monospace,monospace">'+(vmax>=10000?(vmax/1000).toFixed(0)+'k':vmax.toFixed(0))+'</text>';
+
+  /* 09:30 下單時段結束 */
+  { const i=B.findIndex(b=>b.t>='09:30');
+    if(i>0){ const X=(i*cw).toFixed(1);
+      g+='<line x1="'+X+'" y1="'+TOP+'" x2="'+X+'" y2="'+(H-BOT)+'" stroke="#E3A951" '+
+         'stroke-width="1" stroke-dasharray="2 5" opacity=".5"/>'+
+         '<text x="'+(+X+5)+'" y="'+(H-BOT-6)+'" fill="#5A616E" font-size="10.5">09:30</text>'; } }
+
+  /* 進出場標記 */
+  function mark(px,t,dir,kind,net){
+    const i=gi(idxAt(all,t)); if(i<0||i>=B.length)return;
+    const X=x(i), Y=y(px), long=dir==='long', col=long?'#EE5A54':'#34B37E';
+    if(kind==='in'){
+      g+= long? '<path d="M'+(X-8)+' '+(Y+21)+' L'+X+' '+(Y+6)+' L'+(X+8)+' '+(Y+21)+' Z" fill="'+col+'"/>'
+              : '<path d="M'+(X-8)+' '+(Y-21)+' L'+X+' '+(Y-6)+' L'+(X+8)+' '+(Y-21)+' Z" fill="'+col+'"/>';
+      g+='<text x="'+(X+11)+'" y="'+(long?Y+25:Y-24)+'" fill="'+col+'" font-size="11" '+
+         'font-family="ui-monospace,monospace">'+t+' '+px+'</text>';
+    } else {
+      const ec=net>0?'#EE5A54':'#34B37E';
+      g+='<line x1="'+(X-6)+'" y1="'+(Y-6)+'" x2="'+(X+6)+'" y2="'+(Y+6)+'" stroke="'+ec+'" stroke-width="2.5"/>'+
+         '<line x1="'+(X-6)+'" y1="'+(Y+6)+'" x2="'+(X+6)+'" y2="'+(Y-6)+'" stroke="'+ec+'" stroke-width="2.5"/>'+
+         '<text x="'+(X+11)+'" y="'+(Y+4)+'" fill="'+ec+'" font-size="11" '+
+         'font-family="ui-monospace,monospace">'+t+' '+px+'　'+pm(net)+'</text>';
+    }
+  }
+  if(T){ mark(T.entry,T.time,T.dir,'in'); mark(T.exit,T._exit_time.slice(0,5),T.dir,'out',T._net); }
+  if(MODE==='replay'&&RP.judge){
+    mark(RP.judge.entry,RP.judge.time,RP.judge.dir,'in');
+    if(RP.result) mark(RP.result.exit,RP.result.time,RP.judge.dir,'out',RP.result.net);
+    // 揭曉後把「當天實際那筆」也疊上去對照
+    if(RP.state==='revealed'){
+      const rt=TRADES.find(t=>t.date===RP.date);
+      if(rt){ const i=gi(idxAt(all,rt.time));
+        if(i>=0&&i<B.length){ const X=x(i),Y=y(rt.entry);
+          g+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="7" fill="none" stroke="#E3A951" '+
+             'stroke-width="1.6" stroke-dasharray="3 3"/>'+
+             '<text x="'+(X+11)+'" y="'+(Y-11)+'" fill="#E3A951" font-size="10.5">當天你的進場</text>'; } }
+    }
+  }
+
+  /* 游標十字線 */
+  let lb=vis[vis.length-1], hovering=false;
+  if(HOVER.i!=null&&HOVER.i>=G.from&&HOVER.i<G.to&&HOVER.i<=G.rev){
+    lb=all[HOVER.i]; hovering=true;
+    const X=x(gi(HOVER.i));
+    g+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+       '" stroke="#8B92A0" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
+  }
+
+  /* 時間刻度 */
+  const step=Math.max(1,Math.ceil(B.length/9));
+  B.forEach((b,i)=>{ if(i%step)return;
+    g+='<text x="'+x(i).toFixed(1)+'" y="'+(H-6)+'" fill="#5A616E" font-size="11" '+
+       'text-anchor="middle" font-family="ui-monospace,monospace">'+b.t+'</text>'; });
+
+  /* ---- 只換 svg 內容，外框不動（重繪不打斷縮放／拖曳、也不閃） ---- */
+  const sv=document.getElementById('csvg');
+  sv.setAttribute('viewBox','0 0 '+W+' '+H);
+  sv.innerHTML=g;
+
+  /* 標題列 */
+  const D=DATA[C.day];
+  const px=lb.c, chg=px-D.open, pct=chg/D.open*100;
+  const wd=['日','一','二','三','四','五','六'][new Date(C.day+'T00:00:00').getDay()];
+  const rt=TRADES.find(t=>t.date===C.day);
+  document.getElementById('chead').innerHTML=
+    '<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span> <span class="cchg '+sgn(chg)+'">'+
+    pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
+    '<div style="flex:1"><span class="cday">'+C.day+'（'+wd+'）</span>'+
+    (rt?'<span class="ctag">當天有 1 筆練習</span>':'<span class="ctag">當天沒下單</span>')+
+    (MODE==='replay'?'<span class="ctag" style="color:var(--gold);border-color:rgba(227,169,81,.4)">重播中</span>':'')+'</div>'+
+    (MODE==='review'
+      ?'<div class="tfsw"><button data-tf="1" class="'+(TF===1?'on':'')+'">1 分</button>'+
+       '<button data-tf="5" class="'+(TF===5?'on':'')+'">5 分</button></div>'
+      :'<div class="cday" style="color:var(--faint)">1 分 K</div>');
+
+  const vol=lb.v>=10000?(lb.v/1000).toFixed(1)+'k':lb.v.toFixed(0);
+  document.getElementById('clegend').innerHTML=
+    '<span class="lt">'+lb.t+'</span><span>開 <b>'+lb.o+'</b></span><span>高 <b>'+lb.h+'</b></span>'+
+    '<span>低 <b>'+lb.l+'</b></span><span>收 <b style="color:'+(lb.c>=lb.o?'#EE5A54':'#34B37E')+'">'+
+    lb.c+'</b></span><span>量 <b>'+vol+'</b></span>'+(hovering?'':'<span class="lt">（最新一根）</span>');
+}
+
+/* ---- 圖表滑鼠操作 ---- */
+function bindChart(){
+  const sv=document.getElementById('csvg');
+  const AXIS=R/W;
+  const onAxis=e=>{ const r=sv.getBoundingClientRect(); return (e.clientX-r.left)/r.width>1-AXIS; };
+  sv.addEventListener('wheel',function(e){
+    e.preventDefault();
+    if(MODE==='replay'){                       // 重播只准改「看幾根」，看不到未來
+      RP.n=Math.round(Math.min(120,Math.max(20,RP.n*(e.deltaY>0?1.15:0.87)))); render(); return; }
+    if(e.shiftKey||onAxis(e)){
+      VIEW.vz=Math.min(12,Math.max(0.25,VIEW.vz*(e.deltaY>0?0.88:1.14))); render(); return; }
+    const G=geom(), total=G.all.length, r=sv.getBoundingClientRect();
+    const frac=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));
+    const anchor=G.from+frac*G.n;
+    const n=Math.round(Math.min(total,Math.max(8,G.n*(e.deltaY>0?1.18:0.85))));
+    let end=Math.round(anchor+(1-frac)*n); end=Math.max(n,Math.min(total,end));
+    VIEW.n=n; VIEW.end=(end>=total)?null:end; render();
+  },{passive:false});
+  sv.addEventListener('mousedown',function(e){
+    if(MODE==='replay')return;
+    const G=geom(), r=sv.getBoundingClientRect();
+    DRAG={x:e.clientX,y:e.clientY,end:G.to,n:G.n,w:r.width,h:r.height,vz:VIEW.vz,voff:VIEW.voff,
+          axis:onAxis(e),span:0};
+    sv.style.cursor=DRAG.axis?'ns-resize':'grabbing'; e.preventDefault();
+  });
+  window.addEventListener('mousemove',function(e){
+    if(!DRAG)return;
+    if(DRAG.axis){ VIEW.vz=Math.min(12,Math.max(0.25,DRAG.vz*Math.exp(-(e.clientY-DRAG.y)/220)));
+      render(); return; }
+    const G=geom(), total=G.all.length;
+    const moved=Math.round((e.clientX-DRAG.x)/(DRAG.w/DRAG.n));
+    let end=DRAG.end-moved; end=Math.max(DRAG.n,Math.min(total,end));
+    VIEW.end=(end>=total)?null:end; render();
+  });
+  window.addEventListener('mouseup',function(){ if(DRAG){DRAG=null; sv.style.cursor='';} });
+  sv.addEventListener('mousemove',function(e){
+    if(DRAG)return;
+    const G=geom(), r=sv.getBoundingClientRect();
+    const frac=(e.clientX-r.left)/r.width;
+    if(frac<0||frac>1-R/W){ if(HOVER.i!=null){HOVER.i=null;render();} return; }
+    const i=G.from+Math.floor(frac/(1-R/W)*G.n);
+    const ni=Math.max(G.from,Math.min(G.to-1,i));
+    if(ni!==HOVER.i){ HOVER.i=ni; render(); }
+  });
+  sv.addEventListener('mouseleave',function(){ if(HOVER.i!=null){HOVER.i=null; render();} });
+  sv.addEventListener('dblclick',function(e){
+    if(MODE==='replay'){ RP.n=48; render(); return; }
+    if(onAxis(e)){ VIEW.vz=1; VIEW.voff=0; } else focusTrade();
+    render();
+  });
+}
+
+/* 把畫面對準目前選到的那筆交易 */
+function focusTrade(){
+  const s=selTrade(); if(!s){ VIEW={n:60,end:null,vz:1,voff:0}; return; }
+  const C=ctx(), all=C.bars;
+  const xi=idxAt(all,s.t._exit_time.slice(0,5)), ei=idxAt(all,s.t.time);
+  const span=Math.max(TF===1?45:12,(xi-ei)*2+ (TF===1?30:8));
+  VIEW={n:Math.min(all.length,Math.round(span)),
+        end:Math.min(all.length,xi+Math.round(span*0.35)),vz:1,voff:0};
+}
+
+/* ============================================================================
+   5. 進場當下的客觀盤面
+   ============================================================================ */
+function fstrip(){
+  let ft='進場當下的客觀盤面', F=null;
+  if(MODE==='replay'){
+    // 已經判斷過就凍結在「按下去的那一刻」——那才是他要檢討的盤面
+    const i=RP.judge?idxAt(DATA[RP.date].b1,RP.judge.time):RP.rev;
+    F=featAt(RP.date,i);
+    ft=RP.judge?('進場當下的客觀盤面（'+RP.judge.time+'）'):('目前這一刻的客觀盤面（'+F.t+'）');
+  } else {
+    const s=selTrade();
+    if(s){ F=META[s.i].f; ft='進場當下的客觀盤面（'+s.t.date.slice(5)+' '+s.t.time+'）'; }
+  }
+  document.getElementById('ftitle').textContent=ft;
+  const box=document.getElementById('fstrip');
+  if(!F){ box.innerHTML='<div class="fcell" style="grid-column:1/-1;color:var(--faint);'+
+    'text-align:center;padding:16px">選一筆紀錄就會顯示</div>'; return; }
+  const c=(l,v,cls)=>'<div class="fcell"><div class="l">'+l+'</div><div class="v '+(cls||'flat')+'">'+v+'</div></div>';
+  box.innerHTML=
+    c('最近 5 分',pm(F.mom5),sgn(F.mom5))+
+    c('最近 15 分',pm(F.mom15),sgn(F.mom15))+
+    c('對開盤',pm(F.ret_open),sgn(F.ret_open))+
+    c('跳空',pm(F.gap),sgn(F.gap))+
+    c('今日震幅',f(F.rng))+
+    c('位階',f(F.pos*100)+'%')+
+    c('量能',f(F.vol,2)+'倍');
+}
+
+/* ============================================================================
+   6. 右欄：翻紀錄
+   ============================================================================ */
+function rowHTML(x){
+  const t=x.t, rs=REASON[t._reason]||'';
+  return '<div class="trade'+(x.i===SEL?' sel':'')+'" data-pick="'+x.i+'">'+
+    '<div class="tr-top"><span class="tr-date">'+t.date.slice(5)+'</span>'+
+    '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+    '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
+    (rs?' <span class="tag">'+rs+'</span>':'')+'</span>'+
+    '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div>'+
+    (t.note?'<div class="tr-note">「'+t.note+'」</div>':'')+'</div>';
+}
+function paneReview(){
+  const L=filtered(), s=selTrade();
+  const F=[['all','全部'],['win','只看賺的'],['loss','只看賠的'],['long','做多'],['short','做空']];
+  let h='<div class="chips">'+F.map(x=>'<button data-filter="'+x[0]+'" class="'+
+        (FILTER===x[0]?'on':'')+'">'+x[1]+'</button>').join('')+'</div>';
+  h+='<div class="sec-head" style="margin-top:8px"><h2>練習紀錄</h2>'+
+     '<span class="count">'+L.length+' 筆　'+pm(L.reduce((a,x)=>a+x.t._net,0))+' 點</span></div>';
+  if(!L.length){ h+='<div class="card"><div class="empty">這個條件下沒有紀錄</div></div>'; }
+  else{
+    h+='<div class="list" id="tlist">'+L.map(rowHTML).join('')+'</div>';
+    h+='<div class="note" style="margin-top:10px;text-align:center">'+
+       '<span class="kbd">←</span> <span class="kbd">→</span> 切換上一筆／下一筆　'+
+       '<span class="kbd">R</span> 重播這一天</div>';
+  }
+  if(s){
+    const t=s.t, M=META[s.i], win=t._net>0;
+    h+='<div class="sec-head" style="margin-top:14px"><h2>這一筆</h2>'+
+       '<span class="count">'+t.date+(t.real?'　真實紀錄':'')+'</span></div>'+
+       '<div class="card"><div class="dt">'+
+       '<div class="dt-big"><div class="v '+(win?'up':'down')+'">'+pm(t._net)+'</div>'+
+       '<div class="l">'+(t.dir==='long'?'做多':'做空')+'　'+(REASON[t._reason]||'')+
+       '出場　NT$'+(t._net*10).toLocaleString()+'</div></div>'+
+       '<div class="hr"></div>'+
+       '<div class="dt-row"><span class="k">進場</span><span class="v">'+t.time+'　'+t.entry+'</span></div>'+
+       '<div class="dt-row"><span class="k">出場</span><span class="v">'+t._exit_time.slice(0,5)+'　'+t.exit+'</span></div>'+
+       '<div class="dt-row"><span class="k">抱了多久</span><span class="v">'+M.mins+' 分鐘</span></div>'+
+       '<div class="dt-row"><span class="k">進場後最順</span><span class="v up">'+pm(M.mfe)+' 點</span></div>'+
+       '<div class="dt-row"><span class="k">進場後最逆</span><span class="v down">'+pm(M.mae)+' 點</span></div>'+
+       '<div class="hr"></div>'+
+       '<div class="dt-row"><span class="k">當時寫的理由</span></div>'+
+       '<div class="noteline'+(t.note?'':' empty')+'">'+(t.note?'「'+t.note+'」':'（當時沒寫）')+'</div>'+
+       '<div class="btns" style="margin-top:4px">'+
+       '<button class="btn gold" data-act="replayday">重播這一天（蓋住結果）</button></div>'+
+       '</div></div>';
+  }
+  return h;
+}
+
+/* ============================================================================
+   7. 右欄：重播練習
+   ============================================================================ */
+function rpStop(){ if(RP.timer){clearInterval(RP.timer); RP.timer=null;} }
+function rpReset(day){
+  rpStop();
+  RP.date=day||RP.date; RP.state='idle'; RP.rev=0; RP.judge=null; RP.result=null;
+  RP.axis=null; RP.note=''; RP.end=null; RP.n=48; HOVER.i=null;
+}
+function rpPlay(){
+  if(RP.state==='revealed')return;
+  rpStop(); RP.state='running';
+  const ms=(SPEEDS.find(s=>s[0]===RP.speed)||SPEEDS[1])[1];
+  RP.timer=setInterval(function(){rpStep();},ms); render();
+}
+function rpPause(){ rpStop(); if(RP.state==='running')RP.state=RP.judge?'holding':'paused'; render(); }
+function rpStep(back){
+  if(RP.state==='revealed')return;                 // 揭曉後就別再逐根走，要重玩請按「再玩一次」
+  const B=DATA[RP.date].b1;
+  if(back){ RP.rev=Math.max(0,RP.rev-1); RP.axis=null; render(); return; }
+  if(RP.rev>=B.length-1){ rpReveal(); return; }
+  RP.rev++;
+  /* 判斷過就要檢查有沒有觸及 ±100（同一根同時碰到，保守算停損） */
+  if(RP.judge&&!RP.result){
+    const b=B[RP.rev], J=RP.judge, d=J.dir==='long'?1:-1;
+    const hitSL=d>0?b.l<=J.sl:b.h>=J.sl, hitTP=d>0?b.h>=J.tp:b.l<=J.tp;
+    if(hitSL||hitTP){
+      const tp=hitSL?false:true;
+      RP.result={reason:tp?'tp':'sl',exit:tp?J.tp:J.sl,time:b.t,
+                 points:tp?100:-100,net:tp?95:-105};
+      rpReveal(); return;
+    }
+    if(b.t>='11:00'){ RP.result={reason:'close',exit:b.c,time:b.t,
+        points:Math.round(d*(b.c-J.entry)),net:Math.round(d*(b.c-J.entry))-5}; rpReveal(); return; }
+  }
+  if(!RP.judge&&B[RP.rev].t>='10:00'){ rpReveal(); return; }
+  render();
+}
+function rpJudge(dir){
+  if(RP.state==='revealed')return;
+  const B=DATA[RP.date].b1, b=B[RP.rev], d=dir==='long'?1:-1;
+  RP.judge={dir:dir,entry:b.c,time:b.t,tp:b.c+d*100,sl:b.c-d*100,
+            note:(document.getElementById('jnote')||{}).value||''};
+  RP.state='holding'; rpPlay();
+}
+function rpReveal(){
+  rpStop();
+  const B=DATA[RP.date].b1;
+  // 整天全部揭曉，但畫面停在「判斷的那一段＋後續 40 分鐘」，不要跳到下午去
+  const anchor=RP.result?idxAt(B,RP.result.time):RP.rev;
+  RP.end=Math.min(B.length,Math.max(anchor+40,RP.rev+20));
+  RP.n=Math.min(B.length,Math.max(60,RP.end));
+  RP.rev=B.length-1; RP.axis=null; RP.state='revealed';
+  RP.tally.n++;
+  if(RP.result){ if(RP.result.reason==='tp')RP.tally.tp++; else if(RP.result.reason==='sl')RP.tally.sl++; }
+  const rt=TRADES.find(t=>t.date===RP.date);
+  if(rt&&RP.judge&&rt.dir===RP.judge.dir)RP.tally.same++;
+  render();
+}
+function paneReplay(){
+  const rt=TRADES.find(t=>t.date===RP.date);
+  let h='<div class="sec-head" style="margin-top:6px"><h2>選一天重播</h2>'+
+        '<span class="count">從 08:45 開始逐根走</span></div><div class="daysel">'+
+    DAYS.slice().reverse().map(d=>{
+      const t=TRADES.find(x=>x.date===d);
+      return '<button data-day="'+d+'" class="'+(RP.date===d?'on':'')+'">'+d.slice(5)+
+             (t?'<span class="m">有下單</span>':'<span class="m">沒下單</span>')+'</button>';
+    }).join('')+'</div>';
+
+  if(RP.state==='idle'){
+    h+='<div class="card" style="margin-top:12px"><div class="note" style="border:0;padding:0">'+
+       '<b>怎麼玩</b><br>後面的 K 棒會被蓋住，你只看得到「已經走完的部分」。<br>'+
+       '按播放讓它一根一根走，覺得可以進場就按 ▲做多 或 ▼做空 —— '+
+       '這時候你還<b>不知道結果</b>，跟早上真的在看盤一樣。<br>'+
+       '判斷完會繼續走到碰停利或停損，然後才揭曉後續走勢，並跟你當天實際的決定對照。</div>'+
+       '<div class="btns" style="margin-top:12px"><button class="btn gold" data-act="rpplay">開始重播</button></div>'+
+       '</div>';
+  } else if(RP.state==='revealed'){
+    const J=RP.judge, Rr=RP.result;
+    h+='<div class="sec-head" style="margin-top:14px"><h2>揭曉・對照</h2>'+
+       '<span class="count">'+RP.date+'</span></div><div class="card"><div class="cmp">';
+    h+='<div class="side mine"><div class="h">你這次的判斷</div><div class="b">';
+    if(J){
+      h+='<span class="dir '+(J.dir==='long'?'l':'s')+'">'+(J.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+         '<span>'+J.time+'　'+J.entry+' → '+(Rr?Rr.exit:'—')+'</span>'+
+         '<span class="res '+(Rr&&Rr.net>0?'up':'down')+'">'+(Rr?pm(Rr.net):'—')+'</span>';
+    } else { h+='<span style="color:var(--dim)">這次沒有下判斷（觀望）</span>'; }
+    h+='</div>'+(J&&J.note?'<div class="tr-note" style="padding-left:0;margin-top:6px">「'+esc(J.note)+'」</div>':'')+'</div>';
+    h+='<div class="side"><div class="h">當天你實際的決定</div><div class="b">';
+    if(rt){
+      h+='<span class="dir '+(rt.dir==='long'?'l':'s')+'">'+(rt.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+         '<span>'+rt.time+'　'+rt.entry+' → '+rt.exit+'</span>'+
+         '<span class="res '+(rt._net>0?'up':'down')+'">'+pm(rt._net)+'</span>';
+    } else { h+='<span style="color:var(--dim)">當天你沒有下單</span>'; }
+    h+='</div></div>';
+    /* 判定文字 */
+    let v='',cls='diff';
+    if(J&&rt){
+      const same=J.dir===rt.dir;
+      const dm=mt(J.time)-mt(rt.time);
+      v=same?'方向一致':'方向相反';
+      v+='　'+(dm===0?'時間也一樣':(dm>0?'你晚了 '+dm+' 分鐘':'你早了 '+(-dm)+' 分鐘'));
+      cls=same?'same':'diff';
+    } else if(J&&!rt){ v='當天你沒進場，這次你進了'; }
+    else if(!J&&rt){ v='當天你有進場，這次你選擇觀望'; }
+    else { v='兩次都沒進場'; }
+    h+='<div class="verdict '+cls+'">'+v+'</div></div>';
+    h+='<div class="tally"><span>重播 <b>'+RP.tally.n+'</b> 次</span>'+
+       '<span>停利 <b class="up">'+RP.tally.tp+'</b></span>'+
+       '<span>停損 <b class="down">'+RP.tally.sl+'</b></span>'+
+       '<span>與當天同向 <b>'+RP.tally.same+'</b></span></div>';
+    h+='<div class="btns" style="margin-top:12px">'+
+       '<button class="btn" data-act="rpagain">再玩一次這天</button>'+
+       '<button class="btn ghost" data-act="rpnext">換下一天</button></div></div>';
+  } else if(RP.judge){
+    const J=RP.judge, B=DATA[RP.date].b1, cur=B[RP.rev].c;
+    const fl=(J.dir==='long'?1:-1)*(cur-J.entry);
+    h+='<div class="sec-head" style="margin-top:14px"><h2>你已經進場了</h2>'+
+       '<span class="count">等結果</span></div><div class="card">'+
+       '<div class="hold"><div class="v '+sgn(fl)+'">'+pm(Math.round(fl))+'</div>'+
+       '<div class="l">'+(J.dir==='long'?'做多':'做空')+'　'+J.time+' 進場 '+J.entry+'</div></div>'+
+       '<div class="dt-row" style="margin-top:10px"><span class="k">停利</span>'+
+       '<span class="v up">'+J.tp+'</span></div>'+
+       '<div class="dt-row"><span class="k">停損</span><span class="v down">'+J.sl+'</span></div>'+
+       (J.note?'<div class="noteline" style="margin-top:10px">「'+esc(J.note)+'」</div>':'')+
+       '<div class="btns" style="margin-top:12px">'+
+       '<button class="btn ghost" data-act="rpreveal">直接看結果</button></div></div>';
+  } else {
+    const F=featAt(RP.date,RP.rev);
+    h+='<div class="sec-head" style="margin-top:14px"><h2>你的判斷</h2>'+
+       '<span class="count">現在 '+F.t+'　'+F.price+'</span></div><div class="card">'+
+       '<div class="btns"><button class="btn long" data-act="jlong">&#9650; 做多</button>'+
+       '<button class="btn short" data-act="jshort">&#9660; 做空</button></div>'+
+       '<input class="jinput" id="jnote" placeholder="為什麼進？（可不寫，回顧時會顯示）" value="'+
+       esc(RP.note)+'">'+
+       '<div class="btns" style="margin-top:10px">'+
+       '<button class="btn ghost" data-act="rpreveal">今天不做，直接揭曉</button></div>'+
+       '<div class="note" style="margin-top:10px;text-align:center;border:0;padding:0">'+
+       '<span class="kbd">空白鍵</span> 播放／暫停　<span class="kbd">→</span> 下一根　'+
+       '<span class="kbd">↑</span> 做多　<span class="kbd">↓</span> 做空</div></div>';
+  }
+  return h;
+}
+
+/* 重播控制列（放在圖的正下方，眼睛不用離開圖） */
+function ctrlHTML(){
+  if(MODE!=='replay'){
+    return '<div class="chint"><span id="cinfo">'+
+      (selTrade()?'進出場之間已著色：紅＝這一筆賺、綠＝賠':'選一筆紀錄看細節')+
+      '</span>　滾輪縮放・拖曳平移・雙擊回到這一筆</div>';
+  }
+  const B=DATA[RP.date].b1;
+  const playing=RP.state==='running';
+  return '<div class="rpbar">'+
+    '<button class="rpbtn" data-act="rphome" title="回到 08:45">⏮</button>'+
+    '<button class="rpbtn" data-act="rpback" title="退一根">◀</button>'+
+    '<button class="rpbtn play" data-act="'+(playing?'rppause':'rpplay')+'">'+
+      (playing?'❚❚ 暫停':'▶ 播放')+'</button>'+
+    '<button class="rpbtn" data-act="rpstep" title="下一根">▶▶</button>'+
+    '<div class="rpsp">'+SPEEDS.map(s=>'<button data-speed="'+s[0]+'" class="'+
+      (RP.speed===s[0]?'on':'')+'">×'+s[0]+'</button>').join('')+'</div>'+
+    '<div class="rppos"><b>'+B[RP.rev].t+'</b>　'+(RP.rev+1)+' / '+B.length+' 根'+
+      (RP.state==='revealed'?'　已揭曉':'')+'</div></div>';
+}
+
+/* ============================================================================
+   8. 繪製與事件
+   ============================================================================ */
+var lastPane='';
+function render(){
+  if(TAB!=='review')return;
+  drawChart();
+  document.getElementById('cctrl').innerHTML=ctrlHTML();
+  const p=document.getElementById('pane');
+  // 重播每走一根就重繪右欄 —— 先把使用者正在打的理由收起來，重繪後再放回去，
+  // 否則他打到一半的字會被下一根 K 棒洗掉。
+  const jn=document.getElementById('jnote');
+  if(jn) RP.note=jn.value;
+  const focus=document.activeElement&&document.activeElement.id==='jnote';
+  const html=MODE==='review'?paneReview():paneReplay();
+  if(lastPane!==html){ lastPane=html; p.innerHTML=html;
+    if(focus&&document.getElementById('jnote')){ const el=document.getElementById('jnote');
+      el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }
+  fstrip();
+  const sel=document.querySelector('.trade.sel');
+  if(sel&&sel.scrollIntoView)sel.scrollIntoView({block:'nearest'});
+}
+function setTab(t){
+  TAB=t; rpStop(); if(MODE==='replay'&&RP.state==='running')RP.state='paused';
+  document.getElementById('tab-live').classList.toggle('hide',t!=='live');
+  document.getElementById('tab-review').classList.toggle('hide',t!=='review');
+  document.querySelectorAll('.tabs button').forEach(b=>
+    b.classList.toggle('on',b.getAttribute('data-tab')===t));
+  if(t==='review')render();
+}
+function setMode(m){
+  if(m===MODE)return;
+  MODE=m; rpStop(); HOVER.i=null;
+  document.querySelectorAll('.seg button').forEach(b=>
+    b.classList.toggle('on',b.getAttribute('data-mode')===m));
+  if(m==='review')focusTrade();
+  render();
+}
+function pick(i){ SEL=i; focusTrade(); render(); }
+function moveSel(step){
+  const L=filtered(); if(!L.length)return;
+  let k=L.findIndex(x=>x.i===SEL); if(k<0)k=0;
+  k=Math.max(0,Math.min(L.length-1,k+step));
+  pick(L[k].i);
+}
+
+document.addEventListener('click',function(e){
+  const tb=e.target.closest('[data-tab]'); if(tb){ setTab(tb.getAttribute('data-tab')); return; }
+  const md=e.target.closest('[data-mode]'); if(md){ setMode(md.getAttribute('data-mode')); return; }
+  const tf=e.target.closest('[data-tf]'); if(tf){ TF=parseInt(tf.getAttribute('data-tf')); focusTrade(); render(); return; }
+  const fl=e.target.closest('[data-filter]'); if(fl){ FILTER=fl.getAttribute('data-filter');
+    const L=filtered(); if(L.length&&!L.find(x=>x.i===SEL))SEL=L[0].i; focusTrade(); render(); return; }
+  const pk=e.target.closest('[data-pick]'); if(pk){ pick(parseInt(pk.getAttribute('data-pick'))); return; }
+  const dy=e.target.closest('[data-day]'); if(dy){ rpReset(dy.getAttribute('data-day')); render(); return; }
+  const sp=e.target.closest('[data-speed]'); if(sp){ RP.speed=parseFloat(sp.getAttribute('data-speed'));
+    if(RP.state==='running')rpPlay(); else render(); return; }
+  const a=e.target.closest('[data-act]'); if(!a)return;
+  const act=a.getAttribute('data-act');
+  if(act==='replayday'){ const s=selTrade(); if(s){ rpReset(s.t.date); setMode('replay'); } return; }
+  if(act==='rpplay'){ if(RP.state==='idle')RP.state='paused'; rpPlay(); return; }
+  if(act==='rppause'){ rpPause(); return; }
+  if(act==='rpstep'){ rpStop(); if(RP.state==='idle')RP.state='paused'; rpStep(); return; }
+  if(act==='rpback'){ rpStop(); rpStep(true); return; }
+  if(act==='rphome'){ rpReset(); RP.state='paused'; render(); return; }
+  if(act==='jlong'){ RP.note=(document.getElementById('jnote')||{}).value||''; rpJudge('long'); return; }
+  if(act==='jshort'){ RP.note=(document.getElementById('jnote')||{}).value||''; rpJudge('short'); return; }
+  if(act==='rpreveal'){ rpReveal(); return; }
+  if(act==='rpagain'){ rpReset(); render(); return; }
+  if(act==='rpnext'){ const i=DAYS.indexOf(RP.date); rpReset(DAYS[(i+DAYS.length-1)%DAYS.length]); render(); return; }
+});
+document.addEventListener('keydown',function(e){
+  if(TAB!=='review')return;
+  if(e.target.tagName==='INPUT'){ if(e.key==='Escape')e.target.blur(); return; }
+  if(MODE==='review'){
+    if(e.key==='ArrowLeft'||e.key==='ArrowUp'){ e.preventDefault(); moveSel(-1); }
+    else if(e.key==='ArrowRight'||e.key==='ArrowDown'){ e.preventDefault(); moveSel(1); }
+    else if(e.key==='r'||e.key==='R'){ const s=selTrade(); if(s){ rpReset(s.t.date); setMode('replay'); } }
+    return;
+  }
+  if(e.key===' '){ e.preventDefault(); RP.state==='running'?rpPause():rpPlay(); }
+  else if(e.key==='ArrowRight'){ e.preventDefault(); rpStop(); if(RP.state==='idle')RP.state='paused'; rpStep(); }
+  else if(e.key==='ArrowLeft'){ e.preventDefault(); rpStop(); rpStep(true); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); if(!RP.judge)rpJudge('long'); }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); if(!RP.judge)rpJudge('short'); }
+  else if(e.key==='Enter'){ e.preventDefault(); rpReveal(); }
+});
+
+/* 假時鐘（Demo 用） */
+setInterval(function(){
+  const d=new Date();
+  document.getElementById('clk').textContent=pad(d.getHours())+':'+pad(d.getMinutes());
+},1000);
+document.getElementById('clk').textContent='09:41';
+
+bindChart();
+SEL=TRADES.length-1; focusTrade(); render();
+</script></body></html>
