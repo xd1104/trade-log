@@ -1479,18 +1479,20 @@ function chartSVG(s){
  });
 
  const c=s.chips||{};
+ // 有什麼就顯示什麼 —— 原本整排綁在「日盤才有」的欄位上，
+ // 休市時整排消失，連加權都看不到（Benson 回報找不到）。
  let mini='';
- if(live&&c.chg!=null){
-   mini='<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>'+
-     '<span>15分 <b class="'+sgn(c.mom15)+'">'+pm(c.mom15)+'</b></span>'+
-     '<span>跳空 <b>'+pm(c.gap)+'</b></span>'+
+ if(live){
+   if(c.mom5!=null) mini+='<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>';
+   if(c.mom15!=null) mini+='<span>15分 <b class="'+sgn(c.mom15)+'">'+pm(c.mom15)+'</b></span>';
+   if(c.chg!=null) mini+='<span>跳空 <b>'+pm(c.gap)+'</b></span>'+
      '<span>震幅 <b>'+f(c.rng)+'</b></span>'+
      '<span>位階 <b>'+f(c.pos*100)+'%</b></span>'+
-     '<span>量能 <b>'+f(c.vol_ratio,2)+'倍</b></span>'+
-     '<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span>'+
-     // 加權指數與基差：現貨 09:00 才開盤、13:30 收，空窗期顯示「未開盤」
-     '<span>加權 <b>'+(c.idx==null?'<span class="dim">未開盤</span>':f(c.idx))+'</b></span>'+
-     (c.basis==null?'':'<span>基差 <b class="'+sgn(c.basis)+'">'+pm(c.basis)+'</b></span>');
+     '<span>量能 <b>'+f(c.vol_ratio,2)+'倍</b></span>';
+   if(c.bid!=null) mini+='<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span>';
+   // 加權指數與基差：現貨 09:00 才開盤、13:30 收，空窗期明講「未開盤」而不是消失
+   mini+='<span>加權 <b>'+(c.idx==null?'<i class="dim">未開盤</i>':f(c.idx))+'</b></span>';
+   if(c.basis!=null) mini+='<span>基差 <b class="'+sgn(c.basis)+'">'+pm(c.basis)+'</b></span>';
  }
  let pick='';
  if(pickOpen){
@@ -2744,6 +2746,9 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "chips": {"price": today_state.price,
                           "bid": today_state.bid, "ask": today_state.ask,
                           "is_mid": today_state.price_is_mid,
+                          "idx": INDEX.get("price"),
+                          "basis": (round(today_state.price - INDEX["price"], 1)
+                                    if INDEX.get("price") and today_state.price else None),
                           "mom5": today_state.price - today_state._price_ago(min_idx, 5),
                           "mom15": today_state.price - today_state._price_ago(min_idx, 15)},
                 "result": None,
