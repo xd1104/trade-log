@@ -1447,19 +1447,45 @@ function chartSVG(s){
         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
    });
  }
+ // 進出場標記：跟【回顧】分頁用同一套視覺 —— 深色描邊三角形／實心圓叉，
+ // 外加左緣小標籤（時間＋價位＋損益）。舊版只有細小三角與細叉、沒有任何文字，
+ // 在 K 棒堆裡完全看不出來（Benson 2026-08-17 回報「即時這邊的練習符號很不明顯」）。
+ const MBOX=[];
+ const tw=(str,fs)=>{ let w=0; for(let i=0;i<str.length;i++) w+=(str.charCodeAt(i)>255?1.0:0.6)*fs; return w; };
+ const tag=(aY,txt,col)=>{
+   const fs=13, w=tw(txt,fs)+14, h=fs+8;
+   let py=aY-h/2;
+   const cand=[0,-(h+4),h+4,-2*(h+4),2*(h+4)];
+   for(let k=0;k<cand.length;k++){
+     py=Math.max(TOP+2,Math.min(PB-h-2,aY-h/2+cand[k]));
+     if(!MBOX.some(b=>py<b.y+b.h&&b.y<py+h)) break;
+   }
+   MBOX.push({y:py,h:h});
+   return '<rect x="4" y="'+py.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h+
+     '" rx="4" fill="'+col+'" opacity=".92"/>'+
+     '<text x="11" y="'+(py+h-7).toFixed(1)+'" fill="#0F1218" font-size="'+fs+
+     '" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+ };
  T.forEach(t=>{
    const ia=idxAll(t.time); if(ia<G.from||ia>=G.to) return;
    const i=ia-G.from, X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?'#EE5A54':'#34B37E';
    g+='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(W-R)+'" y2="'+Y.toFixed(1)+
-      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".55"/>';
-   g+=long
-     ? '<path d="M'+(X-8)+' '+(Y+20)+' L'+X+' '+(Y+6)+' L'+(X+8)+' '+(Y+20)+' Z" fill="'+col+'"/>'
-     : '<path d="M'+(X-8)+' '+(Y-20)+' L'+X+' '+(Y-6)+' L'+(X+8)+' '+(Y-20)+' Z" fill="'+col+'"/>';
+      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity=".5"/>';
+   const tipY=long?Y+7:Y-7, endY=long?Y+25:Y-25;
+   g+='<path d="M'+(X-9)+' '+endY+' L'+X+' '+tipY+' L'+(X+9)+' '+endY+
+      ' Z" fill="'+col+'" stroke="#0F1218" stroke-width="1.6" stroke-linejoin="round"/>';
+   g+=tag(Y,'\u9032 '+t.time+'  '+Math.round(t.entry),col);
    const je=t._exit_time?idxAll(t._exit_time.slice(0,5)):-1;
    if(je>=G.from&&je<G.to){
      const XE=x(je-G.from), YE=y(t.exit), ec=t._net>0?'#EE5A54':'#34B37E';
-     g+='<line x1="'+(XE-6)+'" y1="'+(YE-6)+'" x2="'+(XE+6)+'" y2="'+(YE+6)+'" stroke="'+ec+'" stroke-width="2.5"/>'+
-        '<line x1="'+(XE-6)+'" y1="'+(YE+6)+'" x2="'+(XE+6)+'" y2="'+(YE-6)+'" stroke="'+ec+'" stroke-width="2.5"/>';
+     g+='<line x1="0" y1="'+YE.toFixed(1)+'" x2="'+(W-R)+'" y2="'+YE.toFixed(1)+
+        '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="5 4" opacity=".5"/>'+
+        '<circle cx="'+XE.toFixed(1)+'" cy="'+YE.toFixed(1)+'" r="8.5" fill="'+ec+
+        '" stroke="#0F1218" stroke-width="1.6"/>'+
+        '<path d="M'+(XE-3.6)+' '+(YE-3.6)+' L'+(XE+3.6)+' '+(YE+3.6)+' M'+(XE-3.6)+' '+(YE+3.6)+
+        ' L'+(XE+3.6)+' '+(YE-3.6)+'" stroke="#0F1218" stroke-width="2.2" stroke-linecap="round"/>';
+     g+=tag(YE,'\u51fa '+t._exit_time.slice(0,5)+'  '+Math.round(t.exit)+
+       (t._net==null?'':'  '+pm(t._net)),ec);
    }
  });
  // ---- 游標所在那根：畫垂直參考線 ----
