@@ -1956,46 +1956,48 @@ function rvDraw(C,D){
  function txtW(s,fs){ let w=0;
    for(let i=0;i<s.length;i++) w+=(s.charCodeAt(i)>255?1.0:0.6)*fs;
    return w; }
- function label(X,aY,txt,col,pref){
-   const fs=17, w=txtW(txt,fs)+16, h=fs+12;
-   let px=X+15;
-   if(px+w>RW-RR-4) px=Math.max(2,X-15-w);
-   const base=pref==='below'?aY+6:pref==='above'?aY-h-6:aY-h/2;
-   let py=base;
-   const cand=[0,h+7,-(h+7),2*(h+7),-2*(h+7),3*(h+7),-3*(h+7)];
+ // 標籤貼在左緣、壓在自己那條價格線上 —— 跟停利／停損同一套視覺。
+ // 舊版是「帶邊框的大膠囊＋連接線漂在圖中間」，疊在 K 棒上會糊成一團，
+ // 結果既醜又反而看不出重點（Benson 2026-08-17 回報）。
+ function edgeLabel(aY,txt,col,dim){
+   const fs=13, w=txtW(txt,fs)+14, h=fs+8;
+   let py=aY-h/2;
+   const cand=[0,-(h+4),h+4,-2*(h+4),2*(h+4),-3*(h+4),3*(h+4)];
    for(let k=0;k<cand.length;k++){
-     py=Math.max(RTOP+2,Math.min(RPB-h-2,base+cand[k]));
-     if(!LBOX.some(b=>px<b.x+b.w&&b.x<px+w&&py<b.y+b.h&&b.y<py+h)) break;
+     py=Math.max(RTOP+2,Math.min(RPB-h-2,aY-h/2+cand[k]));
+     if(!LBOX.some(b=>py<b.y+b.h&&b.y<py+h)) break;
    }
-   LBOX.push({x:px,y:py,w:w,h:h});
-   return '<line x1="'+X.toFixed(1)+'" y1="'+aY.toFixed(1)+'" x2="'+(px<X?px+w:px).toFixed(1)+
-     '" y2="'+(py+h/2).toFixed(1)+'" stroke="'+col+'" stroke-width="1" opacity=".45"/>'+
-     '<rect x="'+px.toFixed(1)+'" y="'+py.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h+
-     '" rx="6" fill="#0F1218" opacity=".85"/>'+
-     '<rect x="'+px.toFixed(1)+'" y="'+py.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h+
-     '" rx="6" fill="none" stroke="'+col+'" stroke-width="1.2" opacity=".6"/>'+
-     '<text x="'+(px+8).toFixed(1)+'" y="'+(py+h-9).toFixed(1)+'" fill="'+col+'" font-size="'+fs+
-     '" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+   LBOX.push({x:4,y:py,w:w,h:h});
+   const o=dim?.4:1;
+   return '<rect x="4" y="'+py.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h+
+     '" rx="4" fill="'+col+'" opacity="'+(o*0.92)+'"/>'+
+     '<text x="11" y="'+(py+h-7).toFixed(1)+'" fill="#0F1218" font-size="'+fs+
+     '" font-weight="700" font-family="ui-monospace,monospace" opacity="'+o+'">'+txt+'</text>';
  }
  function mark(price,t,dir,kind,net,dim){
    const ia=idxAt(all,t), i=gi(ia);
    if(ia<0||i<0||i>=B.length) return '';
    const X=x(i), Y=y(price), long=dir==='long';
    const col=kind==='in'?(long?'#EE5A54':'#34B37E'):(net>0?'#EE5A54':'#34B37E');
-   const op=dim?' opacity=".45"':'';
-   let s='';
+   const op=dim?' opacity=".4"':'';
+   // 價格線貫穿全圖，左緣掛小標籤
+   let s='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(RW-RR).toFixed(1)+'" y2="'+Y.toFixed(1)+
+     '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity="'+(dim?.22:.5)+'"/>';
    if(kind==='in'){
-     const tipY=long?Y+10:Y-10, endY=long?Y+36:Y-36;
-     s+='<path d="M'+(X-13)+' '+endY+' L'+X+' '+tipY+' L'+(X+13)+' '+endY+' Z" fill="'+col+'"'+op+'/>';
-     if(!dim) s+=label(X,endY,'進 '+t+'　'+Math.round(price),col,long?'below':'above');
+     // 三角形貼在 K 棒外側、尖端指向進場價；描深色邊框才不會被 K 棒吃掉
+     const tipY=long?Y+7:Y-7, endY=long?Y+25:Y-25;
+     s+='<path d="M'+(X-9)+' '+endY+' L'+X+' '+tipY+' L'+(X+9)+' '+endY+
+        ' Z" fill="'+col+'" stroke="#0F1218" stroke-width="1.6" stroke-linejoin="round"'+op+'/>';
    } else {
-     const r=10;
-     s+='<line x1="'+(X-r)+'" y1="'+(Y-r)+'" x2="'+(X+r)+'" y2="'+(Y+r)+'" stroke="'+col+
-        '" stroke-width="3.6" stroke-linecap="round"'+op+'/>'+
-        '<line x1="'+(X-r)+'" y1="'+(Y+r)+'" x2="'+(X+r)+'" y2="'+(Y-r)+'" stroke="'+col+
-        '" stroke-width="3.6" stroke-linecap="round"'+op+'/>';
-     if(!dim) s+=label(X,Y,'出 '+t+'　'+Math.round(price)+(net==null?'':'　'+pm(net)),col,'mid');
+     // 出場用實心圓底＋白叉，在任何 K 棒上都看得見
+     const r=8.5;
+     s+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="'+r+'" fill="'+col+
+        '" stroke="#0F1218" stroke-width="1.6"'+op+'/>'+
+        '<path d="M'+(X-3.6)+' '+(Y-3.6)+' L'+(X+3.6)+' '+(Y+3.6)+' M'+(X-3.6)+' '+(Y+3.6)+
+        ' L'+(X+3.6)+' '+(Y-3.6)+'" stroke="#0F1218" stroke-width="2.2" stroke-linecap="round"'+op+'/>';
    }
+   s+=edgeLabel(Y,(kind==='in'?'進 ':'出 ')+t+'  '+Math.round(price)+
+     (kind==='out'&&net!=null?'  '+pm(net):''),col,dim);
    return s;
  }
  let mk='';
