@@ -1447,45 +1447,62 @@ function chartSVG(s){
         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
    });
  }
- // 進出場標記：跟【回顧】分頁用同一套視覺 —— 深色描邊三角形／實心圓叉，
- // 外加左緣小標籤（時間＋價位＋損益）。舊版只有細小三角與細叉、沒有任何文字，
- // 在 K 棒堆裡完全看不出來（Benson 2026-08-17 回報「即時這邊的練習符號很不明顯」）。
- const MBOX=[];
+ // 進出場標記：標籤絕不壓在 K 棒上。
+ // 價位改掛在右側價格軸（本來就是空的灰帶），時間與損益用小字貼在標記旁邊。
+ // 上一版把「進 09:05 46020」做成左緣大色塊，字是看清楚了，但整個擋住早盤那幾根
+ // （Benson 2026-08-17 回報「時間標示有點擋路」）。
+ const AXB=[], CAPB=[];
  const tw=(str,fs)=>{ let w=0; for(let i=0;i<str.length;i++) w+=(str.charCodeAt(i)>255?1.0:0.6)*fs; return w; };
- const tag=(aY,txt,col)=>{
-   const fs=13, w=tw(txt,fs)+14, h=fs+8;
-   let py=aY-h/2;
-   const cand=[0,-(h+4),h+4,-2*(h+4),2*(h+4)];
-   for(let k=0;k<cand.length;k++){
-     py=Math.max(TOP+2,Math.min(PB-h-2,aY-h/2+cand[k]));
-     if(!MBOX.some(b=>py<b.y+b.h&&b.y<py+h)) break;
+ // 右側價格軸掛牌：跟看盤軟體一樣，價位貼在軸上，圖區完全不動
+ const axisChip=(aY,txt,col)=>{
+   const h=17; let py=aY-h/2;
+   for(let k=0;k<6;k++){
+     py=Math.max(TOP,Math.min(PB-h,aY-h/2+(k%2?1:-1)*Math.ceil(k/2)*(h+2)));
+     if(!AXB.some(b=>py<b+h&&b<py+h)) break;
    }
-   MBOX.push({y:py,h:h});
-   return '<rect x="4" y="'+py.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h+
-     '" rx="4" fill="'+col+'" opacity=".92"/>'+
-     '<text x="11" y="'+(py+h-7).toFixed(1)+'" fill="#0F1218" font-size="'+fs+
-     '" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+   AXB.push(py);
+   return '<rect x="'+(W-R+1)+'" y="'+py.toFixed(1)+'" width="'+(R-2)+'" height="'+h+
+     '" rx="3" fill="'+col+'"/>'+
+     '<text x="'+(W-R+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0F1218" font-size="11.5"'+
+     ' font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+ };
+ // 標記旁的小字（時間／損益）：無底色、只描深色外框，佔的面積不到原本的五分之一
+ const caption=(X,baseY,sign,txt,col)=>{
+   const fs=11, w=tw(txt,fs), h=fs+3;
+   let by=baseY;
+   for(let k=0;k<5;k++){
+     by=Math.max(TOP+fs,Math.min(H-BOT-2,baseY+sign*k*(h+3)));
+     const bx=X-w/2;
+     if(!CAPB.some(b=>bx<b.x+b.w&&b.x<bx+w&&by-fs<b.y+b.h&&b.y<by-fs+h)) break;
+   }
+   CAPB.push({x:X-w/2,y:by-fs,w:w,h:h});
+   return '<text x="'+X.toFixed(1)+'" y="'+by.toFixed(1)+'" text-anchor="middle" fill="'+col+
+     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace"'+
+     ' stroke="#0F1218" stroke-width="3.2" paint-order="stroke" stroke-linejoin="round">'+txt+'</text>';
  };
  T.forEach(t=>{
    const ia=idxAll(t.time); if(ia<G.from||ia>=G.to) return;
    const i=ia-G.from, X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?'#EE5A54':'#34B37E';
    g+='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(W-R)+'" y2="'+Y.toFixed(1)+
-      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity=".5"/>';
+      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity=".45"/>';
    const tipY=long?Y+7:Y-7, endY=long?Y+25:Y-25;
    g+='<path d="M'+(X-9)+' '+endY+' L'+X+' '+tipY+' L'+(X+9)+' '+endY+
       ' Z" fill="'+col+'" stroke="#0F1218" stroke-width="1.6" stroke-linejoin="round"/>';
-   g+=tag(Y,'\u9032 '+t.time+'  '+Math.round(t.entry),col);
+   g+=caption(X,long?endY+13:endY-5,long?1:-1,'\u9032 '+t.time,col);
+   g+=axisChip(Y,String(Math.round(t.entry)),col);
    const je=t._exit_time?idxAll(t._exit_time.slice(0,5)):-1;
    if(je>=G.from&&je<G.to){
      const XE=x(je-G.from), YE=y(t.exit), ec=t._net>0?'#EE5A54':'#34B37E';
      g+='<line x1="0" y1="'+YE.toFixed(1)+'" x2="'+(W-R)+'" y2="'+YE.toFixed(1)+
-        '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="5 4" opacity=".5"/>'+
+        '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="5 4" opacity=".45"/>'+
         '<circle cx="'+XE.toFixed(1)+'" cy="'+YE.toFixed(1)+'" r="8.5" fill="'+ec+
         '" stroke="#0F1218" stroke-width="1.6"/>'+
         '<path d="M'+(XE-3.6)+' '+(YE-3.6)+' L'+(XE+3.6)+' '+(YE+3.6)+' M'+(XE-3.6)+' '+(YE+3.6)+
         ' L'+(XE+3.6)+' '+(YE-3.6)+'" stroke="#0F1218" stroke-width="2.2" stroke-linecap="round"/>';
-     g+=tag(YE,'\u51fa '+t._exit_time.slice(0,5)+'  '+Math.round(t.exit)+
-       (t._net==null?'':'  '+pm(t._net)),ec);
+     const down=YE<PB-40;
+     g+=caption(XE,down?YE+22:YE-14,down?1:-1,'\u51fa '+t._exit_time.slice(0,5)+
+        (t._net==null?'':'  '+pm(t._net)),ec);
+     g+=axisChip(YE,String(Math.round(t.exit)),ec);
    }
  });
  // ---- 游標所在那根：畫垂直參考線 ----
@@ -1995,23 +2012,36 @@ function rvDraw(C,D){
  function txtW(s,fs){ let w=0;
    for(let i=0;i<s.length;i++) w+=(s.charCodeAt(i)>255?1.0:0.6)*fs;
    return w; }
- // 標籤貼在左緣、壓在自己那條價格線上 —— 跟停利／停損同一套視覺。
- // 舊版是「帶邊框的大膠囊＋連接線漂在圖中間」，疊在 K 棒上會糊成一團，
- // 結果既醜又反而看不出重點（Benson 2026-08-17 回報）。
- function edgeLabel(aY,txt,col,dim){
-   const fs=13, w=txtW(txt,fs)+14, h=fs+8;
-   let py=aY-h/2;
-   const cand=[0,-(h+4),h+4,-2*(h+4),2*(h+4),-3*(h+4),3*(h+4)];
-   for(let k=0;k<cand.length;k++){
-     py=Math.max(RTOP+2,Math.min(RPB-h-2,aY-h/2+cand[k]));
-     if(!LBOX.some(b=>py<b.y+b.h&&b.y<py+h)) break;
+ // 價位掛在右側價格軸（本來就是空的灰帶），時間／損益用小字貼在標記旁 ——
+ // 兩版之前是「漂在圖中間的大膠囊」，上一版改成左緣大色塊，都還是壓住 K 棒
+ // （Benson 2026-08-17：「時間標示有點擋路」）。現在圖區只剩標記本身。
+ const AXB=[];
+ function axisChip(aY,txt,col,dim){
+   const h=17; let py=aY-h/2;
+   for(let k=0;k<6;k++){
+     py=Math.max(RTOP,Math.min(RPB-h,aY-h/2+(k%2?1:-1)*Math.ceil(k/2)*(h+2)));
+     if(!AXB.some(b=>py<b+h&&b<py+h)) break;
    }
-   LBOX.push({x:4,y:py,w:w,h:h});
+   AXB.push(py);
    const o=dim?.4:1;
-   return '<rect x="4" y="'+py.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+h+
-     '" rx="4" fill="'+col+'" opacity="'+(o*0.92)+'"/>'+
-     '<text x="11" y="'+(py+h-7).toFixed(1)+'" fill="#0F1218" font-size="'+fs+
-     '" font-weight="700" font-family="ui-monospace,monospace" opacity="'+o+'">'+txt+'</text>';
+   return '<rect x="'+(RW-RR+1)+'" y="'+py.toFixed(1)+'" width="'+(RR-2)+'" height="'+h+
+     '" rx="3" fill="'+col+'" opacity="'+o+'"/>'+
+     '<text x="'+(RW-RR+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0F1218" font-size="11.5"'+
+     ' font-weight="700" font-family="ui-monospace,monospace" opacity="'+o+'">'+txt+'</text>';
+ }
+ function caption(X,baseY,sign,txt,col,dim){
+   const fs=11, w=txtW(txt,fs), h=fs+3;
+   let by=baseY;
+   for(let k=0;k<5;k++){
+     by=Math.max(RTOP+fs,Math.min(RH-RBOT-2,baseY+sign*k*(h+3)));
+     const bx=X-w/2;
+     if(!LBOX.some(b=>bx<b.x+b.w&&b.x<bx+w&&by-fs<b.y+b.h&&b.y<by-fs+h)) break;
+   }
+   LBOX.push({x:X-w/2,y:by-fs,w:w,h:h});
+   return '<text x="'+X.toFixed(1)+'" y="'+by.toFixed(1)+'" text-anchor="middle" fill="'+col+
+     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace"'+
+     ' stroke="#0F1218" stroke-width="3.2" paint-order="stroke" stroke-linejoin="round"'+
+     (dim?' opacity=".4"':'')+'>'+txt+'</text>';
  }
  function mark(price,t,dir,kind,net,dim){
    const ia=idxAt(all,t), i=gi(ia);
@@ -2035,8 +2065,11 @@ function rvDraw(C,D){
         '<path d="M'+(X-3.6)+' '+(Y-3.6)+' L'+(X+3.6)+' '+(Y+3.6)+' M'+(X-3.6)+' '+(Y+3.6)+
         ' L'+(X+3.6)+' '+(Y-3.6)+'" stroke="#0F1218" stroke-width="2.2" stroke-linecap="round"'+op+'/>';
    }
-   s+=edgeLabel(Y,(kind==='in'?'進 ':'出 ')+t+'  '+Math.round(price)+
+   const capY=kind==='in'?(long?Y+38:Y-30):(Y<RPB-40?Y+22:Y-14);
+   const capS=kind==='in'?(long?1:-1):(Y<RPB-40?1:-1);
+   s+=caption(X,capY,capS,(kind==='in'?'進 ':'出 ')+t+
      (kind==='out'&&net!=null?'  '+pm(net):''),col,dim);
+   s+=axisChip(Y,String(Math.round(price)),col,dim);
    return s;
  }
  let mk='';
