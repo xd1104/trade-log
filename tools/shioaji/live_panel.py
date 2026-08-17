@@ -112,6 +112,14 @@ TODAY_TRADES = []
 CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
 SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 
+# 加權指數（現貨）：Benson 下單時會看，所以面板一起顯示，並算出基差。
+# 【只顯示，不做分析】永豐的指數歷史 1 分 K 只有 54 個破碎的交易日，
+# 測不出東西 —— 這裡純粹是多一個客觀數字，不是訊號。
+# 現貨 09:00 才開盤、13:30 收，比期貨晚開早收，所以會有「尚未開盤」的空窗。
+INDEX = {"price": None, "at": None, "contract": None}
+CASH_OPEN = pd.Timestamp("09:00").time()
+CASH_CLOSE = pd.Timestamp("13:35").time()
+
 state_lock = threading.Lock()
 STATE = {"status": "starting", "msg": "啟動中…"}
 
@@ -1479,7 +1487,10 @@ function chartSVG(s){
      '<span>震幅 <b>'+f(c.rng)+'</b></span>'+
      '<span>位階 <b>'+f(c.pos*100)+'%</b></span>'+
      '<span>量能 <b>'+f(c.vol_ratio,2)+'倍</b></span>'+
-     '<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span>';
+     '<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span>'+
+     // 加權指數與基差：現貨 09:00 才開盤、13:30 收，空窗期顯示「未開盤」
+     '<span>加權 <b>'+(c.idx==null?'<span class="dim">未開盤</span>':f(c.idx))+'</b></span>'+
+     (c.basis==null?'':'<span>基差 <b class="'+sgn(c.basis)+'">'+pm(c.basis)+'</b></span>');
  }
  let pick='';
  if(pickOpen){
@@ -2617,6 +2628,41 @@ def port_taken():
         sk.close()
 
 
+def poll_index():
+    """
+    背景每 3 秒抓一次加權指數快照。
+
+    用快照輪詢而非訂閱：指數的 tick callback 型別跟期貨不同，
+    而 3 秒一次成本極低，也不會卡住主迴圈（主迴圈 0.25 秒一圈）。
+    """
+    while True:
+        try:
+            api = SESSION_REF.get("api")
+            t = datetime.now().time()
+            if api is not None and CASH_OPEN <= t <= CASH_CLOSE:
+                c = INDEX.get("contract")
+                if c is None:
+                    for _ in range(10):
+                        try:
+                            lst = list(api.Contracts.Indexs.TSE)   # 只能用屬性存取
+                            hit = [x for x in lst if x.code == "IX0001"]
+                            if hit:
+                                c = INDEX["contract"] = hit[0]
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(1)
+                if c is not None:
+                    px = api.snapshots([c])[0].close
+                    if px:
+                        INDEX.update({"price": float(px), "at": time.time()})
+            else:
+                INDEX["price"] = None          # 現貨沒開盤就不要顯示舊值
+        except Exception:
+            pass
+        time.sleep(3)
+
+
 def serve():
     # 只綁 127.0.0.1：面板是給這台電腦自己用的。
     # （曾短暫改成 0.0.0.0 讓手機連，但 Benson 的手機常不在同一個網路，
@@ -2713,6 +2759,9 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "mom5": feats["mom5"], "mom15": feats["mom15"],
                 "bid": today_state.bid, "ask": today_state.ask,
                 "is_mid": today_state.price_is_mid,
+                "idx": INDEX.get("price"),
+                "basis": (round(today_state.price - INDEX["price"], 1)
+                          if INDEX.get("price") and today_state.price else None),
             },
             "result": hist.query(min_idx, feats, today_state.dayvol),
             "msg": None,
@@ -2926,6 +2975,7 @@ def main():
     with state_lock:
         STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
                       "period": hist.period, "n_days_total": hist.n_days})
+    threading.Thread(target=poll_index, daemon=True).start()
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     last_retry = 0.0
