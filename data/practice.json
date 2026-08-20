@@ -1,6 +1,6 @@
 {
-  "updated": "2026-08-19T09:30:00",
-  "count": 5,
+  "updated": "2026-08-20T09:08:52",
+  "count": 6,
   "trades": [
     {
       "date": "2026-08-12",
@@ -43,6 +43,15 @@
       "dir": "long",
       "entry": 45901,
       "exit": 45801,
+      "time": "09:04",
+      "note": "",
+      "mode": "sim"
+    },
+    {
+      "date": "2026-08-20",
+      "dir": "short",
+      "entry": 44978,
+      "exit": 44878,
       "time": "09:04",
       "note": "",
       "mode": "sim"
