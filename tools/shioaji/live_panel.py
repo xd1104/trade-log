@@ -866,6 +866,81 @@ def traded_days():
     return {"traded": traded, "others": others[:24]}
 
 
+_DAYIDX = {"key": None, "days": None}
+
+
+def day_index(n=70):
+    """
+    日期選單（迷你月曆）用的清單：最近 n 個交易日，每天附上日盤漲跌、震幅、練習結果。
+
+    月曆要能一眼看出「哪幾天在動、哪幾天有下單」，所以不能只給日期字串。
+    三種日子要分得出來：
+      有 stats     本機 csv 裡有那天的日盤 K 棒 → 紅綠、震幅都畫得出來
+      closed=True  在 csv 涵蓋範圍內、卻沒有日盤 K 棒 → 休市，選單裡灰掉不能點
+                   （原本可以選，點下去是一張空白圖）
+      兩者皆非     csv 最後一天之後的平日。排程 14:10 才併檔，今天與昨天常常還沒進去 ——
+                   這些仍然要能選，只是沒有紅綠可畫。
+    """
+    f = HERE / "tmf_1min.csv"
+    mt = f.stat().st_mtime if f.exists() else None
+    pt = 0.0
+    if TRADE_DIR.exists():
+        pt = max([p.stat().st_mtime for p in TRADE_DIR.glob("*.json")], default=0.0)
+    key = (mt, pt, len(TODAY_TRADES), str(date.today()))
+    if _DAYIDX["key"] == key:
+        return _DAYIDX["days"]
+
+    stats, lo, hi = {}, None, None
+    if f.exists():
+        if _LOCAL_PX["df"] is None or _LOCAL_PX["mtime"] != mt:
+            local_bars(date.today())            # 觸發載入
+        px = _LOCAL_PX["df"]
+        if px is not None and not px.empty:
+            t = px["ts"].dt.time
+            dayp = px[(t >= SESSION_OPEN) & (t < DAY_END)]
+            if not dayp.empty:
+                g = dayp.groupby(dayp["ts"].dt.date).agg(
+                    h=("High", "max"), l=("Low", "min"), c=("Close", "last")).tail(n + 1)
+                prev = g["c"].shift(1)
+                lo, hi = g.index.min(), g.index.max()
+                for d0, row in g.iterrows():
+                    p = prev.loc[d0]
+                    stats[d0] = {
+                        "c": int(row["c"]), "rng": int(row["h"] - row["l"]),
+                        "chg": None if pd.isna(p) else int(row["c"] - p),
+                        "pct": None if pd.isna(p) else round(float((row["c"] - p) / p * 100), 2),
+                    }
+
+    cand = set(stats)
+    if TRADE_DIR.exists():
+        for p in TRADE_DIR.glob("*.json"):
+            try:
+                cand.add(datetime.strptime(p.stem, "%Y-%m-%d").date())
+            except ValueError:
+                pass
+    for k in range(0, 16):                      # 最近兩週的平日一定要在（含今天）
+        d0 = date.today() - timedelta(days=k)
+        if d0.weekday() < 5:
+            cand.add(d0)
+
+    days = []
+    for d0 in sorted(cand)[-n:]:
+        s = stats.get(d0)
+        try:
+            tr = _day_trades(d0)
+        except Exception:
+            tr = []
+        days.append({
+            "d": str(d0), "w": "一二三四五六日"[d0.weekday()],
+            "closed": s is None and lo is not None and lo <= d0 <= hi,
+            "n": len(tr),
+            "net": int(round(sum(x.get("_net") or 0 for x in tr))) if tr else None,
+            **(s or {}),
+        })
+    _DAYIDX.update({"key": key, "days": days})
+    return days
+
+
 # ---------------------------------------------------------------- 回顧分頁
 
 _VOLREF = {"map": None}
@@ -1237,19 +1312,66 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .legend .lt{color:var(--faint)}
 .chint{font-size:11px; color:var(--faint); text-align:right; margin-top:4px}
 .chint #cinfo{color:var(--dim)}
-.chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px}
+.chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px;
+  gap:14px; flex-wrap:wrap}
 .cpx{font-size:44px; font-weight:700; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; line-height:1}
 .cchg{font-size:17px; font-weight:600; font-family:var(--font-mono)}
 .cdate{font-size:12.5px; color:var(--gold); cursor:pointer; border:1px solid var(--line);
   border-radius:20px; padding:3px 11px; background:var(--surface-2)}
 .cdate:hover{border-color:var(--gold)}
-.daypick{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
-.daypick button{font-size:11.5px; padding:5px 10px; border-radius:7px; cursor:pointer;
+/* 換日：圖上常駐一條翻頁列（◀ 日期 ▶ 今天），點日期展開迷你月曆 */
+.pager{display:flex; align-items:center; gap:7px; flex-wrap:wrap}
+.pager button{font-family:var(--font-sans); cursor:pointer;
   background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
-.daypick button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
-.daypick.dim2{margin-top:6px}
-.daypick .dl2{font-size:11px; color:var(--faint); align-self:center; margin-right:2px}
+.pager .narw{width:27px; height:27px; border-radius:7px; font-size:12px;
+  display:grid; place-items:center; padding:0}
+.pager .narw:hover:not(:disabled){border-color:var(--gold); color:var(--gold)}
+.pager .narw:disabled{opacity:.3; cursor:default}
+.pager .stamp{font-family:var(--font-mono); font-size:12.5px; color:var(--gold);
+  border-radius:8px; padding:4px 11px; background:transparent;
+  font-variant-numeric:tabular-nums; white-space:nowrap}
+.pager .stamp:hover{border-color:var(--gold)}
+.pager .jump{font-size:12px; border-radius:8px; padding:4px 10px; background:transparent}
+.pager .jump:hover{color:var(--gold); border-color:var(--gold)}
+.pager .jump.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+
+.calbox{margin-top:10px; border:1px solid var(--line); border-radius:12px;
+  padding:12px 14px 13px; background:var(--surface-2); width:max-content; max-width:100%}
+.calhead{display:flex; align-items:center; justify-content:space-between; gap:18px;
+  margin-bottom:10px}
+.calhead .mo{font-family:var(--font-mono); font-size:12.5px; font-weight:700}
+.calhead .cnav{display:flex; gap:5px}
+.calhead .cnav button{width:24px; height:24px; border-radius:6px; font-size:12px;
+  display:grid; place-items:center; padding:0; cursor:pointer;
+  background:var(--surface); color:var(--dim); border:1px solid var(--line)}
+.calhead .cnav button:hover:not(:disabled){border-color:var(--gold); color:var(--gold)}
+.calhead .cnav button:disabled{opacity:.3; cursor:default}
+.cal{display:grid; grid-template-columns:repeat(5,48px); gap:5px}
+.cal .wd{font-size:10px; color:var(--faint); text-align:center; letter-spacing:1px}
+.cal .cell{position:relative; height:44px; border-radius:9px; border:1px solid transparent;
+  background:var(--bg); cursor:pointer; padding:5px 0 0; display:flex; flex-direction:column;
+  align-items:center; gap:2px; font-family:var(--font-mono)}
+.cal .cell .dd{font-size:13.5px; font-weight:700; line-height:1.1;
+  font-variant-numeric:tabular-nums}
+.cal .cell .pc{font-size:9px; line-height:1; opacity:.85}
+.cal .cell .rngbar{position:absolute; left:7px; right:7px; bottom:5px; height:2px;
+  border-radius:1px; opacity:.5}
+.cal .cell:hover{border-color:var(--line)}
+.cal .cell.up .dd,.cal .cell.up .pc{color:var(--up)} .cal .cell.up .rngbar{background:var(--up)}
+.cal .cell.dn .dd,.cal .cell.dn .pc{color:var(--down)} .cal .cell.dn .rngbar{background:var(--down)}
+.cal .cell.na .dd{color:var(--dim)}
+/* 休市與空格：不能點，也不要看起來像能點 */
+.cal .cell.off{background:transparent; cursor:default; border-color:transparent}
+.cal .cell.off .dd{color:#333A47; font-weight:400}
+.cal .cell.prac{border-color:rgba(227,169,81,.42)}
+.cal .cell.on{background:var(--gold-soft); border-color:var(--gold)}
+.cal .cell.today::after{content:''; position:absolute; top:5px; right:6px; width:5px;
+  height:5px; border-radius:50%; background:var(--gold)}
+.callegend{display:flex; gap:14px; flex-wrap:wrap; margin-top:11px; font-size:10.5px;
+  color:var(--faint)}
+.callegend i{display:inline-block; width:8px; height:8px; border-radius:3px;
+  vertical-align:-1px; margin-right:4px}
 .mini{display:flex; flex-wrap:wrap; gap:0 20px; font-size:12.5px; color:var(--dim);
   font-family:var(--font-mono); margin-top:12px; padding-top:11px; border-top:1px solid var(--line)}
 .mini b{color:var(--text); font-weight:600}
@@ -1533,7 +1655,7 @@ function setHTML(id,html){
 // ---------------- K 線圖（純 SVG，TradingView 式操作） ----------------
 // 滾輪＝縮放疏密（以游標位置為中心）、按住拖曳＝左右移動時間、雙擊＝還原。
 // 價格軸自動貼合「畫面上看得到的那幾根」，跟看盤軟體一樣。
-var barsCache=null, barsAt=0, viewDate='', pickOpen=false, lastMktFallback='';
+var barsCache=null, barsAt=0, viewDate='', pickOpen=false, calMonth='', lastMktFallback='';
 // n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
 // vz＝價格軸縮放倍率（>1 放大、<1 壓縮）；voff＝價格軸平移量（單位：點）
 var VIEW={n:60, end:null, vz:1, voff:0};
@@ -1753,34 +1875,32 @@ function chartSVG(s){
    mini+='<span>加權 <b>'+(c.idx==null?'<i class="dim">未開盤</i>':f(c.idx))+'</b></span>';
    if(c.basis!=null) mini+='<span>基差 <b class="'+sgn(c.basis)+'">'+pm(c.basis)+'</b></span>';
  }
- let pick='';
- if(pickOpen){
-   const today=new Date().toISOString().slice(0,10);
-   pick='<div class="daypick"><button class="'+(viewDate?'':'on')+'" data-day="">今天（即時）</button>';
-   (barsCache.traded||[]).forEach(d=>{
-     if(d===today) return;
-     pick+='<button class="'+(viewDate===d?'on':'')+'" data-day="'+d+'">▲ '+d.slice(5)+'</button>';
-   });
-   pick+='</div>';
-   if((barsCache.others||[]).length){
-     pick+='<div class="daypick dim2"><span class="dl2">沒下單的日子</span>';
-     (barsCache.others||[]).forEach(d=>{
-       if(d===today) return;
-       pick+='<button class="'+(viewDate===d?'on':'')+'" data-day="'+d+'">'+d.slice(5)+'</button>';
-     });
-     pick+='</div>';
-   }
- }
+ const pick=pickOpen?calHTML():'';
  const sum=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
- // 標題直接寫出圖涵蓋到哪 ——「08-20夜 → 今天」比只寫「今天」清楚
- const dayS=(viewDate||barsCache.date||'').slice(5);
- const noS=((barsCache.night_open)||'').slice(5);
- const rangeS='5 分 K・'+((noS&&noS!==dayS)?(noS+'夜 → '):'')+(viewDate?dayS:'今天');
+ // 翻頁列上直接寫出圖涵蓋到哪 ——「08-20 夜 → 08-21（五）」比只寫「今天」清楚，
+ // 星期也寫出來，不用心算 08-14 是禮拜幾
+ const cur=curDay(), me=dayInfo(cur);
+ // 換日之後、新的 K 棒還沒回來的那一秒，barsCache 還是上一天的 ——
+ // 這時候標籤若照常顯示，會把上一天的練習筆數掛在新日期底下（看起來像那天有下單）。
+ const loading=cur!==(barsCache.date||'');
+ const dayS=cur.slice(5), noS=((barsCache.night_open)||'').slice(5);
+ const rangeS=loading
+   ? dayS+(me?'（'+me.w+'）':'')+'　載入中…'
+   : ((noS&&noS!==dayS)?(noS+' 夜 → '):'')+
+     (viewDate?dayS:'今天')+(me?'（'+me.w+'）':'');
+ const nav=stepTarget(-1), fwd=stepTarget(1);
  return {
    svg:g, vb:'0 0 '+W+' '+H,
    head:'<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
         ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
-        '<span class="cdate" data-pick="1">'+rangeS+sum+' ▾</span>',
+        '<div class="pager">'+
+        '<button class="narw" data-nav="-1" title="前一個交易日（←）"'+
+          (nav?'':' disabled')+'>◀</button>'+
+        '<button class="stamp" data-pick="1">'+rangeS+(loading?'':sum)+' ▾</button>'+
+        '<button class="narw" data-nav="1" title="後一個交易日（→）"'+
+          (fwd?'':' disabled')+'>▶</button>'+
+        '<button class="jump'+(viewDate?'':' on')+'" data-day="" title="回到即時（Home）">今天</button>'+
+        '</div>',
    pick:pick, mini:mini,
    legend:(function(b,hv){
      const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E';
@@ -1798,6 +1918,78 @@ function chartSVG(s){
         (Math.abs(VIEW.vz-1)>0.02?'　直向 '+VIEW.vz.toFixed(1)+'x':'')+
         ((G.live&&Math.abs(VIEW.vz-1)<=0.02&&Math.abs(VIEW.voff)<1)?'':'　雙擊還原')
  };
+}
+
+/* ---------------- 換日：翻頁列 ＋ 迷你月曆 ----------------
+   /api/bars 會附一份 days：最近 70 個交易日，每天帶漲跌、震幅、練習結果。
+   休市日（closed）不能選 —— 以前選得到，點下去是一張空白圖。 */
+function dayList(){ return ((barsCache&&barsCache.days)||[]).filter(x=>!x.closed); }
+function curDay(){ return viewDate||(barsCache&&barsCache.date)||today10(); }
+function dayInfo(d){ return dayList().find(x=>x.d===d)||null; }
+
+/* 往前／往後一個交易日；到底了回 null（箭頭就會變灰） */
+function stepTarget(dir){
+ const L=dayList(); if(!L.length) return null;
+ let i=L.findIndex(x=>x.d===curDay());
+ if(i<0) i=L.length-1;
+ const j=i+dir;
+ return (j>=0&&j<L.length)?L[j].d:null;
+}
+function goDay(d){
+ if(d==null) return;
+ // 最後一天就是今天 → 回到即時模式（viewDate 空字串），而不是把今天當歷史日看
+ const L=dayList();
+ viewDate=(L.length&&d===L[L.length-1].d&&d===today10())?'':d;
+ calMonth=d.slice(0,7);
+ pickOpen=false; fetchBars(true); setTimeout(tick,250); tick();
+}
+
+/* 迷你月曆：只排週一到週五（週末沒有日盤），紅漲綠跌，底下細線是震幅 */
+function calHTML(){
+ const L=dayList(), ALL=(barsCache&&barsCache.days)||[];
+ if(!ALL.length) return '';
+ const months=[...new Set(ALL.map(x=>x.d.slice(0,7)))];
+ if(months.indexOf(calMonth)<0) calMonth=curDay().slice(0,7);
+ const mi=months.indexOf(calMonth);
+ const y=+calMonth.slice(0,4), m=+calMonth.slice(5);
+ const maxRng=Math.max(1,...ALL.map(x=>x.rng||0));
+ const cur=curDay(), td=today10();
+ const first=new Date(y,m-1,1), start=new Date(first);
+ start.setDate(1-((first.getDay()+6)%7));          // 回到該週的週一
+ let cells='';
+ for(let k=0;k<42;k++){
+   const dt=new Date(start); dt.setDate(start.getDate()+k);
+   if(dt.getDay()===0||dt.getDay()===6) continue;   // 週末不排
+   const num=dt.getDate();
+   if(dt.getMonth()!==m-1){ cells+='<span class="cell off"></span>'; continue; }
+   const iso=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+
+             '-'+String(num).padStart(2,'0');
+   const x=ALL.find(v=>v.d===iso);
+   if(!x||x.closed){                                // 休市或超出範圍 → 不能點
+     cells+='<span class="cell off"><span class="dd">'+num+'</span></span>'; continue;
+   }
+   const c=['cell', x.pct==null?'na':(x.pct>0?'up':x.pct<0?'dn':'na')];
+   if(x.n) c.push('prac');
+   if(iso===cur) c.push('on');
+   if(iso===td) c.push('today');
+   cells+='<button class="'+c.join(' ')+'" data-day="'+iso+'">'+
+     '<span class="dd">'+num+'</span>'+
+     '<span class="pc">'+(x.pct==null?'—':pm(x.pct,1))+'</span>'+
+     (x.rng?'<span class="rngbar" style="transform:scaleX('+
+       (0.25+0.75*x.rng/maxRng).toFixed(2)+')"></span>':'')+'</button>';
+ }
+ return '<div class="calbox"><div class="calhead">'+
+   '<span class="mo">'+y+' 年 '+m+' 月</span><span class="cnav">'+
+   '<button data-mo="-1"'+(mi<=0?' disabled':'')+'>‹</button>'+
+   '<button data-mo="1"'+(mi>=months.length-1?' disabled':'')+'>›</button>'+
+   '</span></div><div class="cal">'+
+   ['一','二','三','四','五'].map(w=>'<span class="wd">'+w+'</span>').join('')+
+   cells+'</div><div class="callegend">'+
+   '<span><i style="background:var(--up)"></i>收紅</span>'+
+   '<span><i style="background:var(--down)"></i>收綠</span>'+
+   '<span><i style="background:transparent;border:1px solid rgba(227,169,81,.55)"></i>有練習</span>'+
+   '<span><i style="background:var(--gold);border-radius:50%"></i>今天</span>'+
+   '<span>底下細線＝震幅</span></div></div>';
 }
 
 /* 交易時間（HH:MM）→ K 棒索引。
@@ -1990,10 +2182,23 @@ document.addEventListener('click', function(e){
 });
 document.addEventListener('click', function(e){
  if(TAB!=='live') return;
- if(e.target.closest('[data-pick]')){ pickOpen=!pickOpen; tick(); return; }
+ if(e.target.closest('[data-pick]')){
+   pickOpen=!pickOpen; if(pickOpen) calMonth=curDay().slice(0,7); tick(); return; }
+ // 順序有關係：翻頁箭頭與換月按鈕要先攔，它們跟日期按鈕都在同一塊裡
+ const nv=e.target.closest('[data-nav]');
+ if(nv){ goDay(stepTarget(+nv.getAttribute('data-nav'))); return; }
+ const mo=e.target.closest('[data-mo]');
+ if(mo){
+   const ms=[...new Set(((barsCache&&barsCache.days)||[]).map(x=>x.d.slice(0,7)))];
+   const i=ms.indexOf(calMonth)+(+mo.getAttribute('data-mo'));
+   if(i>=0&&i<ms.length){ calMonth=ms[i]; tick(); }
+   return; }
  const d=e.target.closest('[data-day]');
- if(d){ viewDate=d.getAttribute('data-day'); pickOpen=false; fetchBars(true);
-        setTimeout(tick,300); return; }
+ if(d){
+   const v=d.getAttribute('data-day');
+   if(v===''){ viewDate=''; pickOpen=false; fetchBars(true); tick(); setTimeout(tick,250); }
+   else goDay(v);
+   return; }
  const b=e.target.closest('[data-win]');
  if(!b) return;
  WIN=parseInt(b.getAttribute('data-win'))||0;
@@ -2767,6 +2972,16 @@ document.addEventListener('click',function(e){
  if(act==='rpnext'){ const D=(RV&&RV.days)||[]; const i=D.indexOf(RP.date);
    if(D.length){ rpReset(D[(i+1)%D.length]); rvRender(); } return; }
 });
+/* 即時分頁：← → 換日、Home 回到即時。看圖時手不用離開鍵盤。 */
+document.addEventListener('keydown',function(e){
+ if(TAB!=='live') return;
+ if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+ if(e.key==='ArrowLeft'){ e.preventDefault(); goDay(stepTarget(-1)); }
+ else if(e.key==='ArrowRight'){ e.preventDefault(); goDay(stepTarget(1)); }
+ else if(e.key==='Home'){ e.preventDefault();
+   viewDate=''; pickOpen=false; fetchBars(true); tick(); setTimeout(tick,250); }
+ else if(e.key==='Escape'&&pickOpen){ pickOpen=false; tick(); }
+});
 document.addEventListener('keydown',function(e){
  if(TAB!=='review') return;
  if(e.target.tagName==='INPUT'){ if(e.key==='Escape') e.target.blur(); return; }
@@ -2872,7 +3087,10 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(400, {"error": "tf 只接受 1 或 5"})
                     tf = int(kv[3:])
             out = day_bars(want, tf, full=full)
-            out.update(traded_days())
+            if full:
+                out["days"] = day_index()       # 即時分頁的日期選單（迷你月曆）
+            else:
+                out.update(traded_days())
             return self._json(200, out)
         if self.path.startswith("/api/review"):
             try:
