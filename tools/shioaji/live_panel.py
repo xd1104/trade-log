@@ -41,6 +41,7 @@ import threading
 import time
 import webbrowser
 from datetime import date, datetime, timedelta
+from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -77,6 +78,9 @@ WATCH_END = pd.Timestamp("09:30").time()
 DAY_END = pd.Timestamp("13:45").time()
 NIGHT_OPEN = pd.Timestamp("15:00").time()      # 夜盤 15:00 ~ 隔天 05:00
 NIGHT_CLOSE = pd.Timestamp("05:00").time()
+# 永豐的 K 棒用「結束時間」標記，夜盤最後一根標到 05:01 —— 收夜盤尾巴要含它，
+# 否則每天都會少掉收盤前那一兩分鐘。
+NIGHT_TAIL = pd.Timestamp("05:01").time()
 CHART_TF = 5        # K 線圖用 5 分 K（Benson 看盤的習慣）
 # 圖顯示整個日盤 08:45~13:45：5 分 K 共 60 根，剛好是一張看得舒服的圖；
 # 他的下單時段 08:45~09:30 會在圖上以底色標出來。
@@ -507,9 +511,21 @@ def sync_to_cloud():
         return False, f"同步失敗：{str(e)[:120]}"
 
 
-def day_bars(day=None, tf=CHART_TF):
+def _day_trades(d):
+    """某一天的練習交易（今天的用記憶體，過去的讀檔）。"""
+    if d == date.today():
+        return list(TODAY_TRADES)
+    f = TRADE_DIR / f"{d}.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
+
+
+def day_bars(day=None, tf=CHART_TF, full=False):
     """
-    取某一天的日盤 K 棒，附上那天的練習交易（給 K 線圖標記用）。
+    取某一天的 K 棒，附上那天的練習交易（給 K 線圖標記用）。
+
+    full=True  完整交易日：前一交易日 15:00 的夜盤 → 當天 13:45 收盤（即時分頁用）。
+    full=False 只有日盤 08:45~13:45（回顧分頁用）—— 回顧與 Bar Replay 談的是
+               他 08:45~09:30 的那一單，把夜盤幾百根塞進去只會讓重播沒法用。
 
     tf: 1 或 5（分鐘）。回顧分頁的 Bar Replay 用 1 分 K —— 08:45~09:30 只有 9 根
         5 分 K，逐根重播沒有練習密度。
@@ -521,6 +537,24 @@ def day_bars(day=None, tf=CHART_TF):
     """
     d = day or date.today()
     tf = 1 if int(tf) == 1 else CHART_TF
+
+    if full:
+        try:
+            g, base = session_frame(d)
+            if g is None or g.empty:
+                return {"date": str(d), "bars": [], "trades": [], "tf": tf, "full": True,
+                        "error": None if SESSION_REF.get("api") else "尚未連線，且本機沒有這幾天的資料"}
+            bars = to_timeframe(g, tf, base)
+            if d == date.today():
+                bars = merge_live_tail(bars, tf, base)
+        except Exception as e:
+            return {"error": str(e)[:120]}
+        return {"date": str(d), "bars": bars, "trades": _day_trades(d), "tf": tf,
+                "full": True, "night_open": base.strftime("%Y-%m-%d"),
+                # 漲跌的基準是上一個交易日的日盤收盤（跟看盤軟體一致）。
+                # 含夜盤之後不能再拿「圖上第一根的開盤」當基準 —— 那是昨晚 15:00。
+                "ref": prev_day_close(d)}
+
     df = None
 
     # 過去的日子優先讀本機的 tmf_1min.csv（排程每天累積，永久留著）——
@@ -554,13 +588,7 @@ def day_bars(day=None, tf=CHART_TF):
     except Exception as e:
         return {"error": str(e)[:120]}
 
-    # 那天的練習交易（今天的用記憶體，過去的讀檔）
-    if d == date.today():
-        trades = list(TODAY_TRADES)
-    else:
-        f = TRADE_DIR / f"{d}.json"
-        trades = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
-    out = {"date": str(d), "bars": bars, "trades": trades, "tf": tf}
+    out = {"date": str(d), "bars": bars, "trades": _day_trades(d), "tf": tf}
     if feats is not None:
         out["feats"] = feats
     return out
@@ -584,9 +612,137 @@ def local_bars(d):
     return g.copy() if len(g) else None
 
 
-def to_timeframe(g, minutes):
+def _local_span():
+    """本機 tmf_1min.csv 涵蓋的日期範圍 (最早, 最晚)；沒有檔案回 (None, None)。"""
+    f = HERE / "tmf_1min.csv"
+    if not f.exists():
+        return None, None
+    if _LOCAL_PX["df"] is None or _LOCAL_PX["mtime"] != f.stat().st_mtime:
+        local_bars(date.today())            # 觸發載入
+    px = _LOCAL_PX["df"]
+    if px is None or px.empty:
+        return None, None
+    dd = px["ts"].dt.date
+    return dd.min(), dd.max()
+
+
+def _raw_days(days):
+    """
+    取這幾天的原始 1 分 K（含夜盤）。本機 tmf_1min.csv 優先，缺的才跟永豐要。
+
+    本機檔涵蓋範圍「之內」卻沒資料的日子＝休市，不必再問永豐 ——
+    否則每畫一次圖就要為週末白跑兩次 API。
+    永豐的區間端點碰到非交易日會整段回 404，所以缺的日子一天一天抓、失敗就跳過。
+    """
+    lo, hi = _local_span()
+    frames, missing = [], []
+    for dd in days:
+        g = local_bars(dd)
+        if g is not None:
+            frames.append(g)
+        elif not (lo is not None and lo <= dd <= hi):
+            missing.append(dd)
+    if missing:
+        api = SESSION_REF.get("api")
+        contract = None
+        if api is not None:
+            try:
+                contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
+            except Exception as e:
+                print(f"[K線] 取不到合約：{str(e)[:80]}")
+        if contract is not None:
+            for dd in missing:
+                try:
+                    df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
+                except Exception:
+                    continue                # 多半就是休市日
+                if not df.empty:
+                    df = df.copy()
+                    df["ts"] = pd.to_datetime(df["ts"])
+                    frames.append(df)
+    if not frames:
+        return None
+    out = pd.concat(frames, ignore_index=True)
+    out["ts"] = pd.to_datetime(out["ts"])
+    return out.drop_duplicates("ts").sort_values("ts").reset_index(drop=True)
+
+
+_SESS_BACK = {}     # 交易日 → 它前五天的原始 K 棒（過去的資料不會變，永久留著）
+_SESS_OWN = {}      # 日期 → 該日的原始 K 棒（只快取過去的日子，今天的還在長）
+SESS_RETRY = 60     # 抓不到資料時隔多久再試一次
+
+
+def _cached_raw(cache, key, days):
+    """
+    _raw_days 的快取層。抓到就永久留著；抓不到隔 SESS_RETRY 秒再試。
+
+    【不能把失敗也永久快取】面板啟動時可能還沒連上永豐，那一瞬間抓不到資料 ——
+    若把 None 記起來，K 線圖就會整天空著，重開面板才會好。
+    """
+    hit = cache.get(key)
+    if hit is not None:
+        if hit["df"] is not None or time.time() - hit["at"] < SESS_RETRY:
+            return hit["df"]
+    df = _raw_days(days)
+    cache[key] = {"df": df, "at": time.time()}
+    return df
+
+
+def session_frame(d):
+    """
+    交易日 d 的完整 1 分 K：前一個交易日 15:00 的夜盤 → d 的日盤 13:45 收盤。
+    回傳 (DataFrame, base)；base 是夜盤開盤那一刻，給 to_timeframe 當分組原點。
+
+    期貨的一個交易日是「前一晚夜盤 ＋ 當天日盤」。Benson 早上 08:45 下單前
+    要看得到昨晚怎麼走，所以圖一定要含夜盤 —— 這是原本只畫 08:45~13:45 的缺口。
+
+    【週一的「昨晚」是上週五】夜盤 15:00 開、延到隔天凌晨 05:00，週日沒有夜盤。
+    所以夜盤開盤日不能用「d 減一天」，要往回找最近一個真的有 15:00 以後 K 棒的日子。
+
+    【今天是滾動的】選過去的日期＝嚴格的交易日（到 13:45 收盤為止）；
+    「今天（即時）」則會一路接到今晚的夜盤，看盤時線不會斷在半路。
+    """
+    today = date.today()
+    key = str(d)
+
+    back = _cached_raw(_SESS_BACK, key, [d - timedelta(days=k) for k in range(5, 0, -1)])
+    # 今天的 K 棒還在長，不能快取；過去的日子抓一次就夠
+    own = _raw_days([d]) if d == today else _cached_raw(_SESS_OWN, key, [d])
+
+    pool = [x for x in (back, own) if x is not None and not x.empty]
+    if not pool:
+        return None, None
+    px = pd.concat(pool, ignore_index=True).drop_duplicates("ts").sort_values("ts")
+    tt, dd = px["ts"].dt.time, px["ts"].dt.date
+
+    rows, n = [], None
+    nights = px[(tt >= NIGHT_OPEN) & (dd < d)]
+    if not nights.empty:
+        n = nights["ts"].dt.date.max()                     # 夜盤開盤日
+        rows.append(px[(dd == n) & (tt >= NIGHT_OPEN)])    # 當晚 15:00~23:59
+        tail = n + timedelta(days=1)
+        rows.append(px[(dd == tail) & (tt <= NIGHT_TAIL)])  # 隔天凌晨 ~05:01
+    rows.append(px[(dd == d) & (tt >= SESSION_OPEN) & (tt < DAY_END)])   # 當天日盤
+    if d == today:
+        rows.append(px[(dd == d) & (tt >= NIGHT_OPEN)])    # 今晚的夜盤（只有即時才接）
+
+    rows = [r for r in rows if not r.empty]
+    if not rows:
+        return None, None
+    g = pd.concat(rows, ignore_index=True).drop_duplicates("ts").sort_values("ts")
+    base = (pd.Timestamp.combine(n, NIGHT_OPEN) if n is not None
+            else pd.Timestamp.combine(d, SESSION_OPEN))
+    return g, base
+
+
+def to_timeframe(g, minutes, base=None):
     """
     把 1 分 K 合成 N 分 K，並以每根的「起始時間」標示（跟看盤軟體一致）。
+
+    base: 分組的原點。日盤單獨一張圖時是當天 08:45；
+          含夜盤的完整交易日則是夜盤開盤那一刻（前一交易日 15:00），
+          這樣夜盤與日盤才會落在同一套格線上（15:00 到隔天 08:45 剛好 1065 分鐘，
+          是 5 的倍數，所以 5 分 K 對得起來）。
 
     【關鍵：永豐的 1 分 K 用結束時間標記】
     日盤 08:45 開盤，但第一根的標籤是 08:46 —— 它涵蓋的是 08:45~08:46。
@@ -598,53 +754,74 @@ def to_timeframe(g, minutes):
         return []
     g = g.copy()
     start_ts = g["ts"] - pd.Timedelta(minutes=1)          # 還原成該根的起始時間
-    base = pd.Timestamp.combine(g["ts"].iloc[0].date(), SESSION_OPEN)
+    if base is None:
+        base = pd.Timestamp.combine(g["ts"].iloc[0].date(), SESSION_OPEN)
+    base = pd.Timestamp(base)
     g["slot"] = ((start_ts - base).dt.total_seconds() // (minutes * 60)).astype(int)
     out = []
     for _, blk in g.groupby("slot", sort=True):
         start = base + pd.Timedelta(minutes=minutes * int(blk["slot"].iloc[0]))
-        out.append({"t": start.strftime("%H:%M"),
+        # 帶上日期：跨夜的圖上「22:00」與「10:00」會同時出現，
+        # 前端要靠它畫日期分隔線、也要靠它分辨哪幾根是夜盤。
+        out.append({"t": start.strftime("%H:%M"), "d": start.strftime("%Y-%m-%d"),
                     "o": float(blk["Open"].iloc[0]), "h": float(blk["High"].max()),
                     "l": float(blk["Low"].min()), "c": float(blk["Close"].iloc[-1]),
                     "v": float(blk["Volume"].sum())})
     return out
 
 
-def merge_live_tail(bars, tf):
+def merge_live_tail(bars, tf, base=None):
     """
     用即時 tick 補完「還在形成中」的那根 K 棒。
 
     永豐的 kbars 是一分鐘給一次，所以最新那根的量每分鐘才跳一次，
     看起來像卡住不動；大戶投是用即時成交累加的，才會一直在跑。
     這裡把「kbars 還沒涵蓋到的那幾分鐘」用 tick 累積的資料補上去。
+
+    【夜盤要跨午夜】minute_bar 的鍵只有「分鐘」沒有日期。狀態每天 08:30 重建，
+    所以在 08:45 之前看到的「15:00 以後」那些鍵，指的是昨晚的夜盤，不是今晚。
     """
     st = CURRENT_STATE.get("today")
     if st is None or not st.minute_bar:
         return bars
-    open_min = SESSION_OPEN.hour * 60 + SESSION_OPEN.minute
-    covered = 0
+    now = datetime.now()
+    nowt, today = now.time(), now.date()
+    base = pd.Timestamp(base) if base is not None else pd.Timestamp.combine(today, SESSION_OPEN)
+
+    live = []
+    for mi, b in st.minute_bar.items():
+        hh, mm = divmod(int(mi), 60)
+        t0 = dtime(hh, mm)
+        if not (SESSION_OPEN <= t0 < DAY_END or t0 >= NIGHT_OPEN or t0 <= NIGHT_TAIL):
+            continue                            # 13:45~15:00 沒在交易，不畫
+        d0 = today - timedelta(days=1) if (nowt < SESSION_OPEN and t0 >= NIGHT_OPEN) else today
+        live.append((pd.Timestamp.combine(d0, t0), b))
+    if not live:
+        return bars
+    live.sort()
+
+    covered = base                              # kbars 已經完成到哪一刻
     if bars:
-        last_t = bars[-1]["t"]
-        covered = int(last_t[:2]) * 60 + int(last_t[3:]) + tf      # kbars 已完成到這一刻
-    extra = {mi: b for mi, b in st.minute_bar.items()
-             if mi >= max(covered, open_min) and mi < DAY_END.hour * 60 + DAY_END.minute}
+        last = bars[-1]
+        covered = pd.Timestamp(f'{last["d"]} {last["t"]}') + pd.Timedelta(minutes=tf)
+    extra = [(dt, b) for dt, b in live if dt >= covered]
     if not extra:
         return bars
+
     # 把多出來的分鐘照 tf 分組，接到後面
-    out = list(bars)
-    slots = {}
-    for mi in sorted(extra):
-        slot = open_min + ((mi - open_min) // tf) * tf
-        slots.setdefault(slot, []).append(extra[mi])
-    for slot in sorted(slots):
-        ms = slots[slot]
-        t = f"{slot // 60:02d}:{slot % 60:02d}"
-        bar = {"t": t, "o": ms[0]["o"], "h": max(m["h"] for m in ms),
+    out, slots = list(bars), {}
+    for dt, b in extra:
+        slots.setdefault(int((dt - base).total_seconds() // (tf * 60)), []).append(b)
+    for k in sorted(slots):
+        ms = slots[k]
+        start = base + pd.Timedelta(minutes=tf * k)
+        t, ds = start.strftime("%H:%M"), start.strftime("%Y-%m-%d")
+        bar = {"t": t, "d": ds, "o": ms[0]["o"], "h": max(m["h"] for m in ms),
                "l": min(m["l"] for m in ms), "c": ms[-1]["c"],
                "v": sum(m["v"] for m in ms)}
-        if out and out[-1]["t"] == t:          # 同一根 → 合併
+        if out and out[-1]["t"] == t and out[-1].get("d") == ds:      # 同一根 → 合併
             prev = out[-1]
-            out[-1] = {"t": t, "o": prev["o"], "h": max(prev["h"], bar["h"]),
+            out[-1] = {"t": t, "d": ds, "o": prev["o"], "h": max(prev["h"], bar["h"]),
                        "l": min(prev["l"], bar["l"]), "c": bar["c"],
                        "v": prev["v"] + bar["v"]}
         else:
@@ -656,6 +833,10 @@ def traded_days():
     """
     回顧用的日期清單。有練習紀錄的排前面（那些才是他想回顧的），
     後面補上本機有資料的最近交易日，方便看沒下單的日子長什麼樣。
+
+    另外一定補上「最近幾個平日」—— 排程每天 14:10 才把當天併進 tmf_1min.csv，
+    只看本機檔的話，選單裡永遠選不到昨天（他早上最想翻的就是昨天）。
+    休市日選下去會是空的，但那不會壞事。
     """
     traded = []
     if TRADE_DIR.exists():
@@ -669,11 +850,20 @@ def traded_days():
                 local_bars(date.today())        # 觸發載入
             px = _LOCAL_PX["df"]
             if px is not None:
-                all_days = sorted({str(x) for x in px["ts"].dt.date}, reverse=True)
+                # 週六在檔案裡也有 K 棒（週五夜盤延到週六凌晨），但它不是交易日 ——
+                # 選下去只會看到半截夜盤，所以不列進選單。
+                all_days = sorted({str(x) for x in px["ts"].dt.date
+                                   if x.weekday() < 5}, reverse=True)
                 others = [x for x in all_days if x not in traded][:20]
         except Exception:
             pass
-    return {"traded": traded, "others": others}
+    recent = []
+    for k in range(0, 12):
+        dd = date.today() - timedelta(days=k)
+        if dd.weekday() < 5:                     # 週六日沒有日盤
+            recent.append(str(dd))
+    others = [x for x in recent if x not in traded and x not in others] + others
+    return {"traded": traded, "others": others[:24]}
 
 
 # ---------------------------------------------------------------- 回顧分頁
@@ -1354,7 +1544,9 @@ var DRAG=null;
 function fetchBars(force){
  if(!force && Date.now()-barsAt<3000) return;
  barsAt=Date.now();
- fetch('/api/bars'+(viewDate?('?date='+viewDate):''))
+ // full=1＝完整交易日（前一晚 15:00 夜盤 → 當天 13:45 收盤）。
+ // 回顧分頁走的是同一支 API 但不帶 full，那邊只要日盤。
+ fetch('/api/bars?full=1'+(viewDate?('&date='+viewDate):''))
   .then(r=>r.json()).then(x=>{ barsCache=x; }).catch(()=>{});
 }
 
@@ -1376,7 +1568,10 @@ function chartSVG(s){
  const live=!viewDate;
  const first=G.all[0], last=G.all[G.all.length-1];
  const px = live && s.chips && s.chips.price!=null ? s.chips.price : last.c;
- const chg=px-first.o, pct=chg/first.o*100;
+ // 漲跌基準＝上一個交易日的日盤收盤（跟看盤軟體一致）。含夜盤之後圖上第一根是
+ // 昨晚 15:00，拿它當基準會變成「相對昨晚開盤」，跟大戶投上的數字對不起來。
+ const ref=(barsCache&&barsCache.ref!=null)?barsCache.ref:first.o;
+ const chg=px-ref, pct=chg/ref*100;
 
  // 價格軸只貼合看得到的那幾根
  let hi=Math.max(...B.map(b=>b.h)), lo=Math.min(...B.map(b=>b.l));
@@ -1403,8 +1598,16 @@ function chartSVG(s){
  const vmax=Math.max(1,...B.map(b=>b.v));
  const vy=v=>H-BOT-(v/vmax)*VOLH;       // 量柱由下往上長
  const x=i=>i*cw+cw/2;
+ const isNight=b=>b.t>='15:00'||b.t<'08:45';
 
  let g='';
+ // 夜盤底色：一眼分得出哪一段是昨晚。15:00 之後或 08:45 之前都算夜盤。
+ { let a=-1;
+   const band=(p,q)=>'<rect x="'+(p*cw).toFixed(1)+'" y="'+TOP+'" width="'+((q+1-p)*cw).toFixed(1)+
+     '" height="'+(H-TOP-BOT)+'" fill="#7C8CA8" opacity=".07"/>';
+   B.forEach((bar,i)=>{ if(isNight(bar)){ if(a<0)a=i; } else if(a>=0){ g+=band(a,i-1); a=-1; } });
+   if(a>=0) g+=band(a,B.length-1);
+ }
  // 下單時段底色
  { let a=-1,b=-1;
    B.forEach((bar,i)=>{ if(bar.t>='08:45'&&bar.t<'09:30'){ if(a<0)a=i; b=i; } });
@@ -1419,6 +1622,19 @@ function chartSVG(s){
       '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5A616E" font-size="12" '+
       'font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
  }
+ // 分段線：夜盤→日盤（08:45 開盤）與跨午夜的地方。
+ // 沒有這條線的話，22:00 跟 10:00 擠在同一張圖上會看不出斷在哪。
+ B.forEach((b,i)=>{
+   if(!i) return;
+   const p=B[i-1], dayOpen=isNight(p)&&!isNight(b);
+   const midnight=isNight(b)&&isNight(p)&&b.d!==p.d;
+   if(!dayOpen&&!midnight) return;
+   const X=i*cw;
+   g+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+      '" stroke="#4A5468" stroke-width="1" stroke-dasharray="2 4"/>'+
+      '<text x="'+(X+4).toFixed(1)+'" y="'+(TOP+12)+'" fill="#6B7385" font-size="10.5" '+
+      'font-family="ui-monospace,monospace">'+(dayOpen?'日盤':(b.d||'').slice(5))+'</text>';
+ });
  B.forEach((b,i)=>{
    const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E', X=x(i);
    g+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+
@@ -1556,16 +1772,21 @@ function chartSVG(s){
    }
  }
  const sum=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
+ // 標題直接寫出圖涵蓋到哪 ——「08-20夜 → 今天」比只寫「今天」清楚
+ const dayS=(viewDate||barsCache.date||'').slice(5);
+ const noS=((barsCache.night_open)||'').slice(5);
+ const rangeS='5 分 K・'+((noS&&noS!==dayS)?(noS+'夜 → '):'')+(viewDate?dayS:'今天');
  return {
    svg:g, vb:'0 0 '+W+' '+H,
    head:'<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
         ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
-        '<span class="cdate" data-pick="1">5 分 K・'+(viewDate?viewDate.slice(5):'今天')+sum+' ▾</span>',
+        '<span class="cdate" data-pick="1">'+rangeS+sum+' ▾</span>',
    pick:pick, mini:mini,
    legend:(function(b,hv){
      const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E';
      const vol=b.v>=10000?(b.v/1000).toFixed(1)+'k':b.v.toFixed(0);
-     return '<span class="lt">'+b.t+'</span>'+
+     // 跨夜的圖上光看 22:15 分不出是哪一天，所以連日期一起顯示
+     return '<span class="lt">'+(b.d?b.d.slice(5)+' ':'')+b.t+'</span>'+
        '<span>開 <b>'+b.o.toFixed(0)+'</b></span>'+
        '<span>高 <b>'+b.h.toFixed(0)+'</b></span>'+
        '<span>低 <b>'+b.l.toFixed(0)+'</b></span>'+
@@ -1579,9 +1800,20 @@ function chartSVG(s){
  };
 }
 
+/* 交易時間（HH:MM）→ K 棒索引。
+   含夜盤之後，圖上的時間不再是遞增的字串（…23:55, 00:00…, 08:45…），
+   整條掃會在午夜那裡就停住。練習交易一定落在當天日盤，所以只在那一段找。 */
 function idxAll(t){
  const all=(barsCache&&barsCache.bars)||[];
- let r=-1; for(let i=0;i<all.length;i++){ if(all[i].t<=t) r=i; else break; } return r;
+ const dd=(barsCache&&barsCache.date)||'';
+ let r=-1;
+ for(let i=0;i<all.length;i++){
+   const b=all[i];
+   if(b.d&&b.d!==dd) continue;      // 前一晚的夜盤
+   if(b.t<'08:45') continue;        // 當天凌晨那段仍屬夜盤
+   if(b.t<=t) r=i; else break;
+ }
+ return r;
 }
 
 /* 外框只建一次，之後只換 svg 內容 —— 重繪不會打斷你的縮放與拖曳 */
@@ -2626,9 +2858,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/bars"):
             q = self.path.split("?", 1)[1] if "?" in self.path else ""
-            want, tf = None, CHART_TF
+            want, tf, full = None, CHART_TF, False
             for kv in q.split("&"):
-                if kv.startswith("date="):
+                if kv == "full=1":
+                    full = True
+                elif kv.startswith("date="):
                     try:
                         want = datetime.strptime(kv[5:], "%Y-%m-%d").date()
                     except Exception:
@@ -2637,7 +2871,7 @@ class Handler(BaseHTTPRequestHandler):
                     if kv[3:] not in ("1", "5"):
                         return self._json(400, {"error": "tf 只接受 1 或 5"})
                     tf = int(kv[3:])
-            out = day_bars(want, tf)
+            out = day_bars(want, tf, full=full)
             out.update(traded_days())
             return self._json(200, out)
         if self.path.startswith("/api/review"):

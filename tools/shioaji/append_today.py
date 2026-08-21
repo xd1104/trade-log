@@ -3,8 +3,14 @@ r"""
 =============================================================================
 排程每個交易日 14:10 執行（日盤 13:45 收盤後，當天資料才完整）。
 
+【為什麼要順便回頭抓前幾天】14:10 跑的時候，當天的夜盤（15:00~隔天 05:00）還沒開始，
+所以「今天」這一趟永遠抓不到今晚的夜盤。隔天再抓隔天，昨晚就永遠補不回來 ——
+面板的 K 線圖要畫「前一晚 → 當天日盤」的完整交易日，缺了夜盤等於缺一半。
+週六也一樣（週五夜盤延到週六凌晨 05:00），而週六不是交易日、排程不會跑。
+所以每次都回頭把前 4 天重抓一遍，重複的 ts 會被 drop_duplicates 濾掉。
+
 流程：
-  1. 抓今天的 1 分 K
+  1. 抓今天的 1 分 K，並回頭補抓前 4 天（含週末）的夜盤
   2. 併進 tmf_1min.csv（已經有就跳過，不會重複）
   3. 重新產生 intraday.csv（模型的歷史矩陣）
   4. 印出前後對照，讓人一眼看出樣本多了幾天、關鍵數字有沒有變
@@ -16,7 +22,7 @@ r"""
 import json
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -68,11 +74,7 @@ def main():
 
     px = pd.read_csv(PX)
     px["ts"] = pd.to_datetime(px["ts"])
-    have = set(px["ts"].dt.date.astype(str))
-    if str(today) in have:
-        print(f"{today} 已經在資料裡了，不重複併入。")
-        print("（若要重算模型，直接跑 build_intraday.py）")
-        return
+    before_rows = len(px)
 
     import shioaji as sj
     from _config import get_credentials
@@ -81,33 +83,43 @@ def main():
     api = sj.Shioaji()
     api.login(api_key=api_key, secret_key=secret)
     contract = api.Contracts.Futures.TMF["TMFR1"]
+    # 今天 ＋ 回頭 4 天（含週末，週五的夜盤尾巴落在週六）。
+    # 一天一天抓：區間端點碰到非交易日，永豐會整段回 404。
+    wanted = [today - timedelta(days=k) for k in range(4, -1, -1)]
+    frames = []
     try:
-        new = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
-    except Exception as e:
-        print(f"抓不到 {today} 的資料：{e}")
-        print("（休市日就是這個結果，正常。）")
-        api.logout()
-        return
+        for dd in wanted:
+            try:
+                df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
+            except Exception as e:
+                print(f"  {dd} 抓不到（休市日多半就是這樣）：{str(e)[:60]}")
+                continue
+            if not df.empty:
+                df["ts"] = pd.to_datetime(df["ts"])
+                frames.append(df)
+                print(f"  {dd} 取得 {len(df)} 根")
     finally:
         try:
             api.logout()
         except Exception:
             pass
 
-    if new.empty:
-        print(f"{today} 沒有資料（休市日）。")
+    if not frames:
+        print("這幾天都沒有資料（休市）。")
         return
 
-    new["ts"] = pd.to_datetime(new["ts"])
+    new = pd.concat(frames, ignore_index=True)
     day_bars = new[(new["ts"].dt.time >= SESSION_OPEN) & (new["ts"].dt.time < DAY_END)]
-    if day_bars.empty:
-        print(f"{today} 沒有日盤 K 棒（休市日）。")
-        return
 
     merged = pd.concat([px, new], ignore_index=True)
     merged = merged.drop_duplicates(subset="ts").sort_values("ts")
+    added = len(merged) - before_rows
+    if added == 0:
+        print("沒有新的 K 棒，資料已經是最新的。")
+        print("（若要重算模型，直接跑 build_intraday.py）")
+        return
     merged.to_csv(PX, index=False)
-    print(f"併入 {len(new)} 根 K 線（其中日盤 {len(day_bars)} 根）")
+    print(f"\n新增 {added} 根 K 線（這幾天共取得 {len(new)} 根，其中日盤 {len(day_bars)} 根）")
     print(f"tmf_1min.csv 現在共 {len(merged):,} 根\n")
 
     print("重算模型中…")
