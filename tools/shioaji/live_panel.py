@@ -81,6 +81,52 @@ NIGHT_CLOSE = pd.Timestamp("05:00").time()
 # 永豐的 K 棒用「結束時間」標記，夜盤最後一根標到 05:01 —— 收夜盤尾巴要含它，
 # 否則每天都會少掉收盤前那一兩分鐘。
 NIGHT_TAIL = pd.Timestamp("05:01").time()
+
+
+
+def market_session(now=None):
+    """
+    現在是不是交易時段：'day'（日盤）／'night'（夜盤）／'closed'（休市）。
+
+    只看時鐘與星期，**不含國定假日**（本機沒有假日表；假日會被判成 'day'）。
+    用途是把「現在本來就沒有盤」跟「盤中卻收不到報價」分開 ——
+    前者是正常的，後者才要示警。
+
+    夜盤 15:00 開、延到隔天凌晨 05:00：
+      週一~週五晚上有夜盤（週日晚上沒有），所以凌晨那段落在週二~週六。
+    """
+    now = now or datetime.now()
+    t, wd = now.time(), now.weekday()          # 0=週一 … 6=週日
+    if wd < 5 and SESSION_OPEN <= t < DAY_END:
+        return "day"
+    if wd < 5 and t >= NIGHT_OPEN:
+        return "night"
+    if 1 <= wd <= 5 and t < NIGHT_CLOSE:
+        return "night"
+    return "closed"
+
+
+def quote_state(price, age, sess):
+    """
+    報價狀態，給前端判斷「能不能相信畫面上的數字、能不能下模擬單」。
+
+      live    有新鮮的報價
+      nodata  應該有盤卻收不到報價 —— 要示警（也可能是國定假日，本機無假日表）
+      closed  休市中 —— 正常，不必示警；圖照畫，只是價格不是即時的
+
+    這三態是 Bug A 的核心：以前兩種「沒報價」都叫 waiting，前端分不出來，
+    就用同一道門把整個即時分頁（含 K 線圖與日期選單）擋掉。
+    """
+    if price is not None and age is not None and age <= STALE_SECONDS:
+        return "live"
+    return "nodata" if sess in ("day", "night") else "closed"
+
+
+QUOTE_MSG = {
+    "closed": "休市中 —— 現在不是交易時段，圖上顯示的是最後一根 K 棒的收盤價，不是即時價。",
+    "nodata": "盤中卻收不到報價 —— 若今天是國定假日就是正常休市，否則是連線問題（程式每分鐘會自動重連）。",
+}
+
 CHART_TF = 5        # K 線圖用 5 分 K（Benson 看盤的習慣）
 # 圖顯示整個日盤 08:45~13:45：5 分 K 共 60 根，剛好是一張看得舒服的圖；
 # 他的下單時段 08:45~09:30 會在圖上以底色標出來。
@@ -633,14 +679,23 @@ def _raw_days(days):
     本機檔涵蓋範圍「之內」卻沒資料的日子＝休市，不必再問永豐 ——
     否則每畫一次圖就要為週末白跑兩次 API。
     永豐的區間端點碰到非交易日會整段回 404，所以缺的日子一天一天抓、失敗就跳過。
+
+    【本機檔的最後一天永遠是半天】排程 14:10 跑 append_today，那時當晚的夜盤
+    （15:00~23:59）根本還沒發生 —— 所以 csv 的最後一天只有 00:00~13:45。
+    若照「在範圍內就當作已完整」處理，最新那個交易日的夜盤永遠拿不到，
+    session_frame() 也就永遠拼不出完整的交易日（2026-08-23 實測 08-21 只有半天）。
+    因此 dd >= 本機最後一天時，**一律再跟永豐要一次**，再與本機資料合併
+    （下面 drop_duplicates("ts") 會濾掉重複的分鐘），不是二選一。
     """
-    lo, hi = _local_span()
+    _lo, hi = _local_span()
     frames, missing = [], []
     for dd in days:
         g = local_bars(dd)
         if g is not None:
             frames.append(g)
-        elif not (lo is not None and lo <= dd <= hi):
+        # hi 是 None＝本機根本沒有檔案；dd >= hi＝本機那天可能還沒收完（見上面說明）。
+        # 只有「dd 落在本機檔範圍內、而且比最後一天早」才敢斷定是休市日、不問永豐。
+        if hi is None or dd >= hi:
             missing.append(dd)
     if missing:
         api = SESSION_REF.get("api")
@@ -672,19 +727,30 @@ _SESS_OWN = {}      # 日期 → 該日的原始 K 棒（只快取過去的日�
 SESS_RETRY = 60     # 抓不到資料時隔多久再試一次
 
 
+def _csv_stamp():
+    """tmf_1min.csv 的 mtime，當快取鍵用（檔案換了就代表資料可能補齊了）。"""
+    f = HERE / "tmf_1min.csv"
+    return f.stat().st_mtime if f.exists() else None
+
+
 def _cached_raw(cache, key, days):
     """
-    _raw_days 的快取層。抓到就永久留著；抓不到隔 SESS_RETRY 秒再試。
+    _raw_days 的快取層。抓到就留著；抓不到隔 SESS_RETRY 秒再試。
 
     【不能把失敗也永久快取】面板啟動時可能還沒連上永豐，那一瞬間抓不到資料 ——
     若把 None 記起來，K 線圖就會整天空著，重開面板才會好。
+
+    【也不能不管 csv 有沒有更新】某天在它還是「本機檔最後一天」的時候被快取起來，
+    拿到的是半天（夜盤還沒發生）；排程 14:10 併檔補上夜盤之後，快取若不失效
+    就會一直是半天。所以快取鍵要帶上 csv 的 mtime（day_index() 同樣的作法）。
     """
+    stamp = _csv_stamp()
     hit = cache.get(key)
-    if hit is not None:
+    if hit is not None and hit.get("mt") == stamp:
         if hit["df"] is not None or time.time() - hit["at"] < SESS_RETRY:
             return hit["df"]
     df = _raw_days(days)
-    cache[key] = {"df": df, "at": time.time()}
+    cache[key] = {"df": df, "at": time.time(), "mt": stamp}
     return df
 
 
@@ -1314,28 +1380,80 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .chint #cinfo{color:var(--dim)}
 .chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px;
   gap:14px; flex-wrap:wrap}
+/* 即時分頁的標頭右邊是兩行的翻頁列，一定要底部對齊：baseline 會把右欄「第一行的基線」
+   對到 44px 大字的基線，第二行整條就掛到大字底線以下，整塊白白多吃 22px（實測 45→67）。
+   只掛在 #chead 上，不動 .chead 本身 —— 回顧分頁共用同一個 class，它是單行、
+   改成 flex-end 會讓日期與 1分/5分 切換往下位移。 */
+#chead{align-items:flex-end}
 .cpx{font-size:44px; font-weight:700; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; line-height:1}
 .cchg{font-size:17px; font-weight:600; font-family:var(--font-mono)}
 .cdate{font-size:12.5px; color:var(--gold); cursor:pointer; border:1px solid var(--line);
   border-radius:20px; padding:3px 11px; background:var(--surface-2)}
 .cdate:hover{border-color:var(--gold)}
-/* 換日：圖上常駐一條翻頁列（◀ 日期 ▶ 今天），點日期展開迷你月曆 */
-.pager{display:flex; align-items:center; gap:7px; flex-wrap:wrap}
-.pager button{font-family:var(--font-sans); cursor:pointer;
-  background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
-.pager .narw{width:27px; height:27px; border-radius:7px; font-size:12px;
-  display:grid; place-items:center; padding:0}
-.pager .narw:hover:not(:disabled){border-color:var(--gold); color:var(--gold)}
-.pager .narw:disabled{opacity:.3; cursor:default}
-.pager .stamp{font-family:var(--font-mono); font-size:12.5px; color:var(--gold);
-  border-radius:8px; padding:4px 11px; background:transparent;
-  font-variant-numeric:tabular-nums; white-space:nowrap}
-.pager .stamp:hover{border-color:var(--gold)}
-.pager .jump{font-size:12px; border-radius:8px; padding:4px 10px; background:transparent}
-.pager .jump:hover{color:var(--gold); border-color:var(--gold)}
-.pager .jump.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+/* 換日：圖上常駐一條翻頁列，右欄兩行 —— 上排「能按的」（◀ 日期 ▶ 今天／即時），
+   下排 11px 灰字「只是說明的」（夜盤範圍、練習結果、鍵盤提示）。
+   高度預算：r1 24px ＋ gap 2px ＋ r2 約 16px ＝ 42px，不可超過改版前的 45px；
+   動任何一個字級／padding 都要重量一次 getBoundingClientRect().height，不能用字級推算。 */
+.pager{display:flex; flex-direction:column; align-items:flex-end; gap:2px; position:relative}
+.pager .r1{display:flex; align-items:center; gap:3px}
+.pager .r2{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--faint);
+  line-height:1.25; padding-right:5px; flex-wrap:wrap; justify-content:flex-end}
+.pager .r2 .sep{color:#333A47}
+.pager .r2 b{font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  font-size:11.5px; font-weight:650}
+.pager .r2 .kbdgrp{display:inline-flex; gap:3px; align-items:center}
+.pager .r2 kbd{font-family:var(--font-mono); font-size:10.5px; background:var(--surface-2);
+  border:1px solid var(--line); border-radius:5px; padding:0 4px; color:var(--dim);
+  line-height:1.35}
+/* 箭頭去框變成幽靈圖示：有框的方塊視覺重量跟資訊一樣重，會跟日期互相搶。
+   24×24 是上限，26×26 會讓整塊超過 45px。變灰用顏色不用 opacity（opacity 連背景一起淡，看起來髒）。 */
+.pager .nav-icon{width:24px; height:24px; border-radius:8px; border:0; background:transparent;
+  color:var(--faint); font-size:11px; line-height:1; display:grid; place-items:center;
+  cursor:pointer; font-family:var(--font-sans); padding:0;
+  transition:background .12s ease, color .12s ease}
+.pager .nav-icon:hover:not(:disabled){background:var(--surface-2); color:var(--text)}
+.pager .nav-icon:active:not(:disabled){background:var(--line)}
+.pager .nav-icon:disabled{color:#333A47; cursor:default}
+.pager .nav-icon:focus-visible{outline:1px solid var(--gold); outline-offset:1px}
+/* 日期本身不再是金色（金色只留給「即時／現在」一個意思），line-height 全部鎖 1，
+   否則行高會把 r1 撐過 24px */
+.pager .dstamp{display:inline-flex; align-items:center; gap:7px; border:0; background:transparent;
+  cursor:pointer; padding:3px 7px; border-radius:9px; color:var(--text); line-height:1;
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap;
+  transition:background .12s ease}
+.pager .dstamp .num{font-size:15px; font-weight:650; letter-spacing:.3px; line-height:1}
+/* 星期那一格永遠佔一個字寬（今天是週末/休市時 dayInfo 找不到、星期是空的）——
+   翻頁列整條靠右對齊，這一格一縮 ◀ 就往右跑 12px，連點時第 2 下會落到日期鈕上（誤開月曆）。 */
+.pager .dstamp .wd{font-family:var(--font-sans); font-size:12px; color:var(--dim);
+  font-weight:500; line-height:1; min-width:1em; text-align:center}
+.pager .dstamp .cal-i{color:var(--faint); transition:color .12s ease}
+.pager .dstamp .caret{font-size:8px; color:var(--faint); transition:transform .15s ease, color .12s}
+.pager .dstamp:hover{background:var(--surface-2)}
+.pager .dstamp:hover .cal-i,.pager .dstamp:hover .caret{color:var(--gold)}
+.pager .dstamp.open{background:var(--surface-2)}
+.pager .dstamp.open .cal-i,.pager .dstamp.open .caret{color:var(--gold)}
+.pager .dstamp.open .caret{transform:rotate(180deg)}
+.pager .dstamp.loading .num{color:var(--dim)}
+.pager .dstamp:focus-visible{outline:1px solid var(--gold); outline-offset:1px}
+/* 金色只准有一個意思＝「即時／現在」：看歷史日時出現金色「今天」鈕，
+   即時時改成金點，兩者永不同時出現（舊版金色膠囊＋金色今天互搶就是這樣消掉的） */
+.pager .jump2{font-family:var(--font-sans); font-size:12px; font-weight:600; cursor:pointer;
+  border:0; border-radius:8px; padding:4px 10px; line-height:1.15;
+  background:var(--gold-soft); color:var(--gold); white-space:nowrap;
+  transition:background .12s ease}
+.pager .jump2:hover{background:rgba(227,169,81,.24)}
+.pager .livelamp{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--dim);
+  padding:4px 6px 4px 4px; line-height:1.15; white-space:nowrap}
+.pager .livelamp i{width:6px; height:6px; border-radius:50%; background:var(--gold);
+  box-shadow:0 0 0 3px var(--gold-soft)}
 
+/* 月曆改成錨在翻頁列底下的浮層：以前掛在圖下面，展開會把整張 K 線圖往下推、
+   而且離入口很遠。#cpick 仍然是獨立節點（不併進 #chead）—— #chead 每秒跟著報價重繪，
+   月曆若在裡面會被整個重建，滑鼠停在哪一格都會被打斷。 */
+.cheadwrap{position:relative}
+.calpop{position:absolute; top:calc(100% + 8px); right:0; z-index:30}
+.calpop .calbox{margin-top:0; box-shadow:0 14px 34px rgba(0,0,0,.5)}
 .calbox{margin-top:10px; border:1px solid var(--line); border-radius:12px;
   padding:12px 14px 13px; background:var(--surface-2); width:max-content; max-width:100%}
 .calhead{display:flex; align-items:center; justify-content:space-between; gap:18px;
@@ -1372,9 +1490,17 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   color:var(--faint)}
 .callegend i{display:inline-block; width:8px; height:8px; border-radius:3px;
   vertical-align:-1px; margin-right:4px}
+/* 窄視窗：只收掉「裝飾」（鍵盤提示，那裡通常也沒有實體鍵盤），
+   夜盤範圍與練習結果是資訊、不可藏；月曆改靠左展開才不會超出右邊界。
+   不要對 .pager 下 width:100% —— 那會逼它提早換行，實測反而多吃一整行。 */
+@media(max-width:820px){
+  .pager .r2 .kbdgrp,.pager .r2 .sep.k{display:none}
+  .calpop{right:auto; left:0}
+}
 .mini{display:flex; flex-wrap:wrap; gap:0 20px; font-size:12.5px; color:var(--dim);
   font-family:var(--font-mono); margin-top:12px; padding-top:11px; border-top:1px solid var(--line)}
 .mini b{color:var(--text); font-weight:600}
+.mini b.dim{color:var(--faint)}      /* 「休市中／收不到」不是正常數值，字色壓下來 */
 .btns{display:flex; gap:10px}
 .btn{flex:1; padding:15px; border-radius:12px; cursor:pointer;
   font-family:var(--font-sans); font-size:16px; font-weight:700; letter-spacing:1px}
@@ -1384,6 +1510,10 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .btn.ghost{flex:0 0 auto; background:transparent; color:var(--faint); font-size:13px;
   font-weight:400; border:1px solid var(--line)}
 .btn:active{transform:scale(.99)}
+/* 沒有即時報價時的下單按鈕：真的停用，並在底下寫清楚為什麼（不是純視覺的灰） */
+.btn:disabled{opacity:.32; cursor:not-allowed}
+.btn:disabled:active{transform:none}
+.whyoff{margin-top:10px; font-size:11.5px; color:var(--faint); line-height:1.6}
 .warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
   border-radius:20px; padding:2px 9px; font-weight:600}
 .pnl{text-align:center; padding:6px 0 10px}
@@ -1436,6 +1566,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .foot{font-size:11px; color:var(--faint); text-align:center; margin-top:20px; line-height:1.7}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--down);margin-right:5px}
 .dot.stale{background:var(--gold)} .dot.dead{background:var(--up)}
+/* 休市中不是故障 —— 燈號用中性灰，不要每個週末都亮紅燈 */
+.dot.off{background:var(--faint)}
 .dl{display:inline-block; margin-top:12px; font-size:12px; color:var(--gold); text-decoration:none}
 
 /* ================= 【回顧】分頁（沿用上面的顏色變數，不另立一套） ================= */
@@ -1600,6 +1732,24 @@ const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
 
 var lastMkt='', lastTrade='', lastStats='', lastWarn='', statsCache=null, statsAt=0;
 
+/* ---------------- 報價狀態（Bug A） ----------------
+   後端把「沒有報價」分成兩種：closed＝休市中（正常）、nodata＝盤中卻收不到（示警）。
+   以前兩種都叫 waiting，前端只好用一道門把整個即時分頁擋掉 ——
+   結果假日、國定假日、13:45~15:00、05:00~08:45 全是一片空白，
+   連本機明明就有的歷史 K 線與日期選單都用不了。現在「有沒有報價」跟「畫不畫圖」分開：
+   圖照畫（沒有即時價就用最後一根 K 棒的收盤），只是把狀態誠實標出來。
+   舊版後端沒有 quote 欄位，就退回看 chips.price 推 —— 測試治具也走這條。 */
+function quoteState(s){
+ if(s.quote) return s.quote;
+ return (s.chips&&s.chips.price!=null)?'live':'closed';
+}
+const QLAB={closed:['休市中','var(--faint)'],nodata:['無報價','var(--gold)']};
+const QMSG={
+ closed:'<div class="note"><b>休市中</b>　現在不是交易時段，沒有即時報價。'+
+        '圖上顯示的是最後一根 K 棒的收盤價，不是即時價 —— 歷史 K 線與換日照常可用。</div>',
+ nodata:'<div class="alert"><b>盤中卻收不到報價</b>　'+
+        '若今天是國定假日就是正常休市；否則是連線問題，程式每分鐘會自動重連。</div>'};
+
 async function tick(){
  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
  // 成績每 5 秒抓一次就好 —— 它會讀所有紀錄檔，沒必要跟著報價跳
@@ -1607,36 +1757,47 @@ async function tick(){
    statsAt=Date.now();
    fetch('/api/stats').then(r=>r.json()).then(x=>{statsCache=x;}).catch(()=>{});
  }
+ const q=quoteState(s);
  const PH={recording:['記錄中','var(--up)'],live:['顯示中','var(--down)'],off:['夜盤','var(--faint)']};
- const ph=PH[s.phase]||PH.off, age=s.age_sec==null?99:s.age_sec;
- const dead=(s.conn&&s.conn.ok===false)||age>90;
+ const ph=QLAB[q]||PH[s.phase]||PH.off, age=s.age_sec==null?99:s.age_sec;
+ // 休市中不算「斷線」—— 沒有報價是正常的，燈號要中性，不然每個週末都在紅燈
+ const dead=q==='live'?((s.conn&&s.conn.ok===false)||age>90):(q==='nodata');
+ const dot=q==='closed'?'off':(dead?'dead':(q==='live'&&age>25?'stale':''));
  document.getElementById('clk').textContent=(s.clock||'').slice(0,5);
  document.getElementById('ph').innerHTML='<span style="color:'+ph[1]+'">'+ph[0]+'</span>';
- document.getElementById('sub').innerHTML='<span class="dot '+(dead?'dead':age>25?'stale':'')+'"></span>'+
+ document.getElementById('sub').innerHTML='<span class="dot '+dot+'"></span>'+
    ((s.conn&&s.conn.contract_name)||'微台')+(s.replay?'・重播':'');
 
  // 【回顧】分頁時只更新頂列的時鐘／連線燈；即時分頁的 DOM 一律不動。
  // 後端的報價、持倉監控、±100 自動停利停損跑在 shioaji 回呼裡，完全不受影響。
  if(TAB!=='live') return;
 
- const W=document.getElementById('wait');
- if(s.status!=='live'){ W.hidden=false; W.textContent=s.msg||'等待中…';
-   setHTML('mkt',''); setHTML('trade',''); setHTML('stats',''); return; }
- W.hidden=true;
-
-fetchBars(false);
- const c=s.chips;
- const warn = dead ? '<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
-   (age==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>' : '';
+ fetchBars(false);
+ const c=s.chips||{};
+ const warn = QMSG[q] || (dead ? '<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
+   (s.age_sec==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>' : '');
  setHTML('warn',warn);
- if(!paintChart(s)){
-   // 還沒有 K 棒（例如夜盤）→ 退回簡單的數字卡
+ const W=document.getElementById('wait');
+ const drew=paintChart(s);
+ if(drew){
+   W.hidden=true;
+ } else if(q==='live'){
+   // 有報價但還沒有 K 棒（例如剛連上的夜盤）→ 退回簡單的數字卡
+   W.hidden=true;
    lastMktFallback = '<div class="card"><div class="grid">'+
      '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
      cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
      cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+'</div></div>';
    if(document.getElementById('mkt').innerHTML!==lastMktFallback)
      document.getElementById('mkt').innerHTML=lastMktFallback;
+ } else {
+   // 既沒有報價、也一根 K 棒都拿不到（本機沒資料又沒連上永豐）才是真的沒東西可看。
+   // 舊圖要收掉，否則等待訊息底下還掛著一張沒人知道是哪天的圖。
+   // ⚠️ 不能用 setHTML('mkt','') —— K 線圖是 paintChart 自己塞進 #mkt 的，
+   //    lastMkt 從頭到尾都是 ''，setHTML 會判定「跟上次一樣」而整個略過。
+   W.hidden=false; W.textContent=s.msg||'等待中…';
+   const M=document.getElementById('mkt');
+   if(M.innerHTML){ M.innerHTML=''; lastMkt=''; lastMktFallback=''; }
  }
  setHTML('trade',tradeBox(s));
  setHTML('stats',statsBox(statsCache));
@@ -1656,6 +1817,8 @@ function setHTML(id,html){
 // 滾輪＝縮放疏密（以游標位置為中心）、按住拖曳＝左右移動時間、雙擊＝還原。
 // 價格軸自動貼合「畫面上看得到的那幾根」，跟看盤軟體一樣。
 var barsCache=null, barsAt=0, viewDate='', pickOpen=false, calMonth='', lastMktFallback='';
+var barsPending=false;        // 換日的資料還在路上（見 fetchBars）
+var barsSeq=0;                // 換日請求的流水號，只採用最後一次的回應（見 fetchBars）
 // n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
 // vz＝價格軸縮放倍率（>1 放大、<1 壓縮）；voff＝價格軸平移量（單位：點）
 var VIEW={n:60, end:null, vz:1, voff:0};
@@ -1666,10 +1829,21 @@ var DRAG=null;
 function fetchBars(force){
  if(!force && Date.now()-barsAt<3000) return;
  barsAt=Date.now();
+ // force＝使用者換日（含按「今天」回到即時）。到新資料回來為止都算「載入中」。
+ // 不能只靠「curDay() 跟 barsCache.date 不一樣」判斷 —— 按「今天」時 viewDate 變成空字串，
+ // curDay() 會直接回舊的 barsCache.date，看起來沒在載入，那一秒就會把昨天的練習
+ // 掛在金點「即時」底下（跟舊版把它掛在「今天」底下是同一個坑）。
+ if(force) barsPending=true;
+ // 【只認最後一次請求】連按換日時，先送出的請求可能後回來（伺服器每換一天就要重篩
+ // 54 萬列，多執行緒之間不保證順序）。沒有這道守衛，barsCache 會被舊那天的資料蓋回去，
+ // 而且 barsCache.date 跟 curDay() 又剛好對得上 ⇒ loading 判定不出來，
+ // 畫面就在「即時」底下顯示別天的 K 線與練習筆數（實測按 Home 之後停在 08-18）。
+ const my=++barsSeq;
  // full=1＝完整交易日（前一晚 15:00 夜盤 → 當天 13:45 收盤）。
  // 回顧分頁走的是同一支 API 但不帶 full，那邊只要日盤。
  fetch('/api/bars?full=1'+(viewDate?('&date='+viewDate):''))
-  .then(r=>r.json()).then(x=>{ barsCache=x; }).catch(()=>{});
+  .then(r=>r.json()).then(x=>{ if(my!==barsSeq) return; barsCache=x; barsPending=false; })
+  .catch(()=>{ if(my===barsSeq) barsPending=false; });
 }
 
 function chartGeom(){
@@ -1684,12 +1858,20 @@ function chartGeom(){
  return {all:all, from:Math.max(0,end-n), to:end, n:n, live:VIEW.end==null};
 }
 
+/* 日期按鈕左邊的小月曆圖示：舊版只有一個貼在字尾的「▾」，看不出來那裡可以點 */
+const CAL_ICON='<svg class="cal-i" width="13" height="13" viewBox="0 0 14 14" fill="none" '+
+  'stroke="currentColor" stroke-width="1.3" stroke-linecap="round">'+
+  '<rect x="1.4" y="2.6" width="11.2" height="10" rx="2"/>'+
+  '<path d="M4.4 1.2v2.6M9.6 1.2v2.6M1.4 6h11.2"/></svg>';
+
 function chartSVG(s){
  const G=chartGeom(); if(!G) return null;
  const B=G.all.slice(G.from,G.to), T=(barsCache.trades)||[], P=s.position;
  const live=!viewDate;
  const first=G.all[0], last=G.all[G.all.length-1];
- const px = live && s.chips && s.chips.price!=null ? s.chips.price : last.c;
+ // 沒有即時報價時退回「最後一根 K 棒的收盤」，別把舊的成交價當現價用（Bug A）。
+ const q=quoteState(s);
+ const px = (live && q==='live' && s.chips && s.chips.price!=null) ? s.chips.price : last.c;
  // 漲跌基準＝上一個交易日的日盤收盤（跟看盤軟體一致）。含夜盤之後圖上第一根是
  // 昨晚 15:00，拿它當基準會變成「相對昨晚開盤」，跟大戶投上的數字對不起來。
  const ref=(barsCache&&barsCache.ref!=null)?barsCache.ref:first.o;
@@ -1863,7 +2045,13 @@ function chartSVG(s){
  // 有什麼就顯示什麼 —— 原本整排綁在「日盤才有」的欄位上，
  // 休市時整排消失，連加權都看不到（Benson 回報找不到）。
  let mini='';
- if(live){
+ if(live && q!=='live'){
+   // 沒有即時報價時，上面那個大字是「最後一根 K 棒的收盤」——
+   // 一定要講清楚它不是即時價，否則看起來跟開盤時一模一樣。
+   mini+='<span>報價 <b class="dim">'+(q==='closed'?'休市中':'收不到')+
+         '</b>（上面是收盤價，非即時）</span>';
+ }
+ if(live && q==='live'){
    if(c.mom5!=null) mini+='<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>';
    if(c.mom15!=null) mini+='<span>15分 <b class="'+sgn(c.mom15)+'">'+pm(c.mom15)+'</b></span>';
    if(c.chg!=null) mini+='<span>跳空 <b>'+pm(c.gap)+'</b></span>'+
@@ -1876,30 +2064,49 @@ function chartSVG(s){
    if(c.basis!=null) mini+='<span>基差 <b class="'+sgn(c.basis)+'">'+pm(c.basis)+'</b></span>';
  }
  const pick=pickOpen?calHTML():'';
- const sum=T.length?('　'+T.length+' 筆練習 '+pm(T.reduce((a,t)=>a+t._net,0))+' 點'):'';
- // 翻頁列上直接寫出圖涵蓋到哪 ——「08-20 夜 → 08-21（五）」比只寫「今天」清楚，
- // 星期也寫出來，不用心算 08-14 是禮拜幾
  const cur=curDay(), me=dayInfo(cur);
  // 換日之後、新的 K 棒還沒回來的那一秒，barsCache 還是上一天的 ——
  // 這時候標籤若照常顯示，會把上一天的練習筆數掛在新日期底下（看起來像那天有下單）。
- const loading=cur!==(barsCache.date||'');
+ const loading=barsPending||cur!==(barsCache.date||'');
  const dayS=cur.slice(5), noS=((barsCache.night_open)||'').slice(5);
- const rangeS=loading
-   ? dayS+(me?'（'+me.w+'）':'')+'　載入中…'
-   : ((noS&&noS!==dayS)?(noS+' 夜 → '):'')+
-     (viewDate?dayS:'今天')+(me?'（'+me.w+'）':'');
+ // 下排：純說明。即時那天也照樣寫日期（金點已經在講「現在」了，再寫「今天」是重複）；
+ // 沒練習寫「未練習」而不是整段消失 —— 消失會讓上下兩行的位置跳動。
+ const net=T.reduce((a,t)=>a+t._net,0);
+ const r2=loading
+   ? '<span>載入中…</span>'
+   : ((noS&&noS!==dayS)?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
+     '<span>'+(T.length
+       // 負號用 U+2212 不用 hyphen，等寬字型下跟 + 對得齊（只改這裡，不動全域的 pm()）
+       ? '練習 '+T.length+' 筆 <b class="'+sgn(net)+'">'+pm(net).replace('-','−')+'</b> 點'
+       : '未練習')+'</span>'+
+     // 這個分隔點跟著鍵盤提示一起藏（窄視窗會把提示收掉，只留一個孤零零的「·」很醜）
+     '<span class="sep k">·</span>'+
+     '<span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
  const nav=stepTarget(-1), fwd=stepTarget(1);
  return {
    svg:g, vb:'0 0 '+W+' '+H,
    head:'<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
         ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
         '<div class="pager">'+
-        '<button class="narw" data-nav="-1" title="前一個交易日（←）"'+
+        '<div class="r1">'+
+        '<button class="nav-icon" data-nav="-1" title="前一個交易日（←）"'+
           (nav?'':' disabled')+'>◀</button>'+
-        '<button class="stamp" data-pick="1">'+rangeS+(loading?'':sum)+' ▾</button>'+
-        '<button class="narw" data-nav="1" title="後一個交易日（→）"'+
+        '<button class="dstamp'+(pickOpen?' open':'')+(loading?' loading':'')+
+          '" data-pick="1" title="選日期（Esc 收合）">'+CAL_ICON+
+          '<span class="num">'+dayS+'</span>'+
+          // 這一格固定放星期，載入中不換字 —— 換成「載入中…」會讓日期鈕瞬間變寬約 33px，
+          // 整條 r1 是靠右對齊的，◀ 會被往左推出滑鼠底下：連點 ◀ 時第 2 下就落在日期鈕上
+          // （實測 250ms 節奏 4/5、60ms 節奏 2/5 生效，還誤開了月曆）。
+          // 載入中仍然看得出來：.dstamp.loading 會把日期轉灰，下排 r2 也照樣寫「載入中…」。
+          '<span class="wd">'+(me?me.w:'')+'</span>'+
+          '<span class="caret">▼</span></button>'+
+        '<button class="nav-icon" data-nav="1" title="後一個交易日（→）"'+
           (fwd?'':' disabled')+'>▶</button>'+
-        '<button class="jump'+(viewDate?'':' on')+'" data-day="" title="回到即時（Home）">今天</button>'+
+        (viewDate
+          ?'<button class="jump2" data-day="" title="回到即時（Home）">今天</button>'
+          :'<span class="livelamp" title="即時（Home）"><i></i>即時</span>')+
+        '</div>'+
+        '<div class="r2">'+r2+'</div>'+
         '</div>',
    pick:pick, mini:mini,
    legend:(function(b,hv){
@@ -1931,7 +2138,10 @@ function dayInfo(d){ return dayList().find(x=>x.d===d)||null; }
 function stepTarget(dir){
  const L=dayList(); if(!L.length) return null;
  let i=L.findIndex(x=>x.d===curDay());
- if(i<0) i=L.length-1;
+ // 目前看的日子不在交易日清單裡 —— 只會發生在「今天不是交易日」（週末／國定假日）。
+ // 這時候往前一步應該是「最後一個交易日」本身，不是再退一天：
+ // 週日實測按 ◀ 會從 08-23 直接跳到 08-20，整個跳過上週五（Benson 週末最想看的那天）。
+ if(i<0) return dir<0 ? L[L.length-1].d : null;
  const j=i+dir;
  return (j>=0&&j<L.length)?L[j].d:null;
 }
@@ -2012,17 +2222,32 @@ function idxAll(t){
 function paintChart(s){
  const d=chartSVG(s); if(!d) return false;
  if(!document.getElementById('csvg')){
+   // #cpick 包在 .cheadwrap 裡：月曆是絕對定位的浮層，要錨在翻頁列正下方，
+   // 定位基準必須是「標頭這一塊」而不是整張卡片（卡片是 position:relative）。
    document.getElementById('mkt').innerHTML='<div class="card chart">'+
-     '<div class="chead" id="chead"></div>'+
+     '<div class="cheadwrap"><div class="chead" id="chead"></div>'+
+     '<div class="calpop" id="cpick"></div></div>'+
      '<div class="legend" id="clegend"></div>'+
      '<div class="cwrap"><svg id="csvg" preserveAspectRatio="none"></svg></div>'+
      '<div class="chint"><span id="cinfo"></span>　滾輪縮放・拖曳平移・雙擊還原</div>'+
-     '<div id="cpick"></div><div class="mini" id="cmini"></div></div>';
+     '<div class="mini" id="cmini"></div></div>';
    bindChart();
  }
- const set=(id,html,attr)=>{ const e=document.getElementById(id);
-   if(attr){ if(e.getAttribute(attr)!==html) e.setAttribute(attr,html); }
-   else if(e.innerHTML!==html) e.innerHTML=html; };
+ // 只有內容真的變了才動 DOM —— 跟 setHTML() 同一套道理：tick 每 0.5 秒跑一次，
+ // 使用者剛好在那一瞬間按下去，按鈕會連同事件一起被換掉 → 第一下沒反應。
+ // ⚠️ 比對的是「上次自己設進去的那個字串」（快取在節點上的 __html／__at_xxx），
+ //    絕對不可以讀回 e.innerHTML 來比。瀏覽器解析後再序列化的結果跟原字串不一樣：
+ //    我們產的裸屬性 disabled（翻頁列 ◀▶ 的 (nav?'':' disabled')、月曆 ‹› 的
+ //    (mi<=0?' disabled':'')）讀回來是 disabled=""，兩邊永遠不相等 ⇒ 守衛整個失效，
+ //    月曆與翻頁列每秒被重建兩次（滑鼠 hover 的格子一直被抽掉、點下去剛好碰到重建就沒反應）。
+ //    2026-08-21 實測：3 秒內 #cpick、#chead 各被整個換掉 4 次。
+ //    把 disabled 改成輸出 disabled="" 只是治標 —— 屬性引號、HTML 實體、空白、屬性順序
+ //    任何一個序列化差異都會再犯一次，所以一律比快取字串，不比 DOM 讀回值。
+ const set=(id,html,attr)=>{ const e=document.getElementById(id); if(!e) return;
+   const k=attr?'__at_'+attr:'__html';
+   if(e[k]===html) return;
+   e[k]=html;
+   if(attr) e.setAttribute(attr,html); else e.innerHTML=html; };
  set('chead',d.head); set('clegend',d.legend);
  set('csvg',d.vb,'viewBox'); set('csvg',d.svg);
  set('cpick',d.pick); set('cmini',d.mini); set('cinfo',d.info);
@@ -2119,8 +2344,14 @@ function tradeBox(s){
       '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
       '<button class="btn ghost" data-act="undo">取消</button></div>';
  } else {
-   h+='<div class="btns"><button class="btn long" data-act="long">&#9650; 做多</button>'+
-      '<button class="btn short" data-act="short">&#9660; 做空</button></div>';
+   // 【紀錄正確性】沒有即時報價就不能開單 —— 拿舊價／收盤價記進練習成績，那筆成績是假的。
+   // 這不是 UX 取捨，所以按鈕真的停用（後端 /api/enter 也擋一次）。
+   const q=quoteState(s), off=q!=='live', dis=off?' disabled':'';
+   h+='<div class="btns"><button class="btn long" data-act="long"'+dis+'>&#9650; 做多</button>'+
+      '<button class="btn short" data-act="short"'+dis+'>&#9660; 做空</button></div>';
+   if(off) h+='<div class="whyoff">'+(q==='closed'
+     ?'休市中，沒有即時報價 —— 練習下單要用當下的真實成交價才有意義，開盤後才能按。'
+     :'目前收不到報價，無法確定進場價 —— 恢復報價後才能按。')+'</div>';
  }
  if(T.length){
    let sum=0; T.forEach(t=>sum+=t._net);
@@ -2200,9 +2431,13 @@ document.addEventListener('click', function(e){
    else goDay(v);
    return; }
  const b=e.target.closest('[data-win]');
- if(!b) return;
+ if(!b){
+   // 月曆現在浮在圖上面（以前掛在圖下面，蓋不到東西）——
+   // 點到圖或其他地方就要收掉，不然它會一直擋著 K 線。點月曆自己（換月）不算。
+   if(pickOpen&&!e.target.closest('.calbox')){ pickOpen=false; tick(); }
+   return; }
  WIN=parseInt(b.getAttribute('data-win'))||0;
- lastStats=''; tick();
+ lastStats=''; pickOpen=false; tick();
 });
 /* ============================================================================
    【回顧】分頁
@@ -3031,6 +3266,14 @@ class Handler(BaseHTTPRequestHandler):
             d = body.get("dir")
             if d not in ("long", "short"):
                 return self._json(400, {"error": "方向要是 long 或 short"})
+            # 【紀錄正確性】沒有即時報價就不准開單 —— 用一個舊價或最後收盤價記進
+            # 練習成績，那筆成績就是假的。前端會把按鈕停用，這裡是最後一道防線。
+            # 沒有 quote 欄位（例如測試治具）時當作 live，維持舊行為。
+            with state_lock:
+                q = STATE.get("quote", "live")
+            if q != "live":
+                return self._json(409, {"ok": False, "msg": QUOTE_MSG.get(
+                    q, "現在沒有即時報價，無法進場")})
             ok, msg = open_position(d, price, body.get("note", ""))
             return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
 
@@ -3233,11 +3476,14 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
     CURRENT_STATE["today"] = today_state
     check_position(today_state.price)          # 每次更新都檢查有沒有觸及 ±100
     age = None if today_state.last_recv is None else round(time.time() - today_state.last_recv)
+    sess = market_session()
+    # 重播是拿歷史資料餵的，報價當然「新鮮」—— 不要被時鐘判成休市
+    quote = "live" if replay else quote_state(today_state.price, age, sess)
     with state_lock:
         STATE.update({
             "period": hist.period, "n_days_total": hist.n_days,
             "clock": now_time.strftime("%H:%M:%S"), "replay": replay,
-            "phase": phase,
+            "phase": phase, "market": sess, "quote": quote,
             "position": (dict(POSITION, float_pts=round(
                 (1 if POSITION["dir"] == "long" else -1)
                 * ((today_state.price or POSITION["entry"]) - POSITION["entry"]), 1))
@@ -3247,7 +3493,11 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
             "conn": CONN.copy(),
         })
         if today_state.price is None:
-            STATE.update({"status": "waiting", "msg": "等待第一筆成交…"})
+            # 【Bug A】一筆報價都還沒收到 ≠ 什麼都不能顯示。
+            # 前端會照樣畫 K 線圖與日期選單（資料來自本機 csv／永豐歷史 K），
+            # 只是把報價狀態誠實標成「休市中」或「盤中收不到報價」，並停用下單按鈕。
+            STATE.update({"status": "waiting", "chips": None, "result": None,
+                          "msg": QUOTE_MSG.get(quote, "等待第一筆成交…")})
             return
 
         # 夜盤：沒有日盤開高低，也沒有對照樣本 —— 只給價格與動能
@@ -3490,6 +3740,8 @@ def main():
     session["opened"] = datetime.now().time() >= pd.Timestamp("08:30").time()
     with state_lock:
         STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
+                      "quote": quote_state(None, None, market_session()),
+                      "market": market_session(),
                       "period": hist.period, "n_days_total": hist.n_days})
     threading.Thread(target=poll_index, daemon=True).start()
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
@@ -3517,9 +3769,11 @@ def main():
             # ---- 斷線看門狗
             # 只要「市場應該有在交易」就要盯著：日盤 08:45~13:45、夜盤 15:00~05:00。
             # 之前只盯日盤，夜盤斷線會顯示警告卻永遠不重連 —— 那是 bug。
-            in_day = SESSION_OPEN <= t < DAY_END
-            in_night = t >= NIGHT_OPEN or t < NIGHT_CLOSE
-            market_open = in_day or in_night
+            # 星期也要看：週日晚上沒有夜盤、週一凌晨沒有夜盤尾巴，
+            # 否則整個週末都會被判成「盤中收不到報價」而一直重連（見 market_session）。
+            sess = market_session(now)
+            in_day = sess == "day"
+            market_open = sess in ("day", "night")
 
             if market_open:
                 quiet = (time.time() - st.last_recv) if (st and st.last_recv) else None
@@ -3536,14 +3790,21 @@ def main():
             min_idx = now.hour * 60 + now.minute
             vol_ref = vol_ref_by_min.get(min_idx, 1.0)
 
-            if st is None or st.price is None:
+            if st is None:
+                # 連狀態物件都還沒建（啟動的頭幾秒）。仍然要把報價狀態填進去，
+                # 前端才分得出「休市中」與「盤中收不到報價」，K 線圖也才畫得出來。
+                q = quote_state(None, None, sess)
                 with state_lock:
                     STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
-                                  "msg": "等待第一筆成交…"})
-            elif session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
+                                  "market": sess, "quote": q, "phase": "off",
+                                  "position": None, "today_trades": list(TODAY_TRADES),
+                                  "chips": None, "result": None, "age_sec": None,
+                                  "conn": CONN.copy(),
+                                  "msg": QUOTE_MSG.get(q, "等待第一筆成交…")})
+            elif in_day and session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
                 # 下單時段：即時顯示 + 記錄資料
                 update_state(hist, st, vol_ref, t, phase="recording")
-            elif session["date"] == today and WATCH_END < t < DAY_END:
+            elif in_day and session["date"] == today and WATCH_END < t < DAY_END:
                 # 日盤其餘時間：照常顯示價格與趨勢，但不記錄
                 if not session["saved"] and st.open is not None:
                     session["saved"] = True
