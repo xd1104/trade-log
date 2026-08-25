@@ -1528,7 +1528,11 @@ def all_practice_trades():
 
 PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>早盤盤面儀表板</title><style>
+<title>早盤儀表板</title>
+<!-- 圖示直接內嵌（面板是單一檔、不另外供應靜態檔）。桌面 App 的視窗與
+     工作列圖示就是靠這張 favicon；同一張圖也做成 panel.ico 給捷徑用。 -->
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAvklEQVR42mNgwANEJBT+UwMzkAKoZSlZjqG15XgdQS/LsTqCVM2PVwZixWQ7ghJLKXEM0Q4gxWBS1JJkObnRRNARtLCcFP0MxGp+FxUCxtR2BAOxmsh1ACFHMJDie0KOMNlcB8ZUcQA235PrAGxm4nQAvuDH5wCY5aSGwqgDRh0w+BxAbjYkxgE0LQnxOYDikpDuDiC3JiTVcqpXx+gOoKg6pluDZMCbZEOiUUrzZvmAd0wGRddsUHROB6J7DgCcaOnIVZuz+QAAAABJRU5ErkJggg==">
+<style>
 /* 配色與版型對齊 trade-log App（css/style.css）。
    含台股慣例：紅色=漲/贏、綠色=跌/輸 —— 跟 App 一致，避免看反方向。
    2026-08-25 視覺升級（方案 A 沉穩，規格見 UI-REDESIGN-SPEC.md）：
@@ -4352,10 +4356,13 @@ def main():
     threading.Thread(target=serve, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}/"
     print(f"面板網址：{url}")
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+    # 桌面 App（panel_app.pyw）自己會開一個專屬視窗，這裡再開一次就會多跳一個
+    # 普通的瀏覽器分頁出來。它啟動時會帶 --no-open。
+    if "--no-open" not in sys.argv:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
 
     if "--replay" in sys.argv:
         run_replay(hist, sys.argv[sys.argv.index("--replay") + 1])
