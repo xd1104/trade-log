@@ -1757,6 +1757,82 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   padding:13px 15px; font-size:12px; color:var(--dim); margin-bottom:12px; line-height:1.65}
 .note b{color:var(--text)}
 .wait{text-align:center; padding:48px 20px; color:var(--dim)}
+
+/* ═══════════ 開啟與載入的動態 ═══════════
+   量測過的實際延遲：整頁 17ms、/api/state 2ms、但 /api/bars 要 300~500ms。
+   所以「打開面板」的體感就是那半秒 —— 舊版在那半秒塞一張小小的數字卡，
+   資料到了再被大圖整個頂掉，版面跳一下。現在改成：
+     ① 骨架直接寫在 HTML 裡（第 0 毫秒就在，尺寸跟真圖一模一樣，不會跳）
+     ② 真圖淡入蓋過去
+     ③ K 線由左往右展開一次（只在第一次與換日時，不是每次重繪）
+   ⚠️ 每 0.5 秒重繪的東西一律不准掛動畫：#chead 每次報價變動就整個重建，
+      掛上去會變成一直閃。動畫只能掛在「建一次就不動」的容器上。 */
+@keyframes kk-rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes kk-fade{from{opacity:0}to{opacity:1}}
+@keyframes kk-wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes kk-sheen{from{transform:translateX(-55%)}to{transform:translateX(255%)}}
+@keyframes kk-bar{from{left:-38%}to{left:100%}}
+@keyframes kk-breathe{0%,100%{opacity:.34}50%{opacity:.66}}
+
+/* 進場：只在開站後的頭 1.1 秒有效（body.boot），之後的重繪一律不動 */
+body.boot .topbar{animation:kk-rise .40s cubic-bezier(.22,.68,.36,1) both}
+body.boot #mkt>*{animation:kk-rise .46s cubic-bezier(.22,.68,.36,1) both .04s}
+body.boot .right>*>.card{animation:kk-rise .46s cubic-bezier(.22,.68,.36,1) both}
+body.boot .right>#trade>.card{animation-delay:.10s}
+body.boot .right>#stats>.card{animation-delay:.16s}
+/* 真圖接手骨架：淡入就好，不要再 rise 一次（同一個位置動兩次看起來很躁） */
+.card.chart.kk-in{animation:kk-fade .34s ease both}
+.cwrap.kk-draw svg{animation:kk-wipe .52s cubic-bezier(.22,.68,.36,1) both}
+
+/* 骨架：刻意沿用 .chead/.legend/.cwrap/.chint/.mini 這幾個真名字，
+   高度才會跟真圖分毫不差（量過：標頭 44、legend 18.8、圖 aspect 1040/470、
+   提示 16.5、mini 30.6）。換成自訂 class 就得手動對高度，改一次錯一次。 */
+.skel .sk{position:relative; overflow:hidden; border-radius:5px;
+  background:var(--surface-2); animation:kk-breathe 1.6s ease-in-out infinite}
+.skel .sk::after{content:''; position:absolute; inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.05),transparent);
+  animation:kk-sheen 1.5s ease-in-out infinite}
+/* 這三段的高度是量出來的（真圖：標頭 44、legend 18.8、mini 30.8）。
+   骨架靠 .sk 方塊撐不到那個高度，差 24.5px —— 不補的話換成真圖時整頁會往下推。 */
+.skel .chead{align-items:center; min-height:44px}
+.skel .legend{min-height:18.8px; align-items:center}
+.skel .mini{min-height:30.8px; align-items:center}
+.skel .sk-px{width:172px; height:34px}
+.skel .sk-day{width:118px; height:20px}
+.skel .legend .sk{height:11px}
+.skel .chint .sk{width:150px; height:10px; display:inline-block}
+.skel .mini .sk{width:64px; height:12px}
+/* 高度＝寬度 × 470/1040，跟真圖的 viewBox 完全一致。
+   ⚠️ 假 K 棒一定要絕對定位：當成一般 flex 子元素的話，它們的百分比高度會反過來
+      把 .cwrap 撐高（實測 351 → 553），骨架就比真圖高一截，換過去時版面照樣跳。 */
+.skel .cwrap{aspect-ratio:1040/470; position:relative}
+/* 先把價格軸的格線畫出來，真圖進來時網格不會「突然出現」 */
+.skel .cwrap::before{content:''; position:absolute; left:0; right:0; top:12px; bottom:26px;
+  background:repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 20%)}
+.skel .bars{position:absolute; left:0; right:0; top:12px; bottom:26px;
+  display:flex; align-items:flex-end; gap:2px}
+.skel .bars i{flex:1; background:var(--surface-2); border-radius:2px; opacity:.5;
+  animation:kk-breathe 1.6s ease-in-out infinite}
+
+/* 換日：不要只換一行「載入中」的字。圖先淡下去、頂上跑一條細進度條，
+   新資料回來再由左往右展開 —— 這樣看得出「它在做事」而不是卡住。 */
+.card.chart{position:relative}
+.chart .kk-prog{position:absolute; left:0; right:0; top:0; height:2px; overflow:hidden;
+  opacity:0; transition:opacity .2s; pointer-events:none; border-radius:var(--radius) var(--radius) 0 0}
+.chart.kk-load .kk-prog{opacity:1}
+.chart .kk-prog i{position:absolute; top:0; height:2px; width:38%;
+  background:linear-gradient(90deg,transparent,var(--gold),transparent);
+  animation:kk-bar 1.05s linear infinite}
+.chart.kk-load .cwrap,.chart.kk-load .legend,.chart.kk-load .mini{opacity:.4}
+.chart .cwrap,.chart .legend,.chart .mini{transition:opacity .22s ease}
+
+/* 系統設定「減少動態」就全部關掉 —— 這是看盤工具，不能跟使用者的設定作對 */
+@media (prefers-reduced-motion: reduce){
+  body.boot .topbar,body.boot #mkt>*,body.boot .right>*>.card,
+  .card.chart.kk-in,.cwrap.kk-draw svg,.skel .sk,.skel .sk::after,
+  .skel .bars i,.chart .kk-prog i{animation:none !important}
+  .chart .cwrap,.chart .legend,.chart .mini{transition:none}
+}
 .foot{font-size:11px; color:var(--faint); text-align:center; margin-top:20px; line-height:1.7}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--down);margin-right:5px}
 .dot.stale{background:var(--gold)} .dot.dead{background:var(--up)}
@@ -1900,9 +1976,29 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 </div>
 
 <div id="tab-live">
-  <div id="wait" class="wait">等待資料…</div>
+  <!-- hidden：以前預設可見，開站的第一格畫面會閃一下「等待資料…」再被蓋掉 -->
+  <div id="wait" class="wait" hidden>等待資料…</div>
   <div id="warn"></div>
-  <div class="cols"><div id="mkt"></div><div class="right"><div id="trade"></div><div id="stats"></div></div></div>
+  <div class="cols"><div id="mkt">
+    <!-- K 棒要 0.3~0.5 秒才回得來。骨架寫死在 HTML 裡，第 0 毫秒就佔好位置，
+         尺寸與真圖完全相同 —— 真圖進來時只是淡入，版面一格都不會跳。 -->
+    <div class="card chart skel">
+      <div class="chead"><span class="sk sk-px"></span><span class="sk sk-day"></span></div>
+      <div class="legend"><span class="sk" style="width:88px"></span>
+        <span class="sk" style="width:70px"></span><span class="sk" style="width:70px"></span>
+        <span class="sk" style="width:70px"></span><span class="sk" style="width:56px"></span></div>
+      <div class="cwrap"><div class="bars"><i style="height:38%"></i><i style="height:52%"></i>
+        <i style="height:44%"></i><i style="height:61%"></i><i style="height:55%"></i>
+        <i style="height:70%"></i><i style="height:64%"></i><i style="height:48%"></i>
+        <i style="height:57%"></i><i style="height:72%"></i><i style="height:66%"></i>
+        <i style="height:80%"></i><i style="height:74%"></i><i style="height:59%"></i>
+        <i style="height:68%"></i><i style="height:52%"></i><i style="height:63%"></i>
+        <i style="height:47%"></i></div></div>
+      <div class="chint"><span class="sk"></span></div>
+      <div class="mini"><span class="sk"></span><span class="sk"></span><span class="sk"></span>
+        <span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
+    </div>
+  </div><div class="right"><div id="trade"></div><div id="stats"></div></div></div>
 </div>
 
 <!-- 【回顧】：容器只建這一次，之後只換裡面的內容（重繪不打斷縮放／拖曳、也不閃） -->
@@ -2019,6 +2115,11 @@ async function tick(nf){
  const W=document.getElementById('wait');
  const drew=paintChart(s);
  if(drew){
+   W.hidden=true;
+ } else if(barsCache===null){
+   // 還沒抓到過任何 K 棒（開站的頭 0.3~0.5 秒）→ 骨架留著就好。
+   // 這個分支一定要排在 q==='live' 前面：不然開站那半秒會先塞一張小數字卡，
+   // 圖回來時整個被頂掉，版面跳一下 —— 就是他說的「有點生硬」。
    W.hidden=true;
  } else if(q==='live'){
    // 有報價但還沒有 K 棒（例如剛連上的夜盤）→ 退回簡單的數字卡
@@ -2457,13 +2558,27 @@ function idxAll(t){
  return r;
 }
 
+/* K 線由左往右展開一次。用 class + 計時器拿掉，不留 clip-path 在元素上 ——
+   留著的話之後每次重繪都被裁，圖會缺一角。 */
+var kkWasBusy=false, kkTimer=null;
+function kkDraw(){
+ const w=document.querySelector('#mkt .cwrap'); if(!w) return;
+ w.classList.remove('kk-draw');
+ void w.offsetWidth;                 // 強制回流，動畫才會重播
+ w.classList.add('kk-draw');
+ clearTimeout(kkTimer);
+ kkTimer=setTimeout(function(){ w.classList.remove('kk-draw'); },600);
+}
+
 /* 外框只建一次，之後只換 svg 內容 —— 重繪不會打斷你的縮放與拖曳 */
 function paintChart(s){
  const d=chartSVG(s); if(!d) return false;
  if(!document.getElementById('csvg')){
    // #cpick 包在 .cheadwrap 裡：月曆是絕對定位的浮層，要錨在翻頁列正下方，
    // 定位基準必須是「標頭這一塊」而不是整張卡片（卡片是 position:relative）。
-   document.getElementById('mkt').innerHTML='<div class="card chart">'+
+   // kk-in＝淡入蓋過骨架（骨架已經佔好一樣的位置，所以不需要再 rise 一次）
+   document.getElementById('mkt').innerHTML='<div class="card chart kk-in" id="cchart">'+
+     '<div class="kk-prog"><i></i></div>'+
      '<div class="cheadwrap"><div class="chead" id="chead"></div>'+
      '<div class="calpop" id="cpick"></div></div>'+
      '<div class="legend" id="clegend"></div>'+
@@ -2471,6 +2586,17 @@ function paintChart(s){
      '<div class="chint"><span id="cinfo"></span>　滾輪縮放・拖曳平移・雙擊還原</div>'+
      '<div class="mini" id="cmini"></div></div>';
    bindChart();
+   kkDraw();                       // 第一次出現：K 線由左往右展開一次
+ }
+ // 換日／回到即時的等待期間：圖淡下去 ＋ 頂上跑一條細進度條。
+ // 只切 class，不動 innerHTML —— 動 innerHTML 會打斷他的縮放與拖曳。
+ { const card=document.getElementById('cchart');
+   if(card){
+     const busy=barsPending||curDay()!==((barsCache&&barsCache.date)||'');
+     if(busy!==card.classList.contains('kk-load')) card.classList.toggle('kk-load',busy);
+     if(!busy&&kkWasBusy) kkDraw();     // 新的一天到齊了 → 再展開一次
+     kkWasBusy=busy;
+   }
  }
  // 只有內容真的變了才動 DOM —— 跟 setHTML() 同一套道理：tick 每 0.5 秒跑一次，
  // 使用者剛好在那一瞬間按下去，按鈕會連同事件一起被換掉 → 第一下沒反應。
@@ -2747,6 +2873,11 @@ const SPEEDS=[[0.5,1200],[1,600],[2,300],[4,150]];
 const FUT=10;                // 重播時右邊固定留幾格空白
 const RFEE=5, RTP=100;       // 跟練習下單同一把尺：±100 點、來回 5 點成本
 const REASON={tp:'停利',sl:'停損',manual:'手動',close:'收盤'};
+/* 進場動畫只在開站後的頭 1.1 秒有效。過了就把 class 拿掉 ——
+   不然之後每次卡片內容變動（下單、成績更新）都會整張再飛一次。 */
+document.body.classList.add('boot');
+setTimeout(function(){ document.body.classList.remove('boot'); }, 1100);
+
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const mmin=t=>parseInt(t.slice(0,2))*60+parseInt(t.slice(3,5));
@@ -2839,16 +2970,34 @@ function rvGeom(all){
  const end=RVIEW.end==null?all.length:Math.max(n,Math.min(RVIEW.end,all.length));
  return {from:Math.max(0,end-n),to:end,n:n,rev:all.length-1};
 }
-function rvBlank(msg){
+function rvBlank(msg,loading){
  const sv=document.getElementById('rsvg');
  sv.setAttribute('viewBox','0 0 '+RW+' '+RH);
- sv.innerHTML='<rect x="0" y="0" width="'+RW+'" height="'+RH+'" fill="#171C25"/>'+
-   '<text x="'+(RW/2)+'" y="'+(RH/2)+'" fill="#5A616E" font-size="16" text-anchor="middle">'+msg+'</text>';
+ let g='<rect x="0" y="0" width="'+RW+'" height="'+RH+'" fill="#171C25"/>';
+ if(loading){
+   // 換一天要 0.4~1 秒（伺服器每次都要重篩 54 萬列）。單一行「載入中…」看起來像當掉，
+   // 所以先畫出格線與呼吸中的假 K 棒 —— 跟即時分頁的骨架同一套語言。
+   for(let k=1;k<5;k++){ const y=RTOP+(RPB-RTOP)*k/5;
+     g+='<line x1="0" y1="'+y.toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+y.toFixed(1)+
+        '" stroke="#262D39" stroke-width="1"/>'; }
+   const H=[38,52,44,61,55,70,64,48,57,72,66,80,74,59,68,52,63,47,58,66,51,71,60,45];
+   const cw=(RW-RR)/H.length;
+   H.forEach(function(h,i){
+     const bh=(RPB-RTOP)*h/140, y=RTOP+(RPB-RTOP)*0.5-bh/2;
+     g+='<rect x="'+(i*cw+cw*0.22).toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+(cw*0.56).toFixed(1)+
+        '" height="'+bh.toFixed(1)+'" rx="2" fill="#1F2530">'+
+        '<animate attributeName="opacity" values="0.35;0.7;0.35" dur="1.6s" begin="'+
+        (i*0.045).toFixed(2)+'s" repeatCount="indefinite"/></rect>';
+   });
+ }
+ g+='<text x="'+(RW/2)+'" y="'+(loading?RPB+34:RH/2)+'" fill="#5A616E" font-size="'+
+    (loading?13:16)+'" text-anchor="middle">'+msg+'</text>';
+ sv.innerHTML=g;
  rset('rlegend','');
 }
 function rvDraw(C,D){
  if(!C.day){ rvBlank('還沒有任何練習紀錄'); rset('rhead',''); return; }
- if(!D){ rvBlank('載入中…'); return; }
+ if(!D){ rvBlank('載入中…',true); return; }
  const all=D.bars||[];
  if(!all.length){ rvBlank(D.error?('這天讀不到 K 棒：'+D.error):'這天沒有本機資料');
    rset('rhead','<div><span class="cday">'+C.day+'</span></div>'); return; }
