@@ -13,6 +13,7 @@
 【為什麼不是 Electron】那要多裝 Node、打包出來 150MB 起跳，
 而 Edge 是 Windows 11 內建的，這樣做零安裝、開得快，出事也只有這一個檔要看。
 """
+import hashlib
 import os
 import subprocess
 import sys
@@ -37,7 +38,24 @@ EDGE_CANDIDATES = [
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
 ]
 
+# Chromium 從 start_url 推出來的應用程式 id：SHA-256 前 16 bytes，每個 nibble 映成 a~p。
+# 安裝之後就是用這個 id 啟動，Windows 才會把它當成一支獨立的應用程式（圖示、工作列、
+# 「已安裝的應用程式」清單都跟著走）；只用 --app 開的話一律算在 Edge 頭上。
+APP_ID = "".join(chr(ord("a") + (b >> 4)) + chr(ord("a") + (b & 15))
+                 for b in hashlib.sha256(URL.encode()).digest()[:16])
+
 _stop = threading.Event()
+
+
+def installed():
+    """這個設定檔裡裝過這支應用程式沒有。Edge 會把它的資料放在 Web Applications 底下。"""
+    root = os.path.join(PROFILE, "Default", "Web Applications")
+    if not os.path.isdir(root):
+        return False
+    for dirpath, dirnames, filenames in os.walk(root):
+        if APP_ID in os.path.basename(dirpath) or any(APP_ID in f for f in filenames):
+            return True
+    return False
 
 
 def log(msg):
@@ -115,14 +133,21 @@ def main():
         return 0
 
     os.makedirs(PROFILE, exist_ok=True)
-    win = subprocess.Popen([
-        exe,
-        f"--app={URL}",
-        f"--user-data-dir={PROFILE}",
-        "--window-size=1520,980",
-        "--no-first-run",
-        "--no-default-browser-check",
-    ], creationflags=NO_WINDOW)
+    args = [exe, f"--user-data-dir={PROFILE}",
+            "--no-first-run", "--no-default-browser-check"]
+    if "--install" in sys.argv:
+        # 一次性：開一個「有網址列」的普通視窗，網址列右邊會出現安裝鈕。
+        # 裝好之後工作列才會是我們的圖示（沒裝的話 Windows 一律算它是 Edge）。
+        args += [URL, "--window-size=1200,900"]
+        log("安裝模式：開普通視窗讓他按安裝")
+    elif installed():
+        # 已安裝 → 用 app-id 開，這樣才是「應用程式」，圖示與工作列都歸我們
+        args += [f"--app-id={APP_ID}", "--window-size=1520,980"]
+        log(f"以已安裝的應用程式開啟（app-id {APP_ID}）")
+    else:
+        args += [f"--app={URL}", "--window-size=1520,980"]
+        log("尚未安裝，先用 app 模式開（工作列圖示會是 Edge 的）")
+    win = subprocess.Popen(args, creationflags=NO_WINDOW)
     log("視窗已開，等它關閉")
     win.wait()
 

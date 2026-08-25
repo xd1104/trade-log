@@ -90,7 +90,14 @@ def main():
     out.write_bytes(head + ent + b"".join(imgs))
     print(f"寫好 {out}（{out.stat().st_size} bytes，{len(sizes)} 種尺寸）")
 
-    # 面板網頁也用同一張圖：Edge 的 app 視窗與分頁靠 favicon 顯示圖示
+    # PWA 用的圖示：Windows 要把它當成「安裝好的應用程式」才會用我們的圖示，
+    # 而安裝需要一份 manifest ＋ 192／512 兩種尺寸的 PNG。
+    for n in (192, 512):
+        f = pathlib.Path(__file__).with_name(f"icon-{n}.png")
+        f.write_bytes(png(draw(n)))
+        print(f"寫好 {f.name}（{f.stat().st_size} bytes）")
+
+    # 面板網頁的 favicon（分頁上那顆小圖）直接內嵌，不另外供應靜態檔
     import base64
     small = base64.b64encode(imgs[sizes.index(32)]).decode()
     pathlib.Path(__file__).with_name("_favicon.txt").write_text(small, encoding="ascii")

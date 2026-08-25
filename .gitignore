@@ -22,3 +22,6 @@ tools/shioaji/practice_trades/
 # 【回顧】分頁產生的本機檔案（個人資料，repo 是公開的）
 tools/shioaji/replay_log/
 tools/shioaji/review_cache.json
+
+# 桌面 App 的執行記錄（本機）
+tools/shioaji/panel-app.log

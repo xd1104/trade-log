@@ -1524,6 +1524,32 @@ def all_practice_trades():
     return out
 
 
+# ---------------------------------------------------------------- 桌面 App
+
+# 【為什麼要 manifest】只用 Edge 的 --app 開視窗，Windows 還是把它算成 Edge，
+# 工作列顯示的是 Edge 的圖示。要變成自己的圖示、能釘選、出現在「已安裝的應用程式」裡，
+# 就得讓瀏覽器「安裝」它 —— 而安裝的前提是有一份 manifest 與 192／512 的圖示。
+MANIFEST = {
+    "name": "早盤儀表板",
+    "short_name": "早盤儀表板",
+    "description": "微台指早盤看盤與模擬練習",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#0F1218",
+    "theme_color": "#0F1218",
+    "lang": "zh-Hant",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "maskable"},
+    ],
+}
+
+
 # ---------------------------------------------------------------- 網頁
 
 PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
@@ -1531,6 +1557,8 @@ PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <title>早盤儀表板</title>
 <!-- 圖示直接內嵌（面板是單一檔、不另外供應靜態檔）。桌面 App 的視窗與
      工作列圖示就是靠這張 favicon；同一張圖也做成 panel.ico 給捷徑用。 -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0F1218">
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAvklEQVR42mNgwANEJBT+UwMzkAKoZSlZjqG15XgdQS/LsTqCVM2PVwZixWQ7ghJLKXEM0Q4gxWBS1JJkObnRRNARtLCcFP0MxGp+FxUCxtR2BAOxmsh1ACFHMJDie0KOMNlcB8ZUcQA235PrAGxm4nQAvuDH5wCY5aSGwqgDRh0w+BxAbjYkxgE0LQnxOYDikpDuDiC3JiTVcqpXx+gOoKg6pluDZMCbZEOiUUrzZvmAd0wGRddsUHROB6J7DgCcaOnIVZuz+QAAAABJRU5ErkJggg==">
 <style>
 /* 配色與版型對齊 trade-log App（css/style.css）。
@@ -4140,6 +4168,32 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.path.startswith("/manifest.webmanifest"):
+            b = json.dumps(MANIFEST, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
+
+        if self.path.startswith("/icon-"):
+            name = self.path.split("?", 1)[0].lstrip("/")
+            # 只認自己產的那兩個檔名，不要讓路徑跑到別的地方去
+            if name in ("icon-192.png", "icon-512.png"):
+                f = HERE / name
+                if f.exists():
+                    b = f.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Cache-Control", "max-age=86400")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    self.wfile.write(b)
+                    return
+            self.send_error(404)
+            return
+
         body = PAGE.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
