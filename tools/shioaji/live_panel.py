@@ -447,6 +447,64 @@ def save_trades():
         json.dumps(TODAY_TRADES, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+NOTE_MAX = 500
+
+
+def set_note(d, t, entry, text, on_open=False):
+    """
+    幫某一筆練習紀錄補寫心得 —— 跟手機 App 是同一個 note 欄位。
+
+    【只動 note 一個欄位】整筆重寫會把 _mfe/_mae 這些事後算的欄位弄掉，
+    也會被前端手上的舊快照把其他欄位蓋回舊值。
+    【用（日期＋進場時間＋進場價）認人，不用陣列位序】撤銷最後一筆之後位序就位移了。
+    """
+    text = (text or "").strip()[:NOTE_MAX]
+    if on_open:
+        if POSITION is None:
+            return False, "現在沒有持倉"
+        POSITION["note"] = text
+        return True, "已記下"
+
+    try:
+        datetime.strptime(str(d), "%Y-%m-%d")     # 同時擋掉 ../ 這種路徑
+    except Exception:
+        return False, "日期格式不對"
+
+    today = str(d) == str(date.today())
+    if today:
+        recs = TODAY_TRADES
+    else:
+        f = TRADE_DIR / f"{d}.json"
+        if not f.exists():
+            return False, "那一天沒有練習紀錄"
+        try:
+            recs = json.loads(f.read_text(encoding="utf-8")) or []
+        except Exception:
+            return False, "紀錄檔讀不開"
+
+    hit = None
+    for r in recs:
+        try:
+            if (str(r.get("time", ""))[:5] == str(t)[:5]
+                    and round(float(r.get("entry"))) == round(float(entry))):
+                hit = r
+                break
+        except Exception:
+            continue
+    if hit is None:
+        return False, "找不到那一筆紀錄"
+    hit["note"] = text
+
+    if today:
+        save_trades()
+    else:
+        (TRADE_DIR / f"{d}.json").write_text(
+            json.dumps(recs, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 心得也要跟著上雲，手機那邊才看得到
+    threading.Thread(target=sync_to_cloud, daemon=True).start()
+    return True, "已存"
+
+
 def load_today_trades():
     """
     啟動與跨日時把當天已有的紀錄讀回記憶體。
@@ -513,7 +571,8 @@ def practice_stats():
                                    ("近 30 筆", 30), ("全部", 10 ** 6)]
                     if agg(recs[-n:])],
         "recent": [{k: r.get(k) for k in
-                    ("date", "time", "dir", "entry", "exit", "_net", "_reason", "_source")}
+                    ("date", "time", "dir", "entry", "exit", "note",
+                     "_net", "_reason", "_source")}
                    for r in recs[-12:]][::-1],
         "total": len(recs),
     }
@@ -1650,6 +1709,18 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .noteline{font-size:12.5px; color:var(--text); background:var(--surface-2);
   border:1px solid var(--line); border-radius:9px; padding:9px 11px; line-height:1.6}
 .noteline.empty{color:var(--faint)}
+.noteline[data-nedit]{cursor:pointer}
+.noteline[data-nedit]:hover{border-color:var(--gold); color:var(--gold)}
+.trade .noteline{margin-top:8px; font-size:12px; padding:8px 10px}
+.nedit{margin-top:8px}
+.nedit textarea{width:100%; box-sizing:border-box; min-height:78px; resize:vertical;
+  background:var(--surface-2); border:1px solid var(--gold); border-radius:9px;
+  color:var(--text); font-family:var(--font-sans); font-size:12.5px; line-height:1.6;
+  padding:9px 11px}
+.nedit textarea::placeholder{color:var(--faint)}
+.nedit textarea:focus{outline:none}
+.nedit .nbtn{display:flex; gap:8px; margin-top:7px}
+.nedit .nbtn .btn{flex:1; padding:7px 0; font-size:12.5px}
 .empty{text-align:center; padding:36px 16px; color:var(--faint); font-size:12.5px; line-height:1.8}
 .btn.gold{background:var(--gold-soft); color:var(--gold); border:1px solid transparent}
 .btn.gw{flex:1}                     /* 回顧頁的次要按鈕要跟主按鈕一樣寬 */
@@ -1732,6 +1803,39 @@ const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
 
 var lastMkt='', lastTrade='', lastStats='', lastWarn='', statsCache=null, statsAt=0;
 
+/* ---------------- 心得：跟手機 App 同一個 note 欄位 ----------------
+   面板是即時下單，成交當下沒空打字，所以心得一律「事後補寫」：
+   點那一筆就展開輸入框，存檔後跟練習紀錄一起同步上雲，手機開 App 就看得到。
+   NOTE.key 前面那個字母是分區（t=練習下單、s=練習成績、r=回顧），
+   因為同一筆交易會同時出現在好幾個清單裡，不分區就會有兩個 id 相同的輸入框。 */
+var NOTE={key:null,text:''};
+function nkey(ns,t){
+  return ns+'|'+(t.date||'')+'|'+String(t.time||'').slice(0,5)+'|'+Math.round(t.entry);
+}
+function noteBox(key,note,attrs,hint,ph){
+  if(NOTE.key===key)
+    return '<div class="nedit"><textarea id="tnote" maxlength="500" placeholder="'+ph+
+      '">'+esc(NOTE.text)+'</textarea><div class="nbtn">'+
+      '<button class="btn flat2" data-nsave="1">儲存</button>'+
+      '<button class="btn ghost" data-ncancel="1">取消</button></div></div>';
+  return '<div class="noteline'+(note?'':' empty')+'" data-nedit="'+esc(key)+'" '+attrs+
+    ' data-note="'+esc(note||'')+'">'+(note?'「'+esc(note)+'」':hint)+'</div>';
+}
+function nattr(t){
+  return 'data-nd="'+esc(t.date||'')+'" data-nt="'+esc(String(t.time||'').slice(0,5))+
+    '" data-ne="'+Math.round(t.entry)+'"';
+}
+/* 編輯中就不重畫那一區 —— 中文輸入法打到一半被換掉整個 textarea，字會直接不見。
+   但「展開輸入框」本身也是一次重繪，會被自己這道保護擋掉（第一次就踩到），
+   所以刻意的重繪要帶 force 旗標繞過去。 */
+function nEditing(ns){ return NOTE.key!=null && NOTE.key[0]===ns; }
+function nrepaint(){
+  lastTrade=''; lastStats=''; lastPane='';
+  if(TAB==='review') rvRender(true); else tick(true);
+  setTimeout(function(){ const el=document.getElementById('tnote');
+    if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } },0);
+}
+
 /* ---------------- 報價狀態（Bug A） ----------------
    後端把「沒有報價」分成兩種：closed＝休市中（正常）、nodata＝盤中卻收不到（示警）。
    以前兩種都叫 waiting，前端只好用一道門把整個即時分頁擋掉 ——
@@ -1750,7 +1854,7 @@ const QMSG={
  nodata:'<div class="alert"><b>盤中卻收不到報價</b>　'+
         '若今天是國定假日就是正常休市；否則是連線問題，程式每分鐘會自動重連。</div>'};
 
-async function tick(){
+async function tick(nf){
  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
  // 成績每 5 秒抓一次就好 —— 它會讀所有紀錄檔，沒必要跟著報價跳
  if(Date.now()-statsAt>5000){
@@ -1799,8 +1903,8 @@ async function tick(){
    const M=document.getElementById('mkt');
    if(M.innerHTML){ M.innerHTML=''; lastMkt=''; lastMktFallback=''; }
  }
- setHTML('trade',tradeBox(s));
- setHTML('stats',statsBox(statsCache));
+ if(nf||!nEditing('t')) setHTML('trade',tradeBox(s));
+ if(nf||!nEditing('s')) setHTML('stats',statsBox(statsCache));
 }
 
 // 只有內容真的變了才動 DOM。否則每 0.5 秒重建一次，
@@ -2342,7 +2446,9 @@ function tradeBox(s){
       '<div class="l">'+(P.dir==='long'?'做多':'做空')+'　進場 '+f(P.entry)+'　'+P.entry_time+'</div></div>'+
       '<div class="plimit"><span>停利 '+f(P.tp)+'</span><span>停損 '+f(P.sl)+'</span></div>'+
       '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
-      '<button class="btn ghost" data-act="undo">取消</button></div>';
+      '<button class="btn ghost" data-act="undo">取消</button></div>'+
+      noteBox('t|open',P.note,'data-nopen="1"','＋ 記下現在為什麼這樣做',
+              '現在為什麼想這樣做？（平倉後會留在這筆紀錄裡）');
  } else {
    // 【紀錄正確性】沒有即時報價就不能開單 —— 拿舊價／收盤價記進練習成績，那筆成績是假的。
    // 這不是 UX 取捨，所以按鈕真的停用（後端 /api/enter 也擋一次）。
@@ -2356,19 +2462,28 @@ function tradeBox(s){
  if(T.length){
    let sum=0; T.forEach(t=>sum+=t._net);
    h+='<div class="list">';
-   T.slice().reverse().forEach(t=>h+=row(t));
+   T.slice().reverse().forEach(t=>h+=row(t,'t'));
    h+='</div><div class="plimit" style="margin:12px 0 0">今天 '+T.length+' 筆　合計 '+pm(sum)+' 點</div>';
  }
  return h+'</div>';
 }
-function row(t){
+function row(t,ns){
  const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'';
+ // App 匯入的那幾筆在 my_trades.json，面板不去改它 —— 有心得就顯示，但不給編輯，
+ // 不然按下去只會得到「找不到那一筆紀錄」。
+ const ro=t._source==='app';
+ const nb=!ns?''
+   :ro?(t.note?'<div class="noteline">「'+esc(t.note)+'」</div>':'')
+   :noteBox(nkey(ns,t),t.note,nattr(t),
+       ns==='t'?'＋ 寫下今天的心得':'＋ 補寫心得',
+       ns==='t'?'今天的盤感、進出場理由、紀律有沒有守…'
+               :'現在回頭看，這一筆做對了什麼、做錯了什麼？');
  return '<div class="trade"><div class="tr-top">'+
   '<span class="tr-date">'+(t.date?t.date.slice(5):'')+'</span>'+
   '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
   '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
   (rs?' <span class="tag">'+rs+'</span>':'')+(t._source==='app'?' <span class="tag">App</span>':'')+'</span>'+
-  '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div></div>';
+  '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div>'+nb+'</div>';
 }
 function statsBox(ST){
  if(!ST||!ST.windows||!ST.windows.length) return '';
@@ -2391,7 +2506,7 @@ function statsBox(ST){
   '</div></div>';
  if(ST.recent&&ST.recent.length){
    h+='<div class="list">';
-   ST.recent.forEach(t=>h+=row(t));
+   ST.recent.forEach(t=>h+=row(t,'s'));
    h+='</div><a class="dl" href="/api/export" download>下載練習紀錄（可匯入 App）</a>';
  }
  return h+'</div>';
@@ -2410,6 +2525,42 @@ document.addEventListener('click', function(e){
   .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); statsAt=0; tick(); })
   .catch(()=>{})
   .then(()=>{ b.disabled=false; });
+});
+/* 心得的展開／儲存／取消：即時與回顧兩個分頁共用 */
+document.addEventListener('input', function(e){
+ if(e.target&&e.target.id==='tnote') NOTE.text=e.target.value;
+});
+document.addEventListener('click', function(e){
+ const ed=e.target.closest('[data-nedit]');
+ if(ed){
+   NOTE={key:ed.getAttribute('data-nedit'), text:ed.getAttribute('data-note')||'',
+         date:ed.getAttribute('data-nd')||'', time:ed.getAttribute('data-nt')||'',
+         entry:ed.getAttribute('data-ne')||'', open:ed.hasAttribute('data-nopen')};
+   nrepaint(); return;
+ }
+ const sv=e.target.closest('[data-nsave]');
+ if(sv){
+   const el=document.getElementById('tnote'), txt=el?el.value:NOTE.text;
+   const b=NOTE.open?{open:true,text:txt}
+     :{date:NOTE.date,time:NOTE.time,entry:Number(NOTE.entry),text:txt};
+   sv.disabled=true;
+   fetch('/api/note',{method:'POST',headers:{'Content-Type':'application/json'},
+                      body:JSON.stringify(b)})
+    .then(r=>r.json())
+    .then(r=>{
+      if(!r.ok){ sv.disabled=false; alert(r.msg||'存不起來'); return; }
+      // 回顧分頁的 RV 是進分頁時抓一次的快取，不順手更新的話畫面會停在舊的字
+      if(RV&&RV.trades) RV.trades.forEach(function(x){
+        if(x._source!=='app' && x.date===NOTE.date &&
+           String(x.time||'').slice(0,5)===NOTE.time &&
+           Math.round(x.entry)===Number(NOTE.entry)) x.note=txt;
+      });
+      NOTE={key:null,text:''}; statsAt=0; nrepaint();
+    })
+    .catch(()=>{ sv.disabled=false; alert('存不起來，面板可能剛好在重啟'); });
+   return;
+ }
+ if(e.target.closest('[data-ncancel]')){ NOTE={key:null,text:''}; nrepaint(); return; }
 });
 document.addEventListener('click', function(e){
  if(TAB!=='live') return;
@@ -2882,8 +3033,9 @@ function paneReview(){
       '<div class="dt-row"><span class="k">進場後最逆</span><span class="v down">'+
         (t._mae==null?'—':pm(t._mae)+' 點')+'</span></div>'+
       '<div class="hr"></div>'+
-      '<div class="dt-row"><span class="k" style="font-size:11.5px">當時寫的理由</span></div>'+
-      '<div class="noteline'+(t.note?'':' empty')+'">'+(t.note?'「'+esc(t.note)+'」':'（當時沒寫）')+'</div>'+
+      '<div class="dt-row"><span class="k" style="font-size:11.5px">心得</span></div>'+
+      noteBox(nkey('r',t),t.note,nattr(t),'＋ 補寫這一筆的心得',
+              '現在回頭看，這一筆做對了什麼、做錯了什麼？')+
       '<div class="btns" style="margin-top:4px">'+
       '<button class="btn gold" data-ract="replayday">重播這一天（蓋住結果）</button></div>'+
       '</div></div>';
@@ -3068,7 +3220,7 @@ function ctrlHTML(D){
 }
 
 /* ---------------- 繪製與事件 ---------------- */
-function rvRender(){
+function rvRender(nf){
  if(TAB!=='review') return;
  const C=rvCtx(), D=C.day?rvBars(C.day,C.tf):null;
  if(FOCUSPEND&&D) focusTrade();
@@ -3078,7 +3230,7 @@ function rvRender(){
  const jn=document.getElementById('jnote'); if(jn) RP.note=jn.value;
  const foc=document.activeElement&&document.activeElement.id==='jnote';
  const html=MODE==='review'?paneReview():paneReplay(D);
- if(lastPane!==html){
+ if(lastPane!==html && (nf||!nEditing('r'))){
    lastPane=html; document.getElementById('rpane').innerHTML=html;
    if(foc){ const el=document.getElementById('jnote');
      if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }
@@ -3281,6 +3433,17 @@ class Handler(BaseHTTPRequestHandler):
             r = close_position(price, "manual")
             return self._json(200, {"ok": r is not None,
                                     "msg": "已平倉" if r else "目前沒有持倉"})
+
+        if self.path == "/api/note":
+            try:
+                if body.get("open"):
+                    ok, msg = set_note(None, None, None, body.get("text"), on_open=True)
+                else:
+                    ok, msg = set_note(body.get("date"), body.get("time"),
+                                       body.get("entry"), body.get("text"))
+            except Exception as e:
+                return self._json(400, {"ok": False, "msg": str(e)[:120]})
+            return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
 
         if self.path == "/api/replay":
             # Bar Replay 的判斷 → 只寫 replay_log/，不進 practice_trades/

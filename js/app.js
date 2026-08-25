@@ -449,19 +449,32 @@
         try { pulled = JSON.parse(localStorage.getItem(PULLED_KEY) || '{}'); } catch (e) {}
         var seen = {};
         data.forEach(function (x) { seen[x.date + '|' + (x.mode || 'sim')] = 1; });
-        var added = 0;
+        // 面板的心得是「事後補寫」的，常常在這筆交易早就同步過來之後才寫。
+        // 所以除了塞新紀錄，也要把後來補上的心得補進已存在的那筆 ——
+        // 但【只補空白、不覆蓋】，否則會蓋掉他直接在手機上打的字。
+        var local = {};
+        data.forEach(function (x) { if ((x.mode || 'sim') === 'sim') local[x.date] = x; });
+        var added = 0, filled = 0;
         p.trades.forEach(function (t) {
           if (!t || !t.date || !t.dir) return;
           var k = t.date + '|sim';
           // 已經在本機、或使用者曾經刪掉（拉過就記著）→ 不重複塞回來
-          if (seen[k] || pulled[k]) return;
+          if (seen[k] || pulled[k]) {
+            var cur = local[t.date];
+            if (cur && t.note && !(cur.note || '').trim()) { cur.note = t.note; filled++; }
+            return;
+          }
           data.push({ date: t.date, mode: 'sim', dir: t.dir, entry: Number(t.entry),
                       exit: Number(t.exit), time: t.time || '', note: t.note || '' });
           seen[k] = 1; pulled[k] = 1; added++;
         });
         p.trades.forEach(function (t) { if (t && t.date) pulled[t.date + '|sim'] = 1; });
         try { localStorage.setItem(PULLED_KEY, JSON.stringify(pulled)); } catch (e) {}
-        if (added) { save(data); renderAll(); toast('已同步 ' + added + ' 筆練習紀錄'); }
+        if (added || filled) {
+          save(data); renderAll();
+          toast(added ? ('已同步 ' + added + ' 筆練習紀錄')
+                      : ('已補上 ' + filled + ' 筆心得'));
+        }
       })
       .catch(function () {});   // 沒網路或還沒有這個檔案 —— 正常，不吵使用者
   }
@@ -469,7 +482,7 @@
 
   // ---------- 版本顯示 + 強制更新 ----------
   // 手機 PWA 的快取很黏，沒有版本號時根本看不出自己在哪一版。
-  var APP_VER = 'v16';
+  var APP_VER = 'v17';
   var vl = $('verLabel'); if (vl) vl.textContent = '版本 ' + APP_VER;
   var fu = $('forceUpdBtn');
   if (fu) fu.onclick = function () {

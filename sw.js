@@ -1,6 +1,6 @@
 // 微台指交易日誌 — Service Worker
 // 改前端資源後把版本號 +1（tradelog-shell-vN）強制更新快取。
-var CACHE = 'tradelog-shell-v16';
+var CACHE = 'tradelog-shell-v17';
 var SHELL = [
   './',
   './index.html',
