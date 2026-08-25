@@ -463,6 +463,7 @@ def set_note(d, t, entry, text, on_open=False):
         if POSITION is None:
             return False, "現在沒有持倉"
         POSITION["note"] = text
+        POSITION["note_at"] = datetime.now().isoformat(timespec="seconds")
         return True, "已記下"
 
     try:
@@ -494,6 +495,8 @@ def set_note(d, t, entry, text, on_open=False):
     if hit is None:
         return False, "找不到那一筆紀錄"
     hit["note"] = text
+    # 時間戳是「手機與面板誰的心得比較新」唯一的判準
+    hit["note_at"] = datetime.now().isoformat(timespec="seconds")
 
     if today:
         save_trades()
@@ -578,6 +581,102 @@ def practice_stats():
     }
 
 
+PHONE_URL = ("https://raw.githubusercontent.com/xd1104/trade-log/"
+             "main/data/phone.json")
+PHONE_EVERY = 180          # 秒。GitHub raw 本來就有 CDN 快取，抓太密沒有意義
+
+
+def _note_wins(inc_note, inc_at, cur_note, cur_at):
+    """
+    手機那筆的心得該不該蓋掉面板這筆。跟手機端 noteWins() 是同一套規則，
+    兩邊不一致就會來回互蓋。
+
+    有時間戳的贏；兩邊都有就比時間；兩邊都沒有時**只補空的、不覆蓋**。
+    """
+    a = (inc_note or "").strip()
+    b = (cur_note or "").strip()
+    if a == b:
+        return False
+    if inc_at and not cur_at:
+        return True
+    if cur_at and not inc_at:
+        return False
+    if inc_at and cur_at:
+        return inc_at > cur_at
+    return (not b) and bool(a)
+
+
+def pull_from_phone():
+    """
+    把手機寫的心得抓回來。手機沒辦法直接連到這台電腦（常常不同網路），
+    所以走跟 sync_to_cloud() 對稱的路：手機用鑰匙圈的金鑰把 data/phone.json
+    寫進 repo，這裡讀那個檔。
+
+    【只碰 note / note_at】不會新增、刪除或改動任何一筆交易 ——
+    練習紀錄的真相在這台電腦（面板才知道成交價與 _mfe 那些欄位）。
+    """
+    import urllib.request
+    url = PHONE_URL + "?t=" + str(int(time.time()))
+    try:
+        with urllib.request.urlopen(url, timeout=20) as r:
+            payload = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        return 0, f"讀不到手機的檔案：{str(e)[:80]}"
+
+    incoming = {}
+    for t in payload.get("trades") or []:
+        try:
+            k = (str(t["date"]), str(t.get("time", ""))[:5], round(float(t["entry"])))
+        except Exception:
+            continue
+        incoming[k] = (t.get("note", ""), t.get("note_at", ""))
+    if not incoming:
+        return 0, "手機那邊還沒有紀錄"
+
+    changed = 0
+    if TRADE_DIR.exists():
+        for f in sorted(TRADE_DIR.glob("*.json")):
+            try:
+                recs = json.loads(f.read_text(encoding="utf-8")) or []
+            except Exception:
+                continue
+            touched = False
+            for r in recs:
+                try:
+                    k = (str(r.get("date")), str(r.get("time", ""))[:5],
+                         round(float(r.get("entry"))))
+                except Exception:
+                    continue
+                if k not in incoming:
+                    continue
+                note, at = incoming[k]
+                if _note_wins(note, at, r.get("note"), r.get("note_at")):
+                    r["note"] = note
+                    r["note_at"] = at or datetime.now().isoformat(timespec="seconds")
+                    touched = True
+                    changed += 1
+            if touched:
+                f.write_text(json.dumps(recs, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+    if changed:
+        # 今天那份也在記憶體裡，不重讀的話面板畫面還是舊的
+        load_today_trades()
+        sync_to_cloud()
+    return changed, (f"從手機補回 {changed} 筆心得" if changed else "沒有比較新的心得")
+
+
+def poll_phone():
+    """背景執行緒：定期把手機那邊的心得抓回來。抓不到就下次再說，不吵人。"""
+    while True:
+        try:
+            n, msg = pull_from_phone()
+            if n:
+                print(f"[同步] {msg}")
+        except Exception as e:
+            print(f"[同步] 讀手機紀錄失敗：{str(e)[:100]}")
+        time.sleep(PHONE_EVERY)
+
+
 def sync_to_cloud():
     """
     把練習紀錄寫進 data/practice.json 並推上 GitHub。
@@ -610,7 +709,12 @@ def sync_to_cloud():
         git("commit", "-m", f"chore: 同步練習紀錄（{len(trades)} 筆）")
         r = git("push", "origin", "HEAD")
         if r.returncode != 0:
-            return False, "推送失敗：" + (r.stderr or "")[-120:]
+            # 手機也會往同一個 repo 寫（data/phone.json），被搶先就會是 non-fast-forward。
+            # --autostash：工作目錄不乾淨時照樣能 rebase，事後原樣放回去。
+            git("pull", "--rebase", "--autostash", "origin", "main")
+            r = git("push", "origin", "HEAD")
+            if r.returncode != 0:
+                return False, "推送失敗：" + (r.stderr or "")[-120:]
         return True, f"已同步 {len(trades)} 筆到雲端"
     except Exception as e:
         return False, f"同步失敗：{str(e)[:120]}"
@@ -3459,8 +3563,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(500, {"ok": False, "msg": str(e)[:150]})
 
         if self.path == "/api/sync":
+            # 兩個方向都做一次：先把手機寫的心得抓回來，再把這邊的推上去。
+            # 順序不能反 —— 先推的話會用舊心得去覆蓋剛抓回來的。
+            got, gmsg = pull_from_phone()
             ok, msg = sync_to_cloud()
-            return self._json(200, {"ok": ok, "msg": msg})
+            return self._json(200, {"ok": ok, "msg": (gmsg + "；" if got else "") + msg})
 
         if self.path == "/api/undo":
             # 誤按時可以撤銷最後一筆（只在剛平倉沒多久時合理）
@@ -3907,6 +4014,7 @@ def main():
                       "market": market_session(),
                       "period": hist.period, "n_days_total": hist.n_days})
     threading.Thread(target=poll_index, daemon=True).start()
+    threading.Thread(target=poll_phone, daemon=True).start()
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     last_retry = 0.0

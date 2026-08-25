@@ -167,6 +167,32 @@ data/practice.json       練習紀錄的雲端同步檔（面板自動 push，�
   心得常常是交易同步過來之後才在面板上補寫的，不補就永遠傳不到手機；
   但覆蓋會蓋掉他直接在手機上打的字。
 - 只同步練習（sim）紀錄到 GitHub；**真實交易不上傳**（repo 是公開的，Benson 的決定）。
+  這條在雙向同步之後更重要：手機推上去的 `data/phone.json` 也**只放 sim**，
+  真實交易的心得永遠只留在手機上。
+
+## 雙向同步（2026-08-25）
+
+以前只有「面板 → 手機」。手機那邊寫的心得傳不回來，面板看到的還是 8/11 手動匯出的
+`my_trades.json`（停在 7/24）。現在兩個方向各走各的檔案，不會互相蓋掉：
+
+| 方向 | 誰寫 | 檔案 | 誰讀 |
+|---|---|---|---|
+| 面板 → 手機 | `sync_to_cloud()`（git push） | `data/practice.json` | `pullPractice()` |
+| 手機 → 面板 | 手機用鑰匙圈的金鑰打 GitHub Contents API | `data/phone.json` | `poll_phone()` 每 3 分鐘 |
+
+- **心得誰新誰贏**，靠 `note_at` 時間戳。`noteWins()`（js）與 `_note_wins()`（py）
+  **必須是同一套規則**，不一致就會兩邊來回互蓋。改一邊一定要改另一邊。
+- **改心得（含清空）一律換時間戳**；只改進出場價不換。不然編輯價格會讓那筆
+  「看起來比較新」，把對面比較新的心得蓋掉；而清空不換戳的話，刪掉的字會被補回來。
+- `pull_from_phone()` **只碰 `note` / `note_at`**，不新增／刪除／改動任何一筆交易 ——
+  練習紀錄的真相在這台電腦（只有面板知道成交價與 `_mfe` 那些欄位）。
+- **手機也會往同一個 repo 寫**，所以 `sync_to_cloud()` 的 push 失敗要
+  `git pull --rebase --autostash` 再推一次，否則手機推過之後面板就永遠推不上去。
+- 手機端**內容沒變就不送 PUT**，不然每開一次 App 就洗一版 commit。
+- 鑰匙圈：`appId` 是 `trade-log`、`tokenKey` 是 `tradelog_gh_pat`，模組在 `js/keyring-unlock.js`
+  （keyring repo 的 `sync-unlock.yml` 會自動更新它；trade-log 的目錄是 `js`，不是 `public`/`docs`）。
+  **金鑰要 Benson 自己在鑰匙圈後台配**（fine-grained PAT，只授權 xd1104/trade-log，
+  Contents: Read and write）。開發一律用假 token。
 
 ## 排程
 

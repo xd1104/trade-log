@@ -2,6 +2,32 @@
   'use strict';
 
   var KEY = 'trade-log-v1';
+
+  /* ---------- 跟電腦面板雙向同步 ----------
+     面板 → 手機：面板 push data/practice.json，這邊 pullPractice() 抓下來合併。
+     手機 → 面板：這邊用鑰匙圈解開的 GitHub 金鑰把 data/phone.json 寫回 repo，
+                  面板背景輪詢那個檔案。兩邊各寫各的檔，不會互相蓋掉。
+     【只同步練習（sim）】repo 是公開的，真實交易永遠不上傳 —— 這條沒有例外。
+     心得誰新誰贏，靠 note_at 時間戳判斷；沒有時間戳的一律不覆蓋別人。 */
+  var GH = { owner: 'xd1104', repo: 'trade-log', branch: 'main' };
+  var TOKEN_KEY = 'tradelog_gh_pat';
+  var PHONE_FILE = 'data/phone.json';
+  function ghToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ''; }
+    catch (e) { return ''; }
+  }
+  function nowStamp() { return new Date().toISOString().slice(0, 19); }
+  function isSim(x) { return (x.mode || 'sim') === 'sim'; }
+  /* 心得誰比較新：有時間戳的贏；都有就比大小；都沒有就當作平手（不動） */
+  function noteWins(incoming, current) {
+    var a = (incoming.note || '').trim(), b = (current.note || '').trim();
+    if (a === b) return false;
+    var ta = incoming.note_at || '', tb = current.note_at || '';
+    if (ta && !tb) return true;
+    if (!ta && tb) return false;
+    if (ta && tb) return ta > tb;
+    return !b && !!a;            // 兩邊都沒時間戳：只補空的，不覆蓋
+  }
   var TICK = 10; // 微台指每點 NT$10
 
   // ---------- storage ----------
@@ -355,6 +381,9 @@
     var entry = parseFloat(entryEl.value), exit = parseFloat(exitEl.value);
     if (isNaN(entry) || isNaN(exit)) return;
     var date = dateEl.value || todayISO(), note = noteEl.value.trim();
+    var prev = null;
+    data.forEach(function (x) { if (x.date === date && (x.mode || 'sim') === curMode) prev = x; });
+    var prevNote = prev ? (prev.note || '') : '', prevNoteAt = prev ? prev.note_at : '';
     // 同模式一天一單：移除該模式同日期、以及編輯前的原紀錄，再寫入
     data = data.filter(function (x) {
       var xm = x.mode || 'sim';
@@ -362,8 +391,16 @@
       var isOrig = editingKey && x.date === editingKey.date && xm === editingKey.mode;
       return !isTarget && !isOrig;
     });
-    data.push({ date: date, mode: curMode, dir: curDir, entry: entry, exit: exit, note: note });
+    // 心得有改才換時間戳，否則沿用舊的 —— 不然每次編輯進出場價都會讓這筆
+    // 在同步時「看起來比較新」，把電腦面板上比較新的心得蓋掉。
+    var rec = { date: date, mode: curMode, dir: curDir, entry: entry, exit: exit, note: note };
+    // 清空也要蓋時間戳，否則「在手機上把心得刪掉」傳不回面板（面板那筆有戳、
+    // 這筆沒戳 → 面板判定自己比較新，就把刪掉的字又補回來）。面板端同一套規則。
+    if (note !== (prevNote || '')) { rec.note_at = nowStamp(); }
+    else if (prevNoteAt) { rec.note_at = prevNoteAt; }
+    data.push(rec);
     save(data);
+    schedulePush();
     closeSheet(); renderAll();
     toast(editingKey ? '已更新' : '已記錄 ✓');
     editingKey = null;
@@ -373,7 +410,7 @@
     if (!editingKey) return;
     if (!confirm('確定刪除 ' + fmtDate(editingKey.date) + ' 這筆交易？')) return;
     data = data.filter(function (x) { return !(x.date === editingKey.date && (x.mode || 'sim') === editingKey.mode); });
-    save(data); closeSheet(); renderAll(); toast('已刪除'); editingKey = null;
+    save(data); schedulePush(); closeSheet(); renderAll(); toast('已刪除'); editingKey = null;
   };
 
   // ---------- backup: export / import / sample ----------
@@ -461,11 +498,12 @@
           // 已經在本機、或使用者曾經刪掉（拉過就記著）→ 不重複塞回來
           if (seen[k] || pulled[k]) {
             var cur = local[t.date];
-            if (cur && t.note && !(cur.note || '').trim()) { cur.note = t.note; filled++; }
+            if (cur && noteWins(t, cur)) { cur.note = t.note; cur.note_at = t.note_at || nowStamp(); filled++; }
             return;
           }
           data.push({ date: t.date, mode: 'sim', dir: t.dir, entry: Number(t.entry),
-                      exit: Number(t.exit), time: t.time || '', note: t.note || '' });
+                      exit: Number(t.exit), time: t.time || '', note: t.note || '',
+                      note_at: t.note_at || '' });
           seen[k] = 1; pulled[k] = 1; added++;
         });
         p.trades.forEach(function (t) { if (t && t.date) pulled[t.date + '|sim'] = 1; });
@@ -480,9 +518,101 @@
   }
   pullPractice();
 
+  // ---------- 手機 → 面板：把練習紀錄寫回 repo ----------
+  // 電腦面板讀 data/phone.json。沒有金鑰就安靜跳過（App 照樣能用，只是單向）。
+  var pushTimer = null, pushing = false;
+  function schedulePush() {
+    if (!ghToken()) { syncLine(); return; }
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushPhone, 1500);   // 連續編輯只推最後一次
+  }
+  function ghFetch(url, opts) {
+    var h = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    var tk = ghToken();
+    if (tk) h.Authorization = 'token ' + tk;
+    if (opts && opts.body) h['Content-Type'] = 'application/json';
+    return fetch(url, { method: (opts && opts.method) || 'GET', headers: h, body: opts && opts.body });
+  }
+  function b64(str) {
+    var b = new TextEncoder().encode(str), s = '';
+    for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return btoa(s);
+  }
+  function pushPhone() {
+    if (pushing || !ghToken()) return;
+    var trades = data.filter(isSim).map(function (x) {
+      return { date: x.date, dir: x.dir, entry: Number(x.entry), exit: Number(x.exit),
+               time: x.time || '', note: x.note || '', note_at: x.note_at || '' };
+    }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    var body = JSON.stringify({ updated: nowStamp(), count: trades.length, trades: trades }, null, 2);
+    var api = 'https://api.github.com/repos/' + GH.owner + '/' + GH.repo + '/contents/' + PHONE_FILE;
+    pushing = true; syncLine('同步中…');
+    ghFetch(api + '?ref=' + GH.branch)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (cur) {
+        // 內容一樣就不要送 —— 每次開 App 都推一版只會洗版 commit 紀錄
+        if (cur && cur.content) {
+          try {
+            var old = new TextDecoder().decode(
+              Uint8Array.from(atob(cur.content.replace(/\n/g, '')), function (c) { return c.charCodeAt(0); }));
+            var a = JSON.parse(old), b = JSON.parse(body);
+            if (JSON.stringify(a.trades) === JSON.stringify(b.trades)) { return 'same'; }
+          } catch (e) {}
+        }
+        return ghFetch(api, {
+          method: 'PUT',
+          body: JSON.stringify({ message: 'chore: 手機同步練習紀錄（' + trades.length + ' 筆）',
+                                 content: b64(body), branch: GH.branch,
+                                 sha: cur ? cur.sha : undefined })
+        }).then(function (r) {
+          if (r.ok) return 'ok';
+          return r.json().catch(function () { return {}; }).then(function (j) {
+            throw new Error(pushMsg(r.status, j));
+          });
+        });
+      })
+      .then(function (how) { syncLine(how === 'same' ? '已是最新' : '已同步到電腦面板 ✓'); })
+      .catch(function (e) { syncLine('同步失敗：' + (e.message || '連不到 GitHub')); })
+      .then(function () { pushing = false; });
+  }
+  function pushMsg(status, j) {
+    if (status === 401) return 'GitHub 金鑰無效或過期，重新解鎖看看';
+    if (status === 403) return '金鑰權限不足（要 Contents: Read and write）';
+    if (status === 404) return '這把金鑰沒有授權這個 repo';
+    if (status === 409) return '剛好有別的裝置在寫，等一下會自動再試';
+    return 'GitHub 錯誤 ' + status + '：' + ((j && j.message) || '');
+  }
+  var syncMsg = '';
+  function syncLine(msg) {
+    if (msg != null) syncMsg = msg;
+    var el = $('syncLine'); if (!el) return;
+    el.innerHTML = ghToken()
+      ? '練習紀錄與心得會同步到電腦面板 · <span style="opacity:.6">' + (syncMsg || '待命') + '</span><br>'
+      : '<span style="opacity:.6">解開鑰匙才會把心得同步回電腦面板</span><br>';
+  }
+
+  // ---------- 鑰匙圈 ----------
+  if (window.Keyring) {
+    Keyring.init({
+      appId: 'trade-log',
+      appName: '📈 微台指交易日誌',
+      tokenKey: TOKEN_KEY,
+      enabled: true,
+      toast: toast,
+      onChange: function () { renderKr(); syncLine(); schedulePush(); }
+    });
+  }
+  function renderKr() {
+    var el = $('krChip');
+    if (el && window.Keyring) el.innerHTML = Keyring.chipHtml();
+  }
+  renderKr(); syncLine();
+  if (window.Keyring) Keyring.maybeIntro();
+  schedulePush();
+
   // ---------- 版本顯示 + 強制更新 ----------
   // 手機 PWA 的快取很黏，沒有版本號時根本看不出自己在哪一版。
-  var APP_VER = 'v17';
+  var APP_VER = 'v18';
   var vl = $('verLabel'); if (vl) vl.textContent = '版本 ' + APP_VER;
   var fu = $('forceUpdBtn');
   if (fu) fu.onclick = function () {

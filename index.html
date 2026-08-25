@@ -79,7 +79,9 @@
 
     <footer class="foot">
       <a id="settingsBtn">⚙︎ 每筆手續費 NT$<span id="feeLabel">50</span></a><br>
-      資料僅存在此裝置 · 記得定期<a id="exportBtn">匯出備份</a><br>
+      真實交易只存在這台裝置 · 記得定期<a id="exportBtn">匯出備份</a><br>
+      <span id="syncLine"></span>
+      <div id="krChip"></div>
       <a id="importBtn">匯入備份</a> · <a id="sampleBtn">重設為初始資料</a><br>
       <span id="verLabel" style="opacity:.6">版本 —</span> · <a id="forceUpdBtn">強制更新</a>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
@@ -150,6 +152,7 @@
 
   <div class="toast" id="toast"></div>
 
+  <script src="js/keyring-unlock.js"></script>
   <script src="js/seed-data.js"></script>
   <script src="js/app.js"></script>
   <script>
