@@ -123,6 +123,13 @@ Benson 早上下單前要看得到昨晚怎麼走（2026-08-21 提的），只�
   - 重啟後 `TODAY_TRADES` 是空的 → 再下一單就覆蓋掉當天稍早的紀錄（**弄丟過真實資料**）→ `load_today_trades()`
   - 重啟後開高低量從那一刻重算 → 震幅顯示 20 點 → `seed_from_bars()`
   - 半夜啟動時 `session["state"]` 是 None → 收到的報價全丟 → 啟動時一定建立狀態
+- **跨午夜要清掉「日盤專用」的欄位**（2026-08-25 修）。主迴圈跨日時原本只做
+  `session["date"] = today`，Today 物件與 `TODAY_TRADES` 都不動、要等 08:30 才重建。
+  於是 **00:00~08:30 這段（正好是他早上開面板的時間）**畫面上的開高低、震幅、
+  位階、量能、跳空全是**昨天日盤**的，時鐘卻是今天；練習清單也把昨天那筆算成「今天」，
+  凌晨夜盤再下一單還會把昨天那筆一起寫進今天的檔案（重複計入勝率）。
+  `reset_for_new_day()` **只清 open/high/low/vol**，`minute_bar` / `minute_close`
+  一定要留著 —— 夜盤還在跑，那是 `merge_live_tail()` 補最新那根 K 棒與算動能的來源。
 - **永豐 SDK 會在斷線時把整個行程帶掉**（2026-08-12 19:17，無 Python traceback）。
   `start-panel.bat` 是看門狗迴圈，程式結束就自動重開。**sleep 用 `ping` 不用 `timeout`**
   （tool-manager 沒有 TTY，`timeout` 會失敗）。

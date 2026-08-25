@@ -376,6 +376,24 @@ class Today:
         }
 
 
+def reset_for_new_day(st):
+    """
+    跨過午夜時把「日盤專用」的欄位清乾淨，其餘保留。
+
+    【為什麼不整個重建 Today】00:00~05:00 夜盤還在跑，minute_bar / minute_close
+    是圖上「最新那根 K 棒」與 5/15 分動能的來源（見 merge_live_tail），
+    整個換掉的話夜盤的線會停住、動能會變成 0。
+
+    【為什麼一定要清】open/high/low/vol 的定義是「今天日盤」。不清的話
+    features() 會照樣回傳昨天的開高低量 ⇒ 00:00~08:30 這段（正好是他早上
+    開面板的時間）畫面上的開高低、震幅、位階、量能、跳空全是昨天的，
+    但時鐘是今天 —— 就是他說的「時間錯亂」。
+    """
+    st.open = st.high = st.low = None
+    st.vol = 0
+    st.ticks = 0
+
+
 # ------------------------------------------------------- 模擬練習（不會真的下單）
 
 def open_position(direction, price, note=""):
@@ -4044,9 +4062,18 @@ def main():
                 start_day(today)
                 session["opened"] = True
             elif session["date"] != today and t < pd.Timestamp("08:30").time():
-                # 過了午夜但還沒到 08:30：沿用現有連線，只標記今天尚未開盤重建
+                # 過了午夜但還沒到 08:30：沿用現有連線（夜盤還在跑，不能斷），
+                # 但「昨天的日盤數字」與「昨天的練習紀錄」一定要清掉 ——
+                # 不清的話這段時間（正好是他早上開面板的時候）看到的是昨天的
+                # 開高低量、震幅、位階、量能，而且練習清單會把昨天那筆算成今天，
+                # 凌晨夜盤再下一單還會把昨天那筆一起寫進今天的檔案。
                 session["date"] = today
                 session["opened"] = False
+                if session["state"] is not None:
+                    reset_for_new_day(session["state"])
+                load_today_trades()
+                print(f"[{today}] 跨日：已清掉昨天的日盤數字與練習紀錄，"
+                      f"等 08:30 重建當日狀態")
 
             st = session["state"]
 
