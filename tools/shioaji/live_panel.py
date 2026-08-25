@@ -4172,6 +4172,8 @@ class Handler(BaseHTTPRequestHandler):
             b = json.dumps(MANIFEST, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+            # 換圖示或改名字時要能傳得過去，不要被瀏覽器壓在快取裡
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             self.wfile.write(b)
@@ -4186,7 +4188,7 @@ class Handler(BaseHTTPRequestHandler):
                     b = f.read_bytes()
                     self.send_response(200)
                     self.send_header("Content-Type", "image/png")
-                    self.send_header("Cache-Control", "max-age=86400")
+                    self.send_header("Cache-Control", "max-age=3600")
                     self.send_header("Content-Length", str(len(b)))
                     self.end_headers()
                     self.wfile.write(b)
@@ -4197,6 +4199,10 @@ class Handler(BaseHTTPRequestHandler):
         body = PAGE.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # 【一定要 no-store】沒有快取標頭的話瀏覽器會自己猜著存 ——
+        # 改完面板重開，看到的卻還是舊版，然後要教他按 Ctrl+Shift+R。
+        # 面板是本機服務、每次都只是讀一個字串，沒有省這一下的必要。
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
