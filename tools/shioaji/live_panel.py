@@ -1823,6 +1823,17 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 /* 交易列表自己捲動，整個儀表板才能一眼看完、不用捲整頁 */
 .list{display:flex; flex-direction:column; gap:7px; margin-top:14px;
   max-height:290px; overflow-y:auto; padding-right:4px}
+/* 【一定要 flex:none】.list 是有 max-height 的 flex 直欄，子元素的預設 flex-shrink 是 1 ——
+   內容一超過就不是捲動，而是把每一列**壓扁**（實測 107px 被壓成 21.6px，字全部切掉）。
+   筆數少的時候看不出來（總高沒超過 max-height），紀錄一多就整片糊掉。 */
+.list>*{flex:none}
+/* 清單裡的心得壓成一行、去掉框與底色 —— 這是「掃結果」用的清單，
+   心得在這裡是附註不是主角。帶框的完整樣子留給回顧分頁的「這一筆」。
+   （每列 107px 的話 290px 只放得下 2.7 列，等於要一直捲。） */
+.trade .noteline{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  background:none; border:0; padding:0; margin-top:5px; font-size:11.5px;
+  color:var(--faint); line-height:1.5}
+.trade .noteline[data-nedit]:hover{color:var(--gold); border-color:transparent}
 .list::-webkit-scrollbar{width:6px}
 .list::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
 /* 左緣 2px 的結果色：一眼掃得出賺賠，不必讀數字 */
@@ -1849,7 +1860,6 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .note{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-md);
   padding:12px 14px; font-size:12px; color:var(--dim); margin-bottom:12px; line-height:1.65}
 .note b{color:var(--text)}
-.wait{text-align:center; padding:48px 20px; color:var(--dim)}
 
 /* ═══════════ 開啟與載入的動態 ═══════════
    量測過的實際延遲：整頁 17ms、/api/state 2ms、但 /api/bars 要 300~500ms。
@@ -2041,7 +2051,6 @@ body.boot .right>#stats>.card{animation-delay:.16s}
   transition:border-color .15s var(--ease), color .15s var(--ease)}
 .noteline[data-nedit]:hover{border-color:var(--gold-line); color:var(--gold)}
 /* 卡片內的心得再壓一層底色（同色系會糊在一起） */
-.trade .noteline{margin-top:8px; font-size:12px; padding:8px 10px; background:rgba(0,0,0,.18)}
 .nedit{margin-top:8px}
 .nedit textarea{width:100%; box-sizing:border-box; min-height:78px; resize:vertical;
   background:var(--surface-2); border:1px solid var(--gold-line); border-radius:var(--r-sm);
@@ -2097,8 +2106,6 @@ body.boot .right>#stats>.card{animation-delay:.16s}
 </div>
 
 <div id="tab-live">
-  <!-- hidden：以前預設可見，開站的第一格畫面會閃一下「等待資料…」再被蓋掉 -->
-  <div id="wait" class="wait" hidden>等待資料…</div>
   <div id="warn"></div>
   <div class="cols"><div id="mkt">
     <!-- K 棒要 0.3~0.5 秒才回得來。骨架寫死在 HTML 裡，第 0 毫秒就佔好位置，
@@ -2230,37 +2237,13 @@ async function tick(nf){
  if(TAB!=='live') return;
 
  fetchBars(false);
- const c=s.chips||{};
  const warn = QMSG[q] || (dead ? '<div class="alert"><b>報價已中斷</b>　畫面上的數字是舊的（'+
    (s.age_sec==null?'尚未收到':age+' 秒前')+'）。程式每分鐘會自動重連。</div>' : '');
  setHTML('warn',warn);
- const W=document.getElementById('wait');
- const drew=paintChart(s);
- if(drew){
-   W.hidden=true;
- } else if(barsCache===null){
-   // 還沒抓到過任何 K 棒（開站的頭 0.3~0.5 秒）→ 骨架留著就好。
-   // 這個分支一定要排在 q==='live' 前面：不然開站那半秒會先塞一張小數字卡，
-   // 圖回來時整個被頂掉，版面跳一下 —— 就是他說的「有點生硬」。
-   W.hidden=true;
- } else if(q==='live'){
-   // 有報價但還沒有 K 棒（例如剛連上的夜盤）→ 退回簡單的數字卡
-   W.hidden=true;
-   lastMktFallback = '<div class="card"><div class="grid">'+
-     '<div class="cell px"><div class="l">成交價</div><div class="v flat">'+f(c.price)+'</div></div>'+
-     cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
-     cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+'</div></div>';
-   if(document.getElementById('mkt').innerHTML!==lastMktFallback)
-     document.getElementById('mkt').innerHTML=lastMktFallback;
- } else {
-   // 既沒有報價、也一根 K 棒都拿不到（本機沒資料又沒連上永豐）才是真的沒東西可看。
-   // 舊圖要收掉，否則等待訊息底下還掛著一張沒人知道是哪天的圖。
-   // ⚠️ 不能用 setHTML('mkt','') —— K 線圖是 paintChart 自己塞進 #mkt 的，
-   //    lastMkt 從頭到尾都是 ''，setHTML 會判定「跟上次一樣」而整個略過。
-   W.hidden=false; W.textContent=s.msg||'等待中…';
-   const M=document.getElementById('mkt');
-   if(M.innerHTML){ M.innerHTML=''; lastMkt=''; lastMktFallback=''; }
- }
+ // 畫不出 K 線時退回 fallback 卡片（它一樣帶著翻頁列與月曆，見 pagerHTML）。
+ // barsCache===null 這一關一定要擋在前面：那是開站的頭 0.3~0.5 秒，一根 K 棒都還沒回來，
+ // 骨架留著就好 —— 不然那半秒會先塞一張小卡，圖回來時整個被頂掉，版面跳一下。
+ if(!paintChart(s) && barsCache!==null) paintFallback(s,q);
  if(nf||!nEditing('t')) setHTML('trade',tradeBox(s));
  if(nf||!nEditing('s')) setHTML('stats',statsBox(statsCache));
 }
@@ -2274,11 +2257,58 @@ function setHTML(id,html){
  document.getElementById(id).innerHTML=html;
 }
 
+/* 單一節點版的 setHTML：比對的是「上次自己設進去的那個字串」（快取在節點上），
+   絕對不可以讀回 e.innerHTML 來比 —— 瀏覽器解析後再序列化的結果跟原字串不一樣，
+   裸屬性 disabled 讀回來是 disabled=""，守衛會整個失效（見 paintChart 的長註解）。 */
+function setEl(id,html){
+ const e=document.getElementById(id); if(!e) return;
+ if(e.__html===html) return;
+ e.__html=html;
+ e.innerHTML=html;
+}
+
+/* 沒有 K 棒可畫時的卡片。
+   ⚠ 它一定要含翻頁列與月曆：舊版在這個狀態下把整張 K 線卡（連同換日控制）換成
+   一張只有數字的小卡，於是「換到有資料的那天」這條唯一的自救路徑也一起消失了。
+   做法跟 paintChart 一樣：外框只建一次，之後只換裡面的節點 ——
+   整塊 innerHTML 每 0.5 秒重建的話，使用者按下去的那一瞬間按鈕會連事件一起被換掉。
+   翻頁列與報價分成兩個節點：成交價每秒在跳，寫在一起會讓 ◀ ▶ 跟著每秒被重建。 */
+function paintFallback(s,q){
+ if(!document.getElementById('mfall')){
+   document.getElementById('mkt').innerHTML=
+     '<div class="card l1" id="mfall">'+
+     '<div class="cheadwrap"><div class="chead">'+
+     '<div id="mfq"></div><div id="mfpager"></div></div>'+
+     '<div class="calpop" id="cpick"></div></div>'+
+     '<div id="mfbody"></div></div>';
+ }
+ const c=s.chips||{}, hasPx=(q==='live'&&c.price!=null);
+ // 只寫「現在收到的成交價」，不換算漲跌 —— 漲跌的基準是上一個交易日的日盤收盤，
+ // 那個值跟著 K 棒一起來（barsCache.ref），這個狀態下本來就沒有，硬算會是錯的。
+ setEl('mfq','<div class="qblock"><div class="qmain">'+
+   '<span class="cpx flat">'+(hasPx?f(c.price):'—')+'</span></div>'+
+   '<div class="qsub">'+(hasPx
+     ? '<span class="live"><i></i>即時</span><span class="sep">·</span><span>成交價</span>'
+     : '<span class="live dead"><i></i>'+(q==='closed'?'休市中':'收不到報價')+'</span>'+
+       '<span class="sep">·</span><span>沒有價格可顯示</span>')+
+   '</div></div>');
+ setEl('mfpager',pagerHTML(null));
+ setEl('cpick',pickOpen?calHTML():'');
+ setEl('mfbody',
+   '<div class="note"><b>這一天沒有 K 線可以畫</b>　'+
+   '本機的歷史檔沒有這一天，也還沒跟永豐要到。'+
+   '用上面的 ◀ ▶、月曆或鍵盤 ← → 換到別的交易日就看得到。'+
+   (s.msg?'<br><span style="color:var(--faint)">'+s.msg+'</span>':'')+'</div>'+
+   (hasPx?'<div class="grid">'+
+     cell('最近 5 分鐘',pm(c.mom5)+' 點',sgn(c.mom5))+
+     cell('最近 15 分鐘',pm(c.mom15)+' 點',sgn(c.mom15))+'</div>':''));
+}
+
 
 // ---------------- K 線圖（純 SVG，TradingView 式操作） ----------------
 // 滾輪＝縮放疏密（以游標位置為中心）、按住拖曳＝左右移動時間、雙擊＝還原。
 // 價格軸自動貼合「畫面上看得到的那幾根」，跟看盤軟體一樣。
-var barsCache=null, barsAt=0, viewDate='', pickOpen=false, calMonth='', lastMktFallback='';
+var barsCache=null, barsAt=0, viewDate='', pickOpen=false, calMonth='';
 var barsPending=false;        // 換日的資料還在路上（見 fetchBars）
 var barsSeq=0;                // 換日請求的流水號，只採用最後一次的回應（見 fetchBars）
 // n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
@@ -2593,25 +2623,6 @@ function chartSVG(s){
    rail=dayRail(barsCache,q,live);
  }
  const pick=pickOpen?calHTML():'';
- const cur=curDay(), me=dayInfo(cur);
- // 換日之後、新的 K 棒還沒回來的那一秒，barsCache 還是上一天的 ——
- // 這時候標籤若照常顯示，會把上一天的練習筆數掛在新日期底下（看起來像那天有下單）。
- const loading=barsPending||cur!==(barsCache.date||'');
- const dayS=cur.slice(5), noS=((barsCache.night_open)||'').slice(5);
- // 下排：純說明。即時那天也照樣寫日期（金點已經在講「現在」了，再寫「今天」是重複）；
- // 沒練習寫「未練習」而不是整段消失 —— 消失會讓上下兩行的位置跳動。
- const net=T.reduce((a,t)=>a+t._net,0);
- const r2=loading
-   ? '<span>載入中…</span>'
-   : ((noS&&noS!==dayS)?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
-     '<span>'+(T.length
-       // 負號用 U+2212 不用 hyphen，等寬字型下跟 + 對得齊（只改這裡，不動全域的 pm()）
-       ? '練習 '+T.length+' 筆 <b class="'+sgn(net)+'">'+pm(net).replace('-','−')+'</b> 點'
-       : '未練習')+'</span>'+
-     // 這個分隔點跟著鍵盤提示一起藏（窄視窗會把提示收掉，只留一個孤零零的「·」很醜）
-     '<span class="sep k">·</span>'+
-     '<span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
- const nav=stepTarget(-1), fwd=stepTarget(1);
  // 報價區第三行：把舊版擠在 mini 列開頭那句「報價 休市中（上面是收盤價，非即時）」
  // 搬上來，跟昨收、合約、更新時間放在一起。
  // ⚠ 更新時間放在獨立的 <span id="cupd">：它每秒都在變，寫進 #chead 的字串裡
@@ -2634,28 +2645,7 @@ function chartSVG(s){
         '<span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
         '<span class="cchg '+sgn(chg)+'">'+pm(chg)+
         '<span class="pct">'+pm(pct,2)+'%</span></span></div>'+
-        '<div class="qsub">'+qs+'</div></div>'+
-        '<div class="pager">'+
-        '<div class="r1">'+
-        '<button class="nav-icon" data-nav="-1" title="前一個交易日（←）"'+
-          (nav?'':' disabled')+'>◀</button>'+
-        '<button class="dstamp'+(pickOpen?' open':'')+(loading?' loading':'')+
-          '" data-pick="1" title="選日期（Esc 收合）">'+CAL_ICON+
-          '<span class="num">'+dayS+'</span>'+
-          // 這一格固定放星期，載入中不換字 —— 換成「載入中…」會讓日期鈕瞬間變寬約 33px，
-          // 整條 r1 是靠右對齊的，◀ 會被往左推出滑鼠底下：連點 ◀ 時第 2 下就落在日期鈕上
-          // （實測 250ms 節奏 4/5、60ms 節奏 2/5 生效，還誤開了月曆）。
-          // 載入中仍然看得出來：.dstamp.loading 會把日期轉灰，下排 r2 也照樣寫「載入中…」。
-          '<span class="wd">'+(me?me.w:'')+'</span>'+
-          '<span class="caret">▼</span></button>'+
-        '<button class="nav-icon" data-nav="1" title="後一個交易日（→）"'+
-          (fwd?'':' disabled')+'>▶</button>'+
-        (viewDate
-          ?'<button class="jump2" data-day="" title="回到即時（Home）">今天</button>'
-          :'<span class="livelamp" title="即時（Home）"><i></i>即時</span>')+
-        '</div>'+
-        '<div class="r2">'+r2+'</div>'+
-        '</div>',
+        '<div class="qsub">'+qs+'</div></div>'+pagerHTML(T),
    pick:pick, rail:rail,
    legend:(function(b,hv){
      const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E';
@@ -2681,6 +2671,61 @@ function chartSVG(s){
 function dayList(){ return ((barsCache&&barsCache.days)||[]).filter(x=>!x.closed); }
 function curDay(){ return viewDate||(barsCache&&barsCache.date)||today10(); }
 function dayInfo(d){ return dayList().find(x=>x.d===d)||null; }
+
+/* 翻頁列本體（◀ 日期 ▶ ＋ 今天／即時，下排是說明）。
+   ⚠ 這一列跟「畫不畫得出 K 線」是兩件事，兩邊都要有。
+   以前它只由 chartSVG 產出、跟著 #chead 塞進 K 線卡裡，於是「一根 K 棒都抓不到」時
+   （本機 csv 沒那天、又還沒連上永豐）整張卡連同翻頁列與月曆被換成一張小數字卡 ——
+   而「換到有資料的那天」正是那個狀態下唯一的自救路徑，使用者反而被鎖死在那一天
+   （2026-08-25 視覺升級驗收時再次確認，另開單處理）。
+   T＝那一天的練習交易（有 K 棒時 /api/bars 會一起帶回來）；
+   傳 null＝沒有 K 棒可看，練習筆數改用日期索引裡的 n / net（跟月曆同一份資料）。 */
+function pagerHTML(T){
+ const cur=curDay(), me=dayInfo(cur);
+ // 換日之後、新的 K 棒還沒回來的那一秒，barsCache 還是上一天的 ——
+ // 這時候標籤若照常顯示，會把上一天的練習筆數掛在新日期底下（看起來像那天有下單）。
+ // bd 是空的只發生在 /api/bars 整個出錯（連 date 都沒回），那時不可以判成「載入中」，
+ // 否則日期會永遠停在灰色、r2 永遠寫「載入中…」。
+ const bd=(barsCache&&barsCache.date)||'';
+ const loading=barsPending||(!!bd&&cur!==bd);
+ const dayS=cur.slice(5), noS=((barsCache&&barsCache.night_open)||'').slice(5);
+ const n=T?T.length:((me&&me.n)||0);
+ const net=T?T.reduce((a,t)=>a+t._net,0):((me&&me.net)||0);
+ // 下排：純說明。即時那天也照樣寫日期（金點已經在講「現在」了，再寫「今天」是重複）；
+ // 沒練習寫「未練習」而不是整段消失 —— 消失會讓上下兩行的位置跳動。
+ const r2=loading
+   ? '<span>載入中…</span>'
+   : ((noS&&noS!==dayS)?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
+     '<span>'+(n
+       // 負號用 U+2212 不用 hyphen，等寬字型下跟 + 對得齊（只改這裡，不動全域的 pm()）
+       ? '練習 '+n+' 筆 <b class="'+sgn(net)+'">'+pm(net).replace('-','−')+'</b> 點'
+       : '未練習')+'</span>'+
+     // 這個分隔點跟著鍵盤提示一起藏（窄視窗會把提示收掉，只留一個孤零零的「·」很醜）
+     '<span class="sep k">·</span>'+
+     '<span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
+ const nav=stepTarget(-1), fwd=stepTarget(1);
+ return '<div class="pager">'+
+   '<div class="r1">'+
+   '<button class="nav-icon" data-nav="-1" title="前一個交易日（←）"'+
+     (nav?'':' disabled')+'>◀</button>'+
+   '<button class="dstamp'+(pickOpen?' open':'')+(loading?' loading':'')+
+     '" data-pick="1" title="選日期（Esc 收合）">'+CAL_ICON+
+     '<span class="num">'+dayS+'</span>'+
+     // 這一格固定放星期，載入中不換字 —— 換成「載入中…」會讓日期鈕瞬間變寬約 33px，
+     // 整條 r1 是靠右對齊的，◀ 會被往左推出滑鼠底下：連點 ◀ 時第 2 下就落在日期鈕上
+     // （實測 250ms 節奏 4/5、60ms 節奏 2/5 生效，還誤開了月曆）。
+     // 載入中仍然看得出來：.dstamp.loading 會把日期轉灰，下排 r2 也照樣寫「載入中…」。
+     '<span class="wd">'+(me?me.w:'')+'</span>'+
+     '<span class="caret">▼</span></button>'+
+   '<button class="nav-icon" data-nav="1" title="後一個交易日（→）"'+
+     (fwd?'':' disabled')+'>▶</button>'+
+   (viewDate
+     ?'<button class="jump2" data-day="" title="回到即時（Home）">今天</button>'
+     :'<span class="livelamp" title="即時（Home）"><i></i>即時</span>')+
+   '</div>'+
+   '<div class="r2">'+r2+'</div>'+
+   '</div>';
+}
 
 /* 往前／往後一個交易日；到底了回 null（箭頭就會變灰） */
 function stepTarget(dir){
