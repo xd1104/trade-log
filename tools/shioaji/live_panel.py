@@ -866,7 +866,7 @@ def _local_span():
     return dd.min(), dd.max()
 
 
-def _raw_days(days):
+def _raw_days(days, report=None):
     """
     取這幾天的原始 1 分 K（含夜盤）。本機 tmf_1min.csv 優先，缺的才跟永豐要。
 
@@ -899,6 +899,11 @@ def _raw_days(days):
                 contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
             except Exception as e:
                 print(f"[K線] 取不到合約：{str(e)[:80]}")
+        if contract is None and report is not None:
+            # 【要得到卻要不到】有日子需要跟永豐補（多半是「昨天的夜盤」與今天），
+            # 但這一刻還沒連上。回傳的資料是「能拿到的部分」，不是完整的 ——
+            # 呼叫端（_cached_raw）必須知道，否則會把半成品當成正解永久留著。
+            report["incomplete"] = True
         if contract is not None:
             for dd in missing:
                 try:
@@ -941,10 +946,18 @@ def _cached_raw(cache, key, days):
     stamp = _csv_stamp()
     hit = cache.get(key)
     if hit is not None and hit.get("mt") == stamp:
-        if hit["df"] is not None or time.time() - hit["at"] < SESS_RETRY:
+        # 完整拿到的才永久留著；「還沒連上永豐、只拿到本機那半份」要隔一陣子再試。
+        # 【踩過】面板啟動的頭幾秒還沒連線，那份缺了昨晚夜盤的結果被當成成功存起來，
+        # 而快取鍵只帶 csv 的 mtime、csv 要隔天 14:10 才會再變 ⇒ 圖整天都少一段夜盤，
+        # 夜盤基準往回跳到更早的日子（2026-08-25：週二的圖接的是上週五的夜盤）。
+        if hit["df"] is not None and not hit.get("partial"):
             return hit["df"]
-    df = _raw_days(days)
-    cache[key] = {"df": df, "at": time.time(), "mt": stamp}
+        if time.time() - hit["at"] < SESS_RETRY:
+            return hit["df"]
+    rep = {}
+    df = _raw_days(days, report=rep)
+    cache[key] = {"df": df, "at": time.time(), "mt": stamp,
+                  "partial": bool(rep.get("incomplete"))}
     return df
 
 
