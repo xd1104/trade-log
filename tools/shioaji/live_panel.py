@@ -1590,8 +1590,6 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .cell .v{font-size:19px; font-weight:650; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; margin-top:2px}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text)}
-.px{grid-column:1/-1; text-align:center; padding:16px}
-.px .v{font-size:38px; letter-spacing:-1px}
 .chart{position:relative}
 /* 用瀏覽器原生的縮放把手：右下角可拖曳改變寬高，尺寸記在 localStorage。
    preserveAspectRatio="none" 讓 K 線跟著容器拉伸，跟看盤軟體一樣。 */
