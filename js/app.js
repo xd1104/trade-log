@@ -393,7 +393,12 @@
     });
     // 心得有改才換時間戳，否則沿用舊的 —— 不然每次編輯進出場價都會讓這筆
     // 在同步時「看起來比較新」，把電腦面板上比較新的心得蓋掉。
-    var rec = { date: date, mode: curMode, dir: curDir, entry: entry, exit: exit, note: note };
+    // 【要沿用舊欄位】以前這裡是「整筆重建」，time 沒被帶過來就直接消失了。
+    // 而在手機上編輯過的紀錄剛好就是有心得的那幾筆 ⇒ 電腦面板用
+    // （日期＋進場時間＋進場價）配對時全部對不上，心得永遠傳不回去。
+    var rec = Object.assign({}, prev || {}, {
+      date: date, mode: curMode, dir: curDir, entry: entry, exit: exit, note: note
+    });
     // 清空也要蓋時間戳，否則「在手機上把心得刪掉」傳不回面板（面板那筆有戳、
     // 這筆沒戳 → 面板判定自己比較新，就把刪掉的字又補回來）。面板端同一套規則。
     if (note !== (prevNote || '')) { rec.note_at = nowStamp(); }
@@ -612,7 +617,7 @@
 
   // ---------- 版本顯示 + 強制更新 ----------
   // 手機 PWA 的快取很黏，沒有版本號時根本看不出自己在哪一版。
-  var APP_VER = 'v18';
+  var APP_VER = 'v19';
   var vl = $('verLabel'); if (vl) vl.textContent = '版本 ' + APP_VER;
   var fu = $('forceUpdBtn');
   if (fu) fu.onclick = function () {

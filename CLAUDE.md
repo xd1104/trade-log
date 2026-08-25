@@ -189,6 +189,11 @@ data/practice.json       練習紀錄的雲端同步檔（面板自動 push，�
 - **手機也會往同一個 repo 寫**，所以 `sync_to_cloud()` 的 push 失敗要
   `git pull --rebase --autostash` 再推一次，否則手機推過之後面板就永遠推不上去。
 - 手機端**內容沒變就不送 PUT**，不然每開一次 App 就洗一版 commit。
+- **配對不可以把 `time` 算進去**（2026-08-25 踩到，第一版就是這樣寫的）。
+  手機的表單以前是「整筆重建」，編輯一筆就會把 `time` 弄丟 ——
+  而「在手機上編輯過」跟「有心得」剛好是同一批紀錄，所以真正要同步的那幾筆
+  **100% 對不上**，看起來就像功能整個沒作用。現在配對是「日期＋進場價」，
+  進場價也被改過而那天兩邊都只有一筆時退回用日期認。手機端也已改成沿用舊欄位。
 - 鑰匙圈：`appId` 是 `trade-log`、`tokenKey` 是 `tradelog_gh_pat`，模組在 `js/keyring-unlock.js`
   （keyring repo 的 `sync-unlock.yml` 會自動更新它；trade-log 的目錄是 `js`，不是 `public`/`docs`）。
   **金鑰要 Benson 自己在鑰匙圈後台配**（fine-grained PAT，只授權 xd1104/trade-log，

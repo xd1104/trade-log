@@ -623,15 +623,28 @@ def pull_from_phone():
     except Exception as e:
         return 0, f"讀不到手機的檔案：{str(e)[:80]}"
 
-    incoming = {}
+    # 依日期分組。【不能把 time 放進配對條件】——手機上編輯過的紀錄 time 是空的
+    # （手機表單以前會把它弄丟），而「編輯過」跟「有心得」剛好是同一批，
+    # 一旦把 time 算進去，真正要同步的那幾筆 100% 對不上（2026-08-25 踩到）。
+    by_day = {}
     for t in payload.get("trades") or []:
         try:
-            k = (str(t["date"]), str(t.get("time", ""))[:5], round(float(t["entry"])))
+            by_day.setdefault(str(t["date"]), []).append(
+                (round(float(t["entry"])), t.get("note", ""), t.get("note_at", "")))
         except Exception:
             continue
-        incoming[k] = (t.get("note", ""), t.get("note_at", ""))
-    if not incoming:
+    if not by_day:
         return 0, "手機那邊還沒有紀錄"
+
+    def match(day, entry, same_day_count):
+        """先比進場價；對不上而那天兩邊都只有一筆，就用日期認（他在手機上改過價）。"""
+        cands = by_day.get(day) or []
+        for e, note, at in cands:
+            if e == entry:
+                return note, at
+        if len(cands) == 1 and same_day_count == 1:
+            return cands[0][1], cands[0][2]
+        return None
 
     changed = 0
     if TRADE_DIR.exists():
@@ -643,13 +656,13 @@ def pull_from_phone():
             touched = False
             for r in recs:
                 try:
-                    k = (str(r.get("date")), str(r.get("time", ""))[:5],
-                         round(float(r.get("entry"))))
+                    day, entry = str(r.get("date")), round(float(r.get("entry")))
                 except Exception:
                     continue
-                if k not in incoming:
+                hit = match(day, entry, sum(1 for x in recs if x.get("date") == day))
+                if hit is None:
                     continue
-                note, at = incoming[k]
+                note, at = hit
                 if _note_wins(note, at, r.get("note"), r.get("note_at")):
                     r["note"] = note
                     r["note_at"] = at or datetime.now().isoformat(timespec="seconds")
