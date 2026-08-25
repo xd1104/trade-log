@@ -1,0 +1,1809 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>早盤儀表板・視覺升級 demo</title>
+<!--
+  ═══════════════════════════════════════════════════════════════════
+  lab-ux 的「設計 demo」，不是產品。
+  ・零外部依賴（沒有 CDN、沒有連外、沒有 import）
+  ・K 棒是本機真實歷史資料（2026-08-21 / 08-25），練習紀錄是假的
+  ・按鈕不會送任何請求、不會寫任何檔案
+  規格文件：UI-REDESIGN-SPEC.md
+  ═══════════════════════════════════════════════════════════════════
+-->
+<style>
+/* ══════ 1. 設計代幣 ══════
+   ⚠ 台股慣例不可反：紅=漲/賺、綠=跌/賠。
+   金色只有一個意思：「即時／現在／目前選取」。 */
+:root{
+  --bg:#0E1116;
+  --surface:#151A22;        /* L2 一般卡 */
+  --surface-2:#1C222C;      /* 卡內凹槽（輸入框、分段控制、列表項）*/
+  --raise:#1A212B;          /* L1 主卡（K 線圖）*/
+  --line:#242C38;
+  --line-soft:#1E2530;
+  --text:#E9ECF1; --dim:#8D95A3; --faint:#5C6472; --ghost:#39414F;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14); --gold-line:rgba(227,169,81,.42);
+  --up:#EE5A54;   --up-soft:rgba(238,90,84,.15);    --up-line:rgba(238,90,84,.38);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.15); --down-line:rgba(52,179,126,.38);
+  --r-lg:16px; --r-md:12px; --r-sm:9px; --r-xs:6px;
+  --shadow-1:0 18px 40px -22px rgba(0,0,0,.85);
+  --shadow-2:0 24px 60px -20px rgba(0,0,0,.7);
+  --ease:cubic-bezier(.22,.68,.36,1);
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
+  background-image:radial-gradient(1100px 460px at 50% -10%, rgba(227,169,81,.055), transparent 72%);
+  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased}
+.app{max-width:1500px; margin:0 auto; padding:0 24px 28px}
+.cols{display:grid; grid-template-columns:minmax(0,1fr) 388px; gap:18px; align-items:start}
+@media(max-width:1160px){ .cols{grid-template-columns:minmax(0,1fr)} }
+.right{display:flex; flex-direction:column; gap:14px}
+.up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text)}
+[hidden]{display:none !important}
+
+/* ══════ 2. 卡片層級 ══════
+   舊版：每張卡同一個底色＋同一條邊框＝沒有主次。
+   新版三層：L1 主卡（K 線圖，全頁唯一有陰影的東西）／L2 一般卡／L3 靜卡（純容器）。 */
+.card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg);
+  padding:16px 18px}
+.card.l1{background:linear-gradient(180deg,var(--raise),#161C24); border-color:var(--line);
+  box-shadow:var(--shadow-1); padding:16px 18px 13px; position:relative}
+.card.l1::before{content:""; position:absolute; left:16px; right:16px; top:0; height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent)}
+.card.l3{background:transparent; border-color:transparent; padding:0}
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 2px 8px; gap:10px}
+.sec-head h2{font-size:11.5px; margin:0; color:var(--dim); letter-spacing:1.6px; font-weight:650}
+.sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums}
+.sec-head .warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:20px; padding:2px 9px; font-weight:600}
+
+/* ══════ 3. 頂列 ══════ */
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 16px; gap:16px}
+.brand{display:flex; align-items:center; gap:11px}
+.brand .mark{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(150deg,rgba(227,169,81,.22),rgba(227,169,81,.06));
+  color:var(--gold); font-size:15px; box-shadow:inset 0 0 0 1px rgba(227,169,81,.2)}
+.brand .nm{font-size:15px; font-weight:680; letter-spacing:.3px}
+.brand .sub{font-size:11px; color:var(--faint); margin-top:1px; display:flex; align-items:center; gap:6px}
+.tabs{display:flex; gap:3px; background:var(--surface-2); border-radius:12px; padding:3px;
+  border:1px solid var(--line-soft)}
+.tabs button{border:0; background:transparent; color:var(--dim); cursor:pointer; min-width:100px;
+  font-family:var(--font-sans); font-size:13.5px; font-weight:650; padding:8px 18px; border-radius:9px;
+  transition:color .15s var(--ease), background .15s var(--ease)}
+.tabs button:hover{color:var(--text)}
+.tabs button.on{background:var(--gold-soft); color:var(--gold)}
+.clock{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.clock .d{font-size:14px; font-weight:600; letter-spacing:.4px}
+.clock .w{font-size:11px; color:var(--faint)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--down)}
+.dot.off{background:var(--faint)}
+
+/* ══════ 4. 報價區 ══════
+   舊版：一個大數字＋一排同級距的小字，很平。
+   新版三層：價格 52px 主角／漲跌做成有底色的膠囊／第三行灰字放昨收・合約・更新時間。 */
+.chead{display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  margin-bottom:10px}
+.qblock{display:flex; flex-direction:column; gap:6px; min-width:0}
+.qmain{display:flex; align-items:baseline; gap:11px; flex-wrap:wrap}
+.cpx{font-size:52px; font-weight:700; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  line-height:.94; letter-spacing:-1.6px}
+.cchg{display:inline-flex; align-items:baseline; gap:7px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:15px; font-weight:700; padding:4px 10px 5px;
+  border-radius:9px; line-height:1}
+.cchg.up{background:var(--up-soft); color:var(--up)}
+.cchg.down{background:var(--down-soft); color:var(--down)}
+.cchg.flat{background:var(--surface-2); color:var(--dim)}
+.cchg .pct{font-size:12.5px; font-weight:600; opacity:.85}
+.qsub{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); flex-wrap:wrap}
+.qsub .sep{color:var(--ghost)}
+.qsub .live{color:var(--gold); display:inline-flex; align-items:center; gap:5px}
+.qsub .live i{width:6px;height:6px;border-radius:50%;background:var(--gold);
+  box-shadow:0 0 0 3px var(--gold-soft)}
+
+/* ══════ 5. 翻頁列（⚠ 結構與尺寸沿用現行 live_panel.py，只換色票）══════ */
+.pager{display:flex; flex-direction:column; align-items:flex-end; gap:2px; position:relative}
+.pager .r1{display:flex; align-items:center; gap:3px}
+.pager .r2{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--faint);
+  line-height:1.25; padding-right:5px; flex-wrap:wrap; justify-content:flex-end}
+.pager .r2 .sep{color:var(--ghost)}
+.pager .r2 b{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:11.5px;
+  font-weight:650}
+.pager .r2 kbd{font-family:var(--font-mono); font-size:10.5px; background:var(--surface-2);
+  border:1px solid var(--line-soft); border-radius:5px; padding:0 4px; color:var(--dim); line-height:1.35}
+.pager .nav-icon{width:24px; height:24px; border-radius:8px; border:0; background:transparent;
+  color:var(--faint); font-size:11px; line-height:1; display:grid; place-items:center; cursor:pointer;
+  font-family:var(--font-sans); padding:0; transition:background .12s var(--ease), color .12s var(--ease)}
+.pager .nav-icon:hover:not(:disabled){background:var(--surface-2); color:var(--text)}
+.pager .nav-icon:disabled{color:var(--ghost); cursor:default}
+.pager .dstamp{display:inline-flex; align-items:center; gap:7px; border:0; background:transparent;
+  cursor:pointer; padding:3px 7px; border-radius:9px; color:var(--text); line-height:1;
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap;
+  transition:background .12s var(--ease)}
+.pager .dstamp .num{font-size:15px; font-weight:650; letter-spacing:.3px; line-height:1}
+.pager .dstamp .wd{font-family:var(--font-sans); font-size:12px; color:var(--dim); font-weight:500;
+  line-height:1; min-width:1em; text-align:center}
+.pager .dstamp .cal-i{color:var(--faint); transition:color .12s var(--ease)}
+.pager .dstamp .caret{font-size:8px; color:var(--faint);
+  transition:transform .15s var(--ease), color .12s var(--ease)}
+.pager .dstamp:hover{background:var(--surface-2)}
+.pager .dstamp:hover .cal-i,.pager .dstamp:hover .caret{color:var(--gold)}
+.pager .dstamp.open{background:var(--surface-2)}
+.pager .dstamp.open .cal-i,.pager .dstamp.open .caret{color:var(--gold)}
+.pager .dstamp.open .caret{transform:rotate(180deg)}
+.pager .jump2{font-family:var(--font-sans); font-size:12px; font-weight:600; cursor:pointer; border:0;
+  border-radius:8px; padding:4px 10px; line-height:1.15; background:var(--gold-soft); color:var(--gold);
+  white-space:nowrap; transition:background .12s var(--ease)}
+.pager .jump2:hover{background:rgba(227,169,81,.24)}
+.pager .livelamp{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--dim);
+  padding:4px 6px 4px 4px; line-height:1.15; white-space:nowrap}
+.pager .livelamp i{width:6px; height:6px; border-radius:50%; background:var(--gold);
+  box-shadow:0 0 0 3px var(--gold-soft)}
+.cheadwrap{position:relative}
+.calpop{position:absolute; top:calc(100% + 8px); right:0; z-index:30}
+.calbox{border:1px solid var(--line); border-radius:14px; padding:12px 14px 13px;
+  background:var(--surface-2); width:max-content; box-shadow:var(--shadow-2)}
+.calhead{display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:10px}
+.calhead .mo{font-family:var(--font-mono); font-size:12.5px; font-weight:700}
+.calhead .cnav{display:flex; gap:5px}
+.calhead .cnav button{width:24px; height:24px; border-radius:7px; font-size:12px; display:grid;
+  place-items:center; padding:0; cursor:pointer; background:var(--surface); color:var(--dim);
+  border:1px solid var(--line-soft)}
+.calhead .cnav button:hover{border-color:var(--gold-line); color:var(--gold)}
+.cal{display:grid; grid-template-columns:repeat(5,48px); gap:5px}
+.cal .wd{font-size:10px; color:var(--faint); text-align:center; letter-spacing:1px}
+.cal .cell{position:relative; height:44px; border-radius:10px; border:1px solid transparent;
+  background:var(--bg); cursor:pointer; padding:5px 0 0; display:flex; flex-direction:column;
+  align-items:center; gap:2px; font-family:var(--font-mono)}
+.cal .cell .dd{font-size:13.5px; font-weight:700; line-height:1.1; font-variant-numeric:tabular-nums}
+.cal .cell .pc{font-size:9px; line-height:1; opacity:.85}
+.cal .cell .rngbar{position:absolute; left:7px; right:7px; bottom:5px; height:2px; border-radius:1px;
+  opacity:.5}
+.cal .cell:hover{border-color:var(--line)}
+.cal .cell.up .dd,.cal .cell.up .pc{color:var(--up)} .cal .cell.up .rngbar{background:var(--up)}
+.cal .cell.dn .dd,.cal .cell.dn .pc{color:var(--down)} .cal .cell.dn .rngbar{background:var(--down)}
+.cal .cell.off{background:transparent; cursor:default}
+.cal .cell.off .dd{color:var(--ghost); font-weight:400}
+.cal .cell.prac{border-color:var(--gold-line)}
+.cal .cell.on{background:var(--gold-soft); border-color:var(--gold)}
+.callegend{display:flex; gap:14px; flex-wrap:wrap; margin-top:11px; font-size:10.5px; color:var(--faint)}
+.callegend i{display:inline-block; width:8px; height:8px; border-radius:3px; vertical-align:-1px;
+  margin-right:4px}
+
+/* ══════ 6. 圖表 ══════ */
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--dim);
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; margin:2px 0 8px}
+.legend b{color:var(--text); font-weight:600}
+.legend .lt{color:var(--faint)}
+.cwrap{overflow:hidden; border-radius:10px; position:relative}
+.cwrap svg{display:block; width:100%; height:auto; cursor:crosshair; touch-action:none; user-select:none}
+.chint{font-size:11px; color:var(--faint); text-align:right; margin-top:5px}
+.chint b{color:var(--dim); font-weight:500}
+
+/* ══════ 7. 資料軌（取代舊的 mini 列 / fstrip）══════
+   舊版：5分 15分 跳空 震幅 位階 量能 買賣 加權 基差 全部同一個字級、同一個顏色、
+   只用空白隔開 ⇒ 讀起來是一串連續的字。
+   新版：①標籤在上、數值在下 ②分組（動能／今天／盤口／現貨）中間有分隔線
+        ③位階與量能各給一條 3px 的微型量尺 —— 只呈現已發生的事實，不做任何預測。 */
+.rail{display:flex; align-items:stretch; gap:0; flex-wrap:wrap; margin-top:12px; padding-top:11px;
+  border-top:1px solid var(--line-soft)}
+.rail .grp{display:flex; gap:18px; padding:0 18px; border-right:1px solid var(--line-soft)}
+.rail .grp:first-child{padding-left:0}
+.rail .grp:last-child{border-right:0; padding-right:0}
+.rail .it{min-width:44px}
+.rail .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px; white-space:nowrap; line-height:1.3}
+.rail .v{font-size:15px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1.25; margin-top:2px; white-space:nowrap}
+.rail .v small{font-size:10.5px; font-weight:500; color:var(--faint); margin-left:2px}
+.rail .track{height:3px; border-radius:2px; background:var(--surface-2); margin-top:5px;
+  overflow:hidden; position:relative}
+.rail .track i{position:absolute; top:0; bottom:0; left:0; border-radius:2px; background:var(--dim)}
+.rail .track i.hot{background:var(--gold)}
+.rail .muted .v{color:var(--dim)}
+
+/* ══════ 8. 右欄：練習下單 ══════ */
+.btns{display:flex; gap:10px}
+.btn{flex:1; padding:14px; border-radius:var(--r-md); cursor:pointer; font-family:var(--font-sans);
+  font-size:15.5px; font-weight:700; letter-spacing:1px; border:1px solid transparent;
+  transition:transform .1s var(--ease), background .15s var(--ease), border-color .15s var(--ease)}
+.btn.long{background:var(--up-soft); color:var(--up); border-color:var(--up-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn.short{background:var(--down-soft); color:var(--down); border-color:var(--down-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn.long:hover:not(:disabled){background:rgba(238,90,84,.22)}
+.btn.short:hover:not(:disabled){background:rgba(52,179,126,.22)}
+.btn.flat2{background:var(--surface-2); color:var(--text); border-color:var(--line)}
+.btn.gold{background:var(--gold-soft); color:var(--gold)}
+.btn.gold:hover{background:rgba(227,169,81,.24)}
+.btn.ghost{flex:0 0 auto; background:transparent; color:var(--faint); font-size:13px; font-weight:500;
+  border-color:var(--line)}
+.btn.ghost:hover{color:var(--text); border-color:var(--faint)}
+.btn.gw{flex:1}
+.btn:active:not(:disabled){transform:scale(.985)}
+.btn:disabled{opacity:.3; cursor:not-allowed}
+.whyoff{margin-top:10px; font-size:11.5px; color:var(--faint); line-height:1.6}
+.pnl{text-align:center; padding:4px 0 8px}
+.pnl .v{font-size:44px; font-weight:700; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  line-height:1; letter-spacing:-1px}
+.pnl .l{font-size:12px; color:var(--dim); margin-top:7px}
+.plimit{display:flex; justify-content:center; gap:14px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); margin-bottom:12px}
+
+/* ══════ 9. 右欄：練習成績 ══════
+   舊版：43% 用金色 46px ⇒ 全頁最亮的數字是「勝率」，而金色在別的地方是「即時」。
+   新版：勝率改中性色、並排一條紅綠勝敗條（一眼看得出比例）；
+        真正的結果「合計點數」才吃紅綠。 */
+.seg{display:flex; gap:4px; background:var(--surface-2); border-radius:10px; padding:3px;
+  border:1px solid var(--line-soft); margin-bottom:14px}
+.seg button{flex:1; border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:12.5px; font-weight:600; padding:7px 4px; border-radius:8px;
+  transition:color .15s var(--ease), background .15s var(--ease)}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:var(--gold-soft); color:var(--gold)}
+.score{display:flex; align-items:flex-start; justify-content:space-between; gap:14px}
+.score .rate{line-height:1}
+.score .rate .n{font-family:var(--font-mono); font-size:40px; font-weight:680; letter-spacing:-1.2px;
+  font-variant-numeric:tabular-nums; color:var(--text)}
+.score .rate .p{font-size:19px; color:var(--dim); font-family:var(--font-mono); margin-left:1px}
+.score .rate .lab{font-size:11px; color:var(--faint); letter-spacing:2px; margin-top:7px}
+.score .sum{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.score .sum .n{font-size:26px; font-weight:700; letter-spacing:-.5px; line-height:1.1}
+.score .sum .u{font-size:11px; color:var(--dim); margin-left:3px; font-weight:500}
+.score .sum .cash{font-size:11.5px; color:var(--faint); margin-top:5px}
+.wlbar{display:flex; height:6px; border-radius:3px; overflow:hidden; margin-top:13px; gap:2px}
+.wlbar i{display:block; height:100%; border-radius:3px}
+.wlbar i.w{background:var(--up)} .wlbar i.l{background:var(--down)}
+.wlfoot{display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); margin-top:6px}
+.wlfoot b{font-weight:650}
+.wlfoot .w b{color:var(--up)} .wlfoot .l b{color:var(--down)}
+
+/* ══════ 10. 練習紀錄列 ══════
+   左緣 2px 結果色 rail：一眼掃得出賺賠，不必讀數字。 */
+.list{display:flex; flex-direction:column; gap:7px; margin-top:14px; max-height:290px;
+  overflow-y:auto; padding-right:4px}
+.list::-webkit-scrollbar{width:6px}
+.list::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+.trade{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
+  padding:10px 12px 10px 13px; position:relative; overflow:hidden;
+  transition:border-color .15s var(--ease), background .15s var(--ease)}
+.trade::before{content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--ghost)}
+.trade.win::before{background:var(--up)} .trade.loss::before{background:var(--down)}
+.tr-top{display:flex; align-items:center; gap:9px}
+.tr-date{font-family:var(--font-mono); font-size:12px; color:var(--faint); width:42px; flex:none}
+.dir{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:var(--r-xs); flex:none;
+  letter-spacing:.3px}
+.dir.l{background:var(--up-soft); color:var(--up)}
+.dir.s{background:var(--down-soft); color:var(--down)}
+.tr-px{flex:1; font-family:var(--font-mono); font-size:12.5px; font-variant-numeric:tabular-nums;
+  color:var(--dim)}
+.tr-px .arrow{color:var(--ghost); margin:0 3px}
+.tr-res{font-family:var(--font-mono); font-size:15px; font-weight:700; text-align:right; min-width:52px;
+  flex:none; font-variant-numeric:tabular-nums}
+.r-win{color:var(--up)} .r-loss{color:var(--down)}
+.tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
+.tr-note{font-size:11.5px; color:var(--faint); margin-top:6px; padding-left:51px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.noteline{font-size:12.5px; color:var(--text); background:var(--surface-2); border:1px solid var(--line-soft);
+  border-radius:var(--r-sm); padding:9px 11px; line-height:1.6; margin-top:8px}
+.noteline.empty{color:var(--faint)}
+.noteline[data-nedit]{cursor:pointer; transition:border-color .15s var(--ease), color .15s var(--ease)}
+.noteline[data-nedit]:hover{border-color:var(--gold-line); color:var(--gold)}
+.trade .noteline{font-size:12px; padding:8px 10px; background:rgba(0,0,0,.18)}
+.nedit{margin-top:8px}
+.nedit textarea{width:100%; min-height:78px; resize:vertical; background:var(--surface-2);
+  border:1px solid var(--gold-line); border-radius:var(--r-sm); color:var(--text);
+  font-family:var(--font-sans); font-size:12.5px; line-height:1.6; padding:9px 11px}
+.nedit textarea:focus{outline:none; border-color:var(--gold)}
+.nedit textarea::placeholder{color:var(--faint)}
+.nedit .nbtn{display:flex; gap:8px; margin-top:7px}
+.nedit .nbtn .btn{flex:1; padding:7px 0; font-size:12.5px; letter-spacing:0}
+.dl{display:inline-block; margin-top:12px; font-size:12px; color:var(--gold); text-decoration:none}
+.dl:hover{text-decoration:underline}
+.empty{text-align:center; padding:32px 16px; color:var(--faint); font-size:12.5px; line-height:1.8}
+.note{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-md);
+  padding:12px 14px; font-size:12px; color:var(--dim); line-height:1.65}
+.note b{color:var(--text)}
+.kbd{font-family:var(--font-mono); font-size:10.5px; color:var(--faint); border:1px solid var(--line);
+  border-radius:5px; padding:1px 5px; background:var(--surface-2)}
+
+/* ══════ 11. 回顧分頁 ══════ */
+.chips{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px}
+.chips button{font-size:11.5px; padding:5px 11px; border-radius:20px; cursor:pointer;
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft);
+  font-family:var(--font-sans); transition:color .15s var(--ease), background .15s var(--ease)}
+.chips button:hover{color:var(--text)}
+.chips button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.tfsw{display:flex; gap:3px; background:var(--surface-2); border-radius:var(--r-sm); padding:3px;
+  border:1px solid var(--line-soft)}
+.tfsw button{border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:11.5px; font-weight:600; padding:5px 12px; border-radius:7px}
+.tfsw button.on{background:var(--gold-soft); color:var(--gold)}
+.dt{display:flex; flex-direction:column; gap:9px}
+.dt-row{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px}
+.dt-row .k{color:var(--dim)}
+.dt-row .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13.5px}
+.dt-big{text-align:center; padding:0 0 6px}
+.dt-big .v{font-size:38px; font-weight:700; font-family:var(--font-mono); line-height:1;
+  font-variant-numeric:tabular-nums; letter-spacing:-1px}
+.dt-big .l{font-size:12px; color:var(--dim); margin-top:6px}
+.hr{height:1px; background:var(--line-soft); margin:2px 0}
+.mae{display:flex; gap:2px; align-items:center; margin-top:2px}
+.mae .seg2{height:4px; border-radius:2px}
+.trade.sel{border-color:var(--gold-line); background:rgba(227,169,81,.08)}
+.trade[data-rpick]{cursor:pointer}
+.trade[data-rpick]:hover{border-color:var(--faint)}
+.daysel{display:flex; gap:6px; flex-wrap:wrap}
+.daysel button{font-size:12px; padding:6px 10px; border-radius:var(--r-sm); cursor:pointer;
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft);
+  font-family:var(--font-mono)}
+.daysel button:hover{color:var(--text)}
+.daysel button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.daysel button .m{font-size:9.5px; color:var(--faint); margin-left:4px}
+.jinput{width:100%; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-sm);
+  color:var(--text); font-family:var(--font-sans); font-size:13px; padding:10px 11px; margin-top:9px}
+.jinput::placeholder{color:var(--faint)}
+.jinput:focus{outline:none; border-color:var(--gold-line)}
+.hold{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
+  padding:12px 14px}
+.hold .v{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1;
+  font-variant-numeric:tabular-nums; text-align:center; letter-spacing:-1px}
+.hold .l{font-size:12px; color:var(--dim); text-align:center; margin-top:6px}
+.cmp{display:flex; flex-direction:column; gap:8px}
+.cmp .side{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
+  padding:10px 12px}
+.cmp .side.mine{border-color:var(--gold-line)}
+.cmp .side .h{font-size:11px; color:var(--dim); margin-bottom:5px; letter-spacing:.5px}
+.cmp .side .b{display:flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:13px}
+.cmp .side .b .res{margin-left:auto; font-size:16px; font-weight:700}
+.verdict{border-radius:var(--r-md); padding:10px 12px; font-size:12.5px; line-height:1.6;
+  text-align:center; font-weight:600; margin-top:8px}
+.verdict.same{background:var(--gold-soft); color:var(--gold)}
+.verdict.diff{background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft)}
+.tally{display:flex; gap:14px; justify-content:center; font-family:var(--font-mono); font-size:12px;
+  color:var(--faint); padding-top:10px; flex-wrap:wrap}
+.tally b{color:var(--text); font-size:14px}
+
+/* ══════ 12. Bar Replay 控制列 ══════
+   舊版：一排長得都一樣的方框按鈕，看不出哪個是主要動作、也看不出「走到哪了」。
+   新版：主按鈕（播放）放大＋金色／次要動作幽靈化／底下一條可點的時間軸，
+        上面標著 08:45・09:30・13:45 與「你按下判斷的那一刻」。 */
+.rpbar{margin-top:10px; padding:10px 12px 9px; background:var(--surface-2);
+  border:1px solid var(--line-soft); border-radius:14px}
+.rprow{display:flex; align-items:center; gap:8px}
+.rpbtn{border:1px solid var(--line); background:var(--surface); color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:13px; font-weight:600; padding:8px 12px; border-radius:var(--r-sm);
+  min-width:40px; transition:color .15s var(--ease), border-color .15s var(--ease)}
+.rpbtn:hover:not(:disabled){color:var(--text); border-color:var(--faint)}
+.rpbtn.play{background:var(--gold-soft); color:var(--gold); border-color:transparent; min-width:104px;
+  font-size:13.5px; padding:9px 14px}
+.rpbtn.play:hover{background:rgba(227,169,81,.24); color:var(--gold)}
+.rpbtn:disabled{opacity:.35; cursor:default}
+.rpsp{display:flex; gap:2px; background:var(--surface); border-radius:var(--r-sm); padding:3px;
+  border:1px solid var(--line-soft)}
+.rpsp button{border:0; background:transparent; color:var(--faint); cursor:pointer;
+  font-family:var(--font-mono); font-size:11.5px; font-weight:600; padding:5px 9px; border-radius:var(--r-xs)}
+.rpsp button:hover{color:var(--text)}
+.rpsp button.on{background:var(--gold-soft); color:var(--gold)}
+.rppos{flex:1; font-family:var(--font-mono); font-size:12.5px; color:var(--faint);
+  font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
+.rppos b{color:var(--text); font-size:14px; font-weight:650}
+.rpscrub{position:relative; height:20px; margin-top:8px; cursor:pointer}
+.rpscrub .trk{position:absolute; left:0; right:0; top:5px; height:4px; border-radius:2px;
+  background:var(--surface)}
+.rpscrub .fill{position:absolute; left:0; top:5px; height:4px; border-radius:2px;
+  background:linear-gradient(90deg,rgba(227,169,81,.5),var(--gold))}
+.rpscrub .win{position:absolute; top:5px; height:4px; background:var(--gold-soft)}
+.rpscrub .knob{position:absolute; top:2px; width:10px; height:10px; border-radius:50%;
+  background:var(--gold); box-shadow:0 0 0 3px rgba(227,169,81,.18); margin-left:-5px}
+.rpscrub .jm{position:absolute; top:0; width:2px; height:14px; border-radius:1px; margin-left:-1px}
+.rpscrub .tk{position:absolute; top:12px; font-size:9.5px; color:var(--ghost);
+  font-family:var(--font-mono); transform:translateX(-50%)}
+
+/* ══════ 13. 載入：骨架 ＋ 進場 ＋ 換日 ══════
+   ⚠ 每 0.5 秒重繪的東西不准掛動畫（報價標頭每次價格變動就整個重建）。
+     動畫只掛在「建一次就不動」的容器上，或用「加 class → 計時器移除」。 */
+@keyframes kk-rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes kk-fade{from{opacity:0}to{opacity:1}}
+@keyframes kk-wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes kk-sheen{from{transform:translateX(-60%)}to{transform:translateX(260%)}}
+@keyframes kk-bar{from{left:-38%}to{left:100%}}
+@keyframes kk-breathe{0%,100%{opacity:.30}50%{opacity:.62}}
+body.boot .topbar{animation:kk-rise .40s var(--ease) both}
+body.boot #mkt>*{animation:kk-rise .46s var(--ease) both .04s}
+body.boot .right>*{animation:kk-rise .46s var(--ease) both}
+body.boot .right>*:nth-child(1){animation-delay:.10s}
+body.boot .right>*:nth-child(2){animation-delay:.16s}
+.card.chart.kk-in{animation:kk-fade .34s ease both}
+.cwrap.kk-draw svg{animation:kk-wipe .52s var(--ease) both}
+.skel .sk{position:relative; overflow:hidden; border-radius:5px; background:var(--surface-2);
+  animation:kk-breathe 1.7s ease-in-out infinite}
+.skel .sk::after{content:""; position:absolute; inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.045),transparent);
+  animation:kk-sheen 1.6s ease-in-out infinite}
+.skel .chead{align-items:center; min-height:74px}
+.skel .legend{min-height:18.8px; align-items:center}
+.skel .rail{min-height:42px; align-items:center}
+.skel .sk-px{width:196px; height:44px}
+.skel .sk-day{width:118px; height:20px}
+.skel .legend .sk{height:11px}
+.skel .chint .sk{width:150px; height:10px; display:inline-block}
+.skel .rail .sk{width:60px; height:26px}
+.skel .cwrap{aspect-ratio:1040/470; position:relative}
+.skel .cwrap::before{content:""; position:absolute; left:0; right:0; top:12px; bottom:26px;
+  background:repeating-linear-gradient(to bottom,var(--line-soft) 0 1px,transparent 1px 20%)}
+.skel .bars{position:absolute; left:0; right:0; top:12px; bottom:26px; display:flex;
+  align-items:flex-end; gap:2px}
+.skel .bars i{flex:1; background:var(--surface-2); border-radius:2px;
+  animation:kk-breathe 1.7s ease-in-out infinite}
+.chart{position:relative}
+.chart .kk-prog{position:absolute; left:0; right:0; top:0; height:2px; overflow:hidden; opacity:0;
+  transition:opacity .2s; pointer-events:none; border-radius:var(--r-lg) var(--r-lg) 0 0}
+.chart.kk-load .kk-prog{opacity:1}
+.chart .kk-prog i{position:absolute; top:0; height:2px; width:38%;
+  background:linear-gradient(90deg,transparent,var(--gold),transparent); animation:kk-bar 1.05s linear infinite}
+.chart.kk-load .cwrap,.chart.kk-load .legend,.chart.kk-load .rail{opacity:.4}
+.chart .cwrap,.chart .legend,.chart .rail{transition:opacity .22s ease}
+
+/* 減少動態：系統設定或 demo 面板的開關，兩者都要吃 */
+@media (prefers-reduced-motion: reduce){
+  *{animation:none !important; transition:none !important}
+}
+body.rm *{animation:none !important; transition:none !important}
+
+/* ══════ 14. 方案切換（demo 專用；正式版只會留一種）══════ */
+/* 方案 B「行情頭條」：報價區升級成橫幅（底色＋更大的字），整張圖的重心往上移 */
+body.v-b .chead{background:linear-gradient(180deg,rgba(255,255,255,.035),transparent);
+  margin:-16px -18px 10px; padding:16px 18px 13px; border-bottom:1px solid var(--line-soft);
+  border-radius:var(--r-lg) var(--r-lg) 0 0}
+body.v-b .cpx{font-size:58px}
+body.v-b .card.l1{padding-top:0}
+body.v-b .card.l1::before{display:none}
+/* 方案 C「極簡」：全面去框，只靠留白與底色深淺分層 */
+body.v-c .card{background:transparent; border-color:transparent; box-shadow:none; padding:4px 2px 10px}
+body.v-c .card.l1{background:transparent; border:0; box-shadow:none; padding:4px 2px 10px}
+body.v-c .card.l1::before{display:none}
+body.v-c .right>*{border-top:1px solid var(--line-soft); padding-top:12px}
+body.v-c .trade{background:transparent; border-color:transparent; border-bottom:1px solid var(--line-soft);
+  border-radius:0; padding-left:11px}
+body.v-c .rpbar{background:transparent; border-color:transparent; padding-left:0; padding-right:0}
+body.v-c .seg,body.v-c .tabs{border-color:transparent}
+
+/* ══════ 15. demo 控制面板（正式版不會有）══════ */
+.dock{position:fixed; right:18px; bottom:18px; z-index:90; background:rgba(18,23,30,.94);
+  border:1px solid var(--line); border-radius:14px; padding:12px 14px; box-shadow:var(--shadow-2);
+  backdrop-filter:blur(8px); width:246px}
+.dock h3{font-size:11px; color:var(--gold); letter-spacing:1.4px; margin-bottom:9px; font-weight:700}
+.dock .row{margin-bottom:9px}
+.dock .lab{font-size:10.5px; color:var(--faint); margin-bottom:4px}
+.dock .grp{display:flex; gap:4px}
+.dock button{flex:1; font-size:11.5px; padding:6px 4px; border-radius:8px; cursor:pointer;
+  background:var(--surface-2); border:1px solid var(--line-soft); color:var(--dim);
+  font-family:var(--font-sans)}
+.dock button:hover{color:var(--text)}
+.dock button.on{background:var(--gold-soft); border-color:transparent; color:var(--gold)}
+.dock .wide{width:100%; flex:none; padding:8px 4px; font-weight:600}
+.dock .tip{font-size:10px; color:var(--ghost); line-height:1.5; margin-top:8px;
+  border-top:1px solid var(--line-soft); padding-top:8px}
+.dock .fold{position:absolute; right:10px; top:9px; width:20px; height:20px; padding:0; flex:none;
+  border-radius:6px; font-size:11px; line-height:1}
+body.dock-min .dock .row,body.dock-min .dock .tip{display:none}
+body.dock-min .dock{width:auto}
+.foot{font-size:11px; color:var(--faint); text-align:center; margin-top:22px; line-height:1.8}
+.demo-flag{display:inline-block; font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:20px; padding:2px 10px; font-weight:600}
+</style></head>
+<body class="v-a boot">
+
+<!-- ═══ demo 控制台（正式版不會有這一塊）═══ -->
+<div class="dock" id="dock">
+  <button class="fold" id="fold" title="收合">–</button>
+  <h3>設計 DEMO 控制台</h3>
+  <div class="row"><div class="lab">版面方案（三選一）</div>
+    <div class="grp" id="dv">
+      <button data-v="a" class="on">A 沉穩</button>
+      <button data-v="b">B 頭條</button>
+      <button data-v="c">C 極簡</button>
+    </div></div>
+  <div class="row"><div class="lab">進出場標記</div>
+    <div class="grp" id="dm">
+      <button data-m="new" class="on">新版</button>
+      <button data-m="old">現行版（對照）</button>
+    </div></div>
+  <div class="row"><div class="lab">下單區狀態</div>
+    <div class="grp" id="dq">
+      <button data-q="live" class="on">可下單</button>
+      <button data-q="closed">休市中</button>
+    </div></div>
+  <div class="row"><button class="wide" id="dreload">重新載入一次（看載入動畫）</button></div>
+  <div class="row"><div class="lab">動態</div>
+    <div class="grp" id="dr">
+      <button data-r="0" class="on">正常</button>
+      <button data-r="1">關掉動畫</button>
+    </div></div>
+  <div class="tip">設計稿：資料是本機歷史 K 棒＋假的練習紀錄，按鈕不會下單、不會存檔。</div>
+</div>
+
+<div class="app">
+<div class="topbar">
+  <div class="brand"><div class="mark">&#9702;</div>
+    <div><div class="nm">早盤儀表板</div>
+      <div class="sub"><span class="dot"></span>微台 TMFI6・已連線<span class="demo-flag">設計 DEMO</span></div></div></div>
+  <div class="tabs" id="tabs">
+    <button data-tab="live" class="on">即時</button>
+    <button data-tab="review">回顧</button>
+  </div>
+  <div class="clock"><div class="d" id="clk">11:29:49</div><div class="w">2026-08-25 週二</div></div>
+</div>
+
+<!-- ══════════════ 即時 ══════════════ -->
+<div id="tab-live">
+ <div class="cols">
+  <div id="mkt">
+   <!-- 骨架：尺寸與真圖一致，資料到了才淡入換掉（版面不跳）-->
+   <div class="card chart l1 skel" id="skel">
+     <div class="chead"><span class="sk sk-px"></span><span class="sk sk-day"></span></div>
+     <div class="legend"><span class="sk" style="width:88px"></span>
+       <span class="sk" style="width:70px"></span><span class="sk" style="width:70px"></span>
+       <span class="sk" style="width:70px"></span><span class="sk" style="width:56px"></span></div>
+     <div class="cwrap"><div class="bars" id="skbars"></div></div>
+     <div class="chint"><span class="sk"></span></div>
+     <div class="rail"><span class="sk"></span><span class="sk"></span><span class="sk"></span>
+       <span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
+   </div>
+   <div class="card chart l1" id="cchart" hidden>
+     <div class="kk-prog"><i></i></div>
+     <div class="cheadwrap">
+       <div class="chead" id="chead"></div>
+       <div class="calpop" id="cpick"></div>
+     </div>
+     <div class="legend" id="clegend"></div>
+     <div class="cwrap" id="cwrap"><svg id="csvg" preserveAspectRatio="none" viewBox="0 0 1040 470"></svg></div>
+     <div class="chint"><span id="cinfo"></span>　滾輪縮放・拖曳平移・雙擊還原</div>
+     <div class="rail" id="crail"></div>
+   </div>
+  </div>
+  <div class="right">
+    <div id="trade"></div>
+    <div id="stats"></div>
+  </div>
+ </div>
+</div>
+
+<!-- ══════════════ 回顧 ══════════════ -->
+<div id="tab-review" hidden>
+ <div class="cols">
+  <div>
+   <div class="card chart l1">
+     <div class="chead" id="rhead"></div>
+     <div class="legend" id="rlegend"></div>
+     <div class="cwrap"><svg id="rsvg" preserveAspectRatio="none" viewBox="0 0 1040 430"></svg></div>
+     <div id="rctrl"></div>
+   </div>
+   <div class="sec-head" style="margin-top:16px"><h2 id="rftitle">進場當下的客觀盤面</h2>
+     <span class="count">只有已經發生的數字</span></div>
+   <div class="card"><div class="rail" id="rfrail"></div></div>
+  </div>
+  <div class="right">
+    <div class="seg" id="rmode">
+      <button data-mode="review" class="on">翻紀錄</button>
+      <button data-mode="replay">重播練習</button>
+    </div>
+    <div id="rpane"></div>
+  </div>
+ </div>
+</div>
+
+<div class="foot">只顯示已經發生的客觀數字，不做預測、不給買賣訊號。<br>
+練習下單為模擬，不會送單到永豐。</div>
+</div>
+
+<script>
+const DATA={"liveDate":"2026-08-25","ref":44700.0,"nightOpen":"2026-08-21","live":[["08-21","15:00",45222,45264,45194,45242,3496],["08-21","15:05",45242,45282,45240,45267,1653],["08-21","15:10",45267,45282,45250,45280,1260],["08-21","15:15",45280,45350,45255,45350,3413],["08-21","15:20",45348,45392,45332,45381,2894],["08-21","15:25",45381,45385,45345,45354,1583],["08-21","15:30",45355,45398,45347,45387,1611],["08-21","15:35",45389,45400,45374,45392,1216],["08-21","15:40",45393,45422,45380,45383,1841],["08-21","15:45",45384,45416,45380,45400,1213],["08-21","15:50",45398,45403,45377,45381,644],["08-21","15:55",45381,45445,45376,45439,1491],["08-21","16:00",45445,45458,45411,45437,2043],["08-21","16:05",45437,45437,45356,45361,2181],["08-21","16:10",45366,45380,45339,45372,1745],["08-21","16:15",45373,45378,45346,45374,890],["08-21","16:20",45371,45380,45320,45360,1749],["08-21","16:25",45359,45409,45357,45396,1520],["08-21","16:30",45396,45409,45386,45395,752],["08-21","16:35",45397,45422,45397,45418,893],["08-21","16:40",45418,45424,45400,45415,680],["08-21","16:45",45415,45420,45402,45404,453],["08-21","16:50",45403,45430,45396,45413,838],["08-21","16:55",45414,45423,45407,45407,298],["08-21","17:00",45407,45412,45350,45355,1362],["08-21","17:05",45354,45356,45310,45337,1899],["08-21","17:10",45339,45350,45310,45335,1174],["08-21","17:15",45334,45355,45316,45341,829],["08-21","17:20",45342,45363,45335,45347,667],["08-21","17:25",45345,45356,45325,45333,579],["08-21","17:30",45334,45355,45323,45345,511],["08-21","17:35",45345,45370,45328,45364,778],["08-21","17:40",45363,45380,45360,45367,677],["08-21","17:45",45366,45377,45360,45377,356],["08-21","17:50",45375,45394,45356,45370,734],["08-21","17:55",45367,45368,45346,45349,404],["08-21","18:00",45350,45414,45345,45400,1295],["08-21","18:05",45400,45412,45355,45370,787],["08-21","18:10",45371,45373,45335,45345,715],["08-21","18:15",45344,45359,45342,45345,366],["08-21","18:20",45346,45347,45330,45330,510],["08-21","18:25",45332,45368,45330,45353,458],["08-21","18:30",45351,45356,45335,45341,356],["08-21","18:35",45341,45350,45335,45341,340],["08-21","18:40",45342,45343,45332,45340,193],["08-21","18:45",45340,45350,45339,45344,158],["08-21","18:50",45344,45364,45340,45347,272],["08-21","18:55",45345,45358,45342,45354,327],["08-21","19:00",45352,45368,45301,45330,1610],["08-21","19:05",45330,45375,45330,45362,751],["08-21","19:10",45363,45372,45333,45348,475],["08-21","19:15",45350,45380,45349,45362,462],["08-21","19:20",45362,45439,45361,45436,1795],["08-21","19:25",45434,45443,45401,45427,1113],["08-21","19:30",45423,45429,45373,45400,983],["08-21","19:35",45398,45475,45398,45421,2433],["08-21","19:40",45422,45440,45391,45438,1073],["08-21","19:45",45440,45440,45395,45411,663],["08-21","19:50",45406,45406,45388,45396,489],["08-21","19:55",45396,45413,45392,45395,296],["08-21","20:00",45396,45407,45360,45366,1001],["08-21","20:05",45365,45403,45363,45391,676],["08-21","20:10",45394,45402,45384,45384,288],["08-21","20:15",45385,45410,45381,45384,425],["08-21","20:20",45383,45407,45361,45404,692],["08-21","20:25",45404,45406,45388,45403,365],["08-21","20:30",45402,45414,45370,45385,483],["08-21","20:35",45384,45407,45376,45396,344],["08-21","20:40",45396,45425,45393,45422,627],["08-21","20:45",45421,45435,45417,45435,667],["08-21","20:50",45433,45436,45390,45392,686],["08-21","20:55",45390,45398,45377,45395,739],["08-21","21:00",45397,45416,45385,45394,461],["08-21","21:05",45394,45395,45362,45375,645],["08-21","21:10",45375,45378,45352,45361,834],["08-21","21:15",45359,45369,45318,45329,1437],["08-21","21:20",45327,45351,45324,45350,767],["08-21","21:25",45347,45387,45266,45365,4680],["08-21","21:30",45363,45398,45223,45231,6890],["08-21","21:35",45234,45258,45130,45182,9800],["08-21","21:40",45179,45224,45143,45173,5066],["08-21","21:45",45173,45273,45155,45270,5015],["08-21","21:50",45270,45276,45112,45179,5501],["08-21","21:55",45177,45228,45146,45186,3619],["08-21","22:00",45191,45205,45088,45102,5340],["08-21","22:05",45102,45154,45093,45112,3321],["08-21","22:10",45115,45147,45016,45030,5164],["08-21","22:15",45029,45078,44992,44995,5357],["08-21","22:20",44992,45072,44983,45014,4741],["08-21","22:25",45013,45118,45002,45076,3735],["08-21","22:30",45075,45100,45050,45050,2151],["08-21","22:35",45050,45067,45016,45021,2367],["08-21","22:40",45020,45063,44988,45051,3025],["08-21","22:45",45048,45085,45037,45071,1729],["08-21","22:50",45070,45082,45001,45018,1711],["08-21","22:55",45017,45059,45005,45035,1639],["08-21","23:00",45040,45085,45015,45082,1801],["08-21","23:05",45083,45088,45050,45074,1303],["08-21","23:10",45077,45108,45068,45085,1506],["08-21","23:15",45085,45109,45049,45057,1593],["08-21","23:20",45057,45110,45046,45085,1429],["08-21","23:25",45080,45112,45080,45108,1003],["08-21","23:30",45110,45151,45096,45151,2274],["08-21","23:35",45149,45215,45144,45214,3199],["08-21","23:40",45213,45247,45204,45210,3261],["08-21","23:45",45212,45216,45170,45175,1949],["08-21","23:50",45175,45246,45175,45215,1906],["08-21","23:55",45217,45220,45165,45172,1367],["08-22","00:00",45172,45180,45145,45150,1422],["08-22","00:05",45150,45150,45093,45098,1798],["08-22","00:10",45098,45125,45092,45101,1373],["08-22","00:15",45101,45128,45088,45114,982],["08-22","00:20",45114,45192,45102,45123,2063],["08-22","00:25",45125,45131,45103,45117,556],["08-22","00:30",45120,45127,45102,45102,529],["08-22","00:35",45101,45134,45100,45134,464],["08-22","00:40",45132,45140,45117,45129,519],["08-22","00:45",45126,45129,45091,45094,574],["08-22","00:50",45091,45093,45063,45070,1148],["08-22","00:55",45070,45116,45065,45112,795],["08-22","01:00",45114,45117,45093,45105,450],["08-22","01:05",45105,45114,45093,45101,297],["08-22","01:10",45103,45103,45086,45097,274],["08-22","01:15",45093,45098,45070,45077,429],["08-22","01:20",45077,45077,45030,45068,1018],["08-22","01:25",45069,45087,45049,45079,451],["08-22","01:30",45079,45090,45069,45081,283],["08-22","01:35",45082,45108,45074,45089,410],["08-22","01:40",45090,45105,45085,45105,249],["08-22","01:45",45105,45129,45096,45125,439],["08-22","01:50",45125,45127,45100,45106,303],["08-22","01:55",45106,45117,45093,45102,217],["08-22","02:00",45102,45134,45096,45125,580],["08-22","02:05",45125,45135,45096,45100,251],["08-22","02:10",45101,45111,45085,45085,258],["08-22","02:15",45087,45107,45086,45103,173],["08-22","02:20",45103,45125,45100,45116,304],["08-22","02:25",45114,45118,45077,45077,292],["08-22","02:30",45078,45085,45058,45065,443],["08-22","02:35",45066,45091,45066,45073,179],["08-22","02:40",45075,45092,45074,45080,135],["08-22","02:45",45077,45100,45076,45099,170],["08-22","02:50",45100,45110,45094,45100,201],["08-22","02:55",45100,45115,45091,45114,175],["08-22","03:00",45108,45125,45102,45103,348],["08-22","03:05",45108,45109,45088,45097,141],["08-22","03:10",45097,45097,45077,45086,177],["08-22","03:15",45085,45106,45073,45088,185],["08-22","03:20",45088,45098,45085,45092,56],["08-22","03:25",45091,45096,45080,45080,108],["08-22","03:30",45080,45094,45076,45076,137],["08-22","03:35",45076,45080,45061,45080,248],["08-22","03:40",45076,45079,45056,45056,256],["08-22","03:45",45057,45110,45054,45107,251],["08-22","03:50",45102,45106,45035,45043,606],["08-22","03:55",45041,45081,45020,45037,582],["08-22","04:00",45039,45057,45020,45052,597],["08-22","04:05",45049,45055,45045,45045,109],["08-22","04:10",45045,45056,45042,45056,109],["08-22","04:15",45053,45065,45046,45046,166],["08-22","04:20",45046,45046,45027,45030,230],["08-22","04:25",45031,45046,45031,45039,106],["08-22","04:30",45039,45043,45031,45035,102],["08-22","04:35",45031,45052,45031,45048,374],["08-22","04:40",45046,45057,45040,45045,258],["08-22","04:45",45052,45054,45006,45050,932],["08-22","04:50",45048,45055,45046,45050,257],["08-22","04:55",45049,45085,45047,45069,586],["08-25","08:45",44501,44509,44372,44383,6650],["08-25","08:50",44384,44467,44378,44451,2531],["08-25","08:55",44451,44455,44382,44387,2509],["08-25","09:00",44392,44443,44288,44332,8721],["08-25","09:05",44332,44377,44176,44343,13069],["08-25","09:10",44347,44387,44233,44327,6458],["08-25","09:15",44327,44405,44260,44371,4967],["08-25","09:20",44369,44382,44155,44174,7233],["08-25","09:25",44177,44278,44150,44233,5692],["08-25","09:30",44236,44330,44203,44241,4975],["08-25","09:35",44240,44442,44232,44430,6948],["08-25","09:40",44432,44457,44296,44360,5698],["08-25","09:45",44362,44440,44333,44415,3200],["08-25","09:50",44410,44492,44363,44470,4162],["08-25","09:55",44471,44475,44340,44343,3695],["08-25","10:00",44349,44386,44306,44349,2949],["08-25","10:05",44349,44360,44250,44260,4070],["08-25","10:10",44256,44357,44238,44356,3164],["08-25","10:15",44355,44416,44299,44406,3000],["08-25","10:20",44407,44421,44333,44416,2190],["08-25","10:25",44416,44423,44303,44367,2602],["08-25","10:30",44364,44431,44334,44414,2649],["08-25","10:35",44418,44430,44335,44364,2224],["08-25","10:40",44360,44422,44323,44328,2085],["08-25","10:45",44334,44334,44231,44245,4638],["08-25","10:50",44247,44277,44210,44253,2851],["08-25","10:55",44250,44307,44211,44223,2336],["08-25","11:00",44224,44335,44219,44297,2399],["08-25","11:05",44296,44400,44285,44356,3321],["08-25","11:10",44355,44396,44336,44353,1541],["08-25","11:15",44356,44427,44351,44427,2185],["08-25","11:20",44425,44426,44348,44369,1493],["08-25","11:25",44367,44517,44359,44498,4966],["08-25","11:30",44497,44500,44478,44481,335]],"rv5":[["08-21","08:45",44848,45063,44840,45017,10117],["08-21","08:50",45019,45050,44903,44913,5544],["08-21","08:55",44914,44916,44830,44837,5112],["08-21","09:00",44837,44904,44681,44725,8434],["08-21","09:05",44728,44735,44576,44668,10149],["08-21","09:10",44666,44849,44628,44839,8348],["08-21","09:15",44841,44936,44770,44925,7259],["08-21","09:20",44928,44937,44788,44841,5178],["08-21","09:25",44839,44976,44831,44897,5767],["08-21","09:30",44899,44988,44873,44944,4026],["08-21","09:35",44945,44957,44888,44923,2492],["08-21","09:40",44924,45018,44915,45013,4106],["08-21","09:45",45017,45150,45010,45133,8851],["08-21","09:50",45130,45146,45012,45012,4782],["08-21","09:55",45011,45017,44892,44989,5963],["08-21","10:00",44989,45035,44930,44967,3159],["08-21","10:05",44963,45096,44932,45086,3421],["08-21","10:10",45090,45098,45013,45075,2027],["08-21","10:15",45080,45118,45062,45088,2535],["08-21","10:20",45093,45180,45088,45130,5430],["08-21","10:25",45130,45163,45107,45155,2151],["08-21","10:30",45153,45238,45146,45228,5986],["08-21","10:35",45223,45240,45138,45152,3151],["08-21","10:40",45155,45189,45116,45158,2708],["08-21","10:45",45158,45257,45153,45250,3536],["08-21","10:50",45248,45291,45241,45255,3868],["08-21","10:55",45256,45280,45245,45260,1458],["08-21","11:00",45257,45265,45219,45236,1639],["08-21","11:05",45235,45239,45152,45173,2997],["08-21","11:10",45173,45178,45073,45083,3088],["08-21","11:15",45083,45131,45046,45075,3598],["08-21","11:20",45074,45133,45074,45091,1821],["08-21","11:25",45092,45112,45059,45107,1575],["08-21","11:30",45113,45207,45113,45178,3000],["08-21","11:35",45182,45187,45100,45101,1704],["08-21","11:40",45102,45111,45031,45035,2826],["08-21","11:45",45035,45063,45018,45043,2065],["08-21","11:50",45046,45055,44963,44973,3266],["08-21","11:55",44975,45077,44915,45020,4894],["08-21","12:00",45020,45084,44997,45077,2136],["08-21","12:05",45079,45125,45048,45115,2278],["08-21","12:10",45116,45116,45051,45089,1618],["08-21","12:15",45090,45096,45040,45068,1241],["08-21","12:20",45069,45070,45008,45051,1375],["08-21","12:25",45050,45056,45024,45048,761],["08-21","12:30",45047,45072,45030,45052,901],["08-21","12:35",45055,45065,45027,45041,730],["08-21","12:40",45044,45087,45041,45080,1200],["08-21","12:45",45083,45150,45063,45148,2103],["08-21","12:50",45148,45150,45089,45105,1261],["08-21","12:55",45101,45104,45030,45072,1731],["08-21","13:00",45074,45130,45072,45107,1556],["08-21","13:05",45111,45135,45067,45069,1195],["08-21","13:10",45072,45130,45067,45097,1116],["08-21","13:15",45098,45140,45075,45136,1393],["08-21","13:20",45138,45139,45070,45075,1807],["08-21","13:25",45072,45136,45063,45114,1653],["08-21","13:30",45112,45156,45102,45156,1739],["08-21","13:35",45156,45168,45122,45130,1380],["08-21","13:40",45130,45148,45105,45148,1091]],"rv1":[["08-21","08:45",44848,44988,44840,44957,3441],["08-21","08:46",44960,44977,44914,44921,1487],["08-21","08:47",44925,44992,44925,44973,1441],["08-21","08:48",44973,45040,44962,45012,2184],["08-21","08:49",45008,45063,45004,45017,1564],["08-21","08:50",45019,45036,44995,45003,980],["08-21","08:51",45003,45049,44998,45047,762],["08-21","08:52",45047,45050,44986,44998,1235],["08-21","08:53",44997,45002,44929,44943,1308],["08-21","08:54",44947,44964,44903,44913,1259],["08-21","08:55",44914,44916,44848,44880,1815],["08-21","08:56",44877,44887,44847,44877,876],["08-21","08:57",44878,44910,44870,44900,781],["08-21","08:58",44899,44912,44868,44881,562],["08-21","08:59",44881,44884,44830,44837,1078],["08-21","09:00",44837,44904,44815,44850,1522],["08-21","09:01",44852,44884,44813,44813,1154],["08-21","09:02",44812,44860,44795,44835,1439],["08-21","09:03",44837,44868,44766,44774,1670],["08-21","09:04",44774,44775,44681,44725,2649],["08-21","09:05",44728,44735,44636,44638,2152],["08-21","09:06",44640,44694,44595,44688,2909],["08-21","09:07",44692,44693,44576,44598,2403],["08-21","09:08",44599,44693,44590,44665,1528],["08-21","09:09",44669,44688,44628,44668,1157],["08-21","09:10",44666,44708,44628,44675,1445],["08-21","09:11",44675,44723,44645,44723,1053],["08-21","09:12",44725,44822,44714,44809,2985],["08-21","09:13",44809,44833,44766,44795,1495],["08-21","09:14",44792,44849,44790,44839,1370],["08-21","09:15",44841,44860,44770,44860,1561],["08-21","09:16",44860,44895,44837,44881,1473],["08-21","09:17",44885,44936,44880,44933,1988],["08-21","09:18",44933,44936,44875,44892,1368],["08-21","09:19",44894,44928,44885,44925,869],["08-21","09:20",44928,44937,44885,44897,853],["08-21","09:21",44897,44926,44891,44915,704],["08-21","09:22",44913,44914,44811,44812,1413],["08-21","09:23",44811,44846,44788,44794,1303],["08-21","09:24",44795,44855,44788,44841,905],["08-21","09:25",44839,44915,44831,44900,1170],["08-21","09:26",44906,44943,44886,44936,1222],["08-21","09:27",44938,44955,44910,44919,1294],["08-21","09:28",44918,44976,44917,44951,1206],["08-21","09:29",44951,44959,44896,44897,875],["08-21","09:30",44899,44980,44873,44974,1375],["08-21","09:31",44974,44988,44926,44953,1012],["08-21","09:32",44952,44977,44905,44913,671],["08-21","09:33",44915,44953,44906,44930,481],["08-21","09:34",44930,44965,44914,44944,487],["08-21","09:35",44945,44957,44927,44951,384],["08-21","09:36",44947,44957,44927,44936,340],["08-21","09:37",44937,44944,44893,44914,682],["08-21","09:38",44914,44930,44888,44921,586],["08-21","09:39",44918,44942,44898,44923,500],["08-21","09:40",44924,44968,44915,44964,690],["08-21","09:41",44966,44992,44942,44968,857],["08-21","09:42",44968,44979,44941,44953,436],["08-21","09:43",44957,44993,44955,44987,635],["08-21","09:44",44990,45018,44973,45013,1488],["08-21","09:45",45017,45054,45010,45015,1959],["08-21","09:46",45014,45059,45011,45037,1118],["08-21","09:47",45037,45054,45026,45054,558],["08-21","09:48",45055,45146,45040,45141,3424],["08-21","09:49",45145,45150,45102,45133,1792],["08-21","09:50",45130,45146,45065,45088,1435],["08-21","09:51",45086,45092,45017,45021,1396],["08-21","09:52",45021,45069,45017,45050,768],["08-21","09:53",45053,45053,45022,45040,538],["08-21","09:54",45040,45067,45012,45012,645],["08-21","09:55",45011,45017,44931,44940,2209],["08-21","09:56",44943,44970,44919,44922,1022],["08-21","09:57",44922,44986,44892,44981,1210],["08-21","09:58",44985,44987,44944,44944,567],["08-21","09:59",44943,45007,44908,44989,955],["08-21","10:00",44989,45004,44961,44997,662],["08-21","10:01",44998,45035,44995,45030,891],["08-21","10:02",45027,45030,44930,44949,840],["08-21","10:03",44950,44987,44947,44974,310],["08-21","10:04",44975,44982,44941,44967,456],["08-21","10:05",44963,45000,44932,44998,542],["08-21","10:06",44998,45005,44963,45000,413],["08-21","10:07",44997,45048,44989,45043,759],["08-21","10:08",45038,45062,45009,45045,796],["08-21","10:09",45048,45096,45044,45086,911],["08-21","10:10",45090,45098,45013,45016,804],["08-21","10:11",45017,45068,45015,45031,420],["08-21","10:12",45030,45054,45027,45053,248],["08-21","10:13",45054,45072,45043,45064,240],["08-21","10:14",45062,45080,45051,45075,315],["08-21","10:15",45080,45118,45076,45107,1161],["08-21","10:16",45104,45113,45081,45081,507],["08-21","10:17",45081,45096,45077,45091,278],["08-21","10:18",45092,45094,45073,45073,237],["08-21","10:19",45074,45094,45062,45088,352],["08-21","10:20",45093,45139,45088,45133,1264],["08-21","10:21",45130,45180,45101,45169,1993],["08-21","10:22",45168,45171,45137,45165,949],["08-21","10:23",45165,45176,45142,45149,608],["08-21","10:24",45148,45155,45128,45130,616],["08-21","10:25",45130,45153,45115,45132,614],["08-21","10:26",45134,45136,45107,45118,413],["08-21","10:27",45121,45145,45107,45144,370],["08-21","10:28",45142,45163,45130,45143,454],["08-21","10:29",45150,45162,45148,45155,300],["08-21","10:30",45153,45188,45146,45180,1262],["08-21","10:31",45181,45213,45173,45183,1993],["08-21","10:32",45183,45213,45180,45210,615],["08-21","10:33",45212,45238,45204,45234,1544],["08-21","10:34",45232,45238,45214,45228,572],["08-21","10:35",45223,45232,45205,45221,584],["08-21","10:36",45221,45240,45207,45234,458],["08-21","10:37",45231,45235,45210,45217,363],["08-21","10:38",45215,45218,45169,45169,735],["08-21","10:39",45172,45178,45138,45152,1011],["08-21","10:40",45155,45171,45149,45152,536],["08-21","10:41",45152,45164,45146,45152,419],["08-21","10:42",45152,45157,45116,45144,813],["08-21","10:43",45140,45181,45139,45181,508],["08-21","10:44",45181,45189,45147,45158,432],["08-21","10:45",45158,45178,45153,45177,468],["08-21","10:46",45174,45188,45168,45180,307],["08-21","10:47",45182,45185,45155,45185,273],["08-21","10:48",45184,45233,45183,45205,934],["08-21","10:49",45204,45257,45200,45250,1554],["08-21","10:50",45248,45270,45247,45264,953],["08-21","10:51",45265,45276,45242,45252,847],["08-21","10:52",45254,45287,45241,45287,830],["08-21","10:53",45287,45287,45262,45280,487],["08-21","10:54",45281,45291,45250,45255,751],["08-21","10:55",45256,45275,45245,45269,392],["08-21","10:56",45268,45280,45260,45270,305],["08-21","10:57",45270,45275,45255,45256,253],["08-21","10:58",45255,45265,45251,45255,247],["08-21","10:59",45256,45263,45251,45260,261],["08-21","11:00",45257,45265,45241,45242,459],["08-21","11:01",45244,45259,45241,45253,246],["08-21","11:02",45251,45256,45233,45236,301],["08-21","11:03",45234,45249,45230,45230,308],["08-21","11:04",45230,45243,45219,45236,325],["08-21","11:05",45235,45239,45192,45195,768],["08-21","11:06",45194,45194,45155,45160,1021],["08-21","11:07",45160,45183,45154,45162,521],["08-21","11:08",45160,45172,45152,45159,420],["08-21","11:09",45159,45175,45155,45173,267],["08-21","11:10",45173,45178,45163,45169,265],["08-21","11:11",45166,45177,45155,45165,363],["08-21","11:12",45164,45172,45147,45154,446],["08-21","11:13",45156,45167,45140,45143,374],["08-21","11:14",45141,45142,45073,45083,1640],["08-21","11:15",45083,45118,45069,45109,966],["08-21","11:16",45109,45131,45082,45128,626],["08-21","11:17",45126,45127,45070,45070,528],["08-21","11:18",45070,45120,45046,45103,1110],["08-21","11:19",45106,45122,45073,45075,368],["08-21","11:20",45074,45122,45074,45100,396],["08-21","11:21",45102,45121,45087,45109,292],["08-21","11:22",45113,45133,45100,45123,433],["08-21","11:23",45126,45132,45116,45124,289],["08-21","11:24",45125,45133,45085,45091,411],["08-21","11:25",45092,45093,45069,45077,536],["08-21","11:26",45075,45083,45059,45083,362],["08-21","11:27",45084,45101,45081,45092,274],["08-21","11:28",45092,45110,45092,45096,211],["08-21","11:29",45100,45112,45095,45107,192],["08-21","11:30",45113,45168,45113,45166,984],["08-21","11:31",45168,45182,45154,45163,598],["08-21","11:32",45164,45207,45163,45200,770],["08-21","11:33",45203,45206,45171,45179,404],["08-21","11:34",45178,45188,45167,45178,244],["08-21","11:35",45182,45187,45166,45167,298],["08-21","11:36",45168,45169,45111,45119,592],["08-21","11:37",45119,45149,45117,45144,352],["08-21","11:38",45143,45150,45135,45144,154],["08-21","11:39",45143,45143,45100,45101,308],["08-21","11:40",45102,45111,45070,45085,632],["08-21","11:41",45086,45090,45074,45075,337],["08-21","11:42",45078,45081,45048,45050,671],["08-21","11:43",45048,45068,45034,45047,729],["08-21","11:44",45045,45050,45031,45035,457],["08-21","11:45",45035,45040,45018,45035,780],["08-21","11:46",45030,45043,45022,45042,324],["08-21","11:47",45043,45050,45028,45040,356],["08-21","11:48",45040,45063,45031,45054,397],["08-21","11:49",45053,45053,45040,45043,208],["08-21","11:50",45046,45055,45031,45048,244],["08-21","11:51",45048,45055,45041,45052,140],["08-21","11:52",45051,45052,44988,44988,1316],["08-21","11:53",44988,45006,44978,44989,845],["08-21","11:54",44992,44993,44963,44973,721],["08-21","11:55",44975,44975,44931,44939,1051],["08-21","11:56",44936,44945,44915,44944,964],["08-21","11:57",44942,44994,44928,44983,823],["08-21","11:58",44986,45047,44984,45046,977],["08-21","11:59",45042,45077,45006,45020,1079],["08-21","12:00",45020,45037,44997,45026,757],["08-21","12:01",45021,45035,45014,45025,268],["08-21","12:02",45021,45033,45012,45028,257],["08-21","12:03",45031,45061,45017,45054,362],["08-21","12:04",45050,45084,45043,45077,492],["08-21","12:05",45079,45080,45048,45064,350],["08-21","12:06",45060,45085,45058,45080,243],["08-21","12:07",45081,45096,45075,45092,425],["08-21","12:08",45091,45113,45075,45112,542],["08-21","12:09",45112,45125,45106,45115,718],["08-21","12:10",45116,45116,45090,45090,394],["08-21","12:11",45091,45094,45074,45077,334],["08-21","12:12",45076,45087,45051,45055,425],["08-21","12:13",45054,45083,45052,45076,258],["08-21","12:14",45077,45093,45066,45089,207],["08-21","12:15",45090,45095,45075,45088,219],["08-21","12:16",45088,45096,45045,45045,367],["08-21","12:17",45049,45064,45040,45056,327],["08-21","12:18",45052,45083,45046,45076,204],["08-21","12:19",45077,45080,45067,45068,124],["08-21","12:20",45069,45070,45050,45051,165],["08-21","12:21",45053,45065,45033,45034,302],["08-21","12:22",45033,45037,45008,45025,493],["08-21","12:23",45022,45042,45018,45032,204],["08-21","12:24",45031,45058,45031,45051,211],["08-21","12:25",45050,45055,45030,45055,154],["08-21","12:26",45050,45056,45036,45036,146],["08-21","12:27",45040,45046,45024,45031,182],["08-21","12:28",45031,45051,45029,45044,148],["08-21","12:29",45044,45054,45040,45048,131],["08-21","12:30",45047,45050,45030,45032,183],["08-21","12:31",45032,45056,45032,45052,130],["08-21","12:32",45050,45072,45047,45066,275],["08-21","12:33",45066,45072,45041,45047,225],["08-21","12:34",45051,45053,45041,45052,88],["08-21","12:35",45055,45065,45030,45039,206],["08-21","12:36",45044,45045,45032,45040,133],["08-21","12:37",45037,45047,45033,45038,114],["08-21","12:38",45037,45041,45027,45036,159],["08-21","12:39",45039,45043,45031,45041,118],["08-21","12:40",45044,45065,45041,45058,229],["08-21","12:41",45058,45066,45049,45062,158],["08-21","12:42",45064,45084,45059,45081,429],["08-21","12:43",45078,45087,45056,45069,269],["08-21","12:44",45068,45083,45066,45080,115],["08-21","12:45",45083,45084,45063,45075,181],["08-21","12:46",45074,45100,45072,45099,403],["08-21","12:47",45099,45112,45089,45112,542],["08-21","12:48",45112,45133,45103,45116,514],["08-21","12:49",45118,45150,45117,45148,463],["08-21","12:50",45148,45150,45101,45105,434],["08-21","12:51",45104,45113,45089,45105,366],["08-21","12:52",45102,45108,45095,45108,177],["08-21","12:53",45109,45112,45099,45107,137],["08-21","12:54",45108,45110,45097,45105,147],["08-21","12:55",45101,45104,45088,45089,208],["08-21","12:56",45091,45099,45071,45080,456],["08-21","12:57",45077,45077,45043,45046,525],["08-21","12:58",45043,45067,45030,45060,344],["08-21","12:59",45059,45083,45058,45072,198],["08-21","13:00",45074,45107,45072,45093,358],["08-21","13:01",45095,45126,45093,45107,436],["08-21","13:02",45103,45120,45101,45113,195],["08-21","13:03",45115,45130,45110,45127,293],["08-21","13:04",45128,45129,45107,45107,274],["08-21","13:05",45111,45128,45111,45128,170],["08-21","13:06",45127,45135,45108,45108,265],["08-21","13:07",45109,45115,45100,45107,201],["08-21","13:08",45109,45117,45104,45104,160],["08-21","13:09",45103,45103,45067,45069,399],["08-21","13:10",45072,45086,45067,45073,209],["08-21","13:11",45078,45119,45075,45117,238],["08-21","13:12",45118,45130,45113,45121,261],["08-21","13:13",45119,45124,45102,45107,159],["08-21","13:14",45105,45115,45088,45097,249],["08-21","13:15",45098,45102,45075,45084,402],["08-21","13:16",45084,45101,45081,45101,224],["08-21","13:17",45102,45107,45095,45101,128],["08-21","13:18",45100,45125,45099,45120,210],["08-21","13:19",45120,45140,45111,45136,429],["08-21","13:20",45138,45139,45081,45081,345],["08-21","13:21",45083,45092,45078,45088,314],["08-21","13:22",45087,45101,45075,45079,429],["08-21","13:23",45080,45094,45080,45092,198],["08-21","13:24",45092,45096,45070,45075,521],["08-21","13:25",45072,45120,45063,45120,569],["08-21","13:26",45120,45136,45103,45106,469],["08-21","13:27",45107,45122,45096,45107,261],["08-21","13:28",45105,45109,45088,45096,180],["08-21","13:29",45098,45120,45095,45114,174],["08-21","13:30",45112,45140,45102,45120,432],["08-21","13:31",45122,45128,45112,45128,192],["08-21","13:32",45128,45135,45107,45122,242],["08-21","13:33",45119,45135,45112,45130,258],["08-21","13:34",45133,45156,45132,45156,615],["08-21","13:35",45156,45168,45133,45144,513],["08-21","13:36",45149,45160,45140,45155,202],["08-21","13:37",45156,45160,45140,45140,183],["08-21","13:38",45141,45142,45122,45131,279],["08-21","13:39",45132,45149,45124,45130,203],["08-21","13:40",45130,45142,45111,45114,336],["08-21","13:41",45111,45124,45105,45113,276],["08-21","13:42",45111,45130,45108,45129,158],["08-21","13:43",45129,45148,45120,45148,321]],"days":[{"d":"2026-05-18","w":"一","closed":false,"n":0,"net":null,"c":40797,"rng":842,"chg":-211,"pct":-0.51},{"d":"2026-05-19","w":"二","closed":false,"n":0,"net":null,"c":40260,"rng":742,"chg":-537,"pct":-1.32},{"d":"2026-05-20","w":"三","closed":false,"n":0,"net":null,"c":40151,"rng":530,"chg":-109,"pct":-0.27},{"d":"2026-05-21","w":"四","closed":false,"n":0,"net":null,"c":41533,"rng":733,"chg":1382,"pct":3.44},{"d":"2026-05-22","w":"五","closed":false,"n":0,"net":null,"c":42489,"rng":705,"chg":956,"pct":2.3},{"d":"2026-05-25","w":"一","closed":false,"n":0,"net":null,"c":43907,"rng":1040,"chg":1418,"pct":3.34},{"d":"2026-05-26","w":"二","closed":false,"n":0,"net":null,"c":43862,"rng":648,"chg":-45,"pct":-0.1},{"d":"2026-05-27","w":"三","closed":false,"n":0,"net":null,"c":44800,"rng":914,"chg":938,"pct":2.14},{"d":"2026-05-28","w":"四","closed":false,"n":0,"net":null,"c":43840,"rng":1884,"chg":-960,"pct":-2.14},{"d":"2026-05-29","w":"五","closed":false,"n":0,"net":null,"c":45320,"rng":831,"chg":1480,"pct":3.38},{"d":"2026-06-01","w":"一","closed":false,"n":0,"net":null,"c":46107,"rng":1064,"chg":787,"pct":1.74},{"d":"2026-06-02","w":"二","closed":false,"n":0,"net":null,"c":46149,"rng":897,"chg":42,"pct":0.09},{"d":"2026-06-03","w":"三","closed":false,"n":0,"net":null,"c":46876,"rng":433,"chg":727,"pct":1.58},{"d":"2026-06-04","w":"四","closed":false,"n":0,"net":null,"c":46309,"rng":443,"chg":-567,"pct":-1.21},{"d":"2026-06-05","w":"五","closed":false,"n":0,"net":null,"c":45290,"rng":1118,"chg":-1019,"pct":-2.2},{"d":"2026-06-08","w":"一","closed":false,"n":0,"net":null,"c":43152,"rng":1428,"chg":-2138,"pct":-4.72},{"d":"2026-06-09","w":"二","closed":false,"n":0,"net":null,"c":44730,"rng":1213,"chg":1578,"pct":3.66},{"d":"2026-06-10","w":"三","closed":false,"n":0,"net":null,"c":43345,"rng":1351,"chg":-1385,"pct":-3.1},{"d":"2026-06-11","w":"四","closed":false,"n":0,"net":null,"c":43224,"rng":1375,"chg":-121,"pct":-0.28},{"d":"2026-06-12","w":"五","closed":false,"n":0,"net":null,"c":44260,"rng":898,"chg":1036,"pct":2.4},{"d":"2026-06-15","w":"一","closed":false,"n":0,"net":null,"c":45631,"rng":565,"chg":1371,"pct":3.1},{"d":"2026-06-16","w":"二","closed":false,"n":0,"net":null,"c":45771,"rng":727,"chg":140,"pct":0.31},{"d":"2026-06-17","w":"三","closed":false,"n":0,"net":null,"c":46030,"rng":953,"chg":259,"pct":0.57},{"d":"2026-06-18","w":"四","closed":false,"n":0,"net":null,"c":46727,"rng":499,"chg":697,"pct":1.51},{"d":"2026-06-22","w":"一","closed":false,"n":0,"net":null,"c":48464,"rng":1110,"chg":1737,"pct":3.72},{"d":"2026-06-23","w":"二","closed":false,"n":0,"net":null,"c":47424,"rng":1397,"chg":-1040,"pct":-2.15},{"d":"2026-06-24","w":"三","closed":false,"n":0,"net":null,"c":46352,"rng":1147,"chg":-1072,"pct":-2.26},{"d":"2026-06-25","w":"四","closed":false,"n":0,"net":null,"c":46547,"rng":910,"chg":195,"pct":0.42},{"d":"2026-06-26","w":"五","closed":false,"n":0,"net":null,"c":44530,"rng":1422,"chg":-2017,"pct":-4.33},{"d":"2026-06-29","w":"一","closed":false,"n":0,"net":null,"c":45560,"rng":1268,"chg":1030,"pct":2.31},{"d":"2026-06-30","w":"二","closed":false,"n":0,"net":null,"c":46825,"rng":957,"chg":1265,"pct":2.78},{"d":"2026-07-01","w":"三","closed":false,"n":0,"net":null,"c":47252,"rng":799,"chg":427,"pct":0.91},{"d":"2026-07-02","w":"四","closed":false,"n":0,"net":null,"c":46636,"rng":1162,"chg":-616,"pct":-1.3},{"d":"2026-07-03","w":"五","closed":false,"n":0,"net":null,"c":47022,"rng":1474,"chg":386,"pct":0.83},{"d":"2026-07-06","w":"一","closed":false,"n":0,"net":null,"c":46870,"rng":969,"chg":-152,"pct":-0.32},{"d":"2026-07-07","w":"二","closed":false,"n":0,"net":null,"c":45769,"rng":1585,"chg":-1101,"pct":-2.35},{"d":"2026-07-08","w":"三","closed":false,"n":0,"net":null,"c":45598,"rng":717,"chg":-171,"pct":-0.37},{"d":"2026-07-09","w":"四","closed":false,"n":0,"net":null,"c":45593,"rng":817,"chg":-5,"pct":-0.01},{"d":"2026-07-13","w":"一","closed":false,"n":0,"net":null,"c":45604,"rng":1084,"chg":11,"pct":0.02},{"d":"2026-07-14","w":"二","closed":false,"n":0,"net":null,"c":44800,"rng":1613,"chg":-804,"pct":-1.76},{"d":"2026-07-15","w":"三","closed":false,"n":0,"net":null,"c":46049,"rng":1043,"chg":1249,"pct":2.79},{"d":"2026-07-16","w":"四","closed":false,"n":0,"net":null,"c":45703,"rng":1055,"chg":-346,"pct":-0.75},{"d":"2026-07-17","w":"五","closed":false,"n":0,"net":null,"c":42603,"rng":1951,"chg":-3100,"pct":-6.78},{"d":"2026-07-20","w":"一","closed":false,"n":0,"net":null,"c":42672,"rng":1040,"chg":69,"pct":0.16},{"d":"2026-07-21","w":"二","closed":false,"n":0,"net":null,"c":44368,"rng":1242,"chg":1696,"pct":3.97},{"d":"2026-07-22","w":"三","closed":false,"n":0,"net":null,"c":44654,"rng":746,"chg":286,"pct":0.64},{"d":"2026-07-23","w":"四","closed":false,"n":0,"net":null,"c":44919,"rng":898,"chg":265,"pct":0.59},{"d":"2026-07-24","w":"五","closed":false,"n":0,"net":null,"c":43703,"rng":858,"chg":-1216,"pct":-2.71},{"d":"2026-07-27","w":"一","closed":false,"n":0,"net":null,"c":43901,"rng":905,"chg":198,"pct":0.45},{"d":"2026-07-28","w":"二","closed":false,"n":0,"net":null,"c":41630,"rng":1126,"chg":-2271,"pct":-5.17},{"d":"2026-07-29","w":"三","closed":false,"n":0,"net":null,"c":40368,"rng":2629,"chg":-1262,"pct":-3.03},{"d":"2026-07-30","w":"四","closed":false,"n":0,"net":null,"c":40328,"rng":1558,"chg":-40,"pct":-0.1},{"d":"2026-07-31","w":"五","closed":false,"n":0,"net":null,"c":43795,"rng":1700,"chg":3467,"pct":8.6},{"d":"2026-08-03","w":"一","closed":false,"n":0,"net":null,"c":43225,"rng":855,"chg":-570,"pct":-1.3},{"d":"2026-08-04","w":"二","closed":false,"n":0,"net":null,"c":43332,"rng":1236,"chg":107,"pct":0.25},{"d":"2026-08-05","w":"三","closed":false,"n":0,"net":null,"c":44533,"rng":709,"chg":1201,"pct":2.77},{"d":"2026-08-06","w":"四","closed":false,"n":0,"net":null,"c":44237,"rng":638,"chg":-296,"pct":-0.66},{"d":"2026-08-07","w":"五","closed":false,"n":0,"net":null,"c":44290,"rng":805,"chg":53,"pct":0.12},{"d":"2026-08-10","w":"一","closed":false,"n":0,"net":null,"c":44972,"rng":545,"chg":682,"pct":1.54},{"d":"2026-08-11","w":"二","closed":false,"n":0,"net":null,"c":45077,"rng":618,"chg":105,"pct":0.23},{"d":"2026-08-12","w":"三","closed":false,"n":1,"net":95,"c":45501,"rng":405,"chg":424,"pct":0.94},{"d":"2026-08-13","w":"四","closed":false,"n":1,"net":95,"c":46002,"rng":408,"chg":501,"pct":1.1},{"d":"2026-08-14","w":"五","closed":false,"n":1,"net":-105,"c":45776,"rng":793,"chg":-226,"pct":-0.49},{"d":"2026-08-17","w":"一","closed":false,"n":1,"net":95,"c":45851,"rng":400,"chg":75,"pct":0.16},{"d":"2026-08-18","w":"二","closed":false,"n":1,"net":-105,"c":45100,"rng":901,"chg":-751,"pct":-1.64},{"d":"2026-08-19","w":"三","closed":false,"n":0,"net":null,"c":44503,"rng":665,"chg":-597,"pct":-1.32},{"d":"2026-08-20","w":"四","closed":false,"n":1,"net":95,"c":44905,"rng":669,"chg":402,"pct":0.9},{"d":"2026-08-21","w":"五","closed":false,"n":1,"net":-105,"c":45148,"rng":715,"chg":243,"pct":0.54},{"d":"2026-08-24","w":"一","closed":false,"n":0,"net":null,"c":44700,"rng":674,"chg":-448,"pct":-0.99},{"d":"2026-08-25","w":"二","closed":false,"n":1,"net":-105,"c":null,"rng":null,"chg":null,"pct":null}]};
+/* ════════════════════════════════════════════════════════════
+   demo 邏輯（設計用，不是產品程式碼）
+   ════════════════════════════════════════════════════════════ */
+const $=id=>document.getElementById(id);
+const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
+const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
+const sgn=v=>v>0?'up':v<0?'down':'flat';
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const mmin=t=>parseInt(t.slice(0,2),10)*60+parseInt(t.slice(3,5),10);
+const CAL_ICON='<svg class="cal-i" width="13" height="13" viewBox="0 0 14 14" fill="none" '+
+  'stroke="currentColor" stroke-width="1.3" stroke-linecap="round">'+
+  '<rect x="1.4" y="2.6" width="11.2" height="10" rx="2"/>'+
+  '<path d="M4.4 1.2v2.6M9.6 1.2v2.6M1.4 6h11.2"/></svg>';
+
+/* ---------- 資料（真實歷史 K 棒 ＋ 假練習紀錄）---------- */
+const mk=a=>a.map(r=>({d:'2026-'+r[0], t:r[1], o:r[2], h:r[3], l:r[4], c:r[5], v:r[6]}));
+const LIVE=mk(DATA.live), RV5=mk(DATA.rv5), RV1=mk(DATA.rv1);
+const LIVE_DATE=DATA.liveDate, RV_DATE='2026-08-21';
+const DAYS=DATA.days;
+const DEMO_DAYS=[RV_DATE, LIVE_DATE];              // demo 只有這兩天有 K 線
+const dayRow=d=>DAYS.filter(x=>x.d===d)[0]||null;
+const prevClose=d=>{ const i=DAYS.map(x=>x.d).indexOf(d);
+  for(let k=i-1;k>=0;k--){ if(DAYS[k].c) return DAYS[k].c; } return null; };
+
+/* 用真實 K 棒模擬一筆 ±100 的練習單（規則跟面板一樣：來回成本 5 點）*/
+function simTrade(bars,date,time,dir){
+  let i0=-1;
+  for(let i=0;i<bars.length;i++){
+    const b=bars[i];
+    if(b.d!==date||b.t<'08:45'||b.t>'13:45') continue;
+    if(b.t<=time) i0=i; else break;
+  }
+  if(i0<0) return null;
+  const e=Math.round(bars[i0].c), long=dir==='long';
+  const tp=long?e+100:e-100, sl=long?e-100:e+100;
+  for(let i=i0+1;i<bars.length;i++){
+    const b=bars[i];
+    const hitTp=long?b.h>=tp:b.l<=tp, hitSl=long?b.l<=sl:b.h>=sl;
+    if(hitTp||hitSl){
+      const ex=hitTp?tp:sl;
+      return {date:date, time:bars[i0].t, dir:dir, entry:e, exit:ex,
+              _exit_time:b.t+':00', _reason:hitTp?'tp':'sl',
+              _net:(long?ex-e:e-ex)-5, _mins:mmin(b.t)-mmin(bars[i0].t),
+              _mfe:hitTp?100:38, _mae:hitTp?-24:-100, note:''};
+    }
+  }
+  return null;
+}
+const T_LIVE=simTrade(LIVE,LIVE_DATE,'09:10','short');
+const T_RV=simTrade(RV5,RV_DATE,'09:10','short');
+if(T_LIVE) T_LIVE.note='開盤跳空往下，等回抽站不上去才進。這次紀律有守。';
+if(T_RV) T_RV.note='有一點太晚進了，以為會直接下去。回頭看是正常的賠。';
+
+/* 假的練習歷史：從真實交易日的收盤價長出來，固定樣式（不是亂數，每次打開都一樣）*/
+const PATTERN=['tp','sl','tp','tp','sl','tp','sl','sl','tp','tp','sl','tp',
+               'tp','sl','tp','sl','tp','tp','sl','tp','sl','tp','tp','sl'];
+const NOTES={2:'今天太急了，第一根還沒收完就進場。',
+             5:'守住規則沒有凹單，雖然賠但做得對。',
+             9:'開盤量能明顯放大，這種盤我比較做得順。',
+             14:'昨晚夜盤已經拉高，早上追多是錯的。'};
+const HIST=(function(){
+  const src=DAYS.filter(x=>!x.closed&&x.c).slice(-26,-1);
+  const out=[];
+  src.forEach(function(d,i){
+    const r=PATTERN[i%PATTERN.length], long=(i%3!==0);
+    const e=Math.round(d.c);
+    const ex=r==='tp'?(long?e+100:e-100):(long?e-100:e+100);
+    out.push({date:d.d, time:'09:0'+(i%6), dir:long?'long':'short', entry:e, exit:ex,
+      _reason:r, _net:(r==='tp'?100:-100)-5, note:NOTES[i]||'',
+      _mins:6+(i%17), _mfe:r==='tp'?100:30+(i%40), _mae:r==='tp'?-(12+(i%30)):-100});
+  });
+  if(T_LIVE) out.push(T_LIVE);
+  return out;
+})();
+const HIST_DESC=HIST.slice().reverse();
+
+/* 假的即時籌碼（取自實機當下的一組數字）*/
+const CHIPS={price:44496, chg:-5, gap:-199, rng:367, pos:0.943, vol_ratio:2.60,
+             mom5:145, mom15:136, bid:44496, ask:44499, idx:44433.41, basis:62.6};
+
+/* ---------- 狀態 ---------- */
+var TAB='live';
+var VIEW={n:76,end:null,vz:1,voff:0}, HOVER={i:null}, DRAG=null;
+var viewDate='', pickOpen=false, calMonth=LIVE_DATE.slice(0,7);
+var busy=false, POS=null, QST='live', MARK='new', NOTE={key:null,text:''};
+var WIN=7;
+
+/* ---------- 目前這一天的 K 棒 ---------- */
+function cur(){
+  if(!viewDate) return {bars:LIVE, ref:DATA.ref, date:LIVE_DATE, night:DATA.nightOpen,
+                        trades:T_LIVE?[T_LIVE]:[], live:true};
+  return {bars:RV5, ref:prevClose(RV_DATE), date:RV_DATE, night:'',
+          trades:T_RV?[T_RV]:[], live:false};
+}
+function idxOf(bars,date,t){
+  let r=-1;
+  for(let i=0;i<bars.length;i++){
+    const b=bars[i];
+    if(b.d!==date||b.t<'08:45') continue;
+    if(b.t<=t) r=i; else break;
+  }
+  return r;
+}
+
+/* ════════════════════════════════════════════════════════════
+   K 線引擎（純 SVG）
+   viewBox：即時 1040×470、回顧 1040×430（跟正式面板一致）
+   ════════════════════════════════════════════════════════════ */
+const tw=(s,fs)=>{ let w=0; for(let i=0;i<s.length;i++) w+=(s.charCodeAt(i)>255?1:0.6)*fs; return w; };
+const UP='#EE5A54', DN='#34B37E', INK='#0E1116';
+
+function renderChart(g){
+  const bars=g.bars||[]; if(!bars.length) return null;
+  const W=1040, H=g.H||470, R=64, TOP=12, BOT=26;
+  const VOLH=g.VOLH||86, GAP=g.GAP||14, PB=H-BOT-VOLH-GAP;
+  const V=g.view, total=bars.length;
+  const n=Math.max(6,Math.min(Math.round(V.n),total));
+  const end=V.end==null?total:Math.max(n,Math.min(total,Math.round(V.end)));
+  const from=end-n, B=bars.slice(from,end);
+  const T=g.trades||[], pos=g.pos;
+
+  let hi=Math.max.apply(null,B.map(b=>b.h)), lo=Math.min.apply(null,B.map(b=>b.l));
+  const inView=i=>i>=from&&i<end;
+  T.forEach(function(t){ if(inView(t._i)){ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit); } });
+  if(pos){ hi=Math.max(hi,pos.tp,pos.sl); lo=Math.min(lo,pos.tp,pos.sl); }
+  const pad=(hi-lo)*0.08||10; hi+=pad; lo-=pad;
+  { const mid=(hi+lo)/2+V.voff, half=((hi-lo)/2)/V.vz; hi=mid+half; lo=mid-half; }
+  const span=hi-lo;
+
+  const slots=Math.max(B.length,(Math.min(Math.round(V.n),total)||B.length))+(g.pad||0);
+  const cw=Math.min((W-R)/slots,40), bw=Math.max(1.5,Math.min(18,cw*0.62));
+  const y=v=>TOP+(hi-v)/(hi-lo)*(PB-TOP);
+  const x=i=>i*cw+cw/2;
+  const vmax=Math.max.apply(null,[1].concat(B.map(b=>b.v)));
+  const vy=v=>H-BOT-(v/vmax)*VOLH;
+  const isNight=b=>b.t>='15:00'||b.t<'08:45';
+  let s='';
+
+  /* 夜盤底色 */
+  { let a=-1;
+    const band=(p,q)=>'<rect x="'+(p*cw).toFixed(1)+'" y="'+TOP+'" width="'+((q+1-p)*cw).toFixed(1)+
+      '" height="'+(H-TOP-BOT)+'" fill="#7C8CA8" opacity=".06"/>';
+    B.forEach(function(bar,i){ if(isNight(bar)){ if(a<0)a=i; } else if(a>=0){ s+=band(a,i-1); a=-1; } });
+    if(a>=0) s+=band(a,B.length-1);
+  }
+  /* 下單時段（08:45~09:30）底色 */
+  { let a=-1,b=-1;
+    B.forEach(function(bar,i){ if(bar.t>='08:45'&&bar.t<'09:30'&&!isNight(bar)){ if(a<0)a=i; b=i; } });
+    if(a>=0) s+='<rect x="'+(a*cw).toFixed(1)+'" y="'+TOP+'" width="'+((b+1-a)*cw).toFixed(1)+
+      '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".045"/>';
+  }
+  /* 價格軸 */
+  s+='<rect x="'+(W-R)+'" y="0" width="'+R+'" height="'+H+'" fill="#1C222C" opacity=".5"/>';
+  for(let k=0;k<=5;k++){
+    const v=lo+span*k/5, yy=y(v);
+    s+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+       '" stroke="#232A35" stroke-width="1"/>'+
+       '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5C6472" font-size="12" '+
+       'font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
+  }
+  /* 日盤開盤／跨午夜的分段線 */
+  B.forEach(function(b,i){
+    if(!i) return;
+    const p=B[i-1], dayOpen=isNight(p)&&!isNight(b), midnight=isNight(b)&&isNight(p)&&b.d!==p.d;
+    if(!dayOpen&&!midnight) return;
+    const X=i*cw;
+    s+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+       '" stroke="#49536A" stroke-width="1" stroke-dasharray="2 4"/>'+
+       '<text x="'+(X+5).toFixed(1)+'" y="'+(TOP+12)+'" fill="#6B7385" font-size="10.5" '+
+       'font-family="ui-monospace,monospace">'+(dayOpen?'日盤':(b.d||'').slice(5))+'</text>';
+  });
+  /* K 棒 */
+  B.forEach(function(b,i){
+    const up=b.c>=b.o, col=up?UP:DN, X=x(i);
+    s+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+
+       y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
+    const yo=y(b.o), yc=y(b.c), top=Math.min(yo,yc), hh=Math.max(1.2,Math.abs(yc-yo));
+    s+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+
+       '" height="'+hh.toFixed(1)+'" fill="'+col+'"/>';
+  });
+  /* 量 */
+  s+='<line x1="0" y1="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" x2="'+(W-R)+'" y2="'+
+     (H-BOT-VOLH-GAP/2).toFixed(1)+'" stroke="#232A35" stroke-width="1"/>';
+  B.forEach(function(b,i){
+    const col=b.c>=b.o?UP:DN, X=x(i), yy=vy(b.v);
+    s+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+
+       '" height="'+Math.max(0.8,H-BOT-yy).toFixed(1)+'" fill="'+col+'" opacity=".5"/>';
+  });
+  s+='<text x="'+(W-R+8)+'" y="'+(H-BOT-VOLH+10)+'" fill="#5C6472" font-size="11" '+
+     'font-family="ui-monospace,monospace">'+(vmax>=10000?(vmax/1000).toFixed(0)+'k':vmax.toFixed(0))+'</text>'+
+     '<text x="'+(W-R+8)+'" y="'+(H-BOT-2)+'" fill="#5C6472" font-size="11">量</text>';
+
+  /* 持倉的停利／停損線 */
+  if(pos){
+    [[pos.tp,UP,'停利'],[pos.sl,DN,'停損']].forEach(function(z){
+      const yy=y(z[0]); if(yy<TOP||yy>PB) return;
+      s+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+         '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".75"/>'+
+         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+
+         z[0].toFixed(0)+'</text>';
+    });
+  }
+
+  /* ══ 進出場標記 ══ */
+  const AXB=[];
+  const axisChip=function(aY,txt,col){
+    const h=17; let py=aY-h/2;
+    for(let k=0;k<6;k++){
+      py=Math.max(TOP,Math.min(PB-h,aY-h/2+(k%2?1:-1)*Math.ceil(k/2)*(h+2)));
+      if(!AXB.some(b=>py<b+h&&b<py+h)) break;
+    }
+    AXB.push(py);
+    return '<rect x="'+(W-R+1)+'" y="'+py.toFixed(1)+'" width="'+(R-2)+'" height="'+h+
+      '" rx="4" fill="'+col+'"/><text x="'+(W-R+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="'+INK+
+      '" font-size="11.5" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+  };
+  const CAPB=[];
+  const caption=function(X,baseY,sign,txt,col){          /* 現行版的作法（對照用）*/
+    const fs=11, w=tw(txt,fs), h=fs+3; let by=baseY;
+    for(let k=0;k<5;k++){
+      by=Math.max(TOP+fs,Math.min(H-BOT-2,baseY+sign*k*(h+3)));
+      const bx=X-w/2;
+      if(!CAPB.some(b=>bx<b.x+b.w&&b.x<bx+w&&by-fs<b.y+b.h&&b.y<by-fs+h)) break;
+    }
+    CAPB.push({x:X-w/2,y:by-fs,w:w,h:h});
+    return '<text x="'+X.toFixed(1)+'" y="'+by.toFixed(1)+'" text-anchor="middle" fill="'+col+
+      '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace"'+
+      ' stroke="'+INK+'" stroke-width="3.2" paint-order="stroke" stroke-linejoin="round">'+txt+'</text>';
+  };
+  /* 新版：所有文字都放進「本來就空著」的時間軸帶與價格軸，圖區只留形狀 */
+  const LANE=[];
+  const lanePill=function(X,txt,col){
+    const fs=10.5, w=tw(txt,fs)+13, h=17;
+    let px=X-w/2;
+    px=Math.max(1,Math.min(W-R-w-1,px));
+    let hit=true, tries=0;
+    while(hit&&tries<8){
+      hit=LANE.some(b=>px<b.x+b.w+3&&b.x<px+w+3);
+      if(hit){ px=Math.min(W-R-w-1,px+w+5); tries++; } else break;
+    }
+    LANE.push({x:px,w:w});
+    return '<rect x="'+px.toFixed(1)+'" y="'+(H-BOT+3)+'" width="'+w.toFixed(1)+'" height="'+h+
+      '" rx="5" fill="'+INK+'" fill-opacity=".92" stroke="'+col+'" stroke-opacity=".55"/>'+
+      '<text x="'+(px+w/2).toFixed(1)+'" y="'+(H-BOT+15)+'" text-anchor="middle" fill="'+col+
+      '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+  };
+  const laneX=[];
+  T.forEach(function(t){
+    const ia=t._i; if(ia<from||ia>=end) return;
+    const i=ia-from, X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?UP:DN;
+    const je=(t._j==null?-1:t._j);
+    const hasExit=je>=from&&je<end;
+    const XE=hasExit?x(je-from):null, YE=hasExit?y(t.exit):null;
+    const ec=t._net>0?UP:DN;
+    if(MARK==='old'){
+      s+='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(W-R)+'" y2="'+Y.toFixed(1)+
+         '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity=".45"/>';
+      const tipY=long?Y+7:Y-7, endY=long?Y+25:Y-25;
+      s+='<path d="M'+(X-9)+' '+endY+' L'+X+' '+tipY+' L'+(X+9)+' '+endY+' Z" fill="'+col+
+         '" stroke="'+INK+'" stroke-width="1.6" stroke-linejoin="round"/>';
+      s+=caption(X,long?endY+13:endY-5,long?1:-1,'進 '+t.time,col);
+      s+=axisChip(Y,String(Math.round(t.entry)),col);
+      if(hasExit){
+        s+='<line x1="0" y1="'+YE.toFixed(1)+'" x2="'+(W-R)+'" y2="'+YE.toFixed(1)+
+           '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="5 4" opacity=".45"/>'+
+           '<circle cx="'+XE.toFixed(1)+'" cy="'+YE.toFixed(1)+'" r="8.5" fill="'+ec+
+           '" stroke="'+INK+'" stroke-width="1.6"/>'+
+           '<path d="M'+(XE-3.6)+' '+(YE-3.6)+' L'+(XE+3.6)+' '+(YE+3.6)+' M'+(XE-3.6)+' '+
+           (YE+3.6)+' L'+(XE+3.6)+' '+(YE-3.6)+'" stroke="'+INK+
+           '" stroke-width="2.2" stroke-linecap="round"/>';
+        const down=YE<PB-40;
+        s+=caption(XE,down?YE+22:YE-14,down?1:-1,'出 '+t._exit_time.slice(0,5)+
+           (t._net==null?'':'  '+pm(t._net)),ec);
+        s+=axisChip(YE,String(Math.round(t.exit)),ec);
+      }
+      return;
+    }
+    /* ── 新版 ── */
+    if(hasExit){
+      const yTop=Math.min(Y,YE), yBot=Math.max(Y,YE);
+      s+='<rect x="'+(X-cw/2).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+
+         Math.max(cw,(XE-X)+cw).toFixed(1)+'" height="'+Math.max(2,yBot-yTop).toFixed(1)+
+         '" fill="'+ec+'" opacity=".10"/>';
+      s+='<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
+         '" y2="'+Y.toFixed(1)+'" stroke="'+col+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>';
+      s+='<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
+         '" y2="'+YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>';
+      s+='<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+
+         YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.8" opacity=".9" stroke-linecap="round"/>';
+    }
+    /* 引導線：從標記垂直落到時間軸帶（不壓 K 棒，眼睛接得起來）*/
+    s+='<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+       '" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>';
+    const tri=long?('M'+(X-7.5)+' '+(Y+16)+' L'+X+' '+(Y+3.5)+' L'+(X+7.5)+' '+(Y+16)+' Z')
+                  :('M'+(X-7.5)+' '+(Y-16)+' L'+X+' '+(Y-3.5)+' L'+(X+7.5)+' '+(Y-16)+' Z');
+    s+='<path d="'+tri+'" fill="'+col+'" stroke="'+INK+'" stroke-width="1.8" stroke-linejoin="round"/>';
+    s+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="2.6" fill="'+col+'" stroke="'+INK+
+       '" stroke-width="1.2"/>';
+    s+=axisChip(Y,String(Math.round(t.entry)),col);
+    /* 標籤：進出場很近（他的單多半 5~15 分鐘就結束）時合併成一枚，
+       不要兩枚膠囊互相推擠 */
+    const near=hasExit&&(XE-X)<110;
+    if(!near) laneX.push([X,(long?'▲ 進 ':'▼ 進 ')+t.time,col]);
+    else laneX.push([(X+XE)/2,(long?'▲ ':'▼ ')+t.time+'→'+t._exit_time.slice(0,5)+
+      '　'+pm(t._net),t._net>0?UP:DN]);
+    if(hasExit){
+      s+='<line x1="'+XE.toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+(H-BOT)+
+         '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>';
+      s+='<rect x="'+(XE-5.6).toFixed(1)+'" y="'+(YE-5.6).toFixed(1)+'" width="11.2" height="11.2"'+
+         ' rx="2.4" transform="rotate(45 '+XE.toFixed(1)+' '+YE.toFixed(1)+')" fill="'+ec+
+         '" stroke="'+INK+'" stroke-width="1.8"/>';
+      s+=axisChip(YE,String(Math.round(t.exit)),ec);
+      if(!near) laneX.push([XE,'出 '+t._exit_time.slice(0,5)+'　'+pm(t._net),ec]);
+    }
+  });
+
+  /* 游標參考線 */
+  let legendBar=B[B.length-1], hovering=false;
+  if(g.hover&&g.hover.i!=null&&g.hover.i>=from&&g.hover.i<end){
+    legendBar=bars[g.hover.i]; hovering=true;
+    const X=x(g.hover.i-from);
+    s+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+       '" stroke="#8D95A3" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>';
+  }
+  /* 時間刻度（會被標記膠囊擋到的就跳過）*/
+  const step=Math.max(1,Math.ceil(B.length/8));
+  B.forEach(function(b,i){
+    if(i%step) return;
+    const X=x(i);
+    if(laneX.some(p=>Math.abs(p[0]-X)<58)) return;
+    s+='<text x="'+X.toFixed(1)+'" y="'+(H-9)+'" fill="#5C6472" font-size="11.5" text-anchor="middle" '+
+       'font-family="ui-monospace,monospace">'+b.t+'</text>';
+  });
+  laneX.forEach(function(p){ s+=lanePill(p[0],p[1],p[2]); });
+
+  const b=legendBar, upC=b.c>=b.o?UP:DN;
+  const vol=b.v>=10000?(b.v/1000).toFixed(1)+'k':b.v.toFixed(0);
+  const legend='<span class="lt">'+(b.d?b.d.slice(5)+' ':'')+b.t+'</span>'+
+    '<span>開 <b>'+b.o.toFixed(0)+'</b></span><span>高 <b>'+b.h.toFixed(0)+'</b></span>'+
+    '<span>低 <b>'+b.l.toFixed(0)+'</b></span>'+
+    '<span>收 <b style="color:'+upC+'">'+b.c.toFixed(0)+'</b></span>'+
+    '<span>量 <b>'+vol+'</b></span>'+(hovering?'':'<span class="lt">（最新）</span>');
+  return {svg:s, legend:legend, from:from, to:end, n:n, span:span,
+          info:B.length+' / '+total+' 根'+(Math.abs(V.vz-1)>0.02?'　直向 '+V.vz.toFixed(1)+'x':'')};
+}
+
+/* 滑鼠互動（縮放／平移／hover／雙擊還原）——綁一次，之後只換 svg 內容 */
+function bindChart(svg,getState){
+  const AXIS=64/1040;
+  const onAxis=e=>{ const r=svg.getBoundingClientRect();
+    return (e.clientX-r.left)/r.width>1-AXIS; };
+  svg.addEventListener('wheel',function(e){
+    e.preventDefault();
+    const S=getState(); if(!S) return;
+    const V=S.view, total=S.bars.length;
+    if(e.shiftKey||onAxis(e)){
+      V.vz=Math.min(12,Math.max(0.25,V.vz*(e.deltaY>0?0.88:1.14))); S.paint(); return;
+    }
+    const r=svg.getBoundingClientRect();
+    const frac=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));
+    const n0=Math.max(6,Math.min(V.n,total));
+    const end0=V.end==null?total:V.end;
+    const anchor=(end0-n0)+frac*n0;
+    const n=Math.round(Math.min(total,Math.max(8,n0*(e.deltaY>0?1.18:0.85))));
+    let end=Math.round(anchor+(1-frac)*n);
+    end=Math.max(n,Math.min(total,end));
+    V.n=n; V.end=(end>=total)?null:end;
+    S.paint();
+  },{passive:false});
+  svg.addEventListener('mousedown',function(e){
+    const S=getState(); if(!S) return;
+    const r=svg.getBoundingClientRect(), V=S.view, total=S.bars.length;
+    const n0=Math.max(6,Math.min(V.n,total));
+    DRAG={x:e.clientX,y:e.clientY,end:(V.end==null?total:V.end),n:n0,w:r.width,h:r.height,
+          vz:V.vz,voff:V.voff,span:S.span||100,axis:onAxis(e),S:S};
+    svg.style.cursor=DRAG.axis?'ns-resize':'grabbing';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove',function(e){
+    if(!DRAG||DRAG.S.svg!==svg) return;
+    const S=DRAG.S, V=S.view, total=S.bars.length;
+    if(DRAG.axis){
+      V.vz=Math.min(12,Math.max(0.25,DRAG.vz*Math.exp(-(e.clientY-DRAG.y)/220)));
+      S.paint(); return;
+    }
+    const perBar=DRAG.w/DRAG.n, moved=Math.round((e.clientX-DRAG.x)/perBar);
+    let end=DRAG.end-moved;
+    end=Math.max(DRAG.n,Math.min(total,end));
+    V.end=(end>=total)?null:end;
+    if(DRAG.span>0) V.voff=DRAG.voff+(e.clientY-DRAG.y)/DRAG.h*DRAG.span;
+    S.paint();
+  });
+  window.addEventListener('mouseup',function(){ if(DRAG){ DRAG=null; svg.style.cursor=''; } });
+  svg.addEventListener('mousemove',function(e){
+    if(DRAG) return;
+    const S=getState(); if(!S) return;
+    const V=S.view, total=S.bars.length;
+    const n=Math.max(6,Math.min(V.n,total)), end=V.end==null?total:V.end, from=end-n;
+    const r=svg.getBoundingClientRect(), frac=(e.clientX-r.left)/r.width;
+    if(frac<0||frac>1-64/1040){ if(S.hover.i!=null){ S.hover.i=null; S.paint(); } return; }
+    const i=Math.max(from,Math.min(end-1,from+Math.floor(frac/(1-64/1040)*n)));
+    if(i!==S.hover.i){ S.hover.i=i; S.paint(); }
+  });
+  svg.addEventListener('mouseleave',function(){
+    const S=getState(); if(S&&S.hover.i!=null){ S.hover.i=null; S.paint(); }
+  });
+  svg.addEventListener('dblclick',function(e){
+    const S=getState(); if(!S) return;
+    if(onAxis(e)){ S.view.vz=1; S.view.voff=0; }
+    else { S.view.n=S.defN||76; S.view.end=null; S.view.vz=1; S.view.voff=0; }
+    S.paint();
+  });
+}
+
+/* ════════════════════════════════════════════════════════════
+   資料軌（取代舊的 mini 列 / fstrip）
+   ════════════════════════════════════════════════════════════ */
+function railHTML(groups){
+  return groups.map(function(g){
+    return '<div class="grp">'+g.map(function(it){
+      let h='<div class="it'+(it.muted?' muted':'')+'"><div class="k">'+it.k+'</div>'+
+        '<div class="v '+(it.cls||'')+'">'+it.v+(it.u?'<small>'+it.u+'</small>':'')+'</div>';
+      if(it.track!=null) h+='<div class="track"><i class="'+(it.hot?'hot':'')+'" style="width:'+
+        Math.max(3,Math.min(100,it.track))+'%"></i></div>';
+      return h+'</div>';
+    }).join('')+'</div>';
+  }).join('');
+}
+function liveRail(){
+  const c=CHIPS;
+  return railHTML([
+    [{k:'5 分',v:pm(c.mom5),cls:sgn(c.mom5)},{k:'15 分',v:pm(c.mom15),cls:sgn(c.mom15)}],
+    [{k:'跳空',v:pm(c.gap)},{k:'今日震幅',v:f(c.rng)},
+     {k:'位階',v:f(c.pos*100)+'%',track:c.pos*100,hot:c.pos>0.8||c.pos<0.2},
+     {k:'量能',v:f(c.vol_ratio,2),u:'倍',track:c.vol_ratio/3*100,hot:c.vol_ratio>1.5}],
+    [{k:'買 / 賣',v:f(c.bid)+' / '+f(c.ask)}],
+    [{k:'加權',v:f(c.idx)},{k:'基差',v:pm(c.basis,1),cls:sgn(c.basis)}]
+  ]);
+}
+function dayRail(bars,date,ref){
+  const D=bars.filter(b=>b.d===date&&b.t>='08:45');
+  if(!D.length) return '';
+  const o=D[0].o, hi=Math.max.apply(null,D.map(b=>b.h)), lo=Math.min.apply(null,D.map(b=>b.l));
+  const c=D[D.length-1].c, vol=D.reduce((a,b)=>a+b.v,0);
+  const pos=(c-lo)/Math.max(1,hi-lo);
+  return railHTML([
+    [{k:'開',v:f(o)},{k:'高',v:f(hi),cls:'up'},{k:'低',v:f(lo),cls:'down'},{k:'收',v:f(c)}],
+    [{k:'震幅',v:f(hi-lo)},{k:'收在區間',v:f(pos*100)+'%',track:pos*100},
+     {k:'跳空',v:ref==null?'—':pm(o-ref)}],
+    [{k:'總量',v:(vol/1000).toFixed(1)+'k'},{k:'報價',v:'非即時',muted:true}]
+  ]);
+}
+
+/* ════════════════════════════════════════════════════════════
+   即時分頁
+   ════════════════════════════════════════════════════════════ */
+/* ⚠ 面板鐵律：hover／縮放這種高頻重繪只准動「圖本身」，
+   不可以把報價標頭、右欄一起重建（會閃、會把打到一半的心得換掉）。
+   所以 LS.paint 走 light 路徑，只換 svg / legend / info。 */
+const LS={svg:null,bars:LIVE,view:VIEW,hover:HOVER,span:0,defN:76,
+          paint:function(){ paintLive(true); }};
+/* 只有「上次自己設進去的字串」變了才動 DOM（不可讀回 innerHTML 比對）*/
+function setH(id,html){
+  const e=$(id); if(!e) return;
+  if(e.__html===html) return;
+  e.__html=html; e.innerHTML=html;
+}
+function calHTML(){
+  const months=['2026-07','2026-08'];
+  if(months.indexOf(calMonth)<0) calMonth='2026-08';
+  const mi=months.indexOf(calMonth);
+  const y=+calMonth.slice(0,4), m=+calMonth.slice(5);
+  const maxRng=Math.max.apply(null,[1].concat(DAYS.map(x=>x.rng||0)));
+  const cd=viewDate||LIVE_DATE;
+  const first=new Date(y,m-1,1), start=new Date(first);
+  start.setDate(1-((first.getDay()+6)%7));
+  let cells='';
+  for(let k=0;k<42;k++){
+    const dt=new Date(start); dt.setDate(start.getDate()+k);
+    if(dt.getDay()===0||dt.getDay()===6) continue;
+    const num=dt.getDate();
+    if(dt.getMonth()!==m-1){ cells+='<span class="cell off"></span>'; continue; }
+    const iso=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(num).padStart(2,'0');
+    const x=dayRow(iso);
+    const can=DEMO_DAYS.indexOf(iso)>=0;
+    if(!x||x.closed||!can){
+      cells+='<span class="cell off" title="'+(can?'休市':'demo 沒有放這天的 K 線')+'">'+
+        '<span class="dd">'+num+'</span></span>';
+      continue;
+    }
+    const cl=['cell', x.pct==null?'na':(x.pct>0?'up':x.pct<0?'dn':'na')];
+    if(iso===RV_DATE||iso===LIVE_DATE) cl.push('prac');
+    if(iso===cd) cl.push('on');
+    if(iso===LIVE_DATE) cl.push('today');
+    cells+='<button class="'+cl.join(' ')+'" data-day="'+iso+'">'+
+      '<span class="dd">'+num+'</span><span class="pc">'+(x.pct==null?'—':pm(x.pct,1))+'</span>'+
+      (x.rng?'<span class="rngbar" style="transform:scaleX('+(0.25+0.75*x.rng/maxRng).toFixed(2)+
+        ')"></span>':'')+'</button>';
+  }
+  return '<div class="calbox"><div class="calhead"><span class="mo">'+y+' 年 '+m+' 月</span>'+
+    '<span class="cnav"><button data-mo="-1"'+(mi<=0?' disabled':'')+'>&lsaquo;</button>'+
+    '<button data-mo="1"'+(mi>=months.length-1?' disabled':'')+'>&rsaquo;</button></span></div>'+
+    '<div class="cal">'+['一','二','三','四','五'].map(w=>'<span class="wd">'+w+'</span>').join('')+
+    cells+'</div><div class="callegend">'+
+    '<span><i style="background:var(--up)"></i>收紅</span>'+
+    '<span><i style="background:var(--down)"></i>收綠</span>'+
+    '<span><i style="background:transparent;border:1px solid var(--gold-line)"></i>有練習</span>'+
+    '<span><i style="background:var(--gold);border-radius:50%"></i>今天</span>'+
+    '<span>demo 只放了 08-21 與 08-25</span></div></div>';
+}
+function paintLive(light){
+  const C=cur();
+  C.trades.forEach(function(t){
+    t._i=idxOf(C.bars,C.date,t.time);
+    t._j=t._exit_time?idxOf(C.bars,C.date,t._exit_time.slice(0,5)):-1;
+  });
+  LS.bars=C.bars;
+  const live=!viewDate, q=live?QST:'closed';
+  const last=C.bars[C.bars.length-1];
+  const px=(live&&q==='live')?CHIPS.price:last.c;
+  const chg=px-C.ref, pct=chg/C.ref*100;
+  const r=renderChart({bars:C.bars,view:VIEW,hover:HOVER,H:470,VOLH:86,GAP:14,
+                       trades:C.trades,pos:POS});
+  if(!r) return;
+  LS.span=r.span;
+  $('csvg').innerHTML=r.svg;
+  setH('clegend',r.legend);
+  $('cinfo').textContent=r.info;
+  if(light) return;                 /* hover／縮放：到這裡就停，右欄與標頭都不動 */
+  /* 報價區 */
+  const dayS=C.date.slice(5), noS=(C.night||'').slice(5);
+  const me=dayRow(C.date);
+  const sub=live
+    ?'<span class="live"><i></i>'+(q==='live'?'即時':'休市中')+'</span><span class="sep">·</span>'+
+     '<span>昨收 '+f(C.ref)+'</span><span class="sep">·</span><span>微台 TMFI6</span>'+
+     (q==='live'?'<span class="sep">·</span><span>11:29:49 更新</span>'
+                :'<span class="sep">·</span><span>上面是收盤價，非即時</span>')
+    :'<span>歷史日</span><span class="sep">·</span><span>昨收 '+f(C.ref)+'</span>'+
+     '<span class="sep">·</span><span>13:45 收盤</span>';
+  const nav=viewDate?false:true, fwd=viewDate?true:false;
+  const r2=busy?'<span>載入中…</span>'
+    :((noS&&noS!==dayS)?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
+     '<span>'+(C.trades.length?('練習 '+C.trades.length+' 筆 <b class="'+
+       sgn(C.trades[0]._net)+'">'+pm(C.trades[0]._net).replace('-','−')+'</b> 點'):'未練習')+'</span>'+
+     '<span class="sep k">·</span><span class="kbdgrp"><kbd>&larr;</kbd><kbd>&rarr;</kbd> 換日</span>';
+  setH('chead',
+    '<div class="qblock"><div class="qmain">'+
+      '<span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
+      '<span class="cchg '+sgn(chg)+'">'+pm(chg)+'<span class="pct">'+pm(pct,2)+'%</span></span>'+
+    '</div><div class="qsub">'+sub+'</div></div>'+
+    '<div class="pager"><div class="r1">'+
+      '<button class="nav-icon" data-nav="-1" title="前一個交易日（←）"'+(nav?'':' disabled')+'>&#9664;</button>'+
+      '<button class="dstamp'+(pickOpen?' open':'')+(busy?' loading':'')+'" data-pick="1" title="選日期">'+
+        CAL_ICON+'<span class="num">'+dayS+'</span><span class="wd">'+(me?me.w:'')+'</span>'+
+        '<span class="caret">&#9660;</span></button>'+
+      '<button class="nav-icon" data-nav="1" title="後一個交易日（→）"'+(fwd?'':' disabled')+'>&#9654;</button>'+
+      (viewDate?'<button class="jump2" data-day="" title="回到即時（Home）">今天</button>'
+               :'<span class="livelamp" title="即時"><i></i>即時</span>')+
+    '</div><div class="r2">'+r2+'</div></div>');
+  setH('cpick',pickOpen?calHTML():'');
+  setH('crail',live?(q==='live'?liveRail():dayRail(C.bars,C.date,C.ref))
+                   :dayRail(C.bars,C.date,C.ref));
+  paintRight();
+}
+
+/* ---------- 右欄：練習下單 ---------- */
+const NOTEMAP={};
+function noteBox(key,note,hint,ph){
+  NOTEMAP[key]=note;
+  if(NOTE.key===key){
+    return '<div class="nedit"><textarea id="tnote" placeholder="'+esc(ph)+'">'+esc(NOTE.text)+
+      '</textarea><div class="nbtn"><button class="btn gold" data-nsave="1">存起來</button>'+
+      '<button class="btn ghost gw" data-ncancel="1">取消</button></div></div>';
+  }
+  return note?'<div class="noteline" data-nedit="'+esc(key)+'">「'+esc(note)+'」</div>'
+             :'<div class="noteline empty" data-nedit="'+esc(key)+'">'+hint+'</div>';
+}
+function tradeRow(t,ns){
+  const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'';
+  const key=ns+'|'+t.date+'|'+t.time;
+  const nb=ns?noteBox(key,t.note,ns==='t'?'＋ 寫下今天的心得':'＋ 補寫心得',
+              '現在回頭看，這一筆做對了什麼、做錯了什麼？'):'';
+  return '<div class="trade '+(t._net>0?'win':'loss')+'"><div class="tr-top">'+
+    '<span class="tr-date">'+(t.date||'').slice(5)+'</span>'+
+    '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+    '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
+    (rs?' <span class="tag">'+rs+'</span>':'')+'</span>'+
+    '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div>'+nb+'</div>';
+}
+function tradeBox(){
+  const q=viewDate?'closed':QST;
+  let h='<div class="sec-head"><h2>練習下單</h2><span class="warn">模擬・不會送單</span></div>'+
+        '<div class="card">';
+  if(POS){
+    const px=CHIPS.price, fl=(POS.dir==='long'?1:-1)*(px-POS.entry);
+    h+='<div class="pnl"><div class="v '+sgn(fl)+'">'+pm(Math.round(fl))+'</div>'+
+       '<div class="l">'+(POS.dir==='long'?'做多':'做空')+'　進場 '+f(POS.entry)+'　'+POS.time+'</div></div>'+
+       '<div class="plimit"><span>停利 '+f(POS.tp)+'</span><span>停損 '+f(POS.sl)+'</span></div>'+
+       '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
+       '<button class="btn ghost" data-act="undo">取消</button></div>'+
+       noteBox('open','','＋ 記下現在為什麼這樣做','現在為什麼想這樣做？（平倉後會留在這筆紀錄裡）');
+  } else {
+    const dis=q!=='live'?' disabled':'';
+    h+='<div class="btns"><button class="btn long" data-act="long"'+dis+'>&#9650; 做多</button>'+
+       '<button class="btn short" data-act="short"'+dis+'>&#9660; 做空</button></div>';
+    if(q!=='live') h+='<div class="whyoff">休市中，沒有即時報價 —— 練習下單要用當下的真實成交價'+
+       '才有意義，開盤後才能按。</div>';
+  }
+  const C=cur();
+  if(C.trades.length&&!viewDate){
+    h+='<div class="list">'+C.trades.map(t=>tradeRow(t,'t')).join('')+'</div>'+
+       '<div class="plimit" style="margin:12px 0 0">今天 '+C.trades.length+' 筆　合計 '+
+       pm(C.trades.reduce((a,t)=>a+t._net,0))+' 點</div>';
+  }
+  return h+'</div>';
+}
+function statsBox(){
+  const all=HIST_DESC;
+  const nWin=WIN===0?all.length:Math.min(WIN,all.length);
+  const w=all.slice(0,nWin);
+  const wins=w.filter(t=>t._net>0).length, losses=w.length-wins;
+  const total=w.reduce((a,t)=>a+t._net,0), rate=w.length?wins/w.length*100:0;
+  const cls=total>0?'up':total<0?'down':'flat';
+  const opts=[[7,'近 7 筆'],[10,'近 10 筆'],[30,'近 30 筆'],[0,'全部']];
+  let h='<div class="sec-head"><h2>練習成績</h2><span class="count">共 '+all.length+' 筆</span></div>'+
+    '<div class="card"><div class="seg">'+opts.map(o=>'<button data-win="'+o[0]+'" class="'+
+      (WIN===o[0]?'on':'')+'">'+o[1]+'</button>').join('')+'</div>'+
+    '<div class="score"><div class="rate"><span class="n">'+rate.toFixed(0)+
+      '</span><span class="p">%</span><div class="lab">勝率</div></div>'+
+    '<div class="sum"><div><span class="n '+cls+'">'+pm(total)+'</span><span class="u">點</span></div>'+
+    '<div class="cash">'+(total<0?'-':'+')+'NT$'+Math.abs(total*10).toLocaleString()+'</div></div></div>'+
+    '<div class="wlbar"><i class="w" style="flex:'+Math.max(wins,0.001)+'"></i>'+
+      '<i class="l" style="flex:'+Math.max(losses,0.001)+'"></i></div>'+
+    '<div class="wlfoot"><span class="w"><b>'+wins+'</b> 勝</span>'+
+      '<span class="lt">'+w.length+' 筆</span><span class="l"><b>'+losses+'</b> 敗</span></div>'+
+    '<div class="list">'+all.slice(0,12).map(t=>tradeRow(t,'s')).join('')+'</div>'+
+    '<a class="dl" href="#" data-act="noop">下載練習紀錄（可匯入 App）</a></div>';
+  return h;
+}
+function paintRight(){
+  $('trade').innerHTML=tradeBox();
+  $('stats').innerHTML=statsBox();
+}
+
+/* ---------- 換日（含載入中的進度條）---------- */
+function goDay(d){
+  if(d===(viewDate||LIVE_DATE)) { pickOpen=false; paintLive(); return; }
+  pickOpen=false; busy=true;
+  $('cchart').classList.add('kk-load');
+  paintLive();
+  setTimeout(function(){
+    viewDate=(d===LIVE_DATE?'':d);
+    busy=false; VIEW.n=viewDate?60:76; VIEW.end=null; VIEW.vz=1; VIEW.voff=0; HOVER.i=null;
+    $('cchart').classList.remove('kk-load');
+    paintLive();
+    kkDraw($('cwrap'));
+  },780);
+}
+function kkDraw(el){
+  if(!el) return;
+  el.classList.remove('kk-draw');
+  void el.offsetWidth;
+  el.classList.add('kk-draw');
+  setTimeout(function(){ el.classList.remove('kk-draw'); },700);
+}
+/* 開站：骨架 → 真圖淡入 → K 線由左往右展開 */
+function boot(){
+  $('skel').hidden=false; $('cchart').hidden=true;
+  $('cchart').classList.remove('kk-in');
+  document.body.classList.add('boot');
+  setTimeout(function(){
+    $('skel').hidden=true; $('cchart').hidden=false;
+    $('cchart').classList.add('kk-in');
+    paintLive();
+    kkDraw($('cwrap'));
+    setTimeout(function(){ document.body.classList.remove('boot'); },1100);
+  },900);
+}
+
+/* ════════════════════════════════════════════════════════════
+   回顧分頁（翻紀錄 ／ Bar Replay）
+   【紅線】只顯示已經發生的客觀數字：不預測、不算期望值、不給買賣建議。
+   ════════════════════════════════════════════════════════════ */
+var MODE='review', FILTER='all', SEL=0, TF=5;
+var RVIEW={n:60,end:null,vz:1,voff:0}, RHOVER={i:null};
+var RP={state:'idle',rev:4,speed:1,timer:null,judge:null,result:null,note:'',day:RV_DATE};
+var TALLY={n:0,tp:0,sl:0,same:0};
+const SPEEDS=[[0.5,1200],[1,600],[2,300],[4,150]];
+const REASON={tp:'停利',sl:'停損',manual:'手動',close:'收盤'};
+const RS={svg:null,bars:RV5,view:RVIEW,hover:RHOVER,span:0,defN:60,
+          paint:function(){ paintReview(true); }};   /* hover／縮放只動圖 */
+
+function rvList(){
+  return HIST_DESC.map(function(t,i){ return {t:t,i:i}; }).filter(function(x){
+    const t=x.t;
+    if(FILTER==='win') return t._net>0;
+    if(FILTER==='loss') return t._net<0;
+    if(FILTER==='long') return t.dir==='long';
+    if(FILTER==='short') return t.dir==='short';
+    return true;
+  });
+}
+function selTrade(){
+  const L=rvList(); if(!L.length) return null;
+  let s=L.filter(x=>x.i===SEL)[0];
+  if(!s){ s=L[0]; SEL=s.i; }
+  return s;
+}
+function rvBarsNow(){ return MODE==='replay'?RV1:(TF===5?RV5:RV1); }
+/* demo：所有日期都用 08-21 這天的 K 棒示意，方向與時間照選到的那一筆 */
+function markTrade(rec){
+  const t=simTrade(TF===5?RV5:RV1,RV_DATE,rec.time,rec.dir);
+  if(!t) return null;
+  t.note=rec.note; return t;
+}
+function featAt(bars,i){
+  const D=[], idx=[];
+  for(let k=0;k<bars.length;k++){ if(bars[k].d===RV_DATE&&bars[k].t>='08:45'){ D.push(bars[k]); idx.push(k); } }
+  const j=Math.max(0,Math.min(D.length-1,idx.indexOf(i)<0?D.length-1:idx.indexOf(i)));
+  const c=D[j].c, seen=D.slice(0,j+1);
+  const hi=Math.max.apply(null,seen.map(b=>b.h)), lo=Math.min.apply(null,seen.map(b=>b.l));
+  const back=n=>D[Math.max(0,j-n)].c;
+  const per=TF===5&&bars===RV5?5:1;
+  const avgv=seen.reduce((a,b)=>a+b.v,0)/seen.length;
+  return {t:D[j].t, price:c, mom5:c-back(Math.round(5/per)), mom15:c-back(Math.round(15/per)),
+          ret_open:c-D[0].o, gap:D[0].o-(prevClose(RV_DATE)||D[0].o), rng:hi-lo,
+          pos:(c-lo)/Math.max(1,hi-lo), vol_ratio:D[j].v/Math.max(1,avgv)};
+}
+function paintFStrip(F,title){
+  $('rftitle').textContent=title;
+  if(!F){ $('rfrail').innerHTML='<div class="grp"><div class="it"><div class="k">　</div>'+
+    '<div class="v" style="color:var(--faint);font-size:12.5px">這一刻沒有本機 K 棒可以重建盤面</div>'+
+    '</div></div>'; return; }
+  $('rfrail').innerHTML=railHTML([
+    [{k:'最近 5 分',v:pm(F.mom5),cls:sgn(F.mom5)},{k:'最近 15 分',v:pm(F.mom15),cls:sgn(F.mom15)}],
+    [{k:'對開盤',v:pm(F.ret_open),cls:sgn(F.ret_open)},{k:'跳空',v:pm(F.gap)}],
+    [{k:'今日震幅',v:f(F.rng)},{k:'位階',v:f(F.pos*100)+'%',track:F.pos*100,
+      hot:F.pos>0.8||F.pos<0.2},{k:'量能',v:f(F.vol_ratio,2),u:'倍',
+      track:F.vol_ratio/3*100,hot:F.vol_ratio>1.5}]
+  ]);
+}
+function paintReview(light){
+  if(TAB!=='review') return;
+  const replay=MODE==='replay';
+  let bars, trades=[], pos=null, pad=0;
+  if(replay){
+    const full=RV1;
+    bars=full.slice(0,Math.max(2,RP.rev+1)); pad=10;
+    if(RP.judge){
+      const J=RP.judge;
+      const jt={date:RV_DATE,time:J.time,dir:J.dir,entry:J.entry,exit:J.entry,
+                _reason:'',_net:0,_exit_time:null};
+      jt._i=idxOf(bars,RV_DATE,J.time); jt._j=-1;
+      if(RP.result){
+        jt.exit=RP.result.exit; jt._net=RP.result.net; jt._reason=RP.result.reason;
+        jt._exit_time=RP.result.time+':00';
+        jt._j=idxOf(bars,RV_DATE,RP.result.time);
+      } else { pos={dir:J.dir,entry:J.entry,tp:J.tp,sl:J.sl}; }
+      trades.push(jt);
+    }
+    if(RP.state==='revealed'&&T_RV){
+      const a=Object.assign({},T_RV);
+      a._i=idxOf(bars,RV_DATE,a.time); a._j=idxOf(bars,RV_DATE,a._exit_time.slice(0,5));
+      if(!RP.judge||a.time!==RP.judge.time) trades.push(a);
+    }
+  } else {
+    bars=rvBarsNow();
+    const s=selTrade();
+    const mt=s?markTrade(s.t):null;
+    if(mt){ mt._i=idxOf(bars,RV_DATE,mt.time);
+            mt._j=idxOf(bars,RV_DATE,mt._exit_time.slice(0,5)); trades.push(mt); }
+  }
+  RS.bars=bars;
+  const r=renderChart({bars:bars,view:RVIEW,hover:RHOVER,H:430,VOLH:64,GAP:12,
+                       trades:trades,pos:pos,pad:pad});
+  if(r){ RS.span=r.span; $('rsvg').innerHTML=r.svg; setH('rlegend',r.legend); }
+  if(light) return;                 /* hover／縮放：右欄與控制列都不動 */
+  /* 標頭 */
+  const D=bars.filter(b=>b.d===RV_DATE&&b.t>='08:45');
+  const lastC=D.length?D[D.length-1].c:0, o=D.length?D[0].o:0;
+  const ref=prevClose(RV_DATE)||o, chg=lastC-ref;
+  setH('rhead',
+    '<div class="qblock"><div class="qmain"><span class="cpx '+sgn(chg)+'">'+f(lastC)+'</span>'+
+    '<span class="cchg '+sgn(chg)+'">'+pm(chg)+'<span class="pct">'+pm(chg/ref*100,2)+'%</span></span>'+
+    '</div><div class="qsub"><span>'+RV_DATE+' 週五</span><span class="sep">·</span>'+
+    '<span>日盤 08:45–13:45</span><span class="sep">·</span>'+
+    '<span>'+(replay?'重播中（1 分 K）':'翻紀錄')+'</span></div></div>'+
+    (replay?'':'<div class="tfsw"><button data-tf="1" class="'+(TF===1?'on':'')+'">1 分</button>'+
+      '<button data-tf="5" class="'+(TF===5?'on':'')+'">5 分</button></div>'));
+  setH('rctrl',ctrlHTML(bars));
+  /* 客觀盤面 */
+  if(replay){
+    const i=RP.judge?idxOf(RV1,RV_DATE,RP.judge.time):Math.min(RP.rev,RV1.length-1);
+    const F=featAt(RV1,i);
+    paintFStrip(F,RP.judge?('進場當下的客觀盤面（'+RP.judge.time+'）')
+                          :('目前這一刻的客觀盤面（'+F.t+'）'));
+  } else {
+    const s=selTrade();
+    if(s){ const F=featAt(TF===5?RV5:RV1,idxOf(TF===5?RV5:RV1,RV_DATE,s.t.time));
+      paintFStrip(F,'進場當下的客觀盤面（'+s.t.date.slice(5)+' '+s.t.time+'）'); }
+    else paintFStrip(null,'進場當下的客觀盤面');
+  }
+  const html=replay?paneReplay():paneReviewPane();
+  if(!nEditingReview()||NOTE.key==null) $('rpane').innerHTML=html;
+  const sel=document.querySelector('#rpane .trade.sel');
+  if(sel&&sel.scrollIntoView) sel.scrollIntoView({block:'nearest'});
+}
+function nEditingReview(){ return NOTE.key!=null&&String(NOTE.key).charAt(0)==='r'; }
+
+/* ---------- 控制列 ---------- */
+function ctrlHTML(bars){
+  if(MODE!=='replay'){
+    return '<div class="chint"><b>'+(selTrade()?'進出場之間已著色：紅＝這一筆賺、綠＝賠':'選一筆紀錄看細節')+
+      '</b>　滾輪縮放・拖曳平移・雙擊還原　<b>demo：所有日期都用 08-21 的 K 棒示意</b></div>';
+  }
+  const total=RV1.length, playing=RP.timer!=null;
+  const cur=RV1[Math.min(RP.rev,total-1)];
+  const pctOf=t=>{ const i=idxOf(RV1,RV_DATE,t); return (i<0?0:i)/(total-1)*100; };
+  const fill=RP.rev/(total-1)*100;
+  const wa=pctOf('08:45'), wb=pctOf('09:30');
+  let ticks='';
+  ['08:45','09:30','11:00','13:40'].forEach(function(t){
+    ticks+='<span class="tk" style="left:'+pctOf(t).toFixed(2)+'%">'+t+'</span>';
+  });
+  const jm=RP.judge?'<span class="jm" style="left:'+pctOf(RP.judge.time).toFixed(2)+'%;background:'+
+    (RP.judge.dir==='long'?'var(--up)':'var(--down)')+'"></span>':'';
+  return '<div class="rpbar"><div class="rprow">'+
+    '<button class="rpbtn" data-ract="rphome" title="回到 08:45">&#9198;</button>'+
+    '<button class="rpbtn" data-ract="rpback" title="退一根">&#9664;</button>'+
+    '<button class="rpbtn play" data-ract="'+(playing?'rppause':'rpplay')+'">'+
+      (playing?'&#10074;&#10074; 暫停':'&#9654; 播放')+'</button>'+
+    '<button class="rpbtn" data-ract="rpstep" title="下一根">&#9654;&#9654;</button>'+
+    '<div class="rpsp">'+SPEEDS.map(s=>'<button data-rspeed="'+s[0]+'" class="'+
+      (RP.speed===s[0]?'on':'')+'">&times;'+s[0]+'</button>').join('')+'</div>'+
+    '<div class="rppos"><b>'+cur.t+'</b>　'+(RP.rev+1)+' / '+total+' 根'+
+      (RP.state==='revealed'?'　已揭曉':'')+'</div></div>'+
+    '<div class="rpscrub" data-rseek="1"><div class="trk"></div>'+
+    '<div class="win" style="left:'+wa.toFixed(2)+'%;width:'+(wb-wa).toFixed(2)+'%"></div>'+
+    '<div class="fill" style="width:'+fill.toFixed(2)+'%"></div>'+jm+
+    '<div class="knob" style="left:'+fill.toFixed(2)+'%"></div>'+ticks+'</div></div>';
+}
+
+/* ---------- 右欄：翻紀錄 ---------- */
+function rowPick(x){
+  const t=x.t, rs=REASON[t._reason]||'';
+  return '<div class="trade '+(t._net>0?'win':'loss')+(x.i===SEL?' sel':'')+'" data-rpick="'+x.i+'">'+
+    '<div class="tr-top"><span class="tr-date">'+(t.date||'').slice(5)+'</span>'+
+    '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+    '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
+    (rs?' <span class="tag">'+rs+'</span>':'')+'</span>'+
+    '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div>'+
+    (t.note?'<div class="tr-note">「'+esc(t.note)+'」</div>':'')+'</div>';
+}
+function paneReviewPane(){
+  const L=rvList(), s=selTrade();
+  const FT=[['all','全部'],['win','只看賺的'],['loss','只看賠的'],['long','做多'],['short','做空']];
+  let h='<div class="chips">'+FT.map(x=>'<button data-rfilter="'+x[0]+'" class="'+
+    (FILTER===x[0]?'on':'')+'">'+x[1]+'</button>').join('')+'</div>';
+  h+='<div class="sec-head"><h2>練習紀錄</h2><span class="count">'+L.length+' 筆　'+
+     pm(L.reduce((a,x)=>a+(x.t._net||0),0))+' 點</span></div>';
+  if(!L.length) h+='<div class="card"><div class="empty">這個條件下沒有紀錄<br>'+
+    '<span style="color:var(--ghost)">換一個篩選看看</span></div></div>';
+  else h+='<div class="list">'+L.map(rowPick).join('')+'</div>'+
+    '<div class="note" style="margin-top:10px;text-align:center"><span class="kbd">←</span> '+
+    '<span class="kbd">→</span> 切換上一筆／下一筆　<span class="kbd">R</span> 重播這一天</div>';
+  if(s){
+    const t=s.t, win=t._net>0, ex=t._exit_time?String(t._exit_time).slice(0,5):'—';
+    const mfe=Math.abs(t._mfe||0), mae=Math.abs(t._mae||0), mx=Math.max(1,mfe,mae);
+    h+='<div class="sec-head" style="margin-top:16px"><h2>這一筆</h2><span class="count">'+
+      t.date+'</span></div><div class="card"><div class="dt">'+
+      '<div class="dt-big"><div class="v '+(win?'up':'down')+'">'+pm(t._net)+'</div>'+
+      '<div class="l">'+(t.dir==='long'?'做多':'做空')+'　'+(REASON[t._reason]||'')+'出場　NT$'+
+      Math.round((t._net||0)*10).toLocaleString()+'</div></div><div class="hr"></div>'+
+      '<div class="dt-row"><span class="k">進場</span><span class="v">'+t.time+'　'+t.entry+'</span></div>'+
+      '<div class="dt-row"><span class="k">出場</span><span class="v">'+ex+'　'+t.exit+'</span></div>'+
+      '<div class="dt-row"><span class="k">抱了多久</span><span class="v">'+
+        (t._mins==null?'—':t._mins+' 分鐘')+'</span></div>'+
+      '<div class="dt-row"><span class="k">進場後最順 / 最逆</span><span class="v">'+
+        '<span class="up">'+pm(mfe)+'</span> / <span class="down">'+pm(-mae)+'</span></span></div>'+
+      '<div class="mae"><span class="seg2" style="flex:'+(mfe/mx)+';background:var(--up)"></span>'+
+        '<span class="seg2" style="flex:'+(mae/mx)+';background:var(--down)"></span></div>'+
+      '<div class="hr"></div>'+
+      noteBox('r|'+t.date+'|'+t.time,t.note,'＋ 補寫這一筆的心得',
+              '現在回頭看，這一筆做對了什麼、做錯了什麼？')+
+      '<div class="btns" style="margin-top:10px">'+
+      '<button class="btn gold" data-ract="replayday">重播這一天（蓋住結果）</button></div>'+
+      '</div></div>';
+  }
+  return h;
+}
+
+/* ---------- 右欄：Bar Replay ---------- */
+function rpStop(){ if(RP.timer){ clearInterval(RP.timer); RP.timer=null; } }
+function rpReset(){ rpStop(); RP.state='idle'; RP.rev=4; RP.judge=null; RP.result=null; RP.note=''; }
+function rpPlay(){
+  if(RP.state==='revealed') return;
+  rpStop();
+  const ms=(SPEEDS.filter(s=>s[0]===RP.speed)[0]||[1,600])[1];
+  RP.timer=setInterval(function(){ rpStep(); },ms);
+  paintReview();
+}
+function rpPause(){ rpStop(); paintReview(); }
+function rpStep(back){
+  if(back){ RP.rev=Math.max(1,RP.rev-1); paintReview(); return; }
+  if(RP.rev>=RV1.length-1){ rpReveal(); return; }
+  RP.rev++;
+  if(RP.judge&&!RP.result){
+    const J=RP.judge, b=RV1[RP.rev], long=J.dir==='long';
+    const hitTp=long?b.h>=J.tp:b.l<=J.tp, hitSl=long?b.l<=J.sl:b.h>=J.sl;
+    if(hitTp||hitSl){
+      const ex=hitTp?J.tp:J.sl;
+      RP.result={exit:ex,time:b.t,reason:hitTp?'tp':'sl',
+                 net:(long?ex-J.entry:J.entry-ex)-5};
+      rpReveal(); return;
+    }
+  }
+  paintReview();
+}
+function rpReveal(){
+  rpStop();
+  if(RP.judge&&!RP.result){
+    const b=RV1[RV1.length-1], long=RP.judge.dir==='long';
+    RP.result={exit:b.c,time:b.t,reason:'close',
+               net:(long?b.c-RP.judge.entry:RP.judge.entry-b.c)-5};
+  }
+  if(RP.state!=='revealed'){
+    TALLY.n++;
+    if(RP.result) TALLY[RP.result.reason==='tp'?'tp':'sl']++;
+    if(RP.judge&&T_RV&&RP.judge.dir===T_RV.dir) TALLY.same++;
+  }
+  RP.state='revealed'; RP.rev=RV1.length-1;
+  paintReview();
+}
+function rpJudge(dir){
+  if(RP.judge||RP.state==='revealed') return;
+  const b=RV1[Math.min(RP.rev,RV1.length-1)], e=Math.round(b.c);
+  const el=$('jnote');
+  RP.judge={dir:dir,time:b.t,entry:e,tp:dir==='long'?e+100:e-100,
+            sl:dir==='long'?e-100:e+100,note:el?el.value:RP.note};
+  RP.state='holding';
+  rpPlay();
+}
+function paneReplay(){
+  const days=[RV_DATE,'2026-08-20','2026-08-18','2026-08-17','2026-08-14'];
+  let h='<div class="sec-head"><h2>選一天重播</h2><span class="count">從 08:45 開始逐根走</span></div>'+
+    '<div class="daysel">'+days.map(d=>'<button data-rday="'+d+'" class="'+(RP.day===d?'on':'')+
+      '">'+d.slice(5)+'<span class="m">'+(d===RV_DATE?'有下單':'沒下單')+'</span></button>').join('')+
+    '</div>';
+  if(RP.day!==RV_DATE){
+    return h+'<div class="card" style="margin-top:12px"><div class="empty">'+
+      '這天沒有本機 K 棒可以重播<br><span style="color:var(--ghost)">換一天試試'+
+      '（demo 只放了 08-21）</span></div></div>';
+  }
+  if(RP.state==='idle'){
+    h+='<div class="card" style="margin-top:12px"><div class="note" style="border:0;padding:0">'+
+      '<b>怎麼玩</b><br>後面的 K 棒會被蓋住，你只看得到「已經走完的部分」。<br>'+
+      '按播放讓它一根一根走，覺得可以進場就按 ▲做多 或 ▼做空 —— 這時候你還<b>不知道結果</b>，'+
+      '跟早上真的在看盤一樣。<br>判斷完會繼續走到碰停利或停損，然後才揭曉後續走勢，'+
+      '並跟你當天實際的決定對照。</div>'+
+      '<div class="btns" style="margin-top:12px">'+
+      '<button class="btn gold" data-ract="rpplay">開始重播</button></div></div>';
+    return h;
+  }
+  if(RP.state==='revealed'){
+    const J=RP.judge, Rr=RP.result, rt=T_RV;
+    h+='<div class="sec-head" style="margin-top:16px"><h2>揭曉・對照</h2><span class="count">'+
+      RV_DATE+'</span></div><div class="card"><div class="cmp">'+
+      '<div class="side mine"><div class="h">你這次的判斷</div><div class="b">';
+    if(J) h+='<span class="dir '+(J.dir==='long'?'l':'s')+'">'+(J.dir==='long'?'▲ 多':'▼ 空')+
+      '</span><span>'+J.time+'　'+J.entry+' → '+(Rr?Rr.exit:'—')+'</span>'+
+      '<span class="res '+(Rr&&Rr.net>0?'up':'down')+'">'+(Rr?pm(Rr.net):'—')+'</span>';
+    else h+='<span style="color:var(--dim)">這次沒有下判斷（觀望）</span>';
+    h+='</div>'+(J&&J.note?'<div class="tr-note" style="padding-left:0;margin-top:6px">「'+
+      esc(J.note)+'」</div>':'')+'</div>'+
+      '<div class="side"><div class="h">當天你實際的決定</div><div class="b">';
+    if(rt) h+='<span class="dir '+(rt.dir==='long'?'l':'s')+'">'+(rt.dir==='long'?'▲ 多':'▼ 空')+
+      '</span><span>'+rt.time+'　'+rt.entry+' → '+rt.exit+'</span>'+
+      '<span class="res '+(rt._net>0?'up':'down')+'">'+pm(rt._net)+'</span>';
+    else h+='<span style="color:var(--dim)">當天你沒有下單</span>';
+    h+='</div></div></div>';
+    let v='',cls='diff';
+    if(J&&rt){ const same=J.dir===rt.dir, dm=mmin(J.time)-mmin(rt.time);
+      v=(same?'方向一致':'方向相反')+'　'+(dm===0?'時間也一樣':(dm>0?'你晚了 '+dm+' 分鐘':
+        '你早了 '+(-dm)+' 分鐘')); cls=same?'same':'diff'; }
+    else if(J&&!rt) v='當天你沒進場，這次你進了';
+    else if(!J&&rt) v='當天你有進場，這次你選擇觀望';
+    else v='兩次都沒進場';
+    h+='<div class="verdict '+cls+'">'+v+'</div>'+
+      '<div class="tally"><span>重播 <b>'+TALLY.n+'</b> 次</span>'+
+      '<span>停利 <b class="up">'+TALLY.tp+'</b></span>'+
+      '<span>停損 <b class="down">'+TALLY.sl+'</b></span>'+
+      '<span>與當天同向 <b>'+TALLY.same+'</b></span></div>'+
+      '<div style="text-align:center;font-size:10.5px;color:var(--ghost);margin-top:6px">'+
+      '累計次數（存在 replay_log/，跟你的練習紀錄分開）</div>'+
+      '<div class="btns" style="margin-top:12px">'+
+      '<button class="btn flat2" data-ract="rpagain">再玩一次這天</button>'+
+      '<button class="btn ghost gw" data-ract="rpnext">換下一天</button></div></div>';
+    return h;
+  }
+  if(RP.judge){
+    const J=RP.judge, cur=RV1[Math.min(RP.rev,RV1.length-1)].c;
+    const fl=(J.dir==='long'?1:-1)*(cur-J.entry);
+    h+='<div class="sec-head" style="margin-top:16px"><h2>你已經進場了</h2>'+
+      '<span class="count">等結果</span></div><div class="card">'+
+      '<div class="hold"><div class="v '+sgn(fl)+'">'+pm(Math.round(fl))+'</div>'+
+      '<div class="l">'+(J.dir==='long'?'做多':'做空')+'　'+J.time+' 進場 '+J.entry+'</div></div>'+
+      '<div class="dt-row" style="margin-top:12px"><span class="k">停利</span>'+
+      '<span class="v up">'+J.tp+'</span></div>'+
+      '<div class="dt-row"><span class="k">停損</span><span class="v down">'+J.sl+'</span></div>'+
+      (J.note?'<div class="noteline">「'+esc(J.note)+'」</div>':'')+
+      '<div class="btns" style="margin-top:12px">'+
+      '<button class="btn ghost gw" data-ract="rpreveal">直接看結果</button></div></div>';
+    return h;
+  }
+  const F=featAt(RV1,Math.min(RP.rev,RV1.length-1));
+  h+='<div class="sec-head" style="margin-top:16px"><h2>你的判斷</h2><span class="count">現在 '+
+    F.t+'　'+f(F.price)+'</span></div><div class="card">'+
+    '<div class="btns"><button class="btn long" data-ract="jlong">&#9650; 做多</button>'+
+    '<button class="btn short" data-ract="jshort">&#9660; 做空</button></div>'+
+    '<input class="jinput" id="jnote" placeholder="為什麼進？（可不寫，回顧時會顯示）" value="'+
+    esc(RP.note)+'">'+
+    '<div class="btns" style="margin-top:10px">'+
+    '<button class="btn ghost gw" data-ract="rpreveal">今天不做，直接揭曉</button></div>'+
+    '<div class="note" style="margin-top:10px;text-align:center;border:0;padding:0;background:none">'+
+    '<span class="kbd">空白鍵</span> 播放／暫停　<span class="kbd">→</span> 下一根　'+
+    '<span class="kbd">↑</span> 做多　<span class="kbd">↓</span> 做空</div></div>';
+  return h;
+}
+
+/* ════════════════════════════════════════════════════════════
+   事件
+   ════════════════════════════════════════════════════════════ */
+function setTab(t){
+  if(t===TAB) return;
+  TAB=t;
+  if(t!=='review') rpStop();
+  $('tab-live').hidden=(t!=='live');
+  $('tab-review').hidden=(t!=='review');
+  document.querySelectorAll('#tabs button').forEach(function(b){
+    b.classList.toggle('on',b.getAttribute('data-tab')===t);
+  });
+  if(t==='review'){ paintReview(); kkDraw(document.querySelector('#tab-review .cwrap')); }
+  else { paintLive(); kkDraw($('cwrap')); }
+}
+document.addEventListener('click',function(e){
+  const el=e.target;
+  /* ---- demo 控制台 ---- */
+  const tb=el.closest('[data-tab]'); if(tb){ setTab(tb.getAttribute('data-tab')); return; }
+  const dv=el.closest('[data-v]');
+  if(dv){ const v=dv.getAttribute('data-v');
+    document.body.classList.remove('v-a','v-b','v-c'); document.body.classList.add('v-'+v);
+    document.querySelectorAll('#dv button').forEach(b=>b.classList.toggle('on',b===dv));
+    return; }
+  const dm=el.closest('[data-m]');
+  if(dm){ MARK=dm.getAttribute('data-m');
+    document.querySelectorAll('#dm button').forEach(b=>b.classList.toggle('on',b===dm));
+    paintLive(); paintReview(); return; }
+  const dq=el.closest('[data-q]');
+  if(dq){ QST=dq.getAttribute('data-q'); if(QST!=='live') POS=null;
+    document.querySelectorAll('#dq button').forEach(b=>b.classList.toggle('on',b===dq));
+    paintLive(); return; }
+  const dr=el.closest('[data-r]');
+  if(dr){ document.body.classList.toggle('rm',dr.getAttribute('data-r')==='1');
+    document.querySelectorAll('#dr button').forEach(b=>b.classList.toggle('on',b===dr));
+    return; }
+  if(el.closest('#dreload')){ setTab('live'); boot(); return; }
+  if(el.closest('#fold')){ document.body.classList.toggle('dock-min'); return; }
+
+  /* ---- 心得 ---- */
+  const ed=el.closest('[data-nedit]');
+  if(ed){ const k=ed.getAttribute('data-nedit');
+    NOTE={key:k,text:NOTEMAP[k]||''}; repaintAll(true);
+    const ta=$('tnote'); if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length,ta.value.length); }
+    return; }
+  if(el.closest('[data-nsave]')){
+    const ta=$('tnote'), txt=ta?ta.value:NOTE.text, k=NOTE.key||'';
+    const p=k.split('|');
+    if(p.length===3) HIST.forEach(function(t){ if(t.date===p[1]&&t.time===p[2]) t.note=txt; });
+    NOTE={key:null,text:''}; repaintAll(true); return;
+  }
+  if(el.closest('[data-ncancel]')){ NOTE={key:null,text:''}; repaintAll(true); return; }
+
+  /* ---- 即時分頁 ---- */
+  const ac=el.closest('[data-act]');
+  if(ac){
+    const a=ac.getAttribute('data-act');
+    if(a==='long'||a==='short'){
+      const e0=CHIPS.price;
+      POS={dir:a,entry:e0,time:'11:29',tp:a==='long'?e0+100:e0-100,sl:a==='long'?e0-100:e0+100};
+    } else if(a==='close'||a==='undo'){ POS=null; }
+    else if(a==='noop'){ e.preventDefault(); return; }
+    paintLive(); return;
+  }
+  const win=el.closest('[data-win]');
+  if(win){ WIN=parseInt(win.getAttribute('data-win'),10); paintRight(); return; }
+  if(el.closest('[data-pick]')){ pickOpen=!pickOpen; paintLive(); return; }
+  const nv=el.closest('[data-nav]');
+  if(nv){ goDay(nv.getAttribute('data-nav')==='-1'?RV_DATE:LIVE_DATE); return; }
+  const dd=el.closest('[data-day]');
+  if(dd){ const v=dd.getAttribute('data-day'); goDay(v||LIVE_DATE); return; }
+  if(pickOpen&&!el.closest('.calbox')){ pickOpen=false; paintLive(); }
+
+  /* ---- 回顧分頁 ---- */
+  const md=el.closest('[data-mode]');
+  if(md){ MODE=md.getAttribute('data-mode');
+    document.querySelectorAll('#rmode button').forEach(b=>b.classList.toggle('on',b===md));
+    RVIEW={n:MODE==='replay'?48:60,end:null,vz:1,voff:0}; RHOVER.i=null;
+    if(MODE==='replay') rpReset();
+    paintReview(); return; }
+  const tf=el.closest('[data-tf]');
+  if(tf){ TF=parseInt(tf.getAttribute('data-tf'),10); RVIEW.end=null; paintReview(); return; }
+  const fl=el.closest('[data-rfilter]');
+  if(fl){ FILTER=fl.getAttribute('data-rfilter'); paintReview(); return; }
+  const pk=el.closest('[data-rpick]');
+  if(pk){ SEL=parseInt(pk.getAttribute('data-rpick'),10); RVIEW.end=null; paintReview(); return; }
+  const rd=el.closest('[data-rday]');
+  if(rd){ RP.day=rd.getAttribute('data-rday'); rpReset(); paintReview(); return; }
+  const sp=el.closest('[data-rspeed]');
+  if(sp){ RP.speed=parseFloat(sp.getAttribute('data-rspeed'));
+    if(RP.timer) rpPlay(); else paintReview(); return; }
+  const sk=el.closest('[data-rseek]');
+  if(sk&&RP.state!=='revealed'){
+    const r=sk.getBoundingClientRect();
+    const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    rpStop(); RP.rev=Math.max(1,Math.round(p*(RV1.length-1))); paintReview(); return;
+  }
+  const ra=el.closest('[data-ract]');
+  if(ra){
+    const a=ra.getAttribute('data-ract');
+    if(a==='replayday'){ MODE='replay'; rpReset();
+      document.querySelectorAll('#rmode button').forEach(b=>
+        b.classList.toggle('on',b.getAttribute('data-mode')==='replay'));
+      RVIEW={n:48,end:null,vz:1,voff:0}; paintReview(); return; }
+    if(a==='rpplay'){ if(RP.state==='idle') RP.state='running'; rpPlay(); return; }
+    if(a==='rppause'){ rpPause(); return; }
+    if(a==='rpstep'){ rpStop(); rpStep(); return; }
+    if(a==='rpback'){ rpStop(); rpStep(true); return; }
+    if(a==='rphome'){ rpStop(); RP.rev=4; paintReview(); return; }
+    if(a==='rpreveal'){ rpReveal(); return; }
+    if(a==='rpagain'||a==='rpnext'){ rpReset(); paintReview(); return; }
+    if(a==='jlong'){ rpJudge('long'); return; }
+    if(a==='jshort'){ rpJudge('short'); return; }
+  }
+});
+/* 打字時同步暫存：中途若有重繪，字才不會不見 */
+document.addEventListener('input',function(e){
+  if(!e.target) return;
+  if(e.target.id==='tnote') NOTE.text=e.target.value;
+  if(e.target.id==='jnote') RP.note=e.target.value;
+});
+document.addEventListener('keydown',function(e){
+  if(/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  if(TAB==='live'){
+    if(e.key==='ArrowLeft'){ goDay(RV_DATE); e.preventDefault(); }
+    if(e.key==='ArrowRight'||e.key==='Home'){ goDay(LIVE_DATE); e.preventDefault(); }
+    if(e.key==='Escape'&&pickOpen){ pickOpen=false; paintLive(); }
+    return;
+  }
+  if(MODE==='replay'){
+    if(e.key===' '){ e.preventDefault(); RP.timer?rpPause():rpPlay(); }
+    if(e.key==='ArrowRight'){ e.preventDefault(); rpStop(); rpStep(); }
+    if(e.key==='ArrowLeft'){ e.preventDefault(); rpStop(); rpStep(true); }
+    if(e.key==='ArrowUp'){ e.preventDefault(); rpJudge('long'); }
+    if(e.key==='ArrowDown'){ e.preventDefault(); rpJudge('short'); }
+    return;
+  }
+  const L=rvList(); if(!L.length) return;
+  const at=L.map(x=>x.i).indexOf(SEL);
+  if(e.key==='ArrowRight'){ SEL=L[Math.min(L.length-1,at+1)].i; paintReview(); e.preventDefault(); }
+  if(e.key==='ArrowLeft'){ SEL=L[Math.max(0,at-1)].i; paintReview(); e.preventDefault(); }
+  if(e.key==='r'||e.key==='R'){ MODE='replay'; rpReset();
+    document.querySelectorAll('#rmode button').forEach(b=>
+      b.classList.toggle('on',b.getAttribute('data-mode')==='replay'));
+    paintReview(); }
+});
+function repaintAll(force){
+  if(TAB==='live'){ paintRight(); }
+  else { $('rpane').innerHTML=MODE==='replay'?paneReplay():paneReviewPane(); }
+}
+
+/* ---------- 啟動 ---------- */
+(function(){
+  let sk='';
+  [38,52,44,61,55,70,64,48,57,72,66,80,74,59,68,52,63,47,58,66].forEach(function(h){
+    sk+='<i style="height:'+h+'%"></i>';
+  });
+  $('skbars').innerHTML=sk;
+  LS.svg=$('csvg'); RS.svg=$('rsvg');
+  bindChart($('csvg'),function(){ return TAB==='live'?LS:null; });
+  bindChart($('rsvg'),function(){ return TAB==='review'?RS:null; });
+  SEL=0;
+  boot();
+  setTimeout(function(){ paintReview(); },1000);
+  /* 假時鐘：只動文字，不重建整塊（每 0.5 秒重繪的東西不准掛動畫）*/
+  let sec=29*60+49;
+  setInterval(function(){
+    sec++;
+    const hh=11, mm=Math.floor(sec/60)%60, ss=sec%60;
+    $('clk').textContent=String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0')+':'+
+      String(ss).padStart(2,'0');
+  },1000);
+})();
+</script></body></html>

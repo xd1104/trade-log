@@ -1517,42 +1517,61 @@ PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>早盤盤面儀表板</title><style>
 /* 配色與版型對齊 trade-log App（css/style.css）。
-   含台股慣例：紅色=漲/贏、綠色=跌/輸 —— 跟 App 一致，避免看反方向。 */
+   含台股慣例：紅色=漲/贏、綠色=跌/輸 —— 跟 App 一致，避免看反方向。
+   2026-08-25 視覺升級（方案 A 沉穩，規格見 UI-REDESIGN-SPEC.md）：
+   舊版每張卡同一個底色＋同一條邊框 ⇒ K 線圖（主角）跟一排篩選鈕（配角）視覺重量一樣。
+   現在分三層：L1 主卡（只有 K 線圖，全頁唯一有陰影）／L2 一般卡／L3 純容器。 */
 :root{
-  --bg:#0F1218; --surface:#171C25; --surface-2:#1F2530; --line:#262D39;
-  --text:#E7E9ED; --dim:#8B92A0; --faint:#5A616E;
-  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14);
-  --up:#EE5A54; --up-soft:rgba(238,90,84,.16);
-  --down:#34B37E; --down-soft:rgba(52,179,126,.16);
-  --radius:16px; --radius-sm:11px;
+  --bg:#0E1116; --surface:#151A22; --surface-2:#1C222C; --raise:#1A212B;
+  --line:#242C38; --line-soft:#1E2530;
+  --text:#E9ECF1; --dim:#8D95A3; --faint:#5C6472; --ghost:#39414F;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14); --gold-line:rgba(227,169,81,.42);
+  /* 紅漲綠跌是台股慣例，色碼沿用舊值不准動，只補 soft/line 兩個衍生色 */
+  --up:#EE5A54; --up-soft:rgba(238,90,84,.15); --up-line:rgba(238,90,84,.38);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.15); --down-line:rgba(52,179,126,.38);
+  --r-lg:16px; --r-md:12px; --r-sm:9px; --r-xs:6px;
+  --radius:var(--r-lg); --radius-sm:var(--r-sm);   /* 舊名保留當別名，免得改上百處 */
+  --shadow-1:0 18px 40px -22px rgba(0,0,0,.85);
+  --shadow-2:0 24px 60px -20px rgba(0,0,0,.7);
+  --ease:cubic-bezier(.22,.68,.36,1);
   --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
   --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
-  background-image:radial-gradient(1200px 500px at 50% -8%, rgba(227,169,81,.06), transparent 70%);
-  background-repeat:no-repeat; min-height:100vh}
+  background-image:radial-gradient(1100px 460px at 50% -10%, rgba(227,169,81,.055), transparent 72%);
+  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased}
 /* 電腦大螢幕：左邊大圖、右邊操作區。Benson 只在電腦上開這個面板。 */
-.app{max-width:1500px; margin:0 auto; padding:0 24px 24px}
-.cols{display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:18px; align-items:start}
-@media(max-width:1100px){ .cols{grid-template-columns:minmax(0,1fr)} }
-.right{display:flex; flex-direction:column; gap:12px}
-.topbar{display:flex; align-items:center; justify-content:space-between; padding:20px 4px 16px}
-.brand{display:flex; align-items:center; gap:10px}
-.brand .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
-  background:var(--gold-soft); color:var(--gold); font-size:17px}
-.brand .nm{font-size:15px; font-weight:650}
-.brand .sub{font-size:11px; color:var(--faint); letter-spacing:1.2px; margin-top:1px}
+.app{max-width:1500px; margin:0 auto; padding:0 24px 28px}
+.cols{display:grid; grid-template-columns:minmax(0,1fr) 388px; gap:18px; align-items:start}
+@media(max-width:1160px){ .cols{grid-template-columns:minmax(0,1fr)} }
+.right{display:flex; flex-direction:column; gap:14px}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 16px; gap:16px}
+.brand{display:flex; align-items:center; gap:11px}
+.brand .mark{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(150deg,rgba(227,169,81,.22),rgba(227,169,81,.06));
+  color:var(--gold); font-size:15px; box-shadow:inset 0 0 0 1px rgba(227,169,81,.2)}
+.brand .nm{font-size:15px; font-weight:680; letter-spacing:.3px}
+.brand .sub{font-size:11px; color:var(--faint); margin-top:1px}
 .clock{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
-.clock .d{font-size:13.5px; font-weight:600}
+.clock .d{font-size:14px; font-weight:600; letter-spacing:.4px}
 .clock .w{font-size:11px; color:var(--faint)}
-.card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
-  padding:18px 20px; margin-bottom:12px}
-.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 4px 8px}
-.sec-head h2{font-size:12.5px; margin:0; color:var(--dim); letter-spacing:1.5px; font-weight:600}
-.sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
-.grid{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line);
-  border-radius:var(--radius-sm); overflow:hidden}
+/* L2：一般卡（右欄、回顧的資料卡）。margin-bottom 保留 —— 右欄很多地方靠它疊卡片 */
+.card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg);
+  padding:16px 18px; margin-bottom:12px}
+/* L1：只有 K 線圖用。全頁唯一有陰影的東西 ⇒ 一眼看得出誰是主角。
+   ⚠ 不可以加 overflow:hidden —— 迷你月曆 .calpop 是浮出卡片外的絕對定位元素。 */
+.card.l1{background:linear-gradient(180deg,var(--raise),#161C24); border-color:var(--line);
+  box-shadow:var(--shadow-1); padding:16px 18px 13px; position:relative}
+.card.l1::before{content:''; position:absolute; left:16px; right:16px; top:0; height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent)}
+/* L3：純容器（篩選 chips、只放一行提示的區塊）—— 不要再包一張有邊框的卡 */
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 2px 8px; gap:10px}
+.sec-head h2{font-size:11.5px; margin:0; color:var(--dim); letter-spacing:1.6px; font-weight:650}
+.sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums}
+.grid{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-soft);
+  border-radius:var(--r-md); overflow:hidden}
 .cell{background:var(--surface); padding:11px 13px}
 .cell .l{font-size:11px; color:var(--dim)}
 .cell .v{font-size:19px; font-weight:650; font-family:var(--font-mono);
@@ -1563,28 +1582,41 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .chart{position:relative}
 /* 用瀏覽器原生的縮放把手：右下角可拖曳改變寬高，尺寸記在 localStorage。
    preserveAspectRatio="none" 讓 K 線跟著容器拉伸，跟看盤軟體一樣。 */
-.cwrap{overflow:hidden; border-radius:8px}
+.cwrap{overflow:hidden; border-radius:10px; position:relative}
 .cwrap svg{display:block; width:100%; height:auto; cursor:grab; touch-action:none;
   user-select:none}
-.legend{display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; color:var(--dim);
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--dim);
   font-family:var(--font-mono); font-variant-numeric:tabular-nums; margin:2px 0 8px}
 .legend b{color:var(--text); font-weight:600}
 .legend .lt{color:var(--faint)}
-.chint{font-size:11px; color:var(--faint); text-align:right; margin-top:4px}
+.chint{font-size:11px; color:var(--faint); text-align:right; margin-top:5px}
 .chint #cinfo{color:var(--dim)}
-.chead{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:10px;
-  gap:14px; flex-wrap:wrap}
-/* 即時分頁的標頭右邊是兩行的翻頁列，一定要底部對齊：baseline 會把右欄「第一行的基線」
-   對到 44px 大字的基線，第二行整條就掛到大字底線以下，整塊白白多吃 22px（實測 45→67）。
-   只掛在 #chead 上，不動 .chead 本身 —— 回顧分頁共用同一個 class，它是單行、
-   改成 flex-end 會讓日期與 1分/5分 切換往下位移。 */
-#chead{align-items:flex-end}
-.cpx{font-size:44px; font-weight:700; font-family:var(--font-mono);
-  font-variant-numeric:tabular-nums; line-height:1}
-.cchg{font-size:17px; font-weight:600; font-family:var(--font-mono)}
-.cdate{font-size:12.5px; color:var(--gold); cursor:pointer; border:1px solid var(--line);
-  border-radius:20px; padding:3px 11px; background:var(--surface-2)}
-.cdate:hover{border-color:var(--gold)}
+/* 報價區三層：52px 價格（主角）／有底色的漲跌膠囊／第三行灰字（即時燈・昨收・合約・更新時間）。
+   標頭右邊是兩行的翻頁列，一定要底部對齊（flex-end）：baseline 會把右欄「第一行的基線」
+   對到大字的基線，第二行整條就掛到大字底線以下，整塊白白多吃 22px（實測 45→67）。
+   回顧分頁的 #rhead 也是同一套 qblock，所以這條可以掛在 .chead 上。 */
+.chead{display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:10px;
+  gap:16px; flex-wrap:wrap}
+.qblock{display:flex; flex-direction:column; gap:6px; min-width:0}
+.qmain{display:flex; align-items:baseline; gap:11px; flex-wrap:wrap}
+.cpx{font-size:52px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:.94; letter-spacing:-1.6px}
+.cchg{display:inline-flex; align-items:baseline; gap:7px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:15px; font-weight:700; padding:4px 10px 5px;
+  border-radius:9px; line-height:1}
+.cchg.up{background:var(--up-soft); color:var(--up)}
+.cchg.down{background:var(--down-soft); color:var(--down)}
+.cchg.flat{background:var(--surface-2); color:var(--dim)}
+.cchg .pct{font-size:12.5px; font-weight:600; opacity:.85}
+.qsub{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); flex-wrap:wrap}
+.qsub .sep{color:var(--ghost)}
+.qsub .live{color:var(--gold); display:inline-flex; align-items:center; gap:5px}
+.qsub .live i{width:6px;height:6px;border-radius:50%;background:var(--gold);
+  box-shadow:0 0 0 3px var(--gold-soft)}
+/* 沒有即時報價時燈換成中性灰 —— 週末沒報價不是故障 */
+.qsub .live.dead{color:var(--faint)}
+.qsub .live.dead i{background:var(--faint); box-shadow:0 0 0 3px rgba(255,255,255,.05)}
 /* 換日：圖上常駐一條翻頁列，右欄兩行 —— 上排「能按的」（◀ 日期 ▶ 今天／即時），
    下排 11px 灰字「只是說明的」（夜盤範圍、練習結果、鍵盤提示）。
    高度預算：r1 24px ＋ gap 2px ＋ r2 約 16px ＝ 42px，不可超過改版前的 45px；
@@ -1593,36 +1625,37 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .pager .r1{display:flex; align-items:center; gap:3px}
 .pager .r2{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--faint);
   line-height:1.25; padding-right:5px; flex-wrap:wrap; justify-content:flex-end}
-.pager .r2 .sep{color:#333A47}
+.pager .r2 .sep{color:var(--ghost)}
 .pager .r2 b{font-family:var(--font-mono); font-variant-numeric:tabular-nums;
   font-size:11.5px; font-weight:650}
 .pager .r2 .kbdgrp{display:inline-flex; gap:3px; align-items:center}
 .pager .r2 kbd{font-family:var(--font-mono); font-size:10.5px; background:var(--surface-2);
-  border:1px solid var(--line); border-radius:5px; padding:0 4px; color:var(--dim);
+  border:1px solid var(--line-soft); border-radius:5px; padding:0 4px; color:var(--dim);
   line-height:1.35}
 /* 箭頭去框變成幽靈圖示：有框的方塊視覺重量跟資訊一樣重，會跟日期互相搶。
    24×24 是上限，26×26 會讓整塊超過 45px。變灰用顏色不用 opacity（opacity 連背景一起淡，看起來髒）。 */
 .pager .nav-icon{width:24px; height:24px; border-radius:8px; border:0; background:transparent;
   color:var(--faint); font-size:11px; line-height:1; display:grid; place-items:center;
   cursor:pointer; font-family:var(--font-sans); padding:0;
-  transition:background .12s ease, color .12s ease}
+  transition:background .12s var(--ease), color .12s var(--ease)}
 .pager .nav-icon:hover:not(:disabled){background:var(--surface-2); color:var(--text)}
 .pager .nav-icon:active:not(:disabled){background:var(--line)}
-.pager .nav-icon:disabled{color:#333A47; cursor:default}
+.pager .nav-icon:disabled{color:var(--ghost); cursor:default}
 .pager .nav-icon:focus-visible{outline:1px solid var(--gold); outline-offset:1px}
 /* 日期本身不再是金色（金色只留給「即時／現在」一個意思），line-height 全部鎖 1，
    否則行高會把 r1 撐過 24px */
 .pager .dstamp{display:inline-flex; align-items:center; gap:7px; border:0; background:transparent;
   cursor:pointer; padding:3px 7px; border-radius:9px; color:var(--text); line-height:1;
   font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap;
-  transition:background .12s ease}
+  transition:background .12s var(--ease)}
 .pager .dstamp .num{font-size:15px; font-weight:650; letter-spacing:.3px; line-height:1}
 /* 星期那一格永遠佔一個字寬（今天是週末/休市時 dayInfo 找不到、星期是空的）——
    翻頁列整條靠右對齊，這一格一縮 ◀ 就往右跑 12px，連點時第 2 下會落到日期鈕上（誤開月曆）。 */
 .pager .dstamp .wd{font-family:var(--font-sans); font-size:12px; color:var(--dim);
   font-weight:500; line-height:1; min-width:1em; text-align:center}
-.pager .dstamp .cal-i{color:var(--faint); transition:color .12s ease}
-.pager .dstamp .caret{font-size:8px; color:var(--faint); transition:transform .15s ease, color .12s}
+.pager .dstamp .cal-i{color:var(--faint); transition:color .12s var(--ease)}
+.pager .dstamp .caret{font-size:8px; color:var(--faint);
+  transition:transform .15s var(--ease), color .12s var(--ease)}
 .pager .dstamp:hover{background:var(--surface-2)}
 .pager .dstamp:hover .cal-i,.pager .dstamp:hover .caret{color:var(--gold)}
 .pager .dstamp.open{background:var(--surface-2)}
@@ -1635,9 +1668,13 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .pager .jump2{font-family:var(--font-sans); font-size:12px; font-weight:600; cursor:pointer;
   border:0; border-radius:8px; padding:4px 10px; line-height:1.15;
   background:var(--gold-soft); color:var(--gold); white-space:nowrap;
-  transition:background .12s ease}
+  display:inline-flex; align-items:center; justify-content:center; min-width:52px;
+  transition:background .12s var(--ease)}
 .pager .jump2:hover{background:rgba(227,169,81,.24)}
-.pager .livelamp{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--dim);
+/* 「今天」鈕與「即時」燈固定同寬：這兩個是互斥的（看歷史日才有今天鈕），
+   寬度不一樣的話一按 ◀ 整條靠右對齊的 r1 就會位移，連點時第 2 下會落到別的鈕上。 */
+.pager .livelamp{display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  font-size:12px; color:var(--dim); min-width:52px;
   padding:4px 6px 4px 4px; line-height:1.15; white-space:nowrap}
 .pager .livelamp i{width:6px; height:6px; border-radius:50%; background:var(--gold);
   box-shadow:0 0 0 3px var(--gold-soft)}
@@ -1647,8 +1684,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
    月曆若在裡面會被整個重建，滑鼠停在哪一格都會被打斷。 */
 .cheadwrap{position:relative}
 .calpop{position:absolute; top:calc(100% + 8px); right:0; z-index:30}
-.calpop .calbox{margin-top:0; box-shadow:0 14px 34px rgba(0,0,0,.5)}
-.calbox{margin-top:10px; border:1px solid var(--line); border-radius:12px;
+.calpop .calbox{margin-top:0; box-shadow:var(--shadow-2)}
+.calbox{margin-top:10px; border:1px solid var(--line); border-radius:14px;
   padding:12px 14px 13px; background:var(--surface-2); width:max-content; max-width:100%}
 .calhead{display:flex; align-items:center; justify-content:space-between; gap:18px;
   margin-bottom:10px}
@@ -1656,12 +1693,12 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .calhead .cnav{display:flex; gap:5px}
 .calhead .cnav button{width:24px; height:24px; border-radius:6px; font-size:12px;
   display:grid; place-items:center; padding:0; cursor:pointer;
-  background:var(--surface); color:var(--dim); border:1px solid var(--line)}
-.calhead .cnav button:hover:not(:disabled){border-color:var(--gold); color:var(--gold)}
+  background:var(--surface); color:var(--dim); border:1px solid var(--line-soft)}
+.calhead .cnav button:hover:not(:disabled){border-color:var(--gold-line); color:var(--gold)}
 .calhead .cnav button:disabled{opacity:.3; cursor:default}
 .cal{display:grid; grid-template-columns:repeat(5,48px); gap:5px}
 .cal .wd{font-size:10px; color:var(--faint); text-align:center; letter-spacing:1px}
-.cal .cell{position:relative; height:44px; border-radius:9px; border:1px solid transparent;
+.cal .cell{position:relative; height:44px; border-radius:10px; border:1px solid transparent;
   background:var(--bg); cursor:pointer; padding:5px 0 0; display:flex; flex-direction:column;
   align-items:center; gap:2px; font-family:var(--font-mono)}
 .cal .cell .dd{font-size:13.5px; font-weight:700; line-height:1.1;
@@ -1675,8 +1712,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .cal .cell.na .dd{color:var(--dim)}
 /* 休市與空格：不能點，也不要看起來像能點 */
 .cal .cell.off{background:transparent; cursor:default; border-color:transparent}
-.cal .cell.off .dd{color:#333A47; font-weight:400}
-.cal .cell.prac{border-color:rgba(227,169,81,.42)}
+.cal .cell.off .dd{color:var(--ghost); font-weight:400}
+.cal .cell.prac{border-color:var(--gold-line)}
 .cal .cell.on{background:var(--gold-soft); border-color:var(--gold)}
 .cal .cell.today::after{content:''; position:absolute; top:5px; right:6px; width:5px;
   height:5px; border-radius:50%; background:var(--gold)}
@@ -1691,70 +1728,113 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   .pager .r2 .kbdgrp,.pager .r2 .sep.k{display:none}
   .calpop{right:auto; left:0}
 }
-.mini{display:flex; flex-wrap:wrap; gap:0 20px; font-size:12.5px; color:var(--dim);
-  font-family:var(--font-mono); margin-top:12px; padding-top:11px; border-top:1px solid var(--line)}
-.mini b{color:var(--text); font-weight:600}
-.mini b.dim{color:var(--faint)}      /* 「休市中／收不到」不是正常數值，字色壓下來 */
+/* ── 資料軌：取代舊的 mini 一行純文字（即時）與 7 格方塊（回顧），兩邊共用同一個元件。
+   舊版 9 個數字同字級同顏色、只用空白隔開 ⇒ 讀起來是一長串連續的字。
+   新版：①標籤在上、數值在下 ②分組（動能／今天／盤口／現貨）中間有分隔線
+        ③位階與量能各給一條 3px 量尺 —— 只是把已發生的數字畫成長度，
+          不得加任何「強／弱／偏多」之類的評語（CLAUDE.md 第一段）。 */
+.rail{display:flex; align-items:stretch; flex-wrap:wrap; margin-top:12px; padding-top:11px;
+  border-top:1px solid var(--line-soft)}
+.rail .grp{display:flex; gap:18px; padding:0 18px; border-right:1px solid var(--line-soft)}
+.rail .grp:first-child{padding-left:0}
+.rail .grp:last-child{border-right:0; padding-right:0}
+.rail .it{min-width:44px}
+.rail .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px; white-space:nowrap; line-height:1.3}
+.rail .v{font-size:15px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1.25; margin-top:2px; white-space:nowrap}
+.rail .v small{font-size:10.5px; font-weight:500; color:var(--faint); margin-left:2px}
+.rail .v i{font-style:normal; color:var(--faint)}      /* 「未開盤」這種非數值 */
+.rail .track{height:3px; border-radius:2px; background:var(--surface-2); margin-top:5px;
+  overflow:hidden; position:relative}
+.rail .track i{position:absolute; top:0; bottom:0; left:0; border-radius:2px; background:var(--dim)}
+.rail .track i.hot{background:var(--gold)}
+.rail .muted .v{color:var(--dim)}
+/* 回顧分頁的資料軌自己包在一張卡裡，卡片本身就是分隔，不用再畫上邊線 */
+#rfstrip{margin-top:0; padding-top:0; border-top:0}
 .btns{display:flex; gap:10px}
-.btn{flex:1; padding:15px; border-radius:12px; cursor:pointer;
-  font-family:var(--font-sans); font-size:16px; font-weight:700; letter-spacing:1px}
-.btn.long{background:var(--up-soft); color:var(--up); border:1px solid rgba(238,90,84,.4)}
-.btn.short{background:var(--down-soft); color:var(--down); border:1px solid rgba(52,179,126,.4)}
-.btn.flat2{background:var(--surface-2); color:var(--text); border:1px solid var(--line)}
+.btn{flex:1; padding:14px; border-radius:var(--r-md); cursor:pointer; border:1px solid transparent;
+  font-family:var(--font-sans); font-size:15.5px; font-weight:700; letter-spacing:1px;
+  transition:transform .1s var(--ease), background .15s var(--ease), border-color .15s var(--ease)}
+.btn.long{background:var(--up-soft); color:var(--up); border-color:var(--up-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn.short{background:var(--down-soft); color:var(--down); border-color:var(--down-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn.long:hover:not(:disabled){background:rgba(238,90,84,.22)}
+.btn.short:hover:not(:disabled){background:rgba(52,179,126,.22)}
+.btn.flat2{background:var(--surface-2); color:var(--text); border-color:var(--line)}
 .btn.ghost{flex:0 0 auto; background:transparent; color:var(--faint); font-size:13px;
-  font-weight:400; border:1px solid var(--line)}
-.btn:active{transform:scale(.99)}
+  font-weight:500; border-color:var(--line)}
+.btn.ghost:hover:not(:disabled){color:var(--text); border-color:var(--faint)}
+.btn:active:not(:disabled){transform:scale(.985)}
 /* 沒有即時報價時的下單按鈕：真的停用，並在底下寫清楚為什麼（不是純視覺的灰） */
-.btn:disabled{opacity:.32; cursor:not-allowed}
+.btn:disabled{opacity:.3; cursor:not-allowed}
 .btn:disabled:active{transform:none}
 .whyoff{margin-top:10px; font-size:11.5px; color:var(--faint); line-height:1.6}
 .warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
   border-radius:20px; padding:2px 9px; font-weight:600}
-.pnl{text-align:center; padding:6px 0 10px}
+.pnl{text-align:center; padding:4px 0 8px}
 .pnl .v{font-size:44px; font-weight:700; font-family:var(--font-mono);
-  font-variant-numeric:tabular-nums; line-height:1}
-.pnl .l{font-size:12px; color:var(--dim); margin-top:6px}
+  font-variant-numeric:tabular-nums; line-height:1; letter-spacing:-1px}
+.pnl .l{font-size:12px; color:var(--dim); margin-top:7px}
 .plimit{display:flex; justify-content:center; gap:14px; font-size:11.5px; color:var(--faint);
   font-family:var(--font-mono); margin-bottom:12px}
-.seg{display:flex; gap:4px; background:var(--surface-2); border-radius:10px; padding:3px; margin-bottom:16px}
+.seg{display:flex; gap:4px; background:var(--surface-2); border-radius:10px; padding:3px;
+  border:1px solid var(--line-soft); margin-bottom:14px}
 .seg button{flex:1; border:0; background:transparent; color:var(--dim); cursor:pointer;
-  font-family:var(--font-sans); font-size:12.5px; font-weight:600; padding:8px 4px; border-radius:8px}
+  font-family:var(--font-sans); font-size:12.5px; font-weight:600; padding:7px 4px; border-radius:8px;
+  transition:color .15s var(--ease), background .15s var(--ease)}
+.seg button:hover{color:var(--text)}
 .seg button.on{background:var(--gold-soft); color:var(--gold)}
-.rate-row{display:flex; align-items:flex-end; gap:16px}
-.rate-big{line-height:1}
-.rate-big .num{font-family:var(--font-mono); font-size:46px; font-weight:680; letter-spacing:-1px;
-  color:var(--gold); font-variant-numeric:tabular-nums}
-.rate-big .pct{font-size:22px; color:var(--gold); font-family:var(--font-mono); margin-left:2px}
-.rate-big .lab{font-size:12px; color:var(--dim); letter-spacing:2px; margin-top:6px}
-.rate-meta{flex:1; display:flex; flex-direction:column; gap:8px; align-items:flex-end; padding-bottom:4px}
-.wl{font-family:var(--font-mono); font-size:14px; font-variant-numeric:tabular-nums}
-.wl .w{color:var(--up)} .wl .l{color:var(--down)}
-.net{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
-.net .v{font-size:19px; font-weight:700}
-.net .u{font-size:11px; color:var(--dim)}
+/* ── 練習成績。舊版全頁最大最亮的數字是「金色的勝率」，而金色在翻頁列的定義是
+   「即時／現在」⇒ 一個顏色兩種意思；把勝率捧到視覺頂端也等於暗示這個工具在追勝率。
+   現在：勝率降成中性色，紅綠讓給真正的結果（合計點數），另加一條勝敗條看比例。
+   （這是設計決定，不要改回金色） */
+.score{display:flex; align-items:flex-start; justify-content:space-between; gap:14px}
+.score .rate{line-height:1}
+.score .rate .n{font-family:var(--font-mono); font-size:40px; font-weight:680; letter-spacing:-1.2px;
+  font-variant-numeric:tabular-nums; color:var(--text)}
+.score .rate .p{font-size:19px; color:var(--dim); font-family:var(--font-mono); margin-left:1px}
+.score .rate .lab{font-size:11px; color:var(--faint); letter-spacing:2px; margin-top:7px}
+.score .sum{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.score .sum .n{font-size:26px; font-weight:700; letter-spacing:-.5px; line-height:1.1}
+.score .sum .u{font-size:11px; color:var(--dim); margin-left:3px; font-weight:500}
+.score .sum .cash{font-size:11.5px; color:var(--faint); margin-top:5px}
+.wlbar{display:flex; height:6px; border-radius:3px; overflow:hidden; margin-top:13px; gap:2px}
+.wlbar i{display:block; height:100%; border-radius:3px}
+.wlbar i.w{background:var(--up)} .wlbar i.l{background:var(--down)}
+.wlfoot{display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); margin-top:6px}
+.wlfoot b{font-weight:650}
+.wlfoot .w b{color:var(--up)} .wlfoot .l b{color:var(--down)}
 .cash{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
 /* 交易列表自己捲動，整個儀表板才能一眼看完、不用捲整頁 */
-.list{display:flex; flex-direction:column; gap:8px; margin-top:14px;
+.list{display:flex; flex-direction:column; gap:7px; margin-top:14px;
   max-height:290px; overflow-y:auto; padding-right:4px}
 .list::-webkit-scrollbar{width:6px}
 .list::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
-.trade{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm);
-  padding:11px 13px}
+/* 左緣 2px 的結果色：一眼掃得出賺賠，不必讀數字 */
+.trade{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
+  padding:10px 12px 10px 13px; position:relative; overflow:hidden;
+  transition:border-color .15s var(--ease), background .15s var(--ease)}
+.trade::before{content:''; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--ghost)}
+.trade.win::before{background:var(--up)} .trade.loss::before{background:var(--down)}
 .tr-top{display:flex; align-items:center; gap:9px}
-.tr-date{font-family:var(--font-mono); font-size:12.5px; color:var(--dim); width:44px; flex:none}
-.dir{font-size:11px; font-weight:700; padding:2px 7px; border-radius:6px; flex:none}
+.tr-date{font-family:var(--font-mono); font-size:12px; color:var(--faint); width:42px; flex:none}
+.dir{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:var(--r-xs); flex:none;
+  letter-spacing:.3px}
 .dir.l{background:var(--up-soft); color:var(--up)}
 .dir.s{background:var(--down-soft); color:var(--down)}
-.tr-px{flex:1; font-family:var(--font-mono); font-size:12.5px; font-variant-numeric:tabular-nums}
-.tr-px .arrow{color:var(--faint); margin:0 3px}
+.tr-px{flex:1; font-family:var(--font-mono); font-size:12.5px; font-variant-numeric:tabular-nums;
+  color:var(--dim)}
+.tr-px .arrow{color:var(--ghost); margin:0 3px}
 .tr-res{font-family:var(--font-mono); font-size:15px; font-weight:700; text-align:right;
   min-width:52px; flex:none; font-variant-numeric:tabular-nums}
 .r-win{color:var(--up)} .r-loss{color:var(--down)}
 .tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
-.alert{background:var(--up-soft); border:1px solid var(--up); border-radius:var(--radius-sm);
+.alert{background:var(--up-soft); border:1px solid var(--up-line); border-radius:var(--r-md);
   padding:12px 14px; font-size:12.5px; margin-bottom:12px; line-height:1.6}
-.note{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm);
-  padding:13px 15px; font-size:12px; color:var(--dim); margin-bottom:12px; line-height:1.65}
+.note{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-md);
+  padding:12px 14px; font-size:12px; color:var(--dim); margin-bottom:12px; line-height:1.65}
 .note b{color:var(--text)}
 .wait{text-align:center; padding:48px 20px; color:var(--dim)}
 
@@ -1770,68 +1850,72 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 @keyframes kk-rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 @keyframes kk-fade{from{opacity:0}to{opacity:1}}
 @keyframes kk-wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
-@keyframes kk-sheen{from{transform:translateX(-55%)}to{transform:translateX(255%)}}
+@keyframes kk-sheen{from{transform:translateX(-60%)}to{transform:translateX(260%)}}
 @keyframes kk-bar{from{left:-38%}to{left:100%}}
-@keyframes kk-breathe{0%,100%{opacity:.34}50%{opacity:.66}}
+@keyframes kk-breathe{0%,100%{opacity:.30}50%{opacity:.62}}
 
 /* 進場：只在開站後的頭 1.1 秒有效（body.boot），之後的重繪一律不動 */
-body.boot .topbar{animation:kk-rise .40s cubic-bezier(.22,.68,.36,1) both}
-body.boot #mkt>*{animation:kk-rise .46s cubic-bezier(.22,.68,.36,1) both .04s}
-body.boot .right>*>.card{animation:kk-rise .46s cubic-bezier(.22,.68,.36,1) both}
+body.boot .topbar{animation:kk-rise .40s var(--ease) both}
+body.boot #mkt>*{animation:kk-rise .46s var(--ease) both .04s}
+body.boot .right>*>.card{animation:kk-rise .46s var(--ease) both}
 body.boot .right>#trade>.card{animation-delay:.10s}
 body.boot .right>#stats>.card{animation-delay:.16s}
 /* 真圖接手骨架：淡入就好，不要再 rise 一次（同一個位置動兩次看起來很躁） */
 .card.chart.kk-in{animation:kk-fade .34s ease both}
-.cwrap.kk-draw svg{animation:kk-wipe .52s cubic-bezier(.22,.68,.36,1) both}
+.cwrap.kk-draw svg{animation:kk-wipe .52s var(--ease) both}
 
-/* 骨架：刻意沿用 .chead/.legend/.cwrap/.chint/.mini 這幾個真名字，
-   高度才會跟真圖分毫不差（量過：標頭 44、legend 18.8、圖 aspect 1040/470、
-   提示 16.5、mini 30.6）。換成自訂 class 就得手動對高度，改一次錯一次。 */
+/* 骨架：刻意沿用 .chead/.legend/.cwrap/.chint/.rail 這幾個真名字，
+   高度才會跟真圖分毫不差。換成自訂 class 就得手動對高度，改一次錯一次。 */
 .skel .sk{position:relative; overflow:hidden; border-radius:5px;
-  background:var(--surface-2); animation:kk-breathe 1.6s ease-in-out infinite}
+  background:var(--surface-2); animation:kk-breathe 1.7s ease-in-out infinite}
 .skel .sk::after{content:''; position:absolute; inset:0;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.05),transparent);
-  animation:kk-sheen 1.5s ease-in-out infinite}
-/* 這三段的高度是量出來的（真圖：標頭 44、legend 18.8、mini 30.8）。
-   骨架靠 .sk 方塊撐不到那個高度，差 24.5px —— 不補的話換成真圖時整頁會往下推。 */
-.skel .chead{align-items:center; min-height:44px}
-.skel .legend{min-height:18.8px; align-items:center}
-.skel .mini{min-height:30.8px; align-items:center}
-.skel .sk-px{width:172px; height:34px}
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.045),transparent);
+  animation:kk-sheen 1.6s ease-in-out infinite}
+/* 【2026-08-25 視覺升級後重量】Chrome 1600×950 實測 getBoundingClientRect().height
+   （骨架 → 真圖，同一次載入量兩段）：
+     .chead   骨架 72.25 ／ 真圖 72.25   （52px 大字 ＋ qsub 一行）
+     .legend  骨架 18.75 ／ 真圖 18.75
+     .cwrap   骨架 455.53 ／ 真圖 455.53（同一條 aspect-ratio 1040/470）
+     .chint   骨架 16.50 ／ 真圖 16.50
+     .rail    骨架 54.38 ／ 真圖 54.39   （資料軌是兩行＋量尺，比舊的 mini 高一截）
+     #mkt 總高 695.41 → 695.42，差 0.01px、CLS = 0；.pager 42.17px（上限 45）。
+   ⚠ 改任何字級／padding 都要重量一次，不准用字級推算。 */
+.skel .chead{align-items:center; min-height:72.25px}
+.skel .legend{min-height:18.75px; align-items:center}
+.skel .rail{min-height:54.39px; align-items:center}
+.skel .sk-px{width:196px; height:44px}
 .skel .sk-day{width:118px; height:20px}
 .skel .legend .sk{height:11px}
 .skel .chint .sk{width:150px; height:10px; display:inline-block}
-.skel .mini .sk{width:64px; height:12px}
+.skel .rail .sk{width:60px; height:26px; margin-right:18px}
 /* 高度＝寬度 × 470/1040，跟真圖的 viewBox 完全一致。
    ⚠️ 假 K 棒一定要絕對定位：當成一般 flex 子元素的話，它們的百分比高度會反過來
       把 .cwrap 撐高（實測 351 → 553），骨架就比真圖高一截，換過去時版面照樣跳。 */
 .skel .cwrap{aspect-ratio:1040/470; position:relative}
 /* 先把價格軸的格線畫出來，真圖進來時網格不會「突然出現」 */
 .skel .cwrap::before{content:''; position:absolute; left:0; right:0; top:12px; bottom:26px;
-  background:repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 20%)}
+  background:repeating-linear-gradient(to bottom,var(--line-soft) 0 1px,transparent 1px 20%)}
 .skel .bars{position:absolute; left:0; right:0; top:12px; bottom:26px;
   display:flex; align-items:flex-end; gap:2px}
-.skel .bars i{flex:1; background:var(--surface-2); border-radius:2px; opacity:.5;
-  animation:kk-breathe 1.6s ease-in-out infinite}
+.skel .bars i{flex:1; background:var(--surface-2); border-radius:2px;
+  animation:kk-breathe 1.7s ease-in-out infinite}
 
 /* 換日：不要只換一行「載入中」的字。圖先淡下去、頂上跑一條細進度條，
    新資料回來再由左往右展開 —— 這樣看得出「它在做事」而不是卡住。 */
 .card.chart{position:relative}
 .chart .kk-prog{position:absolute; left:0; right:0; top:0; height:2px; overflow:hidden;
-  opacity:0; transition:opacity .2s; pointer-events:none; border-radius:var(--radius) var(--radius) 0 0}
+  opacity:0; transition:opacity .2s; pointer-events:none; border-radius:var(--r-lg) var(--r-lg) 0 0}
 .chart.kk-load .kk-prog{opacity:1}
 .chart .kk-prog i{position:absolute; top:0; height:2px; width:38%;
   background:linear-gradient(90deg,transparent,var(--gold),transparent);
   animation:kk-bar 1.05s linear infinite}
-.chart.kk-load .cwrap,.chart.kk-load .legend,.chart.kk-load .mini{opacity:.4}
-.chart .cwrap,.chart .legend,.chart .mini{transition:opacity .22s ease}
+.chart.kk-load .cwrap,.chart.kk-load .legend,.chart.kk-load .rail{opacity:.4}
+.chart .cwrap,.chart .legend,.chart .rail{transition:opacity .22s ease}
 
-/* 系統設定「減少動態」就全部關掉 —— 這是看盤工具，不能跟使用者的設定作對 */
+/* 系統設定「減少動態」就全部關掉 —— 這是看盤工具，不能跟使用者的設定作對。
+   一條全域規則最保險：新增元件時不會忘了把它加進白名單。 */
 @media (prefers-reduced-motion: reduce){
-  body.boot .topbar,body.boot #mkt>*,body.boot .right>*>.card,
-  .card.chart.kk-in,.cwrap.kk-draw svg,.skel .sk,.skel .sk::after,
-  .skel .bars i,.chart .kk-prog i{animation:none !important}
-  .chart .cwrap,.chart .legend,.chart .mini{transition:none}
+  *,*::before,*::after{animation:none !important; transition:none !important}
 }
 .foot{font-size:11px; color:var(--faint); text-align:center; margin-top:20px; line-height:1.7}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--down);margin-right:5px}
@@ -1842,53 +1926,73 @@ body.boot .right>#stats>.card{animation-delay:.16s}
 
 /* ================= 【回顧】分頁（沿用上面的顏色變數，不另立一套） ================= */
 [hidden]{display:none !important}
-.tabs{display:flex; gap:4px; background:var(--surface-2); border-radius:11px; padding:3px}
-.tabs button{border:0; background:transparent; color:var(--dim); cursor:pointer; min-width:104px;
-  font-family:var(--font-sans); font-size:13.5px; font-weight:650; padding:9px 18px; border-radius:9px}
+.tabs{display:flex; gap:3px; background:var(--surface-2); border-radius:12px; padding:3px;
+  border:1px solid var(--line-soft)}
+.tabs button{border:0; background:transparent; color:var(--dim); cursor:pointer; min-width:100px;
+  font-family:var(--font-sans); font-size:13.5px; font-weight:650; padding:8px 18px; border-radius:9px;
+  transition:color .15s var(--ease), background .15s var(--ease)}
+.tabs button:hover{color:var(--text)}
 .tabs button.on{background:var(--gold-soft); color:var(--gold)}
 #tab-review .card{padding:16px 18px; margin-bottom:10px}
-#tab-review .card.chart{padding:14px 16px 12px}
+#tab-review .card.chart{padding:16px 18px 13px}
 #tab-review .chead{gap:14px}
-#tab-review .cpx{font-size:34px} #tab-review .cchg{font-size:15px}
+/* 回顧的大字比即時小一階：這一頁的主角是「那一筆交易」，不是現在的價格 */
+#tab-review .cpx{font-size:40px; letter-spacing:-1.2px} #tab-review .cchg{font-size:14px}
 #tab-review .cwrap svg{cursor:crosshair}
 .cday{font-size:13px; color:var(--dim); font-family:var(--font-mono)}
 .ctag{font-size:11px; color:var(--faint); border:1px solid var(--line); border-radius:6px;
   padding:2px 8px; margin-left:6px}
-.tfsw{display:flex; gap:3px; background:var(--surface-2); border-radius:9px; padding:3px}
+.tfsw{display:flex; gap:3px; background:var(--surface-2); border-radius:var(--r-sm); padding:3px;
+  border:1px solid var(--line-soft)}
 .tfsw button{border:0; background:transparent; color:var(--dim); cursor:pointer;
   font-family:var(--font-sans); font-size:11.5px; font-weight:600; padding:5px 12px; border-radius:7px}
 .tfsw button.on{background:var(--gold-soft); color:var(--gold)}
-/* 重播控制列：放在圖的正下方，眼睛不用離開圖 */
-.rpbar{display:flex; align-items:center; gap:8px; margin-top:9px; padding:9px 10px;
-  background:var(--surface-2); border:1px solid var(--line); border-radius:12px}
-.rpbtn{border:1px solid var(--line); background:var(--surface); color:var(--text); cursor:pointer;
-  font-family:var(--font-sans); font-size:13px; font-weight:600; padding:8px 13px; border-radius:9px;
-  min-width:42px}
-.rpbtn:hover{border-color:var(--gold)}
-.rpbtn.play{background:var(--gold-soft); color:var(--gold); border-color:transparent; min-width:96px}
+/* 重播控制列：放在圖的正下方，眼睛不用離開圖。
+   舊版是一排長得都一樣的方框按鈕，看不出哪個是主要動作、也看不出「走到哪了」。
+   新版兩行：上行運鏡（播放鍵是唯一的金色）、下行時間軸（可點著跳）。 */
+.rpbar{margin-top:10px; padding:10px 12px 9px; background:var(--surface-2);
+  border:1px solid var(--line-soft); border-radius:14px}
+.rprow{display:flex; align-items:center; gap:8px}
+.rpbtn{border:1px solid var(--line); background:var(--surface); color:var(--dim); cursor:pointer;
+  font-family:var(--font-sans); font-size:13px; font-weight:600; padding:8px 12px;
+  border-radius:var(--r-sm); min-width:40px;
+  transition:color .15s var(--ease), border-color .15s var(--ease)}
+.rpbtn:hover:not(:disabled){color:var(--text); border-color:var(--faint)}
+.rpbtn.play{background:var(--gold-soft); color:var(--gold); border-color:transparent;
+  min-width:104px; font-size:13.5px; padding:9px 14px}
+.rpbtn.play:hover:not(:disabled){background:rgba(227,169,81,.24); color:var(--gold)}
 .rpbtn:disabled{opacity:.35; cursor:default}
-.rpsp{display:flex; gap:2px; background:var(--surface); border-radius:9px; padding:3px;
-  border:1px solid var(--line)}
+.rpsp{display:flex; gap:2px; background:var(--surface); border-radius:var(--r-sm); padding:3px;
+  border:1px solid var(--line-soft)}
 .rpsp button{border:0; background:transparent; color:var(--faint); cursor:pointer;
-  font-family:var(--font-mono); font-size:11.5px; font-weight:600; padding:5px 9px; border-radius:6px}
+  font-family:var(--font-mono); font-size:11.5px; font-weight:600; padding:5px 9px;
+  border-radius:var(--r-xs)}
+.rpsp button:hover{color:var(--text)}
 .rpsp button.on{background:var(--gold-soft); color:var(--gold)}
-.rppos{flex:1; font-family:var(--font-mono); font-size:12.5px; color:var(--dim);
-  font-variant-numeric:tabular-nums; text-align:right}
-.rppos b{color:var(--text)}
+.rppos{flex:1; font-family:var(--font-mono); font-size:12.5px; color:var(--faint);
+  font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
+.rppos b{color:var(--text); font-size:14px; font-weight:650}
+/* 時間軸：.win＝08:45~09:30（他真正下單的時段）、.jm＝這次按下判斷的那一根 */
+.rpscrub{position:relative; height:20px; margin-top:8px; cursor:pointer}
+.rpscrub .trk{position:absolute; left:0; right:0; top:5px; height:4px; border-radius:2px;
+  background:var(--surface)}
+.rpscrub .win{position:absolute; top:5px; height:4px; background:var(--gold-soft)}
+.rpscrub .fill{position:absolute; left:0; top:5px; height:4px; border-radius:2px;
+  background:linear-gradient(90deg,rgba(227,169,81,.5),var(--gold))}
+.rpscrub .knob{position:absolute; top:2px; width:10px; height:10px; border-radius:50%;
+  background:var(--gold); box-shadow:0 0 0 3px rgba(227,169,81,.18); margin-left:-5px}
+.rpscrub .jm{position:absolute; top:0; width:2px; height:14px; border-radius:1px; margin-left:-1px}
+.rpscrub .tk{position:absolute; top:12px; font-size:9.5px; color:var(--ghost);
+  font-family:var(--font-mono); transform:translateX(-50%)}
+.rpscrub.locked{cursor:default}
 .kbd{font-family:var(--font-mono); font-size:10.5px; color:var(--faint);
-  border:1px solid var(--line); border-radius:5px; padding:1px 5px; background:var(--surface)}
-.fstrip{display:grid; grid-template-columns:repeat(7,1fr); gap:1px; background:var(--line);
-  border-radius:var(--radius-sm); overflow:hidden; margin-top:10px}
-.fcell{background:var(--surface); padding:9px 11px}
-.fcell .l{font-size:10.5px; color:var(--dim); white-space:nowrap}
-.fcell .v{font-size:17px; font-weight:650; font-family:var(--font-mono);
-  font-variant-numeric:tabular-nums; margin-top:1px}
-.ftitle{font-size:11px; color:var(--faint); margin:12px 4px 0}
+  border:1px solid var(--line); border-radius:5px; padding:1px 5px; background:var(--surface-2)}
 #tab-review .seg{margin-bottom:0}
-.chips{display:flex; gap:6px; flex-wrap:wrap; margin:12px 0 4px}
+.chips{display:flex; gap:6px; flex-wrap:wrap; margin:0 0 12px}
 .chips button{font-size:11.5px; padding:5px 11px; border-radius:20px; cursor:pointer;
-  background:var(--surface-2); color:var(--dim); border:1px solid var(--line);
-  font-family:var(--font-sans)}
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft);
+  font-family:var(--font-sans); transition:color .15s var(--ease), background .15s var(--ease)}
+.chips button:hover{color:var(--text)}
 .chips button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
 /* 目標：1600×950 一頁看完、不捲整頁。右欄本身留一道安全閥（視窗更矮時右欄自己捲，
    整頁還是不捲），清單則維持自己的捲動區。 */
@@ -1905,64 +2009,68 @@ body.boot .right>#stats>.card{animation-delay:.16s}
 #rpane .trade{padding:9px 12px}
 #rpane .trade{cursor:pointer}
 #rpane .trade:hover{border-color:var(--faint)}
-.trade.sel{border-color:var(--gold); background:var(--gold-soft)}
-.tr-note{font-size:11.5px; color:var(--faint); margin-top:5px; padding-left:49px;
+.trade.sel{border-color:var(--gold-line); background:rgba(227,169,81,.08)}
+.tr-note{font-size:11.5px; color:var(--faint); margin-top:6px; padding-left:51px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .dt{display:flex; flex-direction:column; gap:9px}
 .dt-row{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px}
 .dt-row .k{color:var(--dim)}
 .dt-row .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13.5px}
-.dt-big{text-align:center; padding:2px 0 8px}
-.dt-big .v{font-size:40px; font-weight:700; font-family:var(--font-mono); line-height:1;
-  font-variant-numeric:tabular-nums}
-.dt-big .l{font-size:12px; color:var(--dim); margin-top:5px}
-.hr{height:1px; background:var(--line); margin:2px 0}
+.dt-big{text-align:center; padding:0 0 6px}
+.dt-big .v{font-size:38px; font-weight:700; font-family:var(--font-mono); line-height:1;
+  font-variant-numeric:tabular-nums; letter-spacing:-1px}
+.dt-big .l{font-size:12px; color:var(--dim); margin-top:6px}
+.hr{height:1px; background:var(--line-soft); margin:2px 0}
 .noteline{font-size:12.5px; color:var(--text); background:var(--surface-2);
-  border:1px solid var(--line); border-radius:9px; padding:9px 11px; line-height:1.6}
+  border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:9px 11px; line-height:1.6}
 .noteline.empty{color:var(--faint)}
-.noteline[data-nedit]{cursor:pointer}
-.noteline[data-nedit]:hover{border-color:var(--gold); color:var(--gold)}
-.trade .noteline{margin-top:8px; font-size:12px; padding:8px 10px}
+.noteline[data-nedit]{cursor:pointer;
+  transition:border-color .15s var(--ease), color .15s var(--ease)}
+.noteline[data-nedit]:hover{border-color:var(--gold-line); color:var(--gold)}
+/* 卡片內的心得再壓一層底色（同色系會糊在一起） */
+.trade .noteline{margin-top:8px; font-size:12px; padding:8px 10px; background:rgba(0,0,0,.18)}
 .nedit{margin-top:8px}
 .nedit textarea{width:100%; box-sizing:border-box; min-height:78px; resize:vertical;
-  background:var(--surface-2); border:1px solid var(--gold); border-radius:9px;
+  background:var(--surface-2); border:1px solid var(--gold-line); border-radius:var(--r-sm);
   color:var(--text); font-family:var(--font-sans); font-size:12.5px; line-height:1.6;
   padding:9px 11px}
 .nedit textarea::placeholder{color:var(--faint)}
-.nedit textarea:focus{outline:none}
+.nedit textarea:focus{outline:none; border-color:var(--gold)}
 .nedit .nbtn{display:flex; gap:8px; margin-top:7px}
 .nedit .nbtn .btn{flex:1; padding:7px 0; font-size:12.5px}
-.empty{text-align:center; padding:36px 16px; color:var(--faint); font-size:12.5px; line-height:1.8}
-.btn.gold{background:var(--gold-soft); color:var(--gold); border:1px solid transparent}
+.empty{text-align:center; padding:32px 16px; color:var(--faint); font-size:12.5px; line-height:1.8}
+.btn.gold{background:var(--gold-soft); color:var(--gold); border-color:transparent}
+.btn.gold:hover:not(:disabled){background:rgba(227,169,81,.24)}
 .btn.gw{flex:1}                     /* 回顧頁的次要按鈕要跟主按鈕一樣寬 */
 .daysel{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
-.daysel button{font-size:12px; padding:7px 10px; border-radius:8px; cursor:pointer;
-  background:var(--surface-2); color:var(--dim); border:1px solid var(--line);
+.daysel button{font-size:12px; padding:6px 10px; border-radius:var(--r-sm); cursor:pointer;
+  background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft);
   font-family:var(--font-mono)}
+.daysel button:hover{color:var(--text)}
 .daysel button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
 .daysel button .m{font-size:9.5px; color:var(--faint); margin-left:4px}
 .jinput{width:100%; background:var(--surface-2); border:1px solid var(--line); border-radius:9px;
   color:var(--text); font-family:var(--font-sans); font-size:13px; padding:10px 11px; margin-top:9px}
 .jinput::placeholder{color:var(--faint)}
-.jinput:focus{outline:none; border-color:var(--gold)}
-.hold{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm);
+.jinput:focus{outline:none; border-color:var(--gold-line)}
+.hold{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
   padding:12px 14px}
 .hold .v{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1;
-  font-variant-numeric:tabular-nums; text-align:center}
-.hold .l{font-size:12px; color:var(--dim); text-align:center; margin-top:5px}
+  font-variant-numeric:tabular-nums; text-align:center; letter-spacing:-1px}
+.hold .l{font-size:12px; color:var(--dim); text-align:center; margin-top:6px}
 .cmp{display:flex; flex-direction:column; gap:8px}
-.cmp .side{background:var(--surface-2); border:1px solid var(--line); border-radius:10px;
+.cmp .side{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
   padding:10px 12px}
-.cmp .side.mine{border-color:rgba(227,169,81,.45)}
-.cmp .side .h{font-size:11px; color:var(--dim); margin-bottom:4px; letter-spacing:.5px}
+.cmp .side.mine{border-color:var(--gold-line)}
+.cmp .side .h{font-size:11px; color:var(--dim); margin-bottom:5px; letter-spacing:.5px}
 .cmp .side .b{display:flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:13px}
 .cmp .side .b .res{margin-left:auto; font-size:16px; font-weight:700}
-.verdict{border-radius:10px; padding:10px 12px; font-size:12.5px; line-height:1.6; text-align:center;
-  font-weight:600}
+.verdict{border-radius:var(--r-md); padding:10px 12px; font-size:12.5px; line-height:1.6;
+  text-align:center; font-weight:600}
 .verdict.same{background:var(--gold-soft); color:var(--gold)}
-.verdict.diff{background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
+.verdict.diff{background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft)}
 .tally{display:flex; gap:14px; justify-content:center; font-family:var(--font-mono); font-size:12px;
-  color:var(--faint); padding-top:4px; flex-wrap:wrap}
+  color:var(--faint); padding-top:8px; flex-wrap:wrap}
 .tally b{color:var(--text); font-size:14px}
 </style></head><body><div class="app">
 <div class="topbar">
@@ -1982,7 +2090,7 @@ body.boot .right>#stats>.card{animation-delay:.16s}
   <div class="cols"><div id="mkt">
     <!-- K 棒要 0.3~0.5 秒才回得來。骨架寫死在 HTML 裡，第 0 毫秒就佔好位置，
          尺寸與真圖完全相同 —— 真圖進來時只是淡入，版面一格都不會跳。 -->
-    <div class="card chart skel">
+    <div class="card chart l1 skel">
       <div class="chead"><span class="sk sk-px"></span><span class="sk sk-day"></span></div>
       <div class="legend"><span class="sk" style="width:88px"></span>
         <span class="sk" style="width:70px"></span><span class="sk" style="width:70px"></span>
@@ -1995,7 +2103,7 @@ body.boot .right>#stats>.card{animation-delay:.16s}
         <i style="height:68%"></i><i style="height:52%"></i><i style="height:63%"></i>
         <i style="height:47%"></i></div></div>
       <div class="chint"><span class="sk"></span></div>
-      <div class="mini"><span class="sk"></span><span class="sk"></span><span class="sk"></span>
+      <div class="rail"><span class="sk"></span><span class="sk"></span><span class="sk"></span>
         <span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
     </div>
   </div><div class="right"><div id="trade"></div><div id="stats"></div></div></div>
@@ -2005,14 +2113,15 @@ body.boot .right>#stats>.card{animation-delay:.16s}
 <div id="tab-review" hidden>
  <div class="cols">
   <div>
-   <div class="card chart">
+   <div class="card chart l1">
     <div class="chead" id="rhead"></div>
     <div class="legend" id="rlegend"></div>
     <div class="cwrap"><svg id="rsvg" preserveAspectRatio="none"></svg></div>
     <div id="rctrl"></div>
    </div>
-   <div class="ftitle" id="rftitle">進場當下的客觀盤面</div>
-   <div class="fstrip" id="rfstrip"></div>
+   <div class="sec-head" style="margin-top:16px"><h2 id="rftitle">進場當下的客觀盤面</h2>
+     <span class="count">只有已經發生的數字</span></div>
+   <div class="card"><div class="rail" id="rfstrip"></div></div>
   </div>
   <div class="right">
    <div class="seg" id="rmode">
@@ -2204,10 +2313,47 @@ const CAL_ICON='<svg class="cal-i" width="13" height="13" viewBox="0 0 14 14" fi
   '<rect x="1.4" y="2.6" width="11.2" height="10" rx="2"/>'+
   '<path d="M4.4 1.2v2.6M9.6 1.2v2.6M1.4 6h11.2"/></svg>';
 
+/* ---------------- 資料軌（即時分頁與回顧分頁共用同一個元件） ----------------
+   舊版即時是一行純文字、回顧是 7 格方塊，兩套；而且 9 個數字同字級同顏色，
+   讀起來是一長串連續的字。現在統一成：標籤在上、數值在下、依語意分組。
+   groups＝[[{k,v,cls,u,track,hot,muted},…],…]，一個內層陣列就是一組。
+   track 只是把已經發生的數字畫成長度（位階、量能），
+   ⛔ 不得加任何「強／弱／偏多」之類的評語或預測（CLAUDE.md 第一段）。 */
+function railHTML(groups){
+ return groups.filter(g=>g&&g.length).map(g=>
+   '<div class="grp">'+g.map(it=>{
+     let h='<div class="it'+(it.muted?' muted':'')+'"><div class="k">'+it.k+'</div>'+
+       '<div class="v '+(it.cls||'')+'">'+it.v+(it.u?'<small>'+it.u+'</small>':'')+'</div>';
+     if(it.track!=null) h+='<div class="track"><i class="'+(it.hot?'hot':'')+'" style="width:'+
+       Math.max(3,Math.min(100,it.track)).toFixed(1)+'%"></i></div>';
+     return h+'</div>';
+   }).join('')+'</div>').join('');
+}
+/* 沒有即時報價（休市／收不到）或在看歷史日時的資料軌：
+   那一天日盤的開高低收＋震幅＋收在區間＋跳空＋總量。資料本來就有，
+   只是不是即時的 —— 舊版整排數字直接消失，看起來像壞掉。 */
+function dayRail(BC,q,live){
+ const all=(BC&&BC.bars)||[], dd=(BC&&BC.date)||'';
+ let D=all.filter(b=>(!b.d||b.d===dd)&&b.t>='08:45'&&b.t<'14:00');
+ if(!D.length) D=all;
+ if(!D.length) return '';
+ const o=D[0].o, hi=Math.max.apply(null,D.map(b=>b.h)), lo=Math.min.apply(null,D.map(b=>b.l));
+ const c=D[D.length-1].c, vol=D.reduce((a,b)=>a+b.v,0);
+ const pos=(c-lo)/Math.max(1,hi-lo);
+ const ref=(BC&&BC.ref!=null)?BC.ref:null;
+ return railHTML([
+   [{k:'開',v:f(o)},{k:'高',v:f(hi),cls:'up'},{k:'低',v:f(lo),cls:'down'},{k:'收',v:f(c)}],
+   [{k:'震幅',v:f(hi-lo)},{k:'收在區間',v:f(pos*100)+'%',track:pos*100},
+    {k:'跳空',v:ref==null?'—':pm(o-ref)}],
+   [{k:'總量',v:(vol/1000).toFixed(1),u:'k'},
+    {k:'報價',v:live?(q==='closed'?'休市中':'收不到'):'歷史日',muted:true}]
+ ]);
+}
 function chartSVG(s){
  const G=chartGeom(); if(!G) return null;
  const B=G.all.slice(G.from,G.to), T=(barsCache.trades)||[], P=s.position;
  const live=!viewDate;
+ const cname=(s.conn&&s.conn.contract_name)||'微台';
  const first=G.all[0], last=G.all[G.all.length-1];
  // 沒有即時報價時退回「最後一根 K 棒的收盤」，別把舊的成交價當現價用（Bug A）。
  const q=quoteState(s);
@@ -2258,12 +2404,12 @@ function chartSVG(s){
    if(a>=0) g+='<rect x="'+(a*cw).toFixed(1)+'" y="'+TOP+'" width="'+((b+1-a)*cw).toFixed(1)+
      '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>';
  }
- g+='<rect x="'+(W-R)+'" y="0" width="'+R+'" height="'+H+'" fill="#1F2530" opacity=".45"/>';
+ g+='<rect x="'+(W-R)+'" y="0" width="'+R+'" height="'+H+'" fill="#1C222C" opacity=".45"/>';
  for(let k=0;k<=5;k++){
    const v=lo+(hi-lo)*k/5, yy=y(v);
    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
-      '" stroke="#262D39" stroke-width="1"/>'+
-      '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5A616E" font-size="12" '+
+      '" stroke="#232A35" stroke-width="1"/>'+
+      '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5C6472" font-size="12" '+
       'font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
  }
  // 分段線：夜盤→日盤（08:45 開盤）與跨午夜的地方。
@@ -2275,7 +2421,7 @@ function chartSVG(s){
    if(!dayOpen&&!midnight) return;
    const X=i*cw;
    g+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
-      '" stroke="#4A5468" stroke-width="1" stroke-dasharray="2 4"/>'+
+      '" stroke="#49536A" stroke-width="1" stroke-dasharray="2 4"/>'+
       '<text x="'+(X+4).toFixed(1)+'" y="'+(TOP+12)+'" fill="#6B7385" font-size="10.5" '+
       'font-family="ui-monospace,monospace">'+(dayOpen?'日盤':(b.d||'').slice(5))+'</text>';
  });
@@ -2289,15 +2435,15 @@ function chartSVG(s){
  });
  // ---- 成交量（同樣紅漲綠跌，跟 K 棒對齊）----
  g+='<line x1="0" y1="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" x2="'+(W-R)+
-    '" y2="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" stroke="#262D39" stroke-width="1"/>';
+    '" y2="'+(H-BOT-VOLH-GAP/2).toFixed(1)+'" stroke="#232A35" stroke-width="1"/>';
  B.forEach((b,i)=>{
    const col=b.c>=b.o?'#EE5A54':'#34B37E', X=x(i), yy=vy(b.v);
    g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+
       '" height="'+Math.max(0.8,H-BOT-yy).toFixed(1)+'" fill="'+col+'" opacity=".55"/>';
  });
- g+='<text x="'+(W-R+8)+'" y="'+(H-BOT-VOLH+10)+'" fill="#5A616E" font-size="11" '+
+ g+='<text x="'+(W-R+8)+'" y="'+(H-BOT-VOLH+10)+'" fill="#5C6472" font-size="11" '+
     'font-family="ui-monospace,monospace">'+(vmax>=10000?(vmax/1000).toFixed(0)+'k':vmax.toFixed(0))+'</text>'+
-    '<text x="'+(W-R+8)+'" y="'+(H-BOT-2)+'" fill="#5A616E" font-size="11">量</text>';
+    '<text x="'+(W-R+8)+'" y="'+(H-BOT-2)+'" fill="#5C6472" font-size="11">量</text>';
 
  if(P&&live&&G.live){
    [[P.tp,'#EE5A54','停利'],[P.sl,'#34B37E','停損']].forEach(z=>{
@@ -2307,11 +2453,12 @@ function chartSVG(s){
         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
    });
  }
- // 進出場標記：標籤絕不壓在 K 棒上。
- // 價位改掛在右側價格軸（本來就是空的灰帶），時間與損益用小字貼在標記旁邊。
- // 上一版把「進 09:05 46020」做成左緣大色塊，字是看清楚了，但整個擋住早盤那幾根
+ // ---- 進出場標記：圖區只留形狀，文字全部搬到本來就空著的兩條軌 ----
+ // 右側 64px 的價格軸掛價位、底部時間軸帶掛時間與損益。
+ // 他的單 5~15 分鐘就結束（±100 點只要 1~3 根 5 分 K），進出場在 x 軸上非常靠近 ——
+ // 舊版兩塊描邊文字必然互相推擠，而且一定壓在那幾根關鍵 K 棒上
  // （Benson 2026-08-17 回報「時間標示有點擋路」）。
- const AXB=[], CAPB=[];
+ const AXB=[], LANE=[], laneX=[];
  const tw=(str,fs)=>{ let w=0; for(let i=0;i<str.length;i++) w+=(str.charCodeAt(i)>255?1.0:0.6)*fs; return w; };
  // 右側價格軸掛牌：跟看盤軟體一樣，價位貼在軸上，圖區完全不動
  const axisChip=(aY,txt,col)=>{
@@ -2322,47 +2469,66 @@ function chartSVG(s){
    }
    AXB.push(py);
    return '<rect x="'+(W-R+1)+'" y="'+py.toFixed(1)+'" width="'+(R-2)+'" height="'+h+
-     '" rx="3" fill="'+col+'"/>'+
-     '<text x="'+(W-R+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0F1218" font-size="11.5"'+
+     '" rx="4" fill="'+col+'"/>'+
+     '<text x="'+(W-R+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0E1116" font-size="11.5"'+
      ' font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
  };
- // 標記旁的小字（時間／損益）：無底色、只描深色外框，佔的面積不到原本的五分之一
- const caption=(X,baseY,sign,txt,col)=>{
-   const fs=11, w=tw(txt,fs), h=fs+3;
-   let by=baseY;
-   for(let k=0;k<5;k++){
-     by=Math.max(TOP+fs,Math.min(H-BOT-2,baseY+sign*k*(h+3)));
-     const bx=X-w/2;
-     if(!CAPB.some(b=>bx<b.x+b.w&&b.x<bx+w&&by-fs<b.y+b.h&&b.y<by-fs+h)) break;
+ // 時間軸帶上的膠囊：彼此水平避讓（碰到就往右推），並夾在圖區內
+ const lanePill=(X,txt,col)=>{
+   const fs=10.5, w=tw(txt,fs)+13, h=17;
+   let px=Math.max(1,Math.min(W-R-w-1,X-w/2));
+   for(let k=0;k<8;k++){
+     if(!LANE.some(b=>px<b.x+b.w+3&&b.x<px+w+3)) break;
+     px=Math.min(W-R-w-1,px+w+5);
    }
-   CAPB.push({x:X-w/2,y:by-fs,w:w,h:h});
-   return '<text x="'+X.toFixed(1)+'" y="'+by.toFixed(1)+'" text-anchor="middle" fill="'+col+
-     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace"'+
-     ' stroke="#0F1218" stroke-width="3.2" paint-order="stroke" stroke-linejoin="round">'+txt+'</text>';
+   LANE.push({x:px,w:w});
+   return '<rect x="'+px.toFixed(1)+'" y="'+(H-BOT+3)+'" width="'+w.toFixed(1)+'" height="'+h+
+     '" rx="5" fill="#0E1116" fill-opacity=".92" stroke="'+col+'" stroke-opacity=".55"/>'+
+     '<text x="'+(px+w/2).toFixed(1)+'" y="'+(H-BOT+15)+'" text-anchor="middle" fill="'+col+
+     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
  };
  T.forEach(t=>{
    const ia=idxAll(t.time); if(ia<G.from||ia>=G.to) return;
    const i=ia-G.from, X=x(i), Y=y(t.entry), long=t.dir==='long', col=long?'#EE5A54':'#34B37E';
-   g+='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(W-R)+'" y2="'+Y.toFixed(1)+
-      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity=".45"/>';
-   const tipY=long?Y+7:Y-7, endY=long?Y+25:Y-25;
-   g+='<path d="M'+(X-9)+' '+endY+' L'+X+' '+tipY+' L'+(X+9)+' '+endY+
-      ' Z" fill="'+col+'" stroke="#0F1218" stroke-width="1.6" stroke-linejoin="round"/>';
-   g+=caption(X,long?endY+13:endY-5,long?1:-1,'\u9032 '+t.time,col);
-   g+=axisChip(Y,String(Math.round(t.entry)),col);
    const je=t._exit_time?idxAll(t._exit_time.slice(0,5)):-1;
-   if(je>=G.from&&je<G.to){
-     const XE=x(je-G.from), YE=y(t.exit), ec=t._net>0?'#EE5A54':'#34B37E';
-     g+='<line x1="0" y1="'+YE.toFixed(1)+'" x2="'+(W-R)+'" y2="'+YE.toFixed(1)+
-        '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="5 4" opacity=".45"/>'+
-        '<circle cx="'+XE.toFixed(1)+'" cy="'+YE.toFixed(1)+'" r="8.5" fill="'+ec+
-        '" stroke="#0F1218" stroke-width="1.6"/>'+
-        '<path d="M'+(XE-3.6)+' '+(YE-3.6)+' L'+(XE+3.6)+' '+(YE+3.6)+' M'+(XE-3.6)+' '+(YE+3.6)+
-        ' L'+(XE+3.6)+' '+(YE-3.6)+'" stroke="#0F1218" stroke-width="2.2" stroke-linecap="round"/>';
-     const down=YE<PB-40;
-     g+=caption(XE,down?YE+22:YE-14,down?1:-1,'\u51fa '+t._exit_time.slice(0,5)+
-        (t._net==null?'':'  '+pm(t._net)),ec);
+   const hasExit=je>=G.from&&je<G.to;
+   const XE=hasExit?x(je-G.from):null, YE=hasExit?y(t.exit):null;
+   const ec=t._net>0?'#EE5A54':'#34B37E';
+   if(hasExit){
+     // 持有區間：底色 ＋ 進出場價的短虛線（只畫在區間內，不再橫貫全圖）＋ 連線
+     const yTop=Math.min(Y,YE), yBot=Math.max(Y,YE);
+     g+='<rect x="'+(X-cw/2).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+
+        Math.max(cw,(XE-X)+cw).toFixed(1)+'" height="'+Math.max(2,yBot-yTop).toFixed(1)+
+        '" fill="'+ec+'" opacity=".10"/>'+
+        '<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
+        '" y2="'+Y.toFixed(1)+'" stroke="'+col+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>'+
+        '<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
+        '" y2="'+YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>'+
+        '<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+
+        YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.8" opacity=".9" stroke-linecap="round"/>';
+   }
+   // 引導線：從標記垂直落到時間軸帶，眼睛才接得起來（不壓 K 棒）
+   g+='<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
+      '" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>';
+   const tri=long?('M'+(X-7.5)+' '+(Y+16)+' L'+X+' '+(Y+3.5)+' L'+(X+7.5)+' '+(Y+16)+' Z')
+                 :('M'+(X-7.5)+' '+(Y-16)+' L'+X+' '+(Y-3.5)+' L'+(X+7.5)+' '+(Y-16)+' Z');
+   g+='<path d="'+tri+'" fill="'+col+'" stroke="#0E1116" stroke-width="1.8" stroke-linejoin="round"/>'+
+      '<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="2.6" fill="'+col+
+      '" stroke="#0E1116" stroke-width="1.2"/>';
+   g+=axisChip(Y,String(Math.round(t.entry)),col);
+   // 進出場很近就把兩枚膠囊合併成一枚，不要互相推擠（他的單多半 5~15 分鐘就結束）
+   const near=hasExit&&(XE-X)<110;
+   if(!near) laneX.push([X,(long?'▲ 進 ':'▼ 進 ')+t.time,col]);
+   else laneX.push([(X+XE)/2,(long?'▲ ':'▼ ')+t.time+'→'+t._exit_time.slice(0,5)+
+     '　'+pm(t._net),ec]);
+   if(hasExit){
+     g+='<line x1="'+XE.toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+(H-BOT)+
+        '" stroke="'+ec+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>'+
+        '<rect x="'+(XE-5.6).toFixed(1)+'" y="'+(YE-5.6).toFixed(1)+'" width="11.2" height="11.2"'+
+        ' rx="2.4" transform="rotate(45 '+XE.toFixed(1)+' '+YE.toFixed(1)+')" fill="'+ec+
+        '" stroke="#0E1116" stroke-width="1.8"/>';
      g+=axisChip(YE,String(Math.round(t.exit)),ec);
+     if(!near) laneX.push([XE,'出 '+t._exit_time.slice(0,5)+'　'+pm(t._net),ec]);
    }
  });
  // ---- 游標所在那根：畫垂直參考線 ----
@@ -2371,37 +2537,47 @@ function chartSVG(s){
    legendIdx=HOVER.i; legendBar=G.all[HOVER.i]; hovering=true;
    const X=x(HOVER.i-G.from);
    g+='<line x1="'+X.toFixed(1)+'" y1="'+TOP+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
-      '" stroke="#8B92A0" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
+      '" stroke="#8D95A3" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
  }
 
- // 時間刻度：依疏密自動決定間隔
+ // 膠囊先算（lanePill 會把實際落點記進 LANE，互相避讓後位置才確定），
+ // 時間刻度再依 LANE 的實際位置閃避 —— 用「原本想放的中心」去比會漏掉被推開的那幾枚。
+ let pills='';
+ laneX.forEach(p=>{ pills+=lanePill(p[0],p[1],p[2]); });
+ // 時間刻度：依疏密自動決定間隔；壓到膠囊的就整個跳過，不要疊字
  const step=Math.max(1,Math.ceil(B.length/8));
  B.forEach((b,i)=>{ if(i%step) return;
-   g+='<text x="'+x(i).toFixed(1)+'" y="'+(H-7)+'" fill="#5A616E" font-size="11.5" '+
+   const X=x(i);
+   if(LANE.some(z=>X+24>z.x-4&&X-24<z.x+z.w+4)) return;
+   g+='<text x="'+X.toFixed(1)+'" y="'+(H-9)+'" fill="#5C6472" font-size="11.5" '+
       'text-anchor="middle" font-family="ui-monospace,monospace">'+b.t+'</text>';
  });
+ g+=pills;                                            // 膠囊畫最後，壓在刻度上面
 
  const c=s.chips||{};
- // 有什麼就顯示什麼 —— 原本整排綁在「日盤才有」的欄位上，
- // 休市時整排消失，連加權都看不到（Benson 回報找不到）。
- let mini='';
- if(live && q!=='live'){
-   // 沒有即時報價時，上面那個大字是「最後一根 K 棒的收盤」——
-   // 一定要講清楚它不是即時價，否則看起來跟開盤時一模一樣。
-   mini+='<span>報價 <b class="dim">'+(q==='closed'?'休市中':'收不到')+
-         '</b>（上面是收盤價，非即時）</span>';
- }
+ // ---- 資料軌 ----
+ // 標籤在上、數值在下，並依語意分組（動能／今天／盤口／現貨），中間有分隔線。
+ // 位階與量能各給一條量尺 —— 只是把已發生的數字畫成長度，不做任何強弱評語。
+ let rail='';
  if(live && q==='live'){
-   if(c.mom5!=null) mini+='<span>5分 <b class="'+sgn(c.mom5)+'">'+pm(c.mom5)+'</b></span>';
-   if(c.mom15!=null) mini+='<span>15分 <b class="'+sgn(c.mom15)+'">'+pm(c.mom15)+'</b></span>';
-   if(c.chg!=null) mini+='<span>跳空 <b>'+pm(c.gap)+'</b></span>'+
-     '<span>震幅 <b>'+f(c.rng)+'</b></span>'+
-     '<span>位階 <b>'+f(c.pos*100)+'%</b></span>'+
-     '<span>量能 <b>'+f(c.vol_ratio,2)+'倍</b></span>';
-   if(c.bid!=null) mini+='<span>買/賣 <b>'+f(c.bid)+' / '+f(c.ask)+'</b></span>';
+   const grp=[];
+   const mom=[];
+   if(c.mom5!=null) mom.push({k:'5 分',v:pm(c.mom5),cls:sgn(c.mom5)});
+   if(c.mom15!=null) mom.push({k:'15 分',v:pm(c.mom15),cls:sgn(c.mom15)});
+   if(mom.length) grp.push(mom);
+   if(c.chg!=null) grp.push([{k:'跳空',v:pm(c.gap)},{k:'今日震幅',v:f(c.rng)},
+     {k:'位階',v:f(c.pos*100)+'%',track:c.pos*100,hot:c.pos>0.8||c.pos<0.2},
+     {k:'量能',v:f(c.vol_ratio,2),u:'倍',track:c.vol_ratio/3*100,hot:c.vol_ratio>1.5}]);
+   if(c.bid!=null) grp.push([{k:'買 / 賣',v:f(c.bid)+' / '+f(c.ask)}]);
    // 加權指數與基差：現貨 09:00 才開盤、13:30 收，空窗期明講「未開盤」而不是消失
-   mini+='<span>加權 <b>'+(c.idx==null?'<i class="dim">未開盤</i>':f(c.idx))+'</b></span>';
-   if(c.basis!=null) mini+='<span>基差 <b class="'+sgn(c.basis)+'">'+pm(c.basis)+'</b></span>';
+   const spot=[{k:'加權',v:c.idx==null?'<i>未開盤</i>':f(c.idx)}];
+   if(c.basis!=null) spot.push({k:'基差',v:pm(c.basis),cls:sgn(c.basis)});
+   grp.push(spot);
+   rail=railHTML(grp);
+ } else {
+   // 沒有即時報價（休市／收不到）或在看歷史日：資料本來就有，只是不是即時的 ——
+   // 舊版整排數字直接消失，看起來像壞掉。改成顯示那一天日盤的開高低收。
+   rail=dayRail(barsCache,q,live);
  }
  const pick=pickOpen?calHTML():'';
  const cur=curDay(), me=dayInfo(cur);
@@ -2423,10 +2599,29 @@ function chartSVG(s){
      '<span class="sep k">·</span>'+
      '<span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
  const nav=stepTarget(-1), fwd=stepTarget(1);
+ // 報價區第三行：把舊版擠在 mini 列開頭那句「報價 休市中（上面是收盤價，非即時）」
+ // 搬上來，跟昨收、合約、更新時間放在一起。
+ // ⚠ 更新時間放在獨立的 <span id="cupd">：它每秒都在變，寫進 #chead 的字串裡
+ //   會讓整個標頭（含翻頁列按鈕）每秒被重建一次 —— paintChart 會另外單獨更新它。
+ const qs=live
+   ? (q==='live'
+      ? '<span class="live"><i></i>即時</span><span class="sep">·</span>'+
+        '<span>昨收 '+f(ref)+'</span><span class="sep">·</span><span>'+cname+'</span>'+
+        '<span class="sep">·</span><span id="cupd"></span>'
+      : '<span class="live dead"><i></i>'+(q==='closed'?'休市中':'收不到報價')+'</span>'+
+        '<span class="sep">·</span><span>昨收 '+f(ref)+'</span><span class="sep">·</span>'+
+        '<span>'+(q==='closed'?'上面是收盤價，非即時'
+                              :'可能是國定假日，也可能是連線問題')+'</span>')
+   : '<span>歷史日</span><span class="sep">·</span><span>昨收 '+f(ref)+'</span>'+
+     '<span class="sep">·</span><span>13:45 收盤</span>';
  return {
    svg:g, vb:'0 0 '+W+' '+H,
-   head:'<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
-        ' <span class="cchg '+sgn(chg)+'">'+pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
+   upd:(live&&q==='live')?((s.clock||'')+' 更新'):'',
+   head:'<div class="qblock"><div class="qmain">'+
+        '<span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
+        '<span class="cchg '+sgn(chg)+'">'+pm(chg)+
+        '<span class="pct">'+pm(pct,2)+'%</span></span></div>'+
+        '<div class="qsub">'+qs+'</div></div>'+
         '<div class="pager">'+
         '<div class="r1">'+
         '<button class="nav-icon" data-nav="-1" title="前一個交易日（←）"'+
@@ -2448,7 +2643,7 @@ function chartSVG(s){
         '</div>'+
         '<div class="r2">'+r2+'</div>'+
         '</div>',
-   pick:pick, mini:mini,
+   pick:pick, rail:rail,
    legend:(function(b,hv){
      const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E';
      const vol=b.v>=10000?(b.v/1000).toFixed(1)+'k':b.v.toFixed(0);
@@ -2577,14 +2772,14 @@ function paintChart(s){
    // #cpick 包在 .cheadwrap 裡：月曆是絕對定位的浮層，要錨在翻頁列正下方，
    // 定位基準必須是「標頭這一塊」而不是整張卡片（卡片是 position:relative）。
    // kk-in＝淡入蓋過骨架（骨架已經佔好一樣的位置，所以不需要再 rise 一次）
-   document.getElementById('mkt').innerHTML='<div class="card chart kk-in" id="cchart">'+
+   document.getElementById('mkt').innerHTML='<div class="card chart l1 kk-in" id="cchart">'+
      '<div class="kk-prog"><i></i></div>'+
      '<div class="cheadwrap"><div class="chead" id="chead"></div>'+
      '<div class="calpop" id="cpick"></div></div>'+
      '<div class="legend" id="clegend"></div>'+
      '<div class="cwrap"><svg id="csvg" preserveAspectRatio="none"></svg></div>'+
      '<div class="chint"><span id="cinfo"></span>　滾輪縮放・拖曳平移・雙擊還原</div>'+
-     '<div class="mini" id="cmini"></div></div>';
+     '<div class="rail" id="crail"></div></div>';
    bindChart();
    kkDraw();                       // 第一次出現：K 線由左往右展開一次
  }
@@ -2615,7 +2810,10 @@ function paintChart(s){
    if(attr) e.setAttribute(attr,html); else e.innerHTML=html; };
  set('chead',d.head); set('clegend',d.legend);
  set('csvg',d.vb,'viewBox'); set('csvg',d.svg);
- set('cpick',d.pick); set('cmini',d.mini); set('cinfo',d.info);
+ set('cpick',d.pick); set('crail',d.rail); set('cinfo',d.info);
+ // 「HH:MM:SS 更新」每秒都在變，所以它自己一個節點：塞進 d.head 的話整個標頭
+ // （含翻頁列的 ◀ ▶ 按鈕）每秒被重建一次，滑鼠停在按鈕上剛好碰到就按不動。
+ set('cupd',d.upd);
  return true;
 }
 
@@ -2739,7 +2937,7 @@ function row(t,ns){
        ns==='t'?'＋ 寫下今天的心得':'＋ 補寫心得',
        ns==='t'?'今天的盤感、進出場理由、紀律有沒有守…'
                :'現在回頭看，這一筆做對了什麼、做錯了什麼？');
- return '<div class="trade"><div class="tr-top">'+
+ return '<div class="trade '+(t._net>0?'win':'loss')+'"><div class="tr-top">'+
   '<span class="tr-date">'+(t.date?t.date.slice(5):'')+'</span>'+
   '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
   '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
@@ -2757,14 +2955,20 @@ function statsBox(ST){
  });
  seg+='</div>';
  const cls=w.total>0?'up':w.total<0?'down':'flat';
+ // 勝率是「已經發生的統計」，用中性色；金色只留給「即時／現在」一個意思，
+ // 紅綠讓給真正的結果（合計點數）。勝敗條讓比例一眼看得出來，不必讀數字。
  let h='<div class="sec-head"><h2>練習成績</h2><span class="count">共 '+ST.total+' 筆</span></div>'+
   '<div class="card">'+seg+
-  '<div class="rate-row"><div class="rate-big"><span class="num">'+w.win_rate.toFixed(0)+
-  '</span><span class="pct">%</span><div class="lab">勝率</div></div>'+
-  '<div class="rate-meta"><div class="wl"><b class="w">'+w.wins+'</b> 勝　<b class="l">'+w.losses+'</b> 敗</div>'+
-  '<div class="net"><span class="v '+cls+'">'+pm(w.total)+'</span> <span class="u">點</span></div>'+
+  '<div class="score"><div class="rate"><span class="n">'+w.win_rate.toFixed(0)+
+  '</span><span class="p">%</span><div class="lab">勝率</div></div>'+
+  '<div class="sum"><div><span class="n '+cls+'">'+pm(w.total)+
+  '</span><span class="u">點</span></div>'+
   '<div class="cash">'+(w.ntd<0?'-':'+')+'NT$'+Math.abs(w.ntd).toLocaleString()+'</div>'+
-  '</div></div>';
+  '</div></div>'+
+  '<div class="wlbar"><i class="w" style="flex:'+Math.max(w.wins,0.001)+'"></i>'+
+  '<i class="l" style="flex:'+Math.max(w.losses,0.001)+'"></i></div>'+
+  '<div class="wlfoot"><span class="w"><b>'+w.wins+'</b> 勝</span>'+
+  '<span>'+w.n+' 筆</span><span class="l"><b>'+w.losses+'</b> 敗</span></div>';
  if(ST.recent&&ST.recent.length){
    h+='<div class="list">';
    ST.recent.forEach(t=>h+=row(t,'s'));
@@ -2973,24 +3177,24 @@ function rvGeom(all){
 function rvBlank(msg,loading){
  const sv=document.getElementById('rsvg');
  sv.setAttribute('viewBox','0 0 '+RW+' '+RH);
- let g='<rect x="0" y="0" width="'+RW+'" height="'+RH+'" fill="#171C25"/>';
+ let g='<rect x="0" y="0" width="'+RW+'" height="'+RH+'" fill="#151A22"/>';
  if(loading){
    // 換一天要 0.4~1 秒（伺服器每次都要重篩 54 萬列）。單一行「載入中…」看起來像當掉，
    // 所以先畫出格線與呼吸中的假 K 棒 —— 跟即時分頁的骨架同一套語言。
    for(let k=1;k<5;k++){ const y=RTOP+(RPB-RTOP)*k/5;
      g+='<line x1="0" y1="'+y.toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+y.toFixed(1)+
-        '" stroke="#262D39" stroke-width="1"/>'; }
+        '" stroke="#232A35" stroke-width="1"/>'; }
    const H=[38,52,44,61,55,70,64,48,57,72,66,80,74,59,68,52,63,47,58,66,51,71,60,45];
    const cw=(RW-RR)/H.length;
    H.forEach(function(h,i){
      const bh=(RPB-RTOP)*h/140, y=RTOP+(RPB-RTOP)*0.5-bh/2;
      g+='<rect x="'+(i*cw+cw*0.22).toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+(cw*0.56).toFixed(1)+
-        '" height="'+bh.toFixed(1)+'" rx="2" fill="#1F2530">'+
+        '" height="'+bh.toFixed(1)+'" rx="2" fill="#1C222C">'+
         '<animate attributeName="opacity" values="0.35;0.7;0.35" dur="1.6s" begin="'+
         (i*0.045).toFixed(2)+'s" repeatCount="indefinite"/></rect>';
    });
  }
- g+='<text x="'+(RW/2)+'" y="'+(loading?RPB+34:RH/2)+'" fill="#5A616E" font-size="'+
+ g+='<text x="'+(RW/2)+'" y="'+(loading?RPB+34:RH/2)+'" fill="#5C6472" font-size="'+
     (loading?13:16)+'" text-anchor="middle">'+msg+'</text>';
  sv.innerHTML=g;
  rset('rlegend','');
@@ -3051,17 +3255,17 @@ function rvDraw(C,D){
      g+='<rect x="'+x0.toFixed(1)+'" y="'+Math.min(yA,yB).toFixed(1)+'" width="'+(x1-x0).toFixed(1)+
         '" height="'+Math.abs(yB-yA).toFixed(1)+'" fill="'+col+'" opacity=".16"/>'+
         '<rect x="'+x0.toFixed(1)+'" y="'+RTOP+'" width="'+(x1-x0).toFixed(1)+'" height="'+(RPB-RTOP)+
-        '" fill="#E7E9ED" opacity=".025"/>';
+        '" fill="#E9ECF1" opacity=".025"/>';
    }
  }
 
  /* 價格格線 */
- g+='<rect x="'+(RW-RR)+'" y="0" width="'+RR+'" height="'+RH+'" fill="#1F2530" opacity=".45"/>';
+ g+='<rect x="'+(RW-RR)+'" y="0" width="'+RR+'" height="'+RH+'" fill="#1C222C" opacity=".45"/>';
  for(let k=0;k<=5;k++){
    const v=lo+(hi-lo)*k/5, yy=y(v);
    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+yy.toFixed(1)+
-      '" stroke="#262D39" stroke-width="1"/><text x="'+(RW-RR+8)+'" y="'+(yy+4).toFixed(1)+
-      '" fill="#5A616E" font-size="12" font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
+      '" stroke="#232A35" stroke-width="1"/><text x="'+(RW-RR+8)+'" y="'+(yy+4).toFixed(1)+
+      '" fill="#5C6472" font-size="12" font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
  }
 
  /* 停利／停損線 */
@@ -3090,18 +3294,18 @@ function rvDraw(C,D){
    const x0=(gi(G.rev)+0.5)*cw+cw*0.2;
    g+='<rect x="'+x0.toFixed(1)+'" y="'+RTOP+'" width="'+(RW-RR-x0).toFixed(1)+'" height="'+
       (RH-RTOP-RBOT)+'" fill="url(#hatch)" opacity=".85"/>'+
-      '<text x="'+(x0+(RW-RR-x0)/2).toFixed(1)+'" y="'+(RTOP+26)+'" fill="#5A616E" font-size="12.5" '+
+      '<text x="'+(x0+(RW-RR-x0)/2).toFixed(1)+'" y="'+(RTOP+26)+'" fill="#5C6472" font-size="12.5" '+
       'text-anchor="middle">後面還沒揭曉</text>';
  }
 
  /* 成交量 */
  g+='<line x1="0" y1="'+(RH-RBOT-RVOLH-RGAP/2).toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+
-    (RH-RBOT-RVOLH-RGAP/2).toFixed(1)+'" stroke="#262D39" stroke-width="1"/>';
+    (RH-RBOT-RVOLH-RGAP/2).toFixed(1)+'" stroke="#232A35" stroke-width="1"/>';
  B.forEach((b,i)=>{ if(G.from+i>G.rev) return;
    const col=b.c>=b.o?'#EE5A54':'#34B37E', X=x(i), yy=vy(b.v);
    g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+
       '" height="'+Math.max(0.8,RH-RBOT-yy).toFixed(1)+'" fill="'+col+'" opacity=".5"/>'; });
- g+='<text x="'+(RW-RR+8)+'" y="'+(RH-RBOT-RVOLH+10)+'" fill="#5A616E" font-size="11" '+
+ g+='<text x="'+(RW-RR+8)+'" y="'+(RH-RBOT-RVOLH+10)+'" fill="#5C6472" font-size="11" '+
     'font-family="ui-monospace,monospace">'+(vmax>=10000?(vmax/1000).toFixed(0)+'k':vmax.toFixed(0))+'</text>';
 
  /* 09:30 下單時段結束 */
@@ -3109,20 +3313,17 @@ function rvDraw(C,D){
    if(i>0){ const X=(i*cw).toFixed(1);
      g+='<line x1="'+X+'" y1="'+RTOP+'" x2="'+X+'" y2="'+(RH-RBOT)+'" stroke="#E3A951" '+
         'stroke-width="1" stroke-dasharray="2 5" opacity=".5"/>'+
-        '<text x="'+(+X+5)+'" y="'+(RH-RBOT-6)+'" fill="#5A616E" font-size="10.5">09:30</text>'; } }
+        '<text x="'+(+X+5)+'" y="'+(RH-RBOT-6)+'" fill="#5C6472" font-size="10.5">09:30</text>'; } }
 
- /* ---- 進出場標記 ----------------------------------------------------------
-    Benson 明講「進場跟出場的時間標記太小」，所以箭頭／✕ 與時間文字都放大，
-    文字加半透明底色不會被 K 棒吃掉。進出場時間很近時（09:02 進、09:05 出）
-    文字方塊會自動上下錯開，並拉一條細線指回標記，才不會分不清誰是誰。 */
- const LBOX=[];
+ /* ---- 進出場標記（跟即時分頁同一套）--------------------------------------
+    圖區只留形狀（三角形＝進場、菱形＝出場、中間一條連線與淡色持有區間），
+    所有文字搬到本來就空著的兩條軌：右側價格軸掛價位、底部時間軸帶掛時間與損益。
+    Benson 2026-08-17 回報「時間標示有點擋路」—— 他的單 5~15 分鐘就結束，
+    進出場在 x 軸上非常近，舊版兩塊描邊文字必然互相推擠、還壓住那幾根關鍵 K 棒。 */
+ const AXB=[], LANE=[], laneX=[];
  function txtW(s,fs){ let w=0;
    for(let i=0;i<s.length;i++) w+=(s.charCodeAt(i)>255?1.0:0.6)*fs;
    return w; }
- // 價位掛在右側價格軸（本來就是空的灰帶），時間／損益用小字貼在標記旁 ——
- // 兩版之前是「漂在圖中間的大膠囊」，上一版改成左緣大色塊，都還是壓住 K 棒
- // （Benson 2026-08-17：「時間標示有點擋路」）。現在圖區只剩標記本身。
- const AXB=[];
  function axisChip(aY,txt,col,dim){
    const h=17; let py=aY-h/2;
    for(let k=0;k<6;k++){
@@ -3130,73 +3331,90 @@ function rvDraw(C,D){
      if(!AXB.some(b=>py<b+h&&b<py+h)) break;
    }
    AXB.push(py);
-   const o=dim?.4:1;
+   const o=dim?'.55':'1';
    return '<rect x="'+(RW-RR+1)+'" y="'+py.toFixed(1)+'" width="'+(RR-2)+'" height="'+h+
-     '" rx="3" fill="'+col+'" opacity="'+o+'"/>'+
-     '<text x="'+(RW-RR+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0F1218" font-size="11.5"'+
+     '" rx="4" fill="'+col+'" opacity="'+o+'"/>'+
+     '<text x="'+(RW-RR+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0E1116" font-size="11.5"'+
      ' font-weight="700" font-family="ui-monospace,monospace" opacity="'+o+'">'+txt+'</text>';
  }
- function caption(X,baseY,sign,txt,col,dim){
-   const fs=11, w=txtW(txt,fs), h=fs+3;
-   let by=baseY;
-   for(let k=0;k<5;k++){
-     by=Math.max(RTOP+fs,Math.min(RH-RBOT-2,baseY+sign*k*(h+3)));
-     const bx=X-w/2;
-     if(!LBOX.some(b=>bx<b.x+b.w&&b.x<bx+w&&by-fs<b.y+b.h&&b.y<by-fs+h)) break;
+ function lanePill(X,txt,col,dim){
+   const fs=10.5, w=txtW(txt,fs)+13, h=17;
+   let px=Math.max(1,Math.min(RW-RR-w-1,X-w/2));
+   for(let k=0;k<8;k++){
+     if(!LANE.some(b=>px<b.x+b.w+3&&b.x<px+w+3)) break;
+     px=Math.min(RW-RR-w-1,px+w+5);
    }
-   LBOX.push({x:X-w/2,y:by-fs,w:w,h:h});
-   return '<text x="'+X.toFixed(1)+'" y="'+by.toFixed(1)+'" text-anchor="middle" fill="'+col+
-     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace"'+
-     ' stroke="#0F1218" stroke-width="3.2" paint-order="stroke" stroke-linejoin="round"'+
-     (dim?' opacity=".4"':'')+'>'+txt+'</text>';
+   LANE.push({x:px,w:w});
+   const o=dim?'.55':'1';
+   return '<g opacity="'+o+'"><rect x="'+px.toFixed(1)+'" y="'+(RH-RBOT+3)+'" width="'+w.toFixed(1)+
+     '" height="'+h+'" rx="5" fill="#0E1116" fill-opacity=".92" stroke="'+col+
+     '" stroke-opacity=".55"/>'+
+     '<text x="'+(px+w/2).toFixed(1)+'" y="'+(RH-RBOT+15)+'" text-anchor="middle" fill="'+col+
+     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text></g>';
  }
- function mark(price,t,dir,kind,net,dim){
-   const ia=idxAt(all,t), i=gi(ia);
+ /* r＝{entry,time,exit,exit_time,dir,net}；pre＝膠囊前綴（揭曉後的「當天」那一筆） */
+ function markTrade(r,dim,pre){
+   const ia=idxAt(all,r.time), i=gi(ia);
    if(ia<0||i<0||i>=B.length) return '';
-   const X=x(i), Y=y(price), long=dir==='long';
-   const col=kind==='in'?(long?'#EE5A54':'#34B37E'):(net>0?'#EE5A54':'#34B37E');
-   const op=dim?' opacity=".4"':'';
-   // 價格線貫穿全圖，左緣掛小標籤
-   let s='<line x1="0" y1="'+Y.toFixed(1)+'" x2="'+(RW-RR).toFixed(1)+'" y2="'+Y.toFixed(1)+
-     '" stroke="'+col+'" stroke-width="1" stroke-dasharray="5 4" opacity="'+(dim?.22:.5)+'"/>';
-   if(kind==='in'){
-     // 三角形貼在 K 棒外側、尖端指向進場價；描深色邊框才不會被 K 棒吃掉
-     const tipY=long?Y+7:Y-7, endY=long?Y+25:Y-25;
-     s+='<path d="M'+(X-9)+' '+endY+' L'+X+' '+tipY+' L'+(X+9)+' '+endY+
-        ' Z" fill="'+col+'" stroke="#0F1218" stroke-width="1.6" stroke-linejoin="round"'+op+'/>';
-   } else {
-     // 出場用實心圓底＋白叉，在任何 K 棒上都看得見
-     const r=8.5;
-     s+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="'+r+'" fill="'+col+
-        '" stroke="#0F1218" stroke-width="1.6"'+op+'/>'+
-        '<path d="M'+(X-3.6)+' '+(Y-3.6)+' L'+(X+3.6)+' '+(Y+3.6)+' M'+(X-3.6)+' '+(Y+3.6)+
-        ' L'+(X+3.6)+' '+(Y-3.6)+'" stroke="#0F1218" stroke-width="2.2" stroke-linecap="round"'+op+'/>';
+   const X=x(i), Y=y(r.entry), long=r.dir==='long', col=long?'#EE5A54':'#34B37E';
+   const o=dim?' opacity=".55"':'';
+   const je=r.exit_time?gi(idxAt(all,String(r.exit_time).slice(0,5))):-1;
+   const hasExit=r.exit!=null&&je>=0&&je<B.length;
+   const XE=hasExit?x(je):null, YE=hasExit?y(r.exit):null;
+   const ec=(r.net!=null&&r.net>0)?'#EE5A54':'#34B37E';
+   let s='';
+   if(hasExit){
+     const yTop=Math.min(Y,YE), yBot=Math.max(Y,YE);
+     s+='<g'+o+'><rect x="'+(X-cw/2).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+
+        Math.max(cw,(XE-X)+cw).toFixed(1)+'" height="'+Math.max(2,yBot-yTop).toFixed(1)+
+        '" fill="'+ec+'" opacity=".10"/>'+
+        '<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
+        '" y2="'+Y.toFixed(1)+'" stroke="'+col+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>'+
+        '<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
+        '" y2="'+YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>'+
+        '<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+
+        YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.8" opacity=".9" stroke-linecap="round"/></g>';
    }
-   const capY=kind==='in'?(long?Y+38:Y-30):(Y<RPB-40?Y+22:Y-14);
-   const capS=kind==='in'?(long?1:-1):(Y<RPB-40?1:-1);
-   s+=caption(X,capY,capS,(kind==='in'?'進 ':'出 ')+t+
-     (kind==='out'&&net!=null?'  '+pm(net):''),col,dim);
-   s+=axisChip(Y,String(Math.round(price)),col,dim);
+   const tri=long?('M'+(X-7.5)+' '+(Y+16)+' L'+X+' '+(Y+3.5)+' L'+(X+7.5)+' '+(Y+16)+' Z')
+                 :('M'+(X-7.5)+' '+(Y-16)+' L'+X+' '+(Y-3.5)+' L'+(X+7.5)+' '+(Y-16)+' Z');
+   s+='<g'+o+'><line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+
+      (RH-RBOT)+'" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>'+
+      '<path d="'+tri+'" fill="'+col+'" stroke="#0E1116" stroke-width="1.8" stroke-linejoin="round"/>'+
+      '<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="2.6" fill="'+col+
+      '" stroke="#0E1116" stroke-width="1.2"/></g>';
+   s+=axisChip(Y,String(Math.round(r.entry)),col,dim);
+   const near=hasExit&&(XE-X)<110;
+   const xt=hasExit?String(r.exit_time).slice(0,5):'';
+   const money=(r.net==null?'':'　'+pm(r.net));
+   if(!near) laneX.push([X,(pre||'')+(long?'▲ 進 ':'▼ 進 ')+r.time,col,dim]);
+   else laneX.push([(X+XE)/2,(pre||'')+(long?'▲ ':'▼ ')+r.time+'→'+xt+money,ec,dim]);
+   if(hasExit){
+     s+='<g'+o+'><line x1="'+XE.toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+XE.toFixed(1)+
+        '" y2="'+(RH-RBOT)+'" stroke="'+ec+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>'+
+        '<rect x="'+(XE-5.6).toFixed(1)+'" y="'+(YE-5.6).toFixed(1)+'" width="11.2" height="11.2"'+
+        ' rx="2.4" transform="rotate(45 '+XE.toFixed(1)+' '+YE.toFixed(1)+')" fill="'+ec+
+        '" stroke="#0E1116" stroke-width="1.8"/></g>';
+     s+=axisChip(YE,String(Math.round(r.exit)),ec,dim);
+     if(!near) laneX.push([XE,(pre||'')+'出 '+xt+money,ec,dim]);
+   }
    return s;
  }
  let mk='';
  if(MODE==='review'){
    // 一天多筆時全部畫出來：選中那筆實心，其餘半透明
-   dayTrades(C.day).forEach(x=>{
-     const t=x.t, dim=!(T&&x.i===sel.i);
-     mk+=mark(t.entry,t.time,t.dir,'in',null,dim);
-     if(t._exit_time) mk+=mark(t.exit,String(t._exit_time).slice(0,5),t.dir,'out',t._net,dim);
+   dayTrades(C.day).forEach(v=>{
+     const t=v.t;
+     mk+=markTrade({entry:t.entry,time:t.time,exit:t.exit,exit_time:t._exit_time,
+                    dir:t.dir,net:t._net},!(T&&sel&&v.i===sel.i));
    });
  } else if(RP.judge){
-   mk+=mark(RP.judge.entry,RP.judge.time,RP.judge.dir,'in');
-   if(RP.result) mk+=mark(RP.result.exit,RP.result.time,RP.judge.dir,'out',RP.result.net);
+   const J=RP.judge, Rr=RP.result;
+   mk+=markTrade({entry:J.entry,time:J.time,exit:Rr?Rr.exit:null,
+                  exit_time:Rr?Rr.time:null,dir:J.dir,net:Rr?Rr.net:null});
    if(RP.state==='revealed'){
      const rt=dayTrade(RP.date);            // 揭曉後把當天實際那筆疊上去對照
-     if(rt){ const i=gi(idxAt(all,rt.time));
-       if(i>=0&&i<B.length){ const X=x(i),Y=y(rt.entry);
-         mk+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="11" fill="none" stroke="#E3A951" '+
-             'stroke-width="2.2" stroke-dasharray="4 3"/>'+
-             label(X,Y,'當天你的進場 '+rt.time,'#E3A951','mid'); } }
+     if(rt) mk+=markTrade({entry:rt.entry,time:rt.time,exit:rt.exit,
+                           exit_time:rt._exit_time,dir:rt.dir,net:rt._net},true,'當天 ');
    }
  }
 
@@ -3206,14 +3424,19 @@ function rvDraw(C,D){
    lb=all[RHOVER.i]; hovering=true;
    const X=x(gi(RHOVER.i));
    g+='<line x1="'+X.toFixed(1)+'" y1="'+RTOP+'" x2="'+X.toFixed(1)+'" y2="'+(RH-RBOT)+
-      '" stroke="#8B92A0" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
+      '" stroke="#8D95A3" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
  }
- /* 時間刻度 */
+ /* 膠囊先算（避讓後位置才確定），時間刻度再依 LANE 的實際落點閃避 */
+ let pills='';
+ laneX.forEach(p=>{ pills+=lanePill(p[0],p[1],p[2],p[3]); });
  const step=Math.max(1,Math.ceil(B.length/9));
  B.forEach((b,i)=>{ if(i%step) return;
-   g+='<text x="'+x(i).toFixed(1)+'" y="'+(RH-6)+'" fill="#5A616E" font-size="11" '+
+   const X=x(i);
+   if(LANE.some(z=>X+24>z.x-4&&X-24<z.x+z.w+4)) return;
+   g+='<text x="'+X.toFixed(1)+'" y="'+(RH-9)+'" fill="#5C6472" font-size="11" '+
       'text-anchor="middle" font-family="ui-monospace,monospace">'+b.t+'</text>'; });
  g+=mk;                                   // 標記畫最後 → 壓在 K 棒上面，一眼看得到
+ g+=pills;
 
  /* 容器只建一次，這裡只換 svg 內容 */
  const sv=document.getElementById('rsvg');
@@ -3224,16 +3447,19 @@ function rvDraw(C,D){
  const op0=all[0].o, px=lb.c, chg=px-op0, pct=chg/op0*100;
  const wd=['日','一','二','三','四','五','六'][new Date(C.day+'T00:00:00').getDay()];
  const dts=dayTrades(C.day);
- rset('rhead','<div><span class="cpx '+sgn(chg)+'">'+f(px)+'</span> <span class="cchg '+sgn(chg)+'">'+
-   pm(chg)+' ('+pm(pct,2)+'%)</span></div>'+
-   '<div style="flex:1"><span class="cday">'+C.day+'（'+wd+'）</span>'+
-   (dts.length?'<span class="ctag">當天有 '+dts.length+' 筆紀錄</span>':'<span class="ctag">當天沒下單</span>')+
-   (MODE==='replay'?'<span class="ctag" style="color:var(--gold);border-color:rgba(227,169,81,.4)">重播中</span>':'')+
-   '</div>'+
+ // 跟即時分頁同一個 qblock：價格／漲跌膠囊／第三行灰字
+ rset('rhead','<div class="qblock"><div class="qmain">'+
+   '<span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
+   '<span class="cchg '+sgn(chg)+'">'+pm(chg)+'<span class="pct">'+pm(pct,2)+'%</span></span>'+
+   '</div><div class="qsub"><span>'+C.day+'（'+wd+'）</span><span class="sep">·</span>'+
+   '<span>日盤 08:45–13:45</span><span class="sep">·</span>'+
+   '<span>'+(dts.length?('當天有 '+dts.length+' 筆紀錄'):'當天沒下單')+'</span>'+
+   (MODE==='replay'?'<span class="sep">·</span><span style="color:var(--gold)">重播中（1 分 K）</span>':'')+
+   '</div></div>'+
    (MODE==='review'
      ?'<div class="tfsw"><button data-tf="1" class="'+(TF===1?'on':'')+'">1 分</button>'+
       '<button data-tf="5" class="'+(TF===5?'on':'')+'">5 分</button></div>'
-     :'<div class="cday" style="color:var(--faint)">1 分 K</div>'));
+     :''));
  const vol=lb.v>=10000?(lb.v/1000).toFixed(1)+'k':lb.v.toFixed(0);
  rset('rlegend','<span class="lt">'+lb.t+'</span><span>開 <b>'+f(lb.o)+'</b></span>'+
    '<span>高 <b>'+f(lb.h)+'</b></span><span>低 <b>'+f(lb.l)+'</b></span>'+
@@ -3241,7 +3467,7 @@ function rvDraw(C,D){
    '<span>量 <b>'+vol+'</b></span>'+(hovering?'':'<span class="lt">（最新一根）</span>'));
 }
 
-/* ---------------- 進場當下的客觀盤面（7 格） ---------------- */
+/* ---------------- 進場當下的客觀盤面（跟即時分頁同一條資料軌） ---------------- */
 function fstrip(D){
  let ft='進場當下的客觀盤面', F=null;
  if(MODE==='replay'){
@@ -3258,25 +3484,25 @@ function fstrip(D){
    if(s){ F=s.t._snap; ft='進場當下的客觀盤面（'+s.t.date.slice(5)+' '+s.t.time+'）'; }
  }
  document.getElementById('rftitle').textContent=ft;
- const box=document.getElementById('rfstrip');
- if(!F){ rset('rfstrip','<div class="fcell" style="grid-column:1/-1;color:var(--faint);'+
-   'text-align:center;padding:16px">這一刻沒有本機 K 棒可以重建盤面</div>'); return; }
- const c=(l,v,cls)=>'<div class="fcell"><div class="l">'+l+'</div><div class="v '+(cls||'flat')+
-   '">'+v+'</div></div>';
- rset('rfstrip',
-   c('最近 5 分',pm(F.mom5),sgn(F.mom5))+
-   c('最近 15 分',pm(F.mom15),sgn(F.mom15))+
-   c('對開盤',pm(F.ret_open),sgn(F.ret_open))+
-   c('跳空',pm(F.gap),sgn(F.gap))+
-   c('今日震幅',f(F.rng))+
-   c('位階',F.pos==null?'—':f(F.pos*100)+'%')+
-   c('量能',F.vol_ratio==null?'—':f(F.vol_ratio,2)+'倍'));
+ if(!F){ rset('rfstrip','<div class="grp"><div class="it" style="min-width:0">'+
+   '<div class="k">　</div><div class="v" style="color:var(--faint);font-size:12.5px">'+
+   '這一刻沒有本機 K 棒可以重建盤面</div></div></div>'); return; }
+ rset('rfstrip',railHTML([
+   [{k:'最近 5 分',v:pm(F.mom5),cls:sgn(F.mom5)},{k:'最近 15 分',v:pm(F.mom15),cls:sgn(F.mom15)}],
+   [{k:'對開盤',v:pm(F.ret_open),cls:sgn(F.ret_open)},{k:'跳空',v:pm(F.gap)},
+    {k:'今日震幅',v:f(F.rng)},
+    {k:'位階',v:F.pos==null?'—':f(F.pos*100)+'%',
+     track:F.pos==null?null:F.pos*100,hot:F.pos>0.8||F.pos<0.2},
+    {k:'量能',v:F.vol_ratio==null?'—':f(F.vol_ratio,2),u:F.vol_ratio==null?'':'倍',
+     track:F.vol_ratio==null?null:F.vol_ratio/3*100,hot:F.vol_ratio>1.5}]
+ ]));
 }
 
 /* ---------------- 右欄：翻紀錄 ---------------- */
 function rowHTML(x){
  const t=x.t, rs=REASON[t._reason]||'';
- return '<div class="trade'+(x.i===SEL?' sel':'')+'" data-rpick="'+x.i+'">'+
+ return '<div class="trade '+(t._net>0?'win':'loss')+(x.i===SEL?' sel':'')+
+   '" data-rpick="'+x.i+'">'+
    '<div class="tr-top"><span class="tr-date">'+(t.date||'').slice(5)+'</span>'+
    '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
    '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
@@ -3480,7 +3706,9 @@ function paneReplay(D){
  }
  return h;
 }
-/* 播放控制列（在圖的正下方，眼睛不用離開圖） */
+/* 播放控制列（在圖的正下方，眼睛不用離開圖）。
+   兩行：上行運鏡（播放鍵是唯一的金色 ⇒ 一眼看得出主要動作），
+   下行時間軸 —— 看得出「現在走到哪、還有多長」，也可以點著跳。 */
 function ctrlHTML(D){
  if(MODE!=='replay'){
    return '<div class="chint"><span style="color:var(--dim)">'+
@@ -3491,7 +3719,22 @@ function ctrlHTML(D){
  if(!B.length) return '<div class="chint">這天沒有 K 棒</div>';
  const playing=RP.state==='running'||(RP.timer!=null);
  const cur=B[Math.min(RP.rev,B.length-1)];
- return '<div class="rpbar">'+
+ const last=Math.max(1,B.length-1);
+ const pctOf=t=>{ const i=idxAt(B,t); return (i<0?0:i)/last*100; };
+ const fill=Math.min(RP.rev,last)/last*100;
+ const wa=pctOf('08:45'), wb=pctOf('09:30');
+ let ticks='';
+ ['08:45','09:30','11:00','13:40'].forEach(t=>{
+   const p=pctOf(t); if(p<=0&&t!=='08:45') return;
+   ticks+='<span class="tk" style="left:'+p.toFixed(2)+'%">'+t+'</span>';
+ });
+ // 判斷點：這次按下做多／做空的那一根（多紅、空綠）
+ const jm=RP.judge?'<span class="jm" style="left:'+pctOf(RP.judge.time).toFixed(2)+'%;background:'+
+   (RP.judge.dir==='long'?'var(--up)':'var(--down)')+'"></span>':'';
+ // 揭曉後不接受跳轉（那是對照用的定格）；已經進場、還在等結果時也不行 ——
+ // 跳過去等於跳過中間那幾根的 ±100 觸價檢查，結果會算錯（紀錄正確性）。
+ const locked=RP.state==='revealed'||!!RP.judge;
+ return '<div class="rpbar"><div class="rprow">'+
    '<button class="rpbtn" data-ract="rphome" title="回到 08:45">⏮</button>'+
    '<button class="rpbtn" data-ract="rpback" title="退一根">◀</button>'+
    '<button class="rpbtn play" data-ract="'+(playing?'rppause':'rpplay')+'">'+
@@ -3499,8 +3742,15 @@ function ctrlHTML(D){
    '<button class="rpbtn" data-ract="rpstep" title="下一根">▶▶</button>'+
    '<div class="rpsp">'+SPEEDS.map(s=>'<button data-rspeed="'+s[0]+'" class="'+
      (RP.speed===s[0]?'on':'')+'">×'+s[0]+'</button>').join('')+'</div>'+
+   // 「已揭曉」講的是狀態，不能拿 locked 來判 —— locked 還包含「已進場、等結果中」，
+   // 那時候後面明明還蓋著，卻會寫成已揭曉（QA 退件：走 20 根按做多就重現）。
    '<div class="rppos"><b>'+cur.t+'</b>　'+(RP.rev+1)+' / '+B.length+' 根'+
-     (RP.state==='revealed'?'　已揭曉':'')+'</div></div>';
+     (RP.state==='revealed'?'　已揭曉':'')+'</div></div>'+
+   '<div class="rpscrub'+(locked?' locked':'')+'"'+(locked?'':' data-rseek="1"')+
+   ' title="點著跳到那一根"><div class="trk"></div>'+
+   '<div class="win" style="left:'+wa.toFixed(2)+'%;width:'+Math.max(0,wb-wa).toFixed(2)+'%"></div>'+
+   '<div class="fill" style="width:'+fill.toFixed(2)+'%"></div>'+jm+
+   '<div class="knob" style="left:'+fill.toFixed(2)+'%"></div>'+ticks+'</div></div>';
 }
 
 /* ---------------- 繪製與事件 ---------------- */
@@ -3624,6 +3874,21 @@ document.addEventListener('click',function(e){
  if(pk){ rvPick(parseInt(pk.getAttribute('data-rpick'))); return; }
  const dy=e.target.closest('[data-rday]');
  if(dy){ rpReset(dy.getAttribute('data-rday')); rvRender(); return; }
+ // 點時間軸跳到那一根：跳之前先停掉播放；已揭曉就不接受跳轉（那是對照用的定格）
+ const sk=e.target.closest('[data-rseek]');
+ if(sk){
+   const B=rpBars();
+   if(B&&B.length&&RP.state!=='revealed'&&!RP.judge){
+     const r=sk.getBoundingClientRect();
+     const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+     rpStop();
+     if(RP.state==='idle') RP.state='paused';
+     RP.rev=Math.max(1,Math.round(p*(B.length-1)));
+     RP.axis=null;                       // 價格軸只擴不縮，跳轉後要重算
+     rvRender();
+   }
+   return;
+ }
  const sp=e.target.closest('[data-rspeed]');
  if(sp){ RP.speed=parseFloat(sp.getAttribute('data-rspeed'));
    if(RP.timer) rpPlay(); else rvRender(); return; }
