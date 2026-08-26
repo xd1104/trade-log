@@ -381,7 +381,7 @@ def reset_for_new_day(st):
     跨過午夜時把「日盤專用」的欄位清乾淨，其餘保留。
 
     【為什麼不整個重建 Today】00:00~05:00 夜盤還在跑，minute_bar / minute_close
-    是圖上「最新那根 K 棒」與 5/15 分動能的來源（見 merge_live_tail），
+    是圖上「最新那根 K 棒」與 5/15 分動能的來源（見 overlay_live），
     整個換掉的話夜盤的線會停住、動能會變成 0。
 
     【為什麼一定要清】open/high/low/vol 的定義是「今天日盤」。不清的話
@@ -784,9 +784,9 @@ def day_bars(day=None, tf=CHART_TF, full=False):
             if g is None or g.empty:
                 return {"date": str(d), "bars": [], "trades": [], "tf": tf, "full": True,
                         "error": None if SESSION_REF.get("api") else "尚未連線，且本機沒有這幾天的資料"}
-            bars = to_timeframe(g, tf, base)
             if d == date.today():
-                bars = merge_live_tail(bars, tf, base)
+                g = overlay_live(g)          # 先在 1 分 K 這一層換掉還沒收完的那幾分鐘
+            bars = to_timeframe(g, tf, base)
         except Exception as e:
             return {"error": str(e)[:120]}
         return {"date": str(d), "bars": bars, "trades": _day_trades(d), "tf": tf,
@@ -819,9 +819,9 @@ def day_bars(day=None, tf=CHART_TF, full=False):
         df["ts"] = pd.to_datetime(df["ts"])
         g = df[(df["ts"].dt.time >= SESSION_OPEN)
                & (df["ts"].dt.time < DAY_END)].sort_values("ts")
-        bars = to_timeframe(g, tf)
         if d == date.today():
-            bars = merge_live_tail(bars, tf)
+            g = overlay_live(g)
+        bars = to_timeframe(g, tf)
         if tf == 1:
             # 逐根的客觀盤面（重播時「目前這一刻」要跟著更新）——只有 1 分 K 對得準
             feats = day_features(bars, d)
@@ -923,7 +923,11 @@ def _raw_days(days, report=None):
 
 _SESS_BACK = {}     # 交易日 → 它前五天的原始 K 棒（過去的資料不會變，永久留著）
 _SESS_OWN = {}      # 日期 → 該日的原始 K 棒（只快取過去的日子，今天的還在長）
+_TODAY_RAW = {}     # 今天的原始 K 棒：短期快取，見 TODAY_TTL
 SESS_RETRY = 60     # 抓不到資料時隔多久再試一次
+# 今天的 kbars 一分鐘才變一次，不必每次要圖都跟永豐重抓（實測整支 0.5~0.85 秒）。
+# 還沒收完的那幾分鐘由 overlay_live() 用即時 tick 換掉，所以壓成 20 秒不會讓畫面變舊。
+TODAY_TTL = 20
 
 
 def _csv_stamp():
@@ -961,6 +965,24 @@ def _cached_raw(cache, key, days):
     return df
 
 
+def _today_raw(d):
+    """
+    今天的原始 1 分 K，帶 TODAY_TTL 秒的短快取。
+
+    【為什麼要快取】前端每 3 秒要一次圖，這裡不快取就是每 3 秒跟永豐打一次 kbars ——
+    實測 /api/bars 整支要 0.5~0.85 秒，幾乎都花在這。而今天的 kbars 一分鐘才變一次。
+    【為什麼快取 20 秒不會讓畫面變舊】還沒收完的那幾分鐘是 overlay_live() 用即時
+    tick 現算的，不靠 kbars；kbars 只負責已經收完的那些分鐘。
+    """
+    hit = _TODAY_RAW.get(d)
+    if hit is not None and time.time() - hit["at"] < TODAY_TTL:
+        return hit["df"]
+    df = _raw_days([d])
+    _TODAY_RAW.clear()          # 只留今天那一筆，跨日自然就沒了
+    _TODAY_RAW[d] = {"df": df, "at": time.time()}
+    return df
+
+
 def session_frame(d):
     """
     交易日 d 的完整 1 分 K：前一個交易日 15:00 的夜盤 → d 的日盤 13:45 收盤。
@@ -980,7 +1002,7 @@ def session_frame(d):
 
     back = _cached_raw(_SESS_BACK, key, [d - timedelta(days=k) for k in range(5, 0, -1)])
     # 今天的 K 棒還在長，不能快取；過去的日子抓一次就夠
-    own = _raw_days([d]) if d == today else _cached_raw(_SESS_OWN, key, [d])
+    own = _today_raw(d) if d == today else _cached_raw(_SESS_OWN, key, [d])
 
     pool = [x for x in (back, own) if x is not None and not x.empty]
     if not pool:
@@ -1006,6 +1028,49 @@ def session_frame(d):
     base = (pd.Timestamp.combine(n, NIGHT_OPEN) if n is not None
             else pd.Timestamp.combine(d, SESSION_OPEN))
     return g, base
+
+
+def overlay_live(g):
+    """
+    用即時 tick 覆蓋掉「還沒收完」的那幾分鐘，回傳新的 1 分 K 表。
+
+    【一定要在 1 分 K 這一層做】永豐的 kbars 會給一根還沒收完的當前分鐘，
+    所以「kbars 涵蓋到哪一分鐘」永遠含當前這分鐘。如果等合成完 N 分 K 再補，
+    那一分鐘會被當成「已經有了」而跳過 —— 畫面就一直吃永豐那份幾秒前的半成品，
+    價格在跳、K 棒不動（Benson 2026-08-26 回報，實測差到 19 點）。
+    同一層才能「換掉」而不是「加上去」，量也就不會重複計。
+
+    只換 kbars 最後那一分鐘（含）之後的部分，前面已經收完的分鐘一律以永豐為準 ——
+    面板自己累的量會因為斷線重連而少算，歷史的部分不要拿它去蓋。
+    """
+    st = CURRENT_STATE.get("today")
+    if g is None or g.empty or st is None or not getattr(st, "minute_bar", None):
+        return g
+    now = datetime.now()
+    today = now.date()
+    rows = []
+    for mi, b in st.minute_bar.items():
+        hh, mm = divmod(int(mi), 60)
+        t0 = dtime(hh, mm)
+        if not (SESSION_OPEN <= t0 < DAY_END or t0 >= NIGHT_OPEN or t0 <= NIGHT_TAIL):
+            continue                                   # 13:45~15:00 沒在交易
+        # minute_bar 的鍵只有「分鐘」沒有日期：08:45 之前看到的「15:00 以後」是昨晚的
+        d0 = (today - timedelta(days=1)
+              if (now.time() < SESSION_OPEN and t0 >= NIGHT_OPEN) else today)
+        rows.append({"ts": pd.Timestamp.combine(d0, t0) + pd.Timedelta(minutes=1),
+                     "Open": float(b["o"]), "High": float(b["h"]),
+                     "Low": float(b["l"]), "Close": float(b["c"]),
+                     "Volume": float(b["v"])})
+    if not rows:
+        return g
+    live = pd.DataFrame(rows)
+    edge = g["ts"].max()                               # kbars 最後那一根（結束時間標記）
+    live = live[live["ts"] >= edge]
+    if live.empty:
+        return g
+    # 只丟掉「真的有即時版本可以取代」的那幾列，其餘原封不動
+    keep = g[~g["ts"].isin(set(live["ts"]))]
+    return pd.concat([keep, live], ignore_index=True).sort_values("ts")
 
 
 def to_timeframe(g, minutes, base=None):
@@ -1040,65 +1105,6 @@ def to_timeframe(g, minutes, base=None):
                     "o": float(blk["Open"].iloc[0]), "h": float(blk["High"].max()),
                     "l": float(blk["Low"].min()), "c": float(blk["Close"].iloc[-1]),
                     "v": float(blk["Volume"].sum())})
-    return out
-
-
-def merge_live_tail(bars, tf, base=None):
-    """
-    用即時 tick 補完「還在形成中」的那根 K 棒。
-
-    永豐的 kbars 是一分鐘給一次，所以最新那根的量每分鐘才跳一次，
-    看起來像卡住不動；大戶投是用即時成交累加的，才會一直在跑。
-    這裡把「kbars 還沒涵蓋到的那幾分鐘」用 tick 累積的資料補上去。
-
-    【夜盤要跨午夜】minute_bar 的鍵只有「分鐘」沒有日期。狀態每天 08:30 重建，
-    所以在 08:45 之前看到的「15:00 以後」那些鍵，指的是昨晚的夜盤，不是今晚。
-    """
-    st = CURRENT_STATE.get("today")
-    if st is None or not st.minute_bar:
-        return bars
-    now = datetime.now()
-    nowt, today = now.time(), now.date()
-    base = pd.Timestamp(base) if base is not None else pd.Timestamp.combine(today, SESSION_OPEN)
-
-    live = []
-    for mi, b in st.minute_bar.items():
-        hh, mm = divmod(int(mi), 60)
-        t0 = dtime(hh, mm)
-        if not (SESSION_OPEN <= t0 < DAY_END or t0 >= NIGHT_OPEN or t0 <= NIGHT_TAIL):
-            continue                            # 13:45~15:00 沒在交易，不畫
-        d0 = today - timedelta(days=1) if (nowt < SESSION_OPEN and t0 >= NIGHT_OPEN) else today
-        live.append((pd.Timestamp.combine(d0, t0), b))
-    if not live:
-        return bars
-    live.sort()
-
-    covered = base                              # kbars 已經完成到哪一刻
-    if bars:
-        last = bars[-1]
-        covered = pd.Timestamp(f'{last["d"]} {last["t"]}') + pd.Timedelta(minutes=tf)
-    extra = [(dt, b) for dt, b in live if dt >= covered]
-    if not extra:
-        return bars
-
-    # 把多出來的分鐘照 tf 分組，接到後面
-    out, slots = list(bars), {}
-    for dt, b in extra:
-        slots.setdefault(int((dt - base).total_seconds() // (tf * 60)), []).append(b)
-    for k in sorted(slots):
-        ms = slots[k]
-        start = base + pd.Timedelta(minutes=tf * k)
-        t, ds = start.strftime("%H:%M"), start.strftime("%Y-%m-%d")
-        bar = {"t": t, "d": ds, "o": ms[0]["o"], "h": max(m["h"] for m in ms),
-               "l": min(m["l"] for m in ms), "c": ms[-1]["c"],
-               "v": sum(m["v"] for m in ms)}
-        if out and out[-1]["t"] == t and out[-1].get("d") == ds:      # 同一根 → 合併
-            prev = out[-1]
-            out[-1] = {"t": t, "d": ds, "o": prev["o"], "h": max(prev["h"], bar["h"]),
-                       "l": min(prev["l"], bar["l"]), "c": bar["c"],
-                       "v": prev["v"] + bar["v"]}
-        else:
-            out.append(bar)
     return out
 
 
@@ -2349,7 +2355,10 @@ var HOVER={i:null};   // 游標對到的 K 棒（全域索引），null＝顯示
 var DRAG=null;
 
 function fetchBars(force){
- if(!force && Date.now()-barsAt<3000) return;
+ // 3 秒 → 1 秒。以前 /api/bars 整支要 0.5~0.85 秒（每次都跟永豐重抓今天的 K 棒），
+ // 抓密一點只是白費力氣；現在今天的 kbars 有 20 秒短快取、最新那幾分鐘由 tick 現算，
+ // 實測 0.04~0.07 秒，所以可以跟著報價一起跳。tick() 本身是 0.5 秒一次。
+ if(!force && Date.now()-barsAt<1000) return;
  barsAt=Date.now();
  // force＝使用者換日（含按「今天」回到即時）。到新資料回來為止都算「載入中」。
  // 不能只靠「curDay() 跟 barsCache.date 不一樣」判斷 —— 按「今天」時 viewDate 變成空字串，
