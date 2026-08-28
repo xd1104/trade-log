@@ -194,23 +194,32 @@ Benson 早上下單前要看得到昨晚怎麼走（2026-08-21 提的），只�
 ## 桌面 App（panel_app.pyw）
 
 雙擊桌面／開始功能表的「早盤儀表板」→ `pythonw.exe panel_app.pyw`：
-先確認伺服器活著（沒有就開起來並看門狗顧著），再用 Edge 開一個專屬視窗；視窗關掉就整組收乾淨。
+先確認伺服器活著（沒有就開起來並看門狗顧著），再**自己開一個視窗**（pywebview，
+底層是 Windows 11 內建的 WebView2）；視窗關掉就整組收乾淨。
+
+- **視窗不能交給 Edge 開**（2026-08-28 換掉）。用 `--app` / `--app-id` 時視窗的擁有者是
+  Edge，Windows 就把它算在 Edge 頭上 ⇒ **工作列顯示 Edge 的圖示，安裝成 PWA 也一樣**。
+  現在視窗是 `pythonw` 這個行程的，開視窗前先
+  `SetCurrentProcessExplicitAppUserModelID("Benson.MorningPanel")` ＋ 帶 `icon=panel.ico`，
+  圖示與工作列就都是我們的（實測視窗擁有者從 msedge 變成 pythonw）。
+- 依賴：`pywebview`（＋`pythonnet`），裝在 repo 的 .venv 裡。WebView2 執行階段 Win11 內建。
 
 - **捷徑會被 Edge 蓋掉**（2026-08-28 踩到）。把面板安裝成 PWA 時，Edge 會在桌面建一個
   **同名**的捷徑，直接覆蓋我們那個 —— 之後點下去只會開視窗、**不會啟動伺服器**，
   畫面就是「127.0.0.1 拒絕連線」。安裝完要把捷徑重寫回指向 `panel_app.pyw`。
-- **不可以用「等 Edge 那個行程結束」判斷關窗**。`--app-id` 啟動的行程會立刻交棒給既有的
-  Edge 行程然後自己結束，實測 **1 秒**就被誤判成關窗 ⇒ 伺服器被收掉、畫面拒絕連線。
-  改成問面板 `/api/idle`：開著的視窗每 0.5 秒會要一次 `/api/state`，超過 `IDLE_CLOSE`
-  秒沒人要就是關了。`/api/idle` 自己不算觀眾（不更新 `LAST_CLIENT`）。
-- **開視窗一律用 `--app=URL`**。`--app-id` 與 Edge 自己捷徑那組 `msedge_proxy`
-  （`--profile-directory=Default --app-id=… --app-url=…`）在這個專屬設定檔底下
-  **都開不出視窗**（實測：沒有任何視窗、`/api/idle` 一直是 null）。裝過之後 Edge 會自己
-  把這個網址認回已安裝的應用程式。
-- **app id 不要自己算**。照 Chromium 那套 SHA-256 推出來的跟 Edge 實際用的對不起來
-  （算出 `kkbjodnh…`、Edge 用 `gflghkeo…`）。要就去 `<設定檔>/Default/Web Applications/`
-  底下看 `_crx__<id>` 或 `Manifest Resources/<id>`。
-- 設定檔在 `%LOCALAPPDATA%\MorningPanelApp`，跟他自己的 Edge 完全分開。
+- 設定檔（WebView2 的 storage）在 `%LOCALAPPDATA%\MorningPanelApp`，跟他自己的 Edge 分開。
+
+### 走過但行不通的路（別再試一次）
+
+用 Edge 開視窗的那一版踩了一整串，全部作廢，留著當紀錄：
+- `--app-id` 啟動的行程 **1 秒就自己結束**（交棒給既有的 Edge），拿它當「視窗關了」會一開就誤判。
+- 改看「多久沒人來要 `/api/state`」也不行：視窗**縮到最小或切到背景時 Edge 會把頁面計時器降頻**，
+  看起來像沒人在看，伺服器會被誤殺（實測 24 秒沒輪詢，視窗其實還開著）。
+  `/api/idle` 這個端點還留著，當作除錯用。
+- `--app-id` 與 Edge 自己捷徑那組 `msedge_proxy`（`--profile-directory=Default --app-id=…
+  --app-url=…`）在專屬設定檔底下**都開不出視窗**（沒有任何視窗、`/api/idle` 一直是 null）。
+- app id 不要自己算：照 Chromium 那套 SHA-256 推出來是 `kkbjodnh…`、Edge 實際用 `gflghkeo…`。
+- **裝成 PWA 也救不了圖示** —— 裝好了工作列還是 Edge 的圖示（Benson 親自確認）。
 
 ## 檔案配置
 

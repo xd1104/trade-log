@@ -6,14 +6,14 @@
 
   1. 伺服器還沒起來就把 live_panel.py 開起來（隱藏視窗），並看門狗顧著它 ——
      永豐 SDK 斷線時會把整個行程帶走，這點跟 start-panel.bat 一樣不能少。
-  2. 用 Edge 的 app 模式開一個沒有網址列、沒有分頁的專屬視窗，
-     `--user-data-dir` 給它自己的設定檔，工作列才會是獨立一顆、不會跟 Edge 混在一起。
+  2. 自己開一個視窗（pywebview，底層是 Windows 11 內建的 WebView2）。
+     視窗是這個行程的，所以工作列顯示的是我們的圖示，關閉時機也拿得準。
   3. 關掉視窗＝離開 App：把伺服器一起收掉（只有這個 App 開起來的才收）。
 
-【為什麼不是 Electron】那要多裝 Node、打包出來 150MB 起跳，
-而 Edge 是 Windows 11 內建的，這樣做零安裝、開得快，出事也只有這一個檔要看。
+【為什麼不是 Electron】那要多裝 Node、打包出來 150MB 起跳。
+【為什麼不用 Edge 的 --app】視窗擁有者是 Edge ⇒ 工作列一律顯示 Edge 的圖示
+（安裝成 PWA 也一樣），而且關窗時機測不準。詳見 open_window() 的說明。
 """
-import json
 import os
 import subprocess
 import sys
@@ -27,43 +27,15 @@ PYTHON = os.path.join(REPO, ".venv", "Scripts", "python.exe")
 PANEL = os.path.join(HERE, "live_panel.py")
 PROFILE = os.path.join(os.environ.get("LOCALAPPDATA", HERE), "MorningPanelApp")
 LOG = os.path.join(HERE, "panel-app.log")
+ICON = os.path.join(HERE, "panel.ico")
 URL = "http://127.0.0.1:8770/"
 BOOT_TIMEOUT = 90          # 秒。第一次啟動要連永豐、載歷史矩陣，慢的時候要一分鐘
-IDLE_CLOSE = 12            # 秒。超過這麼久沒有瀏覽器來要資料就當作視窗關了
 
 NO_WINDOW = 0x08000000     # CREATE_NO_WINDOW
 NEW_GROUP = 0x00000200     # CREATE_NEW_PROCESS_GROUP
 
-EDGE_CANDIDATES = [
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-]
 
 _stop = threading.Event()
-
-
-def installed_app_id():
-    """
-    裝好的應用程式 id，沒裝就回 None。
-
-    【不要自己算】原本是照 Chromium 那套「SHA-256 前 16 bytes、每個 nibble 映成 a~p」
-    去推，實測跟 Edge 實際用的對不起來（算出 kkbjodnh…，Edge 用的是 gflghkeo…），
-    於是永遠判定成「沒安裝」。直接去設定檔裡看它建了什麼才是可靠的：
-    Edge 安裝後會留下 Web Applications/_crx__<id> 與 Manifest Resources/<id>。
-    """
-    root = os.path.join(PROFILE, "Default", "Web Applications")
-    for base in (root, os.path.join(root, "Manifest Resources")):
-        if not os.path.isdir(base):
-            continue
-        try:
-            names = os.listdir(base)
-        except OSError:
-            continue
-        for name in names:
-            aid = name[6:] if name.startswith("_crx__") else name
-            if len(aid) == 32 and aid.isalpha() and aid.islower():
-                return aid
-    return None
 
 
 def log(msg):
@@ -81,13 +53,6 @@ def alive():
             return True
     except Exception:
         return False
-
-
-def edge():
-    for p in EDGE_CANDIDATES:
-        if os.path.exists(p):
-            return p
-    return None
 
 
 def watchdog(started):
@@ -114,35 +79,39 @@ def watchdog(started):
             time.sleep(0.1)
 
 
-def idle_seconds():
-    """面板那邊有多久沒有瀏覽器來要資料了。問不到就回 None。"""
+def open_window():
+    """
+    自己開一個視窗，不要交給 Edge。
+
+    【為什麼不用 Edge 的 --app】那個視窗的擁有者是 Edge，Windows 就把它算在 Edge 頭上：
+    工作列顯示的是 Edge 的圖示（Benson 2026-08-28 確認過，安裝成 PWA 也一樣）。
+    而且沒辦法可靠地知道「視窗被關掉了」——
+      ・--app-id 啟動的行程 1 秒就自己結束，等它＝一開就誤判
+      ・改看「多久沒人來要資料」也不行：視窗被縮到最小或切到背景時，
+        Edge 會把頁面的計時器降頻，看起來就像沒人在看，伺服器會被誤殺
+        （實測 24 秒沒輪詢，其實視窗還開著）
+    改用 pywebview（底層是 Windows 11 內建的 WebView2）：視窗是我們這個行程的，
+    圖示、工作列、關閉時機全都拿得回來，也不必再管 Edge 的規矩。
+    """
+    import ctypes
+    import webview
+
+    # 工作列要認得這是「早盤儀表板」而不是 python.exe，一定要在開視窗之前設
     try:
-        with urllib.request.urlopen(URL + "api/idle", timeout=3) as r:
-            return json.loads(r.read()).get("idle")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Benson.MorningPanel")
     except Exception:
-        return None
+        pass
 
-
-def wait_until_closed():
-    """
-    等到視窗被關掉。
-
-    【不能等 Edge 那個行程結束】用 --app-id 開已安裝的應用程式時，我們啟動的那個
-    行程會立刻交棒給既有的 Edge 行程然後自己結束 —— 實測 1 秒就被誤判成「關窗」，
-    於是伺服器被收掉，畫面就變成「127.0.0.1 拒絕連線」（Benson 2026-08-28 遇到的）。
-    改成問面板「多久沒人來要資料了」：開著的視窗每 0.5 秒就會要一次。
-    """
-    grace = time.time() + 40          # 先給視窗開起來、開始輪詢的時間
-    while not _stop.is_set():
-        time.sleep(2)
-        idle = idle_seconds()
-        if idle is None:              # 伺服器不見了 —— 看門狗會處理，這裡繼續等
-            continue
-        if time.time() < grace:
-            continue
-        if idle > IDLE_CLOSE:
-            log(f"已經 {idle:.0f} 秒沒有人在看，視為視窗已關閉")
-            return
+    webview.create_window("早盤儀表板", URL, width=1520, height=980,
+                          min_size=(1100, 700))
+    kw = {"private_mode": False, "storage_path": PROFILE}
+    if os.path.exists(ICON):
+        kw["icon"] = ICON
+    try:
+        webview.start(**kw)          # 視窗關掉才會回來
+    except TypeError:
+        # 舊版 pywebview 沒有 icon / storage_path，掉回最陽春的用法
+        webview.start()
 
 
 def main():
@@ -164,33 +133,7 @@ def main():
     else:
         log("伺服器本來就在跑，只開視窗")
 
-    exe = edge()
-    if exe is None:
-        log("找不到 Edge，改用預設瀏覽器開")
-        import webbrowser
-        webbrowser.open(URL)
-        return 0
-
-    os.makedirs(PROFILE, exist_ok=True)
-    args = [exe, f"--user-data-dir={PROFILE}",
-            "--no-first-run", "--no-default-browser-check"]
-    if "--install" in sys.argv:
-        # 一次性：開一個「有網址列」的普通視窗，網址列右邊會出現安裝鈕。
-        # 裝好之後工作列才會是我們的圖示（沒裝的話 Windows 一律算它是 Edge）。
-        args += [URL, "--window-size=1200,900"]
-        log("安裝模式：開普通視窗讓他按安裝")
-    else:
-        # 【一律用 --app=URL】試過 --app-id 與 Edge 自己捷徑用的 msedge_proxy
-        # （--profile-directory=Default --app-id=… --app-url=…），在這個專屬設定檔底下
-        # 兩種都**開不出視窗**（實測：沒有任何視窗、面板那邊 idle 一直是 null），
-        # 而 --app=URL 一開就出來、頁面也開始輪詢。裝過之後 Edge 會自己把這個網址
-        # 認回已安裝的應用程式，所以圖示照樣是我們的。
-        args += [f"--app={URL}", "--window-size=1520,980"]
-        aid = installed_app_id()
-        log(f"開啟視窗（{'已安裝 ' + aid if aid else '尚未安裝'}）")
-    subprocess.Popen(args, creationflags=NO_WINDOW)
-    log("視窗已開，等它關閉")
-    wait_until_closed()
+    open_window()
 
     # 關窗＝離開 App。只收自己開的伺服器：本來就在跑的（例如工具面板開的）不要動。
     if owns_server:
