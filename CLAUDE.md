@@ -212,9 +212,140 @@ data/practice.json       練習紀錄的雲端同步檔（面板自動 push，�
 **練習紀錄與重播紀錄必須分開**：`practice_trades/` 是他真實的練習成績、會同步到手機；
 重播是「回頭重做一次判斷」，混進去會污染勝率統計。
 
+## 動效基調（沉穩）＋ 開場（白起） — 2026-08-28 上線，v20
+
+範本正本在 `../app-template/motion/`（跨 App 共用，已上線、已 QA 放行）。
+這支是**第二支**套用的 App，第一支是 `movie-library`（好雷嗎? v1.6.3），
+做法逐項照它 —— 那一版是老闆說「完美」的參考實作，**要改先去看它的 CLAUDE.md 第 30～37 條**。
+
+### 檔案
+
+```
+css/motion.css       動效 token（15 個，數值逐字照範本）＋ 綁**這支 App class 名稱**的規則
+css/splash.css       範本複製品（逐位元組相同，不可以在這裡改）
+js/splash.js         範本複製品（同上）；<body> 尾端、排在 app.js 之前
+js/splash-boot.js    範本複製品；**不被 <script src> 載入**，已逐字 inline 進 index.html
+index.html           關鍵路徑 CSS ＋ SPLASH_CONFIG ＋ inline 的 splash-boot ＋ 非阻塞 CSS ＋ 落地色票
+tools/check-splash.js       靜態守衛（沒有 npm test，這支就是這一層的測試）
+tools/probe/*.mjs           真瀏覽器探針（first-frame / press-scan / paths / flows）
+```
+
+### ⛔ 絕對不要整包套範本的 `motion.css`
+
+範本那份帶著自己的色票，而它的 **`--bg` / `--surface` / `--surface-2` / `--line`
+跟 `css/style.css` 四個變數全部撞名** —— `<link>` 進來會把交易日誌的深色配色
+（連同 `@media (prefers-color-scheme:light)` 那一組覆寫）整個蓋掉。
+所以 `css/motion.css` 是**新寫的**：只有 15 個動效 token ＋ 綁自家 class 的規則，
+**一個色碼都沒有**（`tools/check-splash.js` 有斷言在守；高亮用的金色是 `var(--gold)`，
+所以淺色模式自動跟著換）。要同步範本的新版動效時，一樣只搬 token 與規則。
+
+### 動效只做這五項，不要發散
+
+1. **按下回饋**（最有感）——全 App 每一個可點元素，不是挑幾個。
+   清單是 `tools/probe/press-scan.mjs` 用真滑鼠事件**全掃描**出來的，不是列白名單。
+   ⚠️ 鑰匙圈藥丸 `.kr-chip` **刻意不寫在 motion.css**：模組自己就帶
+   `.kr-chip.kr-chip:active{transform:scale(.97)}`，而且樣式是 `init()` 時注入 `<head>` 尾端，
+   權重與順序都贏我們。在這裡再寫一條只會變成同一條規則活在兩個地方，還蓋不過去。
+2. **清單進場錯開** —— 換模式時整批播；**展開某個月份時只有那個月的列播**
+   （`renderList(quietExcept)` 決定要不要掛 `.anim`）。不做這件事的話，點一下手風琴
+   整張清單會跟著閃一次，看起來像壞掉。
+3. **表單面板開關** —— 離場用**獨立的** `tl-sheet-out` / `tl-fade-out`，
+   不是把進場反著跑（`animation-name` 沒變的話瀏覽器不保證重播）。
+   **流程不掛 `animationend`**：`closeSheet()` 用計時器把 `.closing` 拿掉；
+   就算計時器沒跑到，`.closing` 的終態跟關閉後的靜態值一模一樣 ⇒
+   失敗模式是「看不出來」，不是「面板永遠關不掉」。
+4. **剛存的那一筆高亮**（這支才有的狀態）—— 存完／改完掛 `.fresh`，
+   進場 ＋ 金色光暈；**2 秒後不再標記**，之後的重繪（背景同步拉回紀錄、換月份）不會再閃一次。
+5. **開場**（白起變體）。
+
+⛔ **刻意沒做的**：
+- **不做骨架屏**。資料在 localStorage、開啟是即時的，**沒有東西要等**，加一個假的骨架屏是騙人。
+- **不做頁面 push/pop**。這支只有一頁。
+- 不因為動效新增任何按鈕或連結。
+
+### 進場動畫一律 `backwards`
+
+`both` / `forwards` 會永久保留最終 transform，優先度高於一般宣告 ⇒
+`:active{transform:scale()}` 從此失效、按鈕變成死的，**而且純功能測試抓不到**。
+唯一的例外是離場（`.closing` 的 `*-out` 用 `both`，那本來就要停在終點）。
+
+### 開場：白起（`<html data-splash-intro="light">`）
+
+iPhone 從主畫面開 PWA 時，iOS 會先播自己的啟動畫面（`background_color` ＋ icon），
+約 0.5s 開始**平滑淡出**成接近全白（`#ebebeb`），我們的頁面才畫第一幀。
+白起的做法是**接住那片白**：第一幀就是 `#ebebeb`，700ms 內平順沉成 `#0F1218`，
+金色「誌」在過程中浮出來，名字等底色沉完才升起。畫面上沒有硬切點可以「閃」。
+
+- **落地值**（`index.html` 最後一塊 `<style>`）：
+  `--splash-bg:#0F1218`（＝ `manifest.background_color` ＝ 深色 `theme-color` ＝ 深色 `--bg`）／
+  `--splash-ink:#E7E9ED`（＝`--text`）／`--splash-accent:#E3A951`（＝`--gold`）／
+  glyph `誌`／name `微台指交易日誌`／tagline `一天一筆，記錄與檢討自己`（印記風格不畫標語，只進快取）。
+- **`manifest.webmanifest` 一個字都沒改**（`background_color` / `theme_color` 仍是 `#0F1218`）。
+  ⚠️ 另一條路（C1：連 manifest 一起改白）代價是**他必須把 App 從主畫面移除重新加一次**，
+  而且 localStorage 看起來會像被清掉。`movie-library` 那一輪他選了不用重加的這一版。
+  **要改請先問他。**
+- **開場色票刻意不跟淺色模式走**：iOS 的系統啟動圖只吃 manifest 一個固定值。
+  代價是**淺色模式下收場時會從深色開場交棒到淺色 App**（實測會看到一次深→淺）。
+  這是已知取捨，不是 bug；要不要處理請老闆決定（見下面「還沒拍板」）。
+- **`--sp-lead`（340ms）不要拿掉**：iOS 把畫面交出來之前，我們的動畫已經跑掉約 273ms
+  （`movie-library` 逐格錄影反推）。那一拍就是在補這段盲窗，`tools/check-splash.js` 會驗
+  「白起的四條動畫 delay 全部 ≥ 273ms」。⛔ 不可以改用「把漸深變慢」來掩蓋。
+- **關鍵路徑塊畫的是「動畫的起始狀態」不是完成態**（`.sp-name{opacity:0}` ＋
+  白起的 `.sp-glyph{opacity:0}`）。畫完成態的話 `splash.css` 一到就會跳回起點 ——
+  Benson 在上一支 App 說「有點小奇怪」的就是它。代價：三支 CSS 全 404 時符號與名字不會出現，
+  **那是刻意的**（CSS 404 罕見，跳動每次開 App 都發生）。
+- **`body{background:transparent}` 那一條（關鍵路徑塊 ＋ `splash.css §7a2` 兩份都要）**：
+  `body` 的底色畫在 `html` 畫布**上面**，開場沉下去了 body 那片深色還在。
+  只要有一塊畫面沒被 `#splash` 蓋到就會露出來（上一支 App 的錄影拍到過下緣一條 58px 的深色帶）。
+  ⚠️ 一定要 `transparent`，不可以讓 body 自己再跑一次同樣的漸變。
+- **`<meta name="theme-color">` 有兩條（深色／淺色）**，`splash-boot.js §7b` 的追蹤器抓的是
+  **第一個** ⇒ **深色那一條一定要排在前面**。淺色模式下追蹤器等於沒作用（改到的是沒生效的那一條），
+  無害，但要知道。
+- **SHA 鎖鏈**：`css/splash.css`、`js/splash.js`、`js/splash-boot.js` 必須跟
+  `../app-template/motion/` 逐位元組相同；`index.html` 柵欄裡那份又必須跟 `js/splash-boot.js` 相同。
+  改法是**回範本改**，再 `cp` 過來、再跑
+  `node ../app-template/motion/inline-boot.js index.html js/splash-boot.js` 重貼。
+  兩段鎖鏈 `tools/check-splash.js` 都會驗（正本不在這台機器時會出聲警告，不會安靜放行）。
+
+### 沒有 npm test，守衛就是這一層的測試
+
+```bash
+node tools/check-splash.js index.html manifest.webmanifest          # 約 25 秒（含全色域窮舉）
+node tools/check-splash.js index.html manifest.webmanifest --quick  # 跳過窮舉，約 3 秒
+node tools/probe/first-frame.mjs   # 第一幀 ＝ 動畫起始狀態（自帶負控組）
+node tools/probe/press-scan.mjs    # 按下回饋全掃描（真滑鼠事件，自帶負控組）
+node tools/probe/paths.mjs         # 八條路徑：冷啟動／CSS 遲到／CSS 404／splash.js 404／JS 停用／熱啟動／淺色／reduce
+node tools/probe/flows.mjs         # 面板開關 ＋ 剛存那一筆的高亮
+```
+
+- `tools/check-splash.js` 是範本 `check-splash.js` 的複製品，**只打了四個落地補丁**
+  （模組檔改到 `css/`、`js/` 找；路徑判準不寫死 `motion/`；裸呼叫掃描認檔名不認資料夾；
+  色票那一節換成「motion.css 零顏色 ＋ 色票仍住在 style.css」並**明講對比度不在涵蓋範圍內**）。
+  範本改版時重新複製再把那四段貼回去。
+- **探針一律先把 `'serviceWorker' in navigator` 換掉再量**：這支 App 的 `index.html` 在
+  `controllerchange` 時會 `location.reload()`，第一次進站 SW 一 claim 就整頁重載，
+  量測會被沖掉而且第二次載入是「熱啟動」（實測 `navType="reload"`、`cold=false`，
+  第一版探針因此拿到 0 個樣本）。⚠️ `Network.setBlockedURLs` **擋不住** SW 的 script 抓取。
+- **量 App 底色不可以取畫面左上角**：`body` 有一層
+  `radial-gradient(1200px 500px at 50% -8%, rgba(227,169,81,.06), transparent 70%)`，
+  上半部整片被染掉約 3%（深色 `#0f1218` → `#161619`）；最下緣又被 FAB 的
+  `box-shadow` 染暗一階（淺色 `#f3f5f8` → `#f2f4f7`）。
+  正確取樣點是**左邊界、畫面 62%／74% 兩個高度**，而且兩點必須一致（尺的自證）。
+  第一版就是取角落，八條路裡有四條被誤判成紅燈。
+
+### ⚠️ 已知：SW 的自動 reload 會打斷開場
+
+`index.html` 的 `controllerchange → location.reload()` 是這個專案自己的決定
+（「新版接手後自動重載一次，不用手動清快取」）。**每次部署新版之後的第一次開啟**
+會在開場播到一半時整頁重載；重載後是同一個 session ⇒ 熱啟動 ⇒ 開場不重播，
+所以看起來是「開場演到一半突然變成 App」。上一支 App（`movie-library`）在同一個問題上
+選的是「只跳更新提示、不自動 reload」。**這一輪沒有動它**（不在工單範圍），要不要改請 PM 決定。
+
 ## PWA 注意事項
 
 - 改前端要 **`APP_VER` 與 `sw.js` 的 CACHE 版本一起 +1**。
+  新增前端檔案時 `sw.js` 的 `SHELL` 也要跟著加（`index.html` 引用到的每一支本站 css/js 都要在裡面）。
+  ⚠️ `js/splash-boot.js` **刻意不在 SHELL 裡**：它已經 inline 進 `index.html`，沒有人會 fetch 它。
 - SW 註冊要帶 `updateViaCache:'none'`，fetch 對 HTML/JS/CSS 用 `cache:'no-store'`，
   否則瀏覽器那層快取會讓手機**永遠停在舊版**（踩過）。
 - 「匯入備份」是**合併**不是覆蓋（原本是覆蓋，同步一次就會蓋掉手機上的紀錄）。

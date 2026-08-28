@@ -1,0 +1,319 @@
+/* ============================================================
+   motion.css — 動效基調（沉穩 steady）
+   ------------------------------------------------------------
+   Benson 2026-08-25 拍板的基調，token 數值逐字照 app-template/motion/motion.css。
+   這是第二支套用的 App（第一支是 movie-library「好雷嗎?」v1.6.3）。
+
+   ⚠️⚠️ 這份**刻意只有動效，一個顏色都沒有**。
+      範本的 motion.css 帶著自己的色票，而它的
+        --bg / --surface / --surface-2 / --line
+      跟這支 App（css/style.css）**四個變數全部撞名** —— 整包 <link> 進來會把
+      交易日誌的深色配色（含淺色模式那一組覆寫）整個蓋掉，變成範本的樣子。
+      所以這裡只抄「會動的那一層」：15 個動效 token ＋ 綁**這支 App 自己 class 名稱**的規則。
+      ⛔ 以後要同步範本的新版動效時，一樣只搬 token 與規則，不要搬 :root 的顏色。
+
+   ⚠️ 載入順序：style.css → motion.css → splash.css（見 index.html）。
+      排在 style.css 後面是刻意的：同權重時後宣告者勝，
+      這裡的 transition／animation 才蓋得過 style.css 既有的寫死值（.22s／.26s／.05s）。
+      splash.css 要吃這裡的 --dur-* token，所以一定排在這一支後面。
+
+   ⚠️ 規則只綁這支 App 自己的 class 名稱，沒有 .pressable 這種要改 HTML 的通用類別
+      —— 不用動 js/app.js 產生的 HTML 字串，就不會有「漏加 class 的地方沒有回饋」的洞。
+      唯二的例外是清單的 .anim（第 3 段）與剛存那筆的 .fresh（第 4 段），
+      那兩個是**狀態**不是樣式鉤子，非得由 JS 標記不可。
+   ============================================================ */
+
+
+/* ============================================================
+   1. Token（唯一可調的一層）
+   ------------------------------------------------------------
+   ⚠️ 掛在 :root，不要掛在 body：splash.css 的 --sp-out / --sp-lead 是在 :root
+      那一層對 var(--dur-2) 做代換的，token 只存在 body 的話它會拿到「未定義」
+      → animation-duration 掉回 0s → 開場收場會瞬間跳掉，而且極難查。
+   時間階梯只有四級，不要出現第五個數字。
+   ⚠️ --ease-page 與 --hold-toast 這支 App 目前沒有用到（沒有第二個頁面；
+      toast 的停留時間在 js/app.js 的計時器裡）。**刻意保留**，
+      讓這一組 token 跟範本／movie-library 逐字對得起來，之後同步不用比對差異。
+   ============================================================ */
+:root{
+  /* 時間 */
+  --dur-press:120ms;   /* 按下／放開的回饋 */
+  --dur-1:180ms;       /* 微變化：顏色、透明度、開關、離場 */
+  --dur-2:280ms;       /* 主要位移：卡片進場、面板升起 */
+  --dur-3:420ms;       /* 大範圍／需要被看見的：開場、高亮 */
+
+  /* 曲線 */
+  --ease:cubic-bezier(.22,.61,.36,1);        /* 進場／位移（減速收尾） */
+  --ease-in:cubic-bezier(.45,0,.9,.4);       /* 離場（加速離開） */
+  --ease-press:cubic-bezier(.2,0,.2,1);      /* 按下回饋 */
+  --ease-page:cubic-bezier(.22,.61,.36,1);   /* 全螢幕換頁（這支沒有第二頁，保留） */
+
+  /* 位移距離 */
+  --lift:10px;         /* 小位移：卡片、toast */
+  --lift-lg:20px;      /* 大位移：換頁橫向、FAB 彈入 */
+
+  /* 縮放 */
+  --scale-in:.985;     /* 進場起始縮放 */
+  --press:.985;        /* 大面積元素按下（卡片、清單列、整寬按鈕、半寬切換鈕） */
+  --press-lg:.96;      /* 小元素按下（區間膠囊、footer 連結） */
+
+  /* 錯開 */
+  --stagger:45ms;      /* 清單第 n 項的延遲 = n × stagger */
+
+  /* 閱讀時間：不是動效，不隨調性改變（這支的 toast 停留由 JS 控，保留對齊用） */
+  --hold-toast:2400ms;
+}
+
+
+/* ============================================================
+   2. 按下回饋（優先度最高：手機沒有 hover，這是唯一「我按到了」的訊號）
+   ------------------------------------------------------------
+   ⚠️ 這一段列的是**全 App 每一個可點的東西**，不是挑幾個有感的做。
+      清單是用 tools/check-press.js 從 index.html ＋ js/app.js 產生的 HTML
+      **全掃描**出來的（不是憑印象列白名單 —— 好雷嗎那一輪就是列白名單漏了第 5 顆）。
+      新增可點元素時要一起加進來，並重跑那支腳本。
+   ⚠️ 只動 transform（compositor-only）。底色的 :active 由 style.css 負責，這裡不碰顏色。
+   ⚠️ 鑰匙圈藥丸 .kr-chip **刻意不在這裡**：模組自己就帶
+      `.kr-chip.kr-chip:active{transform:scale(.97)}`（js/keyring-unlock.js），
+      而且它的樣式是 init() 時注入 <head> 尾端 ⇒ 權重與順序都贏我們。
+      在這裡再寫一條只會變成「同一條規則活在兩個地方」，還蓋不過去。
+   ============================================================ */
+
+/* 大面積：卡片、清單列、月份標頭、整寬按鈕、半寬切換鈕 */
+.trade,
+.trow,
+.month-head,
+.fab button,
+.sheet-actions button,
+.btn-delete,
+.dir-toggle button,
+.mode-toggle button,
+.modebar button{
+  transition:transform var(--dur-press) var(--ease-press);
+}
+.trade:active,
+.trow:active,
+.month-head:active,
+.fab button:active,
+.sheet-actions button:active,
+.btn-delete:active,
+.dir-toggle button:active,
+.mode-toggle button:active,
+.modebar button:active{transform:scale(var(--press));}
+/* 今日卡原本還有一條 border-color 的 transition（滑鼠移上去變亮），
+   上面那條群組規則會把它蓋掉 —— 補回來，順便改成吃 token。 */
+.trade{
+  transition:transform var(--dur-press) var(--ease-press),
+             border-color var(--dur-1) var(--ease);
+}
+
+/* 小元素：區間膠囊、自訂區間的「套用」、footer 那一排連結 */
+.seg button,
+.custrange .apply,
+.foot a{
+  transition:transform var(--dur-press) var(--ease-press);
+}
+.seg button:active,
+.custrange .apply:active,
+.foot a:active{transform:scale(var(--press-lg));}
+
+/* 停用的儲存鈕不給回饋：按不動的東西不可以看起來會動 */
+.sheet-actions button:disabled,
+.sheet-actions button:disabled:active{transform:none;}
+
+/* 不是按鈕的東西，明確寫死沒有按下回饋（避免以後有人「順手統一」）：
+   .scrim 是背景遮罩（點它是關閉，但它不是一顆按鈕，縮放會像整個畫面在抖）；
+   .today-cta 是「今天還沒記錄」的說明卡，不可點。 */
+.scrim,.scrim:active,
+.today-cta,.today-cta:active{transform:none;}
+
+
+/* ============================================================
+   3. 清單進場（錯開）
+   ------------------------------------------------------------
+   #list 的內容在「換模式（模擬／真實）」與「展開／收合月份」時整批重繪。
+   ⚠️ 只有**該播的時候**才播：js/app.js 的 renderList() 決定要不要在節點上
+      掛 .anim —— 展開某個月份時只有**那個月**的列會播，其他月份不重播
+      （不然點一下手風琴，整張清單會跟著閃一次，看起來像壞掉）。
+      進場動畫本身是 CSS 的事，「這一批要不要播」是狀態，只有 JS 知道。
+
+   ⚠️ 一律 backwards，不可以用 both／forwards：
+      both 會永久保留最終 transform，優先度高於一般宣告
+      ⇒ .trow:active{transform:scale()} 從此失效、清單列按起來是死的
+      （純功能測試抓不到這種 bug）。
+
+   stagger 上限 12：用 nth-child 寫死，比在 app.js 算 --i 少一個「忘了傳 index」的洞。
+   第 13 筆以後跟第 12 筆同時進場（否則一個月 22 筆的話最後一筆要等 1 秒才出現）。
+   ============================================================ */
+#list > .month.anim{
+  animation:tl-item-in var(--dur-2) var(--ease) backwards;
+}
+@keyframes tl-item-in{
+  from{opacity:0;transform:translateY(var(--lift)) scale(var(--scale-in));}
+  to  {opacity:1;transform:none;}
+}
+#list > .month.anim:nth-child(1){animation-delay:0ms;}
+#list > .month.anim:nth-child(2){animation-delay:calc(var(--stagger) * 1);}
+#list > .month.anim:nth-child(3){animation-delay:calc(var(--stagger) * 2);}
+#list > .month.anim:nth-child(4){animation-delay:calc(var(--stagger) * 3);}
+#list > .month.anim:nth-child(5){animation-delay:calc(var(--stagger) * 4);}
+#list > .month.anim:nth-child(6){animation-delay:calc(var(--stagger) * 5);}
+#list > .month.anim:nth-child(7){animation-delay:calc(var(--stagger) * 6);}
+#list > .month.anim:nth-child(8){animation-delay:calc(var(--stagger) * 7);}
+#list > .month.anim:nth-child(9){animation-delay:calc(var(--stagger) * 8);}
+#list > .month.anim:nth-child(10){animation-delay:calc(var(--stagger) * 9);}
+#list > .month.anim:nth-child(11){animation-delay:calc(var(--stagger) * 10);}
+#list > .month.anim:nth-child(n+12){animation-delay:calc(var(--stagger) * 11);}
+
+/* 月份裡的每一列。列比卡片小、數量多，所以錯開用一半的間距、時間短一級，
+   不然展開一個 22 筆的月份會拖太久。 */
+.month-rows.anim > .trow{
+  animation:tl-row-in var(--dur-1) var(--ease) backwards;
+}
+@keyframes tl-row-in{
+  from{opacity:0;transform:translateY(calc(var(--lift) * .6));}
+  to  {opacity:1;transform:none;}
+}
+.month-rows.anim > .trow:nth-child(1){animation-delay:0ms;}
+.month-rows.anim > .trow:nth-child(2){animation-delay:calc(var(--stagger) * .5);}
+.month-rows.anim > .trow:nth-child(3){animation-delay:calc(var(--stagger) * 1);}
+.month-rows.anim > .trow:nth-child(4){animation-delay:calc(var(--stagger) * 1.5);}
+.month-rows.anim > .trow:nth-child(5){animation-delay:calc(var(--stagger) * 2);}
+.month-rows.anim > .trow:nth-child(6){animation-delay:calc(var(--stagger) * 2.5);}
+.month-rows.anim > .trow:nth-child(7){animation-delay:calc(var(--stagger) * 3);}
+.month-rows.anim > .trow:nth-child(8){animation-delay:calc(var(--stagger) * 3.5);}
+.month-rows.anim > .trow:nth-child(9){animation-delay:calc(var(--stagger) * 4);}
+.month-rows.anim > .trow:nth-child(10){animation-delay:calc(var(--stagger) * 4.5);}
+.month-rows.anim > .trow:nth-child(11){animation-delay:calc(var(--stagger) * 5);}
+.month-rows.anim > .trow:nth-child(n+12){animation-delay:calc(var(--stagger) * 5.5);}
+
+/* 空狀態卡：比一般項目慢一級進場 —— 它是「這裡真的沒東西」的宣告，不是清單的一員。
+   （#list 直接放一張 .empty-card 時才會命中） */
+#list > .empty-card{
+  animation:tl-item-in var(--dur-3) var(--ease) backwards;
+}
+
+
+/* ============================================================
+   4. 剛存的那一筆：進場 ＋ 高亮（回答「我剛剛存的是哪一張」）
+   ------------------------------------------------------------
+   由 js/app.js 在存檔／編輯之後掛 .fresh（今日格用 .trade.fresh，
+   歷史清單用 .trow.fresh），約 2 秒後不再標記。
+
+   ⭐ 帶 delay 的第二段用 backwards 還是 forwards（範本收斂後的唯一一條規則）：
+      **只要跟第一段搶同一個屬性就必須 forwards**；不搶同一個屬性時用 backwards。
+      這裡進場動的是 opacity/transform，高亮動的是 box-shadow/border-color，
+      兩者沒有交集 ⇒ 用 backwards，光暈從進場的第一幀就在
+      （用 forwards 的話光暈要等 280ms 才突然冒出來，看起來像兩件事）。
+   ⚠️ 高亮**只用 App 自己的色票變數**（--gold / --gold-soft / --line），
+      這裡沒有寫任何色碼 ⇒ 淺色模式自動跟著換。
+   ============================================================ */
+.trade.fresh{
+  animation:tl-item-in var(--dur-2) var(--ease) backwards,
+            tl-fresh-glow var(--dur-3) var(--ease) backwards var(--dur-2);
+}
+.trow.fresh{
+  animation:tl-row-in var(--dur-1) var(--ease) backwards,
+            tl-fresh-glow var(--dur-3) var(--ease) backwards var(--dur-1);
+}
+/* .trow 沒有自己的邊框（它靠 border-top 分隔），所以高亮只走底色＋內光暈 */
+@keyframes tl-fresh-glow{
+  0%  {box-shadow:0 0 0 2px var(--gold-soft), 0 0 0 1px var(--gold) inset; border-color:var(--gold);}
+  62% {box-shadow:0 0 0 2px var(--gold-soft), 0 0 0 1px var(--gold) inset; border-color:var(--gold);}
+  100%{box-shadow:0 0 0 0 transparent, 0 0 0 0 transparent inset; border-color:var(--line);}
+}
+
+
+/* ============================================================
+   5. 表單面板（#sheet／#settingsSheet）與遮罩（#scrim）
+   ------------------------------------------------------------
+   ⚠️ 離場**一律用獨立的 *-out keyframes**，不可以沿用進場的名字改 direction:reverse
+      —— animation-name 沒變的話瀏覽器不保證重播。
+   ⚠️ 流程**不准掛 animationend**：js/app.js 的 closeSheet() 用計時器把 .closing 拿掉。
+      就算那個計時器沒跑到，.closing 的終態（sheet 在畫面外、scrim 全透明）
+      跟關閉後的靜態值一模一樣 ⇒ 失敗模式是「看不出來」，不是「面板永遠關不掉」。
+   ⚠️ style.css 原本的 transition（.22s／.26s）在這裡關掉：
+      兩套機制同時驅動同一個屬性，時長不一樣時會在動畫結束那一刻跳一下。
+   出場一律比進場快（--dur-1 對 --dur-2）：關閉是使用者已經決定的事，不要拖。
+   ============================================================ */
+.scrim,.sheet{transition:none;}
+
+.scrim.show{animation:tl-fade-in var(--dur-2) var(--ease) backwards;}
+.sheet.show{animation:tl-sheet-in var(--dur-2) var(--ease) backwards;}
+@keyframes tl-fade-in{from{opacity:0;} to{opacity:1;}}
+@keyframes tl-sheet-in{
+  from{transform:translateY(102%);}
+  to  {transform:translateY(0);}
+}
+
+.scrim.closing{animation:tl-fade-out var(--dur-1) var(--ease-in) both;}
+.sheet.closing{animation:tl-sheet-out var(--dur-1) var(--ease-in) both;}
+@keyframes tl-fade-out{from{opacity:1;} to{opacity:0;}}
+@keyframes tl-sheet-out{
+  from{transform:translateY(0);}
+  to  {transform:translateY(102%);}
+}
+
+
+/* ============================================================
+   6. 開場收場之後的銜接（.boot 由 js/splash.js 掛上，1400ms 後自己拿掉）
+   ------------------------------------------------------------
+   收場動畫與內容進場要「重疊」不要「串接」：串接會有一個很明顯的空拍，
+   那個空拍就是廉價感的來源。
+   bootSelector 是 ".app, .fab"（見 index.html 的 SPLASH_CONFIG）。
+   ⚠️ 用 `> *` 全掃，不列白名單：以後在 .app 裡多加一個區塊也不會漏。
+   ⚠️ 一律 backwards（不是 both）：.boot 掛著的那 1.4 秒使用者已經可以按東西了，
+      殘留 transform 會把 :active 殺掉。
+   ⚠️ FAB 的動畫掛在**裡面那顆 button**，不是 .fab 本身 ——
+      .fab 有 transform:translateX(-50%) 在做水平置中，
+      在它身上跑 transform 動畫會讓按鈕整顆飛到畫面左邊。
+   ============================================================ */
+.app.boot > *{
+  animation:tl-boot-el var(--dur-3) var(--ease) backwards;
+}
+@keyframes tl-boot-el{
+  from{opacity:0;transform:translateY(calc(var(--lift) * 1.2)) scale(var(--scale-in));}
+  to  {opacity:1;transform:none;}
+}
+.app.boot > *:nth-child(1){animation-delay:0ms;}
+.app.boot > *:nth-child(2){animation-delay:calc(var(--stagger) * .8);}
+.app.boot > *:nth-child(3){animation-delay:calc(var(--stagger) * 1.6);}
+.app.boot > *:nth-child(4){animation-delay:calc(var(--stagger) * 2.4);}
+.app.boot > *:nth-child(5){animation-delay:calc(var(--stagger) * 3.2);}
+.app.boot > *:nth-child(n+6){animation-delay:calc(var(--stagger) * 4);}
+
+.fab.boot button{
+  animation:tl-fab-boot var(--dur-3) var(--ease) backwards;
+  animation-delay:calc(var(--stagger) * 4);
+}
+@keyframes tl-fab-boot{
+  from{opacity:0;transform:scale(.72) translateY(var(--lift-lg));}
+  to  {opacity:1;transform:none;}
+}
+
+
+/* ============================================================
+   7. Toast：改成吃 token（style.css 原本寫死 .24s）
+   ============================================================ */
+.toast{
+  transition:opacity var(--dur-1) var(--ease),transform var(--dur-2) var(--ease);
+}
+
+
+/* ============================================================
+   8. 減少動態
+   ------------------------------------------------------------
+   只把 token 歸零（1ms），元件規則一行都不改。
+   刻意用 1ms 而不是 animation:none：動畫照跑、animationend 照樣觸發，
+   「等動畫結束才做事」的流程完全不用寫第二套。
+   （style.css 另外有一條 *{transition:none!important}，兩者不衝突。）
+   ============================================================ */
+@media (prefers-reduced-motion:reduce){
+  :root{
+    --dur-press:1ms; --dur-1:1ms; --dur-2:1ms; --dur-3:1ms;
+    --ease:linear; --ease-in:linear; --ease-press:linear; --ease-page:linear;
+    --lift:0px; --lift-lg:0px; --scale-in:1;
+    --press:1; --press-lg:1;
+    --stagger:0ms;
+  }
+}

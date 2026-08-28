@@ -1,6 +1,41 @@
 (function () {
   'use strict';
 
+  /* ---------- 開場畫面（js/splash.js）----------
+     ⚠️ 一定要寫成 window.Splash && …，**不可以裸寫 Splash.hold()**。
+     那支模組載不到的時候（離線、SW 沒預快取、部署漏檔）裸寫會丟 ReferenceError
+     ⇒ 整支 app.js 的 IIFE 當場中止 ⇒ 一筆紀錄都畫不出來、沒套樣式的 #splash
+     永遠卡在畫面上，而且**保險絲就住在那支沒載到的檔案裡**，不會有人來救。
+     （範本那一輪 QA 實測過的災情，見 lab 手冊 D 段。） */
+  var hasSplash = !!(window.Splash && window.Splash.hold && window.Splash.ready);
+  if (hasSplash) { try { Splash.hold(); } catch (e) { hasSplash = false; } }
+  if (!hasSplash) splashFallback();
+
+  function splashFallback() {
+    /* 自己把開場收掉。全螢幕的東西卡住＝App 打不開，比白畫面嚴重一個等級。 */
+    try {
+      var sp = document.getElementById('splash');
+      if (sp && sp.parentNode) sp.parentNode.removeChild(sp);
+      document.documentElement.setAttribute('data-splash', 'off');
+    } catch (e) {}
+    /* splash.js 平常會掛這一行；沒有它的話 iOS Safari 的 :active 不會觸發
+       ＝ 手機上所有按下回饋都是死的。 */
+    try { document.addEventListener('touchstart', function () {}, { passive: true }); }
+    catch (e) { try { document.addEventListener('touchstart', function () {}, false); } catch (e2) {} }
+  }
+
+  /* 畫面畫好了就叫一次，開場才會收。
+     這支 App 的資料在 localStorage、開啟是即時的，所以「畫好」就是 renderAll() 跑完
+     —— 不必等網路（pullPractice 是背景同步，讓它去等開場沒有意義）。
+     只認第一次：之後同步進來的重繪都不該再影響開場。
+     ⚠️ 失敗也要叫，不然開場會變成當機畫面、要停到 6 秒保險絲才走。 */
+  var splashDone = false;
+  function splashReady() {
+    if (splashDone) return;
+    splashDone = true;
+    if (window.Splash && window.Splash.ready) { try { Splash.ready(); } catch (e) {} }
+  }
+
   var KEY = 'trade-log-v1';
 
   /* ---------- 跟電腦面板雙向同步 ----------
@@ -119,6 +154,21 @@
     cash.textContent = '淨 ' + (nt < 0 ? '−' : '+') + 'NT$' + nfmt(Math.abs(nt));
   }
 
+  // ---------- 剛存的那一筆：讓他認得出「就是這張」 ----------
+  // 存完／改完之後，那一筆在畫面上會走「進場 ＋ 金色光暈」（css/motion.css 第 4 段）。
+  // ⚠️ 用計時器把標記拿掉，**不掛 animationend**：動畫是 backwards fill，
+  //    跑完自己回到常態，class 留著也沒有殘留效果；標記拿掉是為了讓之後的重繪
+  //    （背景同步拉回紀錄、換月份）不要再閃一次。
+  var freshKey = null, freshTimer = null;
+  function markFresh(date, m) {
+    freshKey = date + '|' + (m || 'sim');
+    clearTimeout(freshTimer);
+    freshTimer = setTimeout(function () { freshKey = null; }, 2000);
+  }
+  function freshCls(t) {
+    return (freshKey && t.date + '|' + (t.mode || 'sim') === freshKey) ? ' fresh' : '';
+  }
+
   // ---------- render: today + list ----------
   function tradeHTML(t) {
     var r = res(t), rc = cls(r);
@@ -130,7 +180,7 @@
       : '<span class="badge b-flat">平</span>';
     var note = t.note ? '<div class="tr-note">' + esc(t.note) + '</div>'
       : '<div class="tr-note empty">（無備註）</div>';
-    return '<div class="trade" tabindex="0" data-date="' + t.date + '">' +
+    return '<div class="trade' + freshCls(t) + '" tabindex="0" data-date="' + t.date + '">' +
       '<div class="tr-top">' +
         '<span class="tr-date">' + fmtDate(t.date) + '</span>' + dir +
         '<span class="tr-px">' + nfmt(t.entry) + '<span class="arrow">→</span>' + nfmt(t.exit) + '</span>' +
@@ -162,7 +212,7 @@
       : r < 0 ? '<span class="badge b-loss">敗</span>'
       : '<span class="badge b-flat">平</span>';
     var dot = t.note ? '<span class="rw-note" title="有備註"></span>' : '<span class="rw-note ph"></span>';
-    return '<div class="trow" tabindex="0" data-date="' + t.date + '">' +
+    return '<div class="trow' + freshCls(t) + '" tabindex="0" data-date="' + t.date + '">' +
       '<span class="rw-date">' + fmtDate(t.date) + '</span>' + dir +
       '<span class="rw-px">' + nfmt(t.entry) + '<i>→</i>' + nfmt(t.exit) + '</span>' +
       '<span class="rw-res r-' + rc + '">' + signed(r) + '</span>' + badge + dot +
@@ -171,7 +221,17 @@
 
   var openMonths = null; // 展開中的月份 key 集合（null = 尚未初始化）
 
-  function renderList() {
+  /* renderList(quietExcept)
+       undefined / false → 這是「換了一批資料」（換模式、存檔、初次載入）：
+                           月份卡與列都播錯開進場。
+       '2026-08'（月份 key）→ 展開某個月份：**只有那個月的列**播進場，
+                           其他月份不重播（不然點一下手風琴整張清單會跟著閃一次）。
+       true                → 收合月份：整張都不播。
+     ⚠️ 「這一批要不要播」是狀態，只有 JS 知道；進場動畫本身是 CSS 的事
+        （css/motion.css 第 3 段），所以這裡只負責掛不掛 .anim。 */
+  function renderList(quietExcept) {
+    var quiet = quietExcept !== undefined && quietExcept !== false;
+    var openedMk = (typeof quietExcept === 'string') ? quietExcept : null;
     var listAll = md();
     var desc = sortAsc(listAll).reverse().filter(function (x) { return x.date !== todayISO(); });
     $('histCount').textContent = desc.length + ' 筆';
@@ -203,12 +263,13 @@
       var sum = '<span class="ms-rate">勝率 ' + rate + '%</span>' +
         '<span class="ms-wl"><b class="w">' + w + '</b>勝 <b class="l">' + l + '</b>敗</span>' +
         '<span class="ms-net ' + cls(net) + '">' + signed(net) + '點</span>';
-      return '<div class="month">' +
+      var rowsAnim = (!quiet || k === openedMk) ? ' anim' : '';
+      return '<div class="month' + (quiet ? '' : ' anim') + '">' +
         '<div class="month-head' + (open ? ' open' : '') + '" data-mk="' + k + '" tabindex="0" role="button" aria-expanded="' + open + '">' +
           '<span class="mh-l"><span class="chev">▾</span>' + monthLabel(k) + '</span>' +
           '<span class="mh-sum">' + sum + '</span>' +
         '</div>' +
-        (open ? '<div class="month-rows">' + items.map(rowHTML).join('') + '</div>' : '') +
+        (open ? '<div class="month-rows' + rowsAnim + '">' + items.map(rowHTML).join('') + '</div>' : '') +
         '</div>';
     }).join('');
     wireList();
@@ -219,7 +280,11 @@
     for (var i = 0; i < heads.length; i++) {
       (function (h) {
         var k = h.getAttribute('data-mk');
-        var toggle = function () { openMonths[k] = !openMonths[k]; renderList(); };
+        /* 展開 → 只讓這個月的列播進場；收合 → 整張都不播（見 renderList 的說明） */
+        var toggle = function () {
+          openMonths[k] = !openMonths[k];
+          renderList(openMonths[k] ? k : true);
+        };
         h.onclick = toggle;
         h.onkeydown = function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
       })(heads[i]);
@@ -246,7 +311,12 @@
     }
   }
 
-  function renderAll() { $('feeLabel').textContent = fee; renderSummary(); renderToday(); renderList(); }
+  /* ⚠️ finally：畫面畫壞了也要把開場收掉，不然開場會變成當機畫面、
+     要停到 splash.js 那條 6 秒保險絲才走。 */
+  function renderAll() {
+    try { $('feeLabel').textContent = fee; renderSummary(); renderToday(); renderList(); }
+    finally { splashReady(); }
+  }
 
   // ---------- top date ----------
   (function () {
@@ -345,13 +415,42 @@
     }
     updatePreview();
     lockScroll();
-    scrim.classList.add('show'); sheet.classList.add('show');
+    openPanel(sheet);
+  }
+
+  /* ---------- 面板開關的動效（css/motion.css 第 5 段）----------
+     開：.show 播 tl-sheet-in／tl-fade-in
+     關：換成 .closing 播獨立的 tl-sheet-out／tl-fade-out（**不是**把進場反著跑
+         —— animation-name 沒變的話瀏覽器不保證重播）。
+     ⚠️ 收尾用計時器把 .closing 拿掉，**不掛 animationend**：
+        animationend 被中斷／不觸發時面板會永遠關不掉。
+        就算這個計時器沒跑到，.closing 的終態（面板在畫面外、遮罩全透明）
+        跟關閉後的靜態值一模一樣 ⇒ 失敗模式是「看不出來」，不是「卡住」。 */
+  var CLOSE_MS = 260;               // > --dur-1(180ms) ＋ 餘裕
+  var closeTimer = null;
+  function panels() { return [scrim, sheet, $('settingsSheet')]; }
+  function openPanel(el) {
+    clearTimeout(closeTimer);
+    var ps = panels();
+    for (var i = 0; i < ps.length; i++) { if (ps[i]) ps[i].classList.remove('closing'); }
+    scrim.classList.add('show');
+    el.classList.add('show');
   }
   function closeSheet() {
-    scrim.classList.remove('show');
-    sheet.classList.remove('show');
-    $('settingsSheet').classList.remove('show');
+    clearTimeout(closeTimer);
+    var ps = panels(), closing = [], i;
+    for (i = 0; i < ps.length; i++) {
+      if (ps[i] && ps[i].classList.contains('show')) {
+        ps[i].classList.remove('show');
+        ps[i].classList.add('closing');
+        closing.push(ps[i]);
+      }
+    }
     unlockScroll();
+    if (!closing.length) return;
+    closeTimer = setTimeout(function () {
+      for (var j = 0; j < closing.length; j++) closing[j].classList.remove('closing');
+    }, CLOSE_MS);
   }
 
   $('openBtn').onclick = function () { openSheet(null); };
@@ -406,6 +505,7 @@
     data.push(rec);
     save(data);
     schedulePush();
+    markFresh(date, curMode);       // 讓他在清單上認得出「就是這張」
     closeSheet(); renderAll();
     toast(editingKey ? '已更新' : '已記錄 ✓');
     editingKey = null;
@@ -461,7 +561,7 @@
   $('settingsBtn').onclick = function () {
     $('feeInput').value = fee;
     lockScroll();
-    scrim.classList.add('show'); settingsSheet.classList.add('show');
+    openPanel(settingsSheet);
   };
   $('feeCancelBtn').onclick = closeSheet;
   $('feeSaveBtn').onclick = function () {
@@ -617,7 +717,7 @@
 
   // ---------- 版本顯示 + 強制更新 ----------
   // 手機 PWA 的快取很黏，沒有版本號時根本看不出自己在哪一版。
-  var APP_VER = 'v19';
+  var APP_VER = 'v20';
   var vl = $('verLabel'); if (vl) vl.textContent = '版本 ' + APP_VER;
   var fu = $('forceUpdBtn');
   if (fu) fu.onclick = function () {
