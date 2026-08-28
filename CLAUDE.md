@@ -233,7 +233,7 @@ data/practice.json       練習紀錄的雲端同步檔（面板自動 push，�
 **練習紀錄與重播紀錄必須分開**：`practice_trades/` 是他真實的練習成績、會同步到手機；
 重播是「回頭重做一次判斷」，混進去會污染勝率統計。
 
-## 動效基調（沉穩）＋ 開場（白起） — 2026-08-28 上線，v20
+## 動效基調（沉穩）＋ 開場（白起） — 2026-08-28 上線，v20（v21 修狀態列淺色帶）
 
 範本正本在 `../app-template/motion/`（跨 App 共用，已上線、已 QA 放行）。
 這支是**第二支**套用的 App，第一支是 `movie-library`（好雷嗎? v1.6.3），
@@ -248,7 +248,7 @@ js/splash.js         範本複製品（同上）；<body> 尾端、排在 app.js
 js/splash-boot.js    範本複製品；**不被 <script src> 載入**，已逐字 inline 進 index.html
 index.html           關鍵路徑 CSS ＋ SPLASH_CONFIG ＋ inline 的 splash-boot ＋ 非阻塞 CSS ＋ 落地色票
 tools/check-splash.js       靜態守衛（沒有 npm test，這支就是這一層的測試）
-tools/probe/*.mjs           真瀏覽器探針（first-frame / press-scan / paths / flows）
+tools/probe/*.mjs           真瀏覽器探針（first-frame / press-scan / paths / flows / status-band / safe-area）
 ```
 
 ### ⛔ 絕對不要整包套範本的 `motion.css`
@@ -319,9 +319,32 @@ iPhone 從主畫面開 PWA 時，iOS 會先播自己的啟動畫面（`backgroun
   `body` 的底色畫在 `html` 畫布**上面**，開場沉下去了 body 那片深色還在。
   只要有一塊畫面沒被 `#splash` 蓋到就會露出來（上一支 App 的錄影拍到過下緣一條 58px 的深色帶）。
   ⚠️ 一定要 `transparent`，不可以讓 body 自己再跑一次同樣的漸變。
+- **⛔ `apple-mobile-web-app-status-bar-style` 一定要 `black-translucent`，不可以是 `black`**
+  （v21，2026-08-28 修；v20 上線時是 `black`，Benson 當天就回報）。
+  症狀：開場漸深時，畫面**最上緣有一條 26 CSS px 的淺色帶跟不上內容**，約 1 秒後才自己跳成深色。
+  他的螢幕錄影逐格（1180×2556、59.94fps）：第 160 幀上緣 `#e4e4e4` / 內容 `#4e5054`；
+  第 200 幀上緣還是 `#e3e3e3` / 內容已經 `#14161a`；第 260 幀上緣才跳成 `#18191d`。
+  根因：`black` ⇒ iOS 在頁面**外面**另外畫一條實心的狀態列底，它取用 `theme-color` 的頻率
+  **遠低於每幀** ⇒ §7b 的每幀追蹤器再準也追不上，就卡在最初那片白。
+  `black-translucent` ⇒ 狀態列**沒有自己的底**，直接疊在我們畫的畫面上 ⇒ 跟開場一起變，
+  **結構上不可能不同步**。`movie-library` 用的就是這一條（Benson 評「完美」），
+  而 `js/splash-boot.js §7b` 的註解本來就是照 `black-translucent` 寫的 —— v20 等於違反了模組自己的前提。
+  ⚠️ 代價：WebView 延伸到狀態列底下，貼頂／貼底的東西必須自己讓開。
+  實測（`tools/probe/safe-area.mjs`，注入 iPhone 15 Pro 的 inset 59/34）：
+  `.topbar` padding-top 77px、`#modeBar` y=138.8、`.summary` y=199.8、FAB 距底 56、
+  `#kr-full .kr-top` padding-top 69px —— **原本就全部有讓開，一行版面都不用改**。
+  ⚠️ 唯一薄的地方：兩個 `.sheet` 的 `max-height:92vh`，內容灌到撞頂時面板頂端落在 y=68.2，
+  離 inset 只剩 **9.2px**（393×852 上實測；算式 `0.08×vh − inset`，各機型最薄是 iPhone 16 Pro 的 7.9px）。
+  **刻意不動它**：改成 `calc(92vh - var(--safe-t))` 會讓記錄面板的自然高（727px）超過新的
+  max-height（724.8px），本來不用捲的面板突然變成要捲 —— 那是看得見的退步。
+  真的要調的話請連 `.sheet` 的內容高度一起重新設計。
 - **`<meta name="theme-color">` 有兩條（深色／淺色）**，`splash-boot.js §7b` 的追蹤器抓的是
   **第一個** ⇒ **深色那一條一定要排在前面**。淺色模式下追蹤器等於沒作用（改到的是沒生效的那一條），
   無害，但要知道。
+  改成 `black-translucent` 之後 §7b **還是要留**（v21 沒動它）：它負責的已經不是狀態列那一帶
+  （那塊現在由我們自己畫），而是**頁面之外**剩下的系統色 —— overscroll 回彈區與 home 指示條那一帶
+  （`movie-library` 錄影拍到過的下緣 58px 深色帶就是它）。而且 `js/splash-boot.js` 在 SHA 鎖鏈上，
+  動它要回範本改、影響所有 App。實測 8 條路徑全過、開場中寫入 100 個相異值、收場換回字面值 `#0F1218`。
 - **SHA 鎖鏈**：`css/splash.css`、`js/splash.js`、`js/splash-boot.js` 必須跟
   `../app-template/motion/` 逐位元組相同；`index.html` 柵欄裡那份又必須跟 `js/splash-boot.js` 相同。
   改法是**回範本改**，再 `cp` 過來、再跑
@@ -337,6 +360,8 @@ node tools/probe/first-frame.mjs   # 第一幀 ＝ 動畫起始狀態（自帶�
 node tools/probe/press-scan.mjs    # 按下回饋全掃描（真滑鼠事件，自帶負控組）
 node tools/probe/paths.mjs         # 八條路徑：冷啟動／CSS 遲到／CSS 404／splash.js 404／JS 停用／熱啟動／淺色／reduce
 node tools/probe/flows.mjs         # 面板開關 ＋ 剛存那一筆的高亮
+node tools/probe/status-band.mjs [dark|light|reduce|hot]   # 頂端不准有硬邊（v21 那個 bug 的常駐防線）
+node tools/probe/safe-area.mjs   [dark|light]              # 注入真 inset，逐項量貼頂/貼底元素有沒有讓開
 ```
 
 - `tools/check-splash.js` 是範本 `check-splash.js` 的複製品，**只打了四個落地補丁**

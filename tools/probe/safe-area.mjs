@@ -168,6 +168,28 @@ try {
     await sleep(600);
   }
 
+  /* ---- 鑰匙圈全屏面板：模組自己用 env() 排版（js/keyring-unlock.js 是 keyring repo
+         自動同步過來的正本複製品，⛔ 只准量、不准改）。GitHub 已被 setBlockedURLs 擋掉。 ---- */
+  await c.send("Runtime.evaluate", {
+    expression: `(()=>{const chip=document.querySelector('#krChip button,#krChip .kr-chip,#krChip a'); if(chip)chip.click();})()`
+  });
+  await sleep(1200);
+  const kr = JSON.parse((await c.send("Runtime.evaluate", {
+    expression: `(()=>{const o={};for(const s of ['#kr-full','#kr-full .kr-top','#kr-full .kr-foot']){
+      const e=document.querySelector(s); if(!e){o[s]=null;continue;} const b=e.getBoundingClientRect(),cs=getComputedStyle(e);
+      o[s]={top:+b.top.toFixed(1),bottom:+b.bottom.toFixed(1),pt:cs.paddingTop,pb:cs.paddingBottom};}
+      o.vh=innerHeight; return JSON.stringify(o);})()`,
+    returnByValue: true
+  })).result.value);
+  console.log("\n=== 鑰匙圈全屏面板 #kr-full（模組自己排版，只量不改）===");
+  if (!kr["#kr-full"]) { console.log("  （這個 session 叫不出來，未驗）"); }
+  else {
+    const top = kr["#kr-full .kr-top"], foot = kr["#kr-full .kr-foot"];
+    line(".kr-top padding-top", top ? top.pt : "-", top ? parseFloat(top.pt) >= INSET_T : undefined);
+    line(".kr-top 內容起點 y", top ? (parseFloat(top.pt)).toFixed(0) : "-", top ? parseFloat(top.pt) >= INSET_T : undefined);
+    line(".kr-foot padding-bottom", foot ? foot.pb : "-", foot ? parseFloat(foot.pb) >= INSET_B : undefined);
+  }
+
   console.log("\n" + (bad ? "[未過] " + bad + " 項不合格" : "[通過] 全部貼邊元素都讓開了"));
   c.close();
 } finally {

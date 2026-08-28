@@ -1,6 +1,13 @@
-/* 臨時：black-translucent 之下，狀態列那一帶（頂 59px）是我們自己畫的
-   ⇒ 整段開場它必須跟內容同色。逐幀取樣比對，並自帶負控組。
-   用法：node tools/probe/__tmp__band.mjs [dark|light|reduce|hot] */
+/* 狀態列帶探針（v21 起）＝ Benson 2026-08-28 回報那個 bug 的常駐防線。
+   症狀：開場漸深時畫面最上緣有一條 26 CSS px 的淺色帶跟不上，約 1 秒後才自己跳成深色。
+   根因：status-bar-style 是 `black` ⇒ iOS 在頁面**外面**另外畫一條實心的狀態列底，
+         那條底取用 <meta theme-color> 的頻率遠低於每幀 ⇒ splash-boot §7b 追不上。
+   修法：改成 `black-translucent` ⇒ 那一帶由我們自己畫 ⇒ 結構上不可能不同步。
+   判準：整段開場，頂端 0~90px **不准出現硬邊**（相鄰兩列的 RGB 跳幅 > 6 就是硬邊）。
+   ⚠️ 不可以拿 y=6 直接跟畫面中段比：body 有一層金色 radial-gradient，
+      上緣本來就被染亮約 3%（CLAUDE.md 記過，第一版探針就是這樣被誤判成紅燈的）。
+   自帶負控組：重現舊症狀（頂 26px 貼 #e0e0e0）必須翻紅。
+   用法：node tools/probe/status-band.mjs [dark|light|reduce|hot] */
 import { spawn } from "node:child_process";
 import fs from "node:fs"; import os from "node:os"; import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,7 +120,7 @@ try {
   console.log("  App --bg                " + fin.bg);
   console.log("  theme-color 兩條          " + fin.tc.join("  ｜  "));
 
-  console.log("\n" + (bad ? "[未過] " + bad + " 項" : "[通過] 整段開場：狀態列帶與內容同色（Δ≤6）"));
+  console.log("\n" + (bad ? "[未過] " + bad + " 項" : "[通過] 整段開場，頂端 0~90px 沒有硬邊（最大跨列跳 ≤ 6）"));
   c.close();
 } finally { try { ch.kill(); } catch (e) {} try { srv.kill(); } catch (e) {} }
 process.exit(bad ? 1 : 0);
