@@ -1,0 +1,16 @@
+{
+  "date": "2026-08-26",
+  "before": {
+    "days": 494,
+    "up_after_drop": 62.05,
+    "up_after_rise": 41.8,
+    "up_flat": 50.89
+  },
+  "after": {
+    "days": 495,
+    "up_after_drop": 62.15,
+    "up_after_rise": 41.7,
+    "up_flat": 50.85
+  },
+  "ran_at": "2026-08-26T14:15:22"
+}

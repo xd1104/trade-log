@@ -20,7 +20,18 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <!-- ⭐⭐ 一定要 black-translucent，不可以改回 black（v21，2026-08-28）。
+       症狀（Benson 的螢幕錄影逐格，1180×2556、59.94fps）：開場漸深的時候，
+       畫面最上緣有一條 26 CSS px 的**淺色帶**跟不上內容，約 1 秒後才自己跳成深色。
+       根因：`black` ⇒ iOS 在頁面**外面**另外畫一條實心的狀態列底，那條底取用
+       <meta theme-color> 的頻率遠低於每幀 ⇒ js/splash-boot.js §7b 的每幀追蹤器
+       再準也追不上，它就卡在最初那個淺色。
+       `black-translucent` ⇒ 狀態列**沒有自己的底**，直接疊在我們畫的畫面上
+       ⇒ 跟開場一起變，**結構上不可能不同步**。movie-library 用的就是這一條
+       （Benson 評「完美」），§7b 的註解也是照 black-translucent 寫的。
+       ⚠️ 代價：WebView 會延伸到狀態列底下 ⇒ 貼頂的東西必須自己讓開
+          （.topbar 的 padding-top 已經帶 var(--safe-t)，實測 59px 有吃到）。 -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="交易日誌">
 
   <!-- ⭐⭐ 關鍵路徑 CSS：第一次繪製的那一幀就長這樣。

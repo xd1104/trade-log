@@ -160,6 +160,10 @@ except Exception:
 POSITION = None
 TODAY_TRADES = []
 CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
+# 最後一次有瀏覽器來要資料的時間。桌面 App 靠它判斷「視窗是不是被關掉了」——
+# 用 Edge 的 --app-id 開視窗時，啟動的那個行程會立刻結束（Edge 交棒給既有的行程），
+# 所以不能用「等那個行程結束」來判斷關窗，會一開就誤判（實測 1 秒就誤判）。
+LAST_CLIENT = {"at": 0.0}
 SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 
 # 加權指數（現貨）：Benson 下單時會看，所以面板一起顯示，並算出基差。
@@ -4168,6 +4172,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b)
             return
         if self.path.startswith("/api/state"):
+            LAST_CLIENT["at"] = time.time()      # 有人在看（桌面 App 靠這個判斷關窗）
             with state_lock:
                 payload = json.dumps(STATE, ensure_ascii=False).encode()
             self.send_response(200)
@@ -4177,6 +4182,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.path.startswith("/api/idle"):
+            # 幾秒沒有瀏覽器來要資料了。刻意不更新 LAST_CLIENT ——
+            # 問的人是桌面 App 的啟動器，它不算觀眾。
+            last = LAST_CLIENT["at"]
+            b = json.dumps({"idle": None if last == 0 else round(time.time() - last, 1)}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
+
         if self.path.startswith("/manifest.webmanifest"):
             b = json.dumps(MANIFEST, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
