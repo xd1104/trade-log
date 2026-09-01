@@ -151,6 +151,48 @@ chk("  演練時本機部位留著（不然持倉畫面演練不到）", (kept o
 blocked("  演練時已有部位一樣擋住再進場", broker.can_enter(45000, True), "已經有部位")
 broker._state["position"] = None
 
+print("\n=== 停利要用實際成交價算，不是送單當下的參考價 ===")
+# 模擬帳戶實測：參考價 46833、實際成交 46835 ⇒ 停利要 46935 不是 46933
+FILLED = {"code": "TMFI6", "quantity": 1, "direction": "Buy", "price": 46835}
+
+
+class FilledAPI:
+    def list_positions(self, acc=None):
+        return [type("P", (), FILLED)()]
+
+
+connect(FilledAPI())
+broker.is_live = lambda: True          # 借用「已成交」的假券商，測正式模式的算法
+broker._state["position"] = None
+ok, err, pos = broker.enter("long", 46833, 100)      # 參考價故意跟成交價差 2 點
+chk("  部位記的是實際成交價", (pos or {}).get("entry"), 46835.0)
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  停利掛在 46935（成交價 +100），不是 46933", recs[-1]["price"], 46935.0)
+
+print("\n=== IOC 沒成交就不可以掛停利 ===")
+
+
+class NoFillAPI:
+    def list_positions(self, acc=None):
+        return []                       # 送出了但沒撮到
+
+
+connect(NoFillAPI())
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.0                  # 測試不要真的等 5 秒
+broker._state["position"] = None
+ok, err, pos = broker.enter("long", 46833, 100)
+chk("  回報失敗", ok, False)
+chk("  沒有留下假部位", broker._state["position"], None)
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  最後一筆是「沒成交」而不是停利單", recs[-1]["kind"], "entry_nofill")
+chk("  完全沒有掛出停利（那張會變成反向新部位）",
+    any(r["kind"] == "target" for r in recs[-2:]), False)
+broker.is_live = lambda: broker.REAL_FLAG.exists()   # 還原
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
 print("\n=== dry run 真的沒送出去 ===")
 connect(FakeAPI())
 ok, err, pos = broker.enter("long", 45000, 100)

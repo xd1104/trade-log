@@ -33,6 +33,7 @@ Benson 2026-08-28 知情後決定「停損也交給面板，風險我承擔」�
 """
 import json
 import pathlib
+import time
 import threading
 from datetime import date, datetime
 
@@ -219,10 +220,34 @@ def can_enter(price, quote_live):
     return True, None
 
 
+FILL_WAIT = 5.0        # 送出後最多等幾秒確認成交
+
+
+def _wait_fill(direction):
+    """
+    等券商回報「真的成交了」，回傳實際成交均價；沒成交回 None。
+
+    【為什麼一定要等】兩個理由，模擬帳戶實測（2026-09-01）都看得到：
+    1. **停利／停損要用實際成交價算**。送單當下的參考價是 46833，實際成交 46835 ——
+       用參考價算的話停利掛在 46933，比正確的 46935 少 2 點。市場快的時候差更多。
+    2. **IOC 可能整張沒成交**。沒成交卻照樣掛停利平倉單的話，那張 Cover 單留在場上，
+       之後成交就變成一個**反向的新部位** —— 明明沒進場卻突然有一個空單。
+    """
+    if not is_live():
+        return None                       # 演練沒有真的部位可以等
+    deadline = time.time() + FILL_WAIT
+    while time.time() < deadline:
+        pos = broker_position()
+        if isinstance(pos, dict) and pos.get("dir") == direction and pos.get("entry"):
+            return float(pos["entry"])
+        time.sleep(0.4)
+    return None
+
+
 def enter(direction, price, tp_points):
     """
     進場。用範圍市價（MKP）＋ IOC：要就立刻成交，不要掛在那裡等。
-    成交後順手把 +tp_points 的停利限價單掛到券商那邊 —— 那一張電腦關機也有效。
+    **確認成交之後**才把停利限價單掛到券商那邊 —— 那一張電腦關機也有效。
     """
     import shioaji as sj
     act = sj.Action.Buy if direction == "long" else sj.Action.Sell
@@ -231,11 +256,24 @@ def enter(direction, price, tp_points):
         "entry")
     if not ok:
         return False, err, None
+
+    fill = _wait_fill(direction)
+    if is_live() and fill is None:
+        # IOC 沒成交。**絕對不可以掛停利** —— 那張 Cover 單留在場上，
+        # 成交之後就變成一個反向的新部位。
+        _log("entry_nofill", {"ok": False, "why": "IOC 沒有成交，不掛停利"})
+        with _lock:
+            _state["position"] = None
+        return False, "沒有成交（範圍市價 IOC 當下沒撮到），沒有掛停利，也沒有部位", None
+
+    entry = fill if fill is not None else float(price)
     with _lock:
-        _state["position"] = {"dir": direction, "entry": float(price), "qty": QTY,
+        _state["position"] = {"dir": direction, "entry": entry, "qty": QTY,
                               "entry_time": datetime.now().strftime("%H:%M:%S"),
-                              "target_trade": None, "recovered": False}
-    tp = float(price) + (tp_points if direction == "long" else -tp_points)
+                              "target_trade": None, "recovered": False,
+                              "ref_price": float(price)}
+    # 停利一律用**實際成交價**算，不是送單當下的參考價
+    tp = entry + (tp_points if direction == "long" else -tp_points)
     place_target(tp)
     return True, None, _state["position"]
 
@@ -270,7 +308,7 @@ def close(reason):
     if t is not None and is_live() and _state["api"] is not None:
         try:
             _state["api"].cancel_order(t)
-            _log("cancel_target", {"ok": True})
+            _log("cancel_target", {"ok": True, "why": "平倉前先撤掉還掛著的停利單"})
         except Exception as e:
             _log("cancel_target", {"ok": False, "err": str(e)[:200]})
     act = sj.Action.Sell if pos["dir"] == "long" else sj.Action.Buy
