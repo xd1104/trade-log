@@ -14,6 +14,7 @@
 【為什麼不用 Edge 的 --app】視窗擁有者是 Edge ⇒ 工作列一律顯示 Edge 的圖示
 （安裝成 PWA 也一樣），而且關窗時機測不準。詳見 open_window() 的說明。
 """
+import json
 import os
 import subprocess
 import sys
@@ -53,6 +54,61 @@ def alive():
             return True
     except Exception:
         return False
+
+
+def server_is_stale():
+    """
+    正在跑的那個伺服器，是不是比硬碟上的程式舊。
+
+    【為什麼要有這個】關視窗**不等於**重開面板 —— 下面 main() 看到伺服器活著就直接
+    接上去（用意是不要每次開窗都重連永豐、等一分鐘）。副作用是改過程式之後，
+    關視窗再點一次，接到的還是那個舊伺服器，**新程式永遠載不進來，畫面上還完全看不出來**
+    （2026-09-01 就這樣白重開一次，以為在測新版）。
+    現在面板會自己回報 `code.stale`（硬碟上的檔案比行程新），據此先把舊的收掉。
+    """
+    try:
+        with urllib.request.urlopen(URL + "api/state", timeout=3) as r:
+            s = json.load(r)
+    except Exception as e:
+        log(f"問不到伺服器版本（{e}），當作不用重開")
+        return False
+    code = (s.get("real") or {}).get("code")
+    if code is None:
+        return True          # 連版本指紋都沒有 ⇒ 舊到還沒有這個欄位，一定要換掉
+    return bool(code.get("stale"))
+
+
+def running_panels():
+    """正在跑的 live_panel.py 行程（不含自己）。只認命令列，不亂猜。"""
+    ps = "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", creationflags=NO_WINDOW, timeout=40)
+        rows = json.loads(out.stdout or "[]")
+    except Exception as e:
+        log(f"列不出行程：{e}")
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    me = os.getpid()
+    return [r["ProcessId"] for r in rows
+            if r.get("ProcessId") != me and "live_panel.py" in (r.get("CommandLine") or "")]
+
+
+def kill_stale_server():
+    """把舊的伺服器收乾淨，等連接埠真的放開。"""
+    pids = running_panels()
+    log(f"舊伺服器比程式舊，收掉 {pids}")
+    for pid in pids:
+        subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                       capture_output=True, creationflags=NO_WINDOW)
+    for _ in range(40):
+        if not alive():
+            return True
+        time.sleep(0.25)
+    log("等不到舊伺服器退場，只好接著用它")
+    return False
 
 
 def watchdog(started):
@@ -118,6 +174,10 @@ def main():
     log("=== 啟動 ===")
     started = []
     owns_server = False
+
+    # 接上去之前先確認它跑的是不是最新的程式；不是就先收掉，下面會開一個新的。
+    if alive() and server_is_stale():
+        kill_stale_server()
 
     if not alive():
         if not os.path.exists(PYTHON):

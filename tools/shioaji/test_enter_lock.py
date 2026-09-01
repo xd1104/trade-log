@@ -111,6 +111,21 @@ code, body = post("/api/real/enter", {"dir": "short"})
 chk("  下一筆送得出去", code, 200)
 chk("  而且真的到 broker", CALLS, ["short"])
 
+print("\n=== 面板要知道自己跑的是不是最新的程式 ===")
+# 關視窗再開**不等於**重開面板（panel_app 看到伺服器活著就直接接上去），
+# 所以改過程式之後很容易在完全不知情的狀況下繼續跑舊版 —— 09-01 就白重開一次。
+import datetime as _dt
+
+real_boot = LP.BOOT_AT
+LP.BOOT_AT = _dt.datetime.now() - _dt.timedelta(days=1)     # 行程比檔案舊
+chk("  檔案比行程新 → 要說自己過期了", LP.code_stamp()["stale"], True)
+LP.BOOT_AT = _dt.datetime.now() + _dt.timedelta(minutes=5)  # 行程比檔案新
+chk("  行程比檔案新 → 不可以亂喊過期", LP.code_stamp()["stale"], False)
+LP.BOOT_AT = real_boot
+stamp = LP.code_stamp()
+chk("  版本指紋該有的欄位都在",
+    sorted(stamp.keys()), ["broker", "panel", "stale", "started"])
+
 srv.shutdown()
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")
 sys.exit(1 if FAIL else 0)

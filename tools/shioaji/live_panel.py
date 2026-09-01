@@ -2410,7 +2410,11 @@ function realBox(s){
       (firing?'<div class="whyoff">送出中…等券商回報成交（最多 5 秒）</div>':'')+
       (ok?'':'<div class="whyoff">'+esc(R.why||'現在不能下單')+'</div>')+
       '<div class="quota">今天真實進場 '+(R.entries_today||0)+' / '+(R.max_entries||3)+
-      (R.code?'　·　程式 '+esc(R.code.broker)+'　啟動 '+esc(R.code.started):'')+'</div>';
+      (R.code?'　·　程式 '+esc(R.code.broker)+'　啟動 '+esc(R.code.started):'')+'</div>'+
+      // 硬碟上的程式比跑著的這個新 ⇒ 他以為重開過了，其實沒有。一定要講出來。
+      (R.code&&R.code.stale
+        ? '<div class="whyoff"><b>面板跑的不是最新的程式</b>　關視窗再開沒有用（會接回同一個舊的），'
+          +'要跑 restart-panel.py 才會真的換掉</div>' : '');
  }
  return h+'</div></div>';
 }
@@ -4681,15 +4685,22 @@ def code_stamp():
     沒有任何提示。今天要確認「畫面上的程式＝正在跑的程式」，得去比對檔案時間戳
     跟行程啟動時間才推得出來 —— 那不該是判斷方式（lab-qa 退件第 9 條）。
     """
-    out = []
+    out, newest = [], 0.0
     for f in ("broker.py", "live_panel.py"):
         p = HERE / f
         try:
-            out.append(datetime.fromtimestamp(p.stat().st_mtime).strftime("%m-%d %H:%M"))
+            m = p.stat().st_mtime
+            newest = max(newest, m)
+            out.append(datetime.fromtimestamp(m).strftime("%m-%d %H:%M"))
         except Exception:
             out.append("?")
+    # stale ＝ 硬碟上的程式比這個行程還新 ⇒ 我跑的不是最新的那份。
+    # `panel_app.pyw` 靠這個決定「要不要先把舊伺服器收掉再開」，
+    # 前端也靠它跳提醒 —— 不然關視窗再開只是接回同一個舊伺服器，
+    # 改過的程式永遠載不進來，而且畫面上完全看不出來（2026-09-01 白重開一次）。
     return {"broker": out[0], "panel": out[1],
-            "started": BOOT_AT.strftime("%m-%d %H:%M")}
+            "started": BOOT_AT.strftime("%m-%d %H:%M"),
+            "stale": newest > BOOT_AT.timestamp() + 2}
 
 
 def real_state(price, quote, age):
