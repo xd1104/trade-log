@@ -186,6 +186,61 @@ recs = [json.loads(l) for l in
         (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
 chk("  停利掛在 46935（成交價 +100），不是 46933", recs[-1]["price"], 46935.0)
 
+print("\n=== 做空的部位不可以被讀成做多（2026-09-01 出過大事）===")
+
+
+def pos_api(direction_value, qty=1):
+    class A:
+        def place_order(self, contract, order):
+            return FakeTrade()
+
+        def list_positions(self, acc=None):
+            return [type("P", (), {"code": "TMFI6", "quantity": qty,
+                                   "direction": direction_value, "price": 46978})()]
+    return A()
+
+
+for label, val, want in [("Action.Sell（永豐給的樣子）", "Action.Sell", "short"),
+                         ("Action.Buy", "Action.Buy", "long"),
+                         ("字串 Sell", "Sell", "short"),
+                         ("字串 Buy", "Buy", "long")]:
+    connect(pos_api(val))
+    chk(f"  {label} → {want}", (broker.broker_position() or {}).get("dir"), want)
+
+connect(pos_api("", qty=-1))
+chk("  沒有 direction 欄位、數量是負的 → short", (broker.broker_position() or {}).get("dir"), "short")
+connect(pos_api("", qty=0))
+chk("  數量 0 → 當作沒有部位", broker.broker_position(), None)
+
+print("\n=== 平倉要用券商確認過的方向，不是記憶體裡那份 ===")
+connect(pos_api("Action.Sell"))
+broker.is_live = lambda: True
+# 故意把本機記成相反方向，重現 2026-09-01 那個狀況
+broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
+                             "entry_time": "11:23", "target_trade": None, "recovered": True}
+broker.close("test")
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  空單平倉送出的是 Buy（舊版會送 Sell，等於再加一口空單）",
+    recs[-1]["action"], "Action.Buy")
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
+print("\n=== 有部位但方向不符 → 停手，不可以當成「沒成交」 ===")
+connect(pos_api("Action.Buy"))          # 券商說是多單
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.0
+broker._state["position"] = None
+ok, err, pos = broker.enter("short", 46978, 100)   # 但我們送的是空單
+chk("  回報失敗", ok, False)
+chk("  訊息講出方向不符", "不符" in (err or ""), True)
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  記成 entry_mismatch 而不是 entry_nofill", recs[-1]["kind"], "entry_mismatch")
+chk("  完全沒有掛停利", any(r["kind"] == "target" for r in recs), False)
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
 print("\n=== IOC 沒成交就不可以掛停利 ===")
 
 

@@ -141,9 +141,28 @@ def broker_position():
         qty = int(getattr(p, "quantity", 0) or 0)
         if qty == 0:
             continue
+        # 【2026-09-01 出過大事】舊寫法是
+        #     "long" if ("buy" in d or qty > 0) else "short"
+        # qty > 0 對任何部位都成立 ⇒ **永遠回報做多**。他做空的那一筆因此：
+        #   ・_wait_fill 等不到「方向相符」的部位 → 誤判成沒成交 → 沒掛停利
+        #   ・畫面把空單顯示成多單
+        #   ・停損算在錯的一邊
+        #   ・按平倉時送出的是 Sell（該送 Buy）⇒ 又加了一口空單
+        # 現在：先認 direction 這個欄位，認不出來才看數量正負；
+        # **兩者都判斷不出來就回 unknown，絕對不猜**。
         d = str(getattr(p, "direction", "")).lower()
-        return {"dir": "long" if ("buy" in d or qty > 0) else "short",
-                "qty": abs(qty), "entry": float(getattr(p, "price", 0) or 0)}
+        if "sell" in d or "short" in d:
+            side = "short"
+        elif "buy" in d or "long" in d:
+            side = "long"
+        elif qty < 0:
+            side = "short"
+        elif qty > 0:
+            side = "long"
+        else:
+            _state["last_error"] = "券商回報的部位看不出方向，不敢動它"
+            return "unknown"
+        return {"dir": side, "qty": abs(qty), "entry": float(getattr(p, "price", 0) or 0)}
     return None
 
 
@@ -243,11 +262,20 @@ def _wait_fill(direction):
     if not is_live():
         return None                       # 演練沒有真的部位可以等
     deadline = time.time() + FILL_WAIT
+    other = None
     while time.time() < deadline:
         pos = broker_position()
-        if isinstance(pos, dict) and pos.get("dir") == direction and pos.get("entry"):
-            return float(pos["entry"])
+        if isinstance(pos, dict) and pos.get("entry"):
+            if pos.get("dir") == direction:
+                return float(pos["entry"])
+            other = pos          # 有部位但方向不是我們送的 —— 這很不對勁
         time.sleep(0.4)
+    if other is not None:
+        # 【不可以當成「沒成交」】那樣會清掉本機部位、讓畫面顯示空手，
+        # 但券商那邊其實有東西。2026-09-01 就是這樣，還連帶讓後續平倉送錯邊。
+        raise RuntimeError(
+            f"券商回報的部位方向是 {other['dir']}，跟送出的 {direction} 不符 —— "
+            "已經停手，請自己到大戶投確認並處理")
     return None
 
 
@@ -264,7 +292,13 @@ def enter(direction, price, tp_points):
     if not ok:
         return False, err, None
 
-    fill = _wait_fill(direction)
+    try:
+        fill = _wait_fill(direction)
+    except RuntimeError as e:
+        # 方向不符：券商那邊有東西但不是我們送的方向。停手、不掛停利、
+        # **不要清掉部位**（清掉畫面會顯示空手，但帳上其實有東西）。
+        _log("entry_mismatch", {"ok": False, "err": str(e)})
+        return False, str(e), None
     if is_live() and fill is None:
         # IOC 沒成交。**絕對不可以掛停利** —— 那張 Cover 單留在場上，
         # 成交之後就變成一個反向的新部位。
@@ -306,11 +340,22 @@ def close(reason):
     """
     立刻平倉（停損、手動、收盤）。範圍市價＋IOC。
     先把還掛著的停利單取消，免得平完倉那張變成反向新倉。
+
+    【方向一定要跟券商重新確認】2026-09-01 出過事：本機記的方向是錯的，
+    平倉送出去變成同方向再加一口。平倉是「反向下單」，方向錯 = 部位加倍，
+    所以這裡寧可拒絕，也不用記憶體裡那份可能過期的資料。
     """
     import shioaji as sj
     pos = _state["position"]
+    if is_live():
+        fresh = reconcile()
+        if fresh == "unknown":
+            return False, "跟券商對帳失敗，不確定部位方向 —— 請自己到大戶投平倉"
+        pos = fresh
     if pos is None:
         return False, "沒有部位"
+    if pos.get("dir") not in ("long", "short"):
+        return False, "看不出部位方向，不敢送平倉單 —— 請自己到大戶投平倉"
     t = pos.get("target_trade")
     if t is not None and is_live() and _state["api"] is not None:
         try:
