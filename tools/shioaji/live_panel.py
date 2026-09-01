@@ -2304,18 +2304,35 @@ var lastMkt='', lastTrade='', lastStats='', lastWarn='', lastReal='', statsCache
 /* ---------------- 真實下單 ----------------
    ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。
    記住狀態的話，某天心不在焉點到就是一個真實部位。 */
-var REAL_ON=false, HOLD_MS=650, holdTimer=null;
+var REAL_ON=false, HOLD_MS=650, holdTimer=null, holdingNow=false;
 function realToggle(){ REAL_ON=!REAL_ON; lastReal=''; tick(true); }
 function holdStart(el,dir){
+  holdEnd(el);
+  holdingNow=true;
   el.classList.add('holding');
-  clearTimeout(holdTimer);
-  holdTimer=setTimeout(function(){ el.classList.remove('holding'); realFire(dir); },HOLD_MS);
+  // 只綁在按鈕本身：mouseleave 綁在按鈕上時，游標在按鈕內部的子元素之間移動
+  // **不會**觸發。之前是 document + capture，游標稍微一動、離開任何一個
+  // 子元素就被判定成放開，所以按到一半就自己取消。
+  el.addEventListener('mouseleave',onLeave);
+  window.addEventListener('mouseup',onUp,true);
+  holdTimer=setTimeout(function(){
+    // 保險：按鈕已經不在畫面上就不要送單。理論上有 holdingNow 擋著不會發生，
+    // 但這是真錢，寧可多一道。
+    if(!document.body.contains(el)){ holdEnd(el); return; }
+    holdEnd(el); realFire(dir);
+  },HOLD_MS);
 }
+function onLeave(e){ holdEnd(e.currentTarget); }
+function onUp(){ document.querySelectorAll('.rbtn.holding').forEach(holdEnd); }
 function holdEnd(el){
-  if(!el.classList.contains('holding')) return;
-  clearTimeout(holdTimer); el.classList.remove('holding');
+  clearTimeout(holdTimer); holdTimer=null; holdingNow=false;
+  if(!el) return;
+  el.classList.remove('holding');
+  el.removeEventListener('mouseleave',onLeave);
+  window.removeEventListener('mouseup',onUp,true);
 }
 function realFire(dir){
+  holdingNow=false;
   fetch('/api/real/enter',{method:'POST',headers:{'Content-Type':'application/json'},
                            body:JSON.stringify({dir:dir})})
    .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'送不出去'); lastReal=''; tick(true); })
@@ -2457,7 +2474,12 @@ async function tick(nf){
  // 骨架留著就好 —— 不然那半秒會先塞一張小卡，圖回來時整個被頂掉，版面跳一下。
  if(!paintChart(s) && barsCache!==null) paintFallback(s,q);
  if(nf||!nEditing('t')) setHTML('trade',tradeBox(s));
- setHTML('real',realBox(s));
+ // 【長按期間不准重繪這張卡】卡片裡有現價，每次報價變動整塊 innerHTML 就被換掉，
+ // 按住的那顆按鈕當場被銷毀 —— 畫面看起來像「按到一半自己취消」。
+ // 更糟的是計時器還握著那顆已經不在畫面上的按鈕，時間到照樣送單：
+ // 使用者以為取消了，單卻出去了（2026-09-01 Benson 回報，查證後沒送出是因為
+ // 剛好還有另一個 bug 把它擋掉，不是設計正確）。
+ if(!holdingNow) setHTML('real',realBox(s));
  if(nf||!nEditing('s')) setHTML('stats',statsBox(statsCache));
 }
 
@@ -3322,10 +3344,9 @@ document.addEventListener('mousedown', function(e){
  const b=e.target.closest('[data-rdir]');
  if(b&&!b.disabled) holdStart(b,b.getAttribute('data-rdir'));
 });
-['mouseup','mouseleave','blur'].forEach(function(ev){
- document.addEventListener(ev, function(e){
-   document.querySelectorAll('.rbtn.holding').forEach(holdEnd);
- }, true);
+// 切走視窗（Alt+Tab、鎖螢幕）也算放開 —— 手離開鍵鼠了就不該繼續倒數
+window.addEventListener('blur',function(){
+ document.querySelectorAll('.rbtn.holding').forEach(holdEnd);
 });
 
 document.addEventListener('click', function(e){
