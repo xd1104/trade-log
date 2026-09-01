@@ -1,0 +1,97 @@
+{
+ "status": "live",
+ "msg": "",
+ "quote": "live",
+ "market": "day",
+ "period": "2024-08-12 ~ 2026-09-01",
+ "n_days_total": 499,
+ "clock": "12:47:42",
+ "replay": null,
+ "phase": "live",
+ "position": null,
+ "today_trades": [],
+ "age_sec": 0,
+ "conn": {
+  "ok": true,
+  "since": null,
+  "retries": 0,
+  "last_error": null,
+  "contract": "TMFI6",
+  "contract_name": "微型臺指期貨 202609"
+ },
+ "chips": {
+  "price": 47134.0,
+  "chg": 1165.0,
+  "gap": 2.0,
+  "rng": 1179.0,
+  "pos": 0.9881255301102629,
+  "vol_ratio": 2.648211918451872,
+  "mom5": 29.0,
+  "mom15": 4.0,
+  "bid": 47134.0,
+  "ask": 47135.0,
+  "is_mid": false,
+  "idx": 46853.89,
+  "idx_chg": 725.42,
+  "idx_pct": 1.57,
+  "basis": 280.1
+ },
+ "result": {
+  "n_days": 150,
+  "index": 47.3,
+  "direction": "沒訊號",
+  "regime": "flat",
+  "verified": {
+   "rate": 52.5,
+   "ci": [
+    50.0,
+    54.9
+   ],
+   "n_days": 334,
+   "n": 4154
+  },
+  "consistent": false,
+  "any_meaningful": false,
+  "horizons": [
+   {
+    "h": 5,
+    "prob_up": 43.3,
+    "ci": [
+     35.4,
+     51.3
+    ],
+    "base": 46.1,
+    "move": -7.3,
+    "q1": -33.3,
+    "q3": 23.8,
+    "meaningful": false
+   },
+   {
+    "h": 10,
+    "prob_up": 47.3,
+    "ci": [
+     39.3,
+     55.4
+    ],
+    "base": 46.7,
+    "move": 0.0,
+    "q1": -45.6,
+    "q3": 33.2,
+    "meaningful": false
+   },
+   {
+    "h": 15,
+    "prob_up": 52.0,
+    "ci": [
+     44.0,
+     60.0
+    ],
+    "base": 50.2,
+    "move": 4.3,
+    "q1": -41.2,
+    "q3": 52.4,
+    "meaningful": false
+   }
+  ]
+ }
+}
