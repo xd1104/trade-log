@@ -30,3 +30,7 @@ tools/shioaji/panel-app.log
 tools/shioaji/real_orders/
 tools/shioaji/sim_orders/
 tools/shioaji/REAL_ORDERS_ON
+
+# 憑證：絕對不進版控
+*.pfx
+*.p12

@@ -4739,7 +4739,7 @@ def main():
 
     import shioaji as sj
     from shioaji import BidAskFOPv1, Exchange, TickFOPv1
-    from _config import get_credentials
+    from _config import get_ca, get_credentials
 
     api_key, secret = get_credentials()
     vol_ref_by_min = hist.df.groupby("min_idx")["vol_cum"].median().to_dict()
@@ -4798,6 +4798,21 @@ def main():
         api = sj.Shioaji()
         api.login(api_key=api_key, secret_key=secret)
         contract = pick_live_contract(api)
+        # 【真實下單一定要憑證】沒啟用的話送單會被永豐擋下來（CA not activated）。
+        # 模擬帳戶不需要憑證，所以模擬測兩輪都測不到這一關 —— 2026-09-01 第一次按真單才發現。
+        ca = get_ca()
+        if ca:
+            try:
+                api.activate_ca(ca_path=ca[0], ca_passwd=ca[1], person_id=ca[2])
+                broker.CA_OK["ok"], broker.CA_OK["msg"] = True, None
+                print("[憑證] 已啟用，可以真實下單")
+            except Exception as e:
+                broker.CA_OK["ok"] = False
+                broker.CA_OK["msg"] = f"憑證啟用失敗：{str(e)[:120]}"
+                print("[憑證] " + broker.CA_OK["msg"])
+        else:
+            broker.CA_OK["ok"] = False
+            broker.CA_OK["msg"] = "還沒設定憑證（.env 裡的 SHIOAJI_CA_PATH / SHIOAJI_CA_PASSWD）"
         broker.configure(api, contract)      # 真實下單要用同一個連線與同一個合約
         api.set_on_tick_fop_v1_callback(on_tick)
         api.set_on_bidask_fop_v1_callback(on_bidask)

@@ -21,6 +21,26 @@ def _load_env_file():
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def get_ca():
+    """
+    憑證設定。**真實下單一定要憑證**，模擬帳戶不用 —— 所以模擬測了兩輪都測不到，
+    第一次按真單才跳「CA not activated」（2026-09-01）。
+
+    回傳 (路徑, 密碼, 身分證字號)；沒設定就回 None，面板照常跑、只是不能真實下單。
+    密碼跟 API Key 一樣只放 .env（已 gitignore），絕不寫進程式碼。
+    """
+    _load_env_file()
+    path = os.environ.get("SHIOAJI_CA_PATH", "")
+    pwd = os.environ.get("SHIOAJI_CA_PASSWD", "")
+    pid = os.environ.get("SHIOAJI_PERSON_ID", "")
+    if not path or not pwd:
+        return None
+    if not Path(path).exists():
+        print(f"[憑證] 找不到檔案：{path}")
+        return None
+    return path, pwd, (pid or None)
+
+
 def get_credentials():
     _load_env_file()
     api_key = os.environ.get("SHIOAJI_API_KEY", "")

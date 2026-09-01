@@ -44,6 +44,10 @@ QTY = 1                                   # 口數。寫死，不從介面讀
 MAX_ENTRIES = 3                           # 每天最多進場幾次
 STALE_ALARM = 20                          # 有真實部位時，報價超過幾秒沒更新就示警
 
+# 憑證狀態。真實下單一定要憑證，模擬帳戶不用 —— 所以模擬跑再多輪也測不到這一關
+# （2026-09-01 第一次按真單才跳 CA not activated）。面板登入時填這個。
+CA_OK = {"ok": False, "msg": "尚未檢查憑證"}
+
 _lock = threading.Lock()
 _state = {
     "api": None,
@@ -209,6 +213,9 @@ def can_enter(price, quote_live):
         return False, "還沒連上永豐"
     if _state["account"] is None:
         return False, "找不到期貨帳號（可能是 API 還沒簽署完成）"
+    # 憑證沒啟用就先擋在這裡，不要讓他長按完才吃到永豐的錯誤訊息
+    if is_live() and not CA_OK["ok"]:
+        return False, CA_OK["msg"] or "憑證沒啟用，不能真實下單"
     n = entries_today()
     if n >= MAX_ENTRIES:
         return False, f"今天真實進場已經 {n} 次，達到上限 {MAX_ENTRIES} 次"
@@ -324,6 +331,7 @@ def close(reason):
 def snapshot():
     """給面板顯示用。"""
     return {"live": is_live(), "position": _state["position"],
+            "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"],
             "entries_today": entries_today(), "max_entries": MAX_ENTRIES,
             "account": str(getattr(_state["account"], "account_id", "")) or None,
             "last_error": _state["last_error"]}
