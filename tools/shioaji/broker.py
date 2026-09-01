@@ -144,18 +144,19 @@ def broker_position():
 
 def reconcile():
     """啟動時／每次要動作之前叫。把券商的實況寫回 _state。"""
-    if not is_live():
-        # 【演練模式不對帳】券商那邊當然沒有部位，拿它去清掉演練部位的話，
-        # 按下去的部位下一秒就被抹掉 —— 持倉那一整塊畫面根本演練不到
-        # （2026-09-01 實測：長按送出後部位出現，1 秒後自己消失）。
-        # 演練時本機的 _state 就是唯一的真相。
-        return _state["position"]
     pos = broker_position()
     if pos == "unknown":
         return "unknown"
     with _lock:
         if pos is None:
-            _state["position"] = None
+            # 【演練時不可以清掉本機部位】券商那邊當然沒有部位，拿它去清的話，
+            # 長按送出的演練部位下一秒就被抹掉 —— 持倉那一整塊畫面根本演練不到
+            # （2026-09-01 實測）。
+            # ⚠️ 但**只跳過「清掉」這一件事**。第一版整個 return 掉，
+            #    連「對帳失敗就不送單」「券商已有部位就不送單」兩道也一起失效 ——
+            #    等於演練模式跟正式模式行為不一樣，那樣的演練就白練了。
+            if is_live():
+                _state["position"] = None
         elif _state["position"] is None:
             # 重啟後撿回部位：只知道方向與均價，停利單的下落要另外查
             _state["position"] = {"dir": pos["dir"], "entry": pos["entry"],
