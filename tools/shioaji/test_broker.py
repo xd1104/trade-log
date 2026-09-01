@@ -75,6 +75,44 @@ FAKE_ACC = sj.Account(account_type=sj.AccountType.Future, person_id="TESTPID",
                       username="test")
 
 
+class BrokerSim:
+    """
+    會成交的假券商。**送出「平倉的範圍市價單」之後就變成空手** ——
+    停利那張也是 Cover 但屬於限價，不算平倉成交。
+
+    ⚠️ 假券商一定要模擬「部位真的會消失」。之前那版永遠回報有部位，
+    於是 close() 的確認迴圈永遠等不到空手 —— 測試紅了，但紅的是假物件，
+    不是產品（2026-09-01 連續兩次栽在假物件上）。
+    """
+
+    def __init__(self, direction="Action.Sell", cancel_ok=True):
+        self.flat = False
+        self.cancel_ok = cancel_ok
+        self.sent = 0
+        self.direction = direction
+
+    def place_order(self, contract, order):
+        self.sent += 1
+        if (str(order.octype) == "FuturesOCType.Cover"
+                and str(order.price_type) == "FuturesPriceType.MKP"):
+            self.flat = True                 # 平倉市價單 → 成交
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        if not self.cancel_ok:
+            raise RuntimeError("StatusCode: 400, Detail: Please run update_status")
+
+    def cancel_order(self, t):
+        if not self.cancel_ok:
+            raise RuntimeError("cancel failed")
+
+    def list_positions(self, acc=None):
+        if self.flat:
+            return []
+        return [type("P", (), {"code": "TMFI6", "quantity": 1,
+                               "direction": self.direction, "price": 46978})()]
+
+
 def connect(api):
     broker._state["api"] = api
     broker._state["account"] = FAKE_ACC
@@ -213,8 +251,9 @@ connect(pos_api("", qty=0))
 chk("  數量 0 → 當作沒有部位", broker.broker_position(), None)
 
 print("\n=== 平倉要用券商確認過的方向，不是記憶體裡那份 ===")
-connect(pos_api("Action.Sell"))
+connect(BrokerSim("Action.Sell"))
 broker.is_live = lambda: True
+broker.FILL_WAIT = 1.0
 # 故意把本機記成相反方向，重現 2026-09-01 那個狀況
 broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
                              "entry_time": "11:23", "target_trade": None, "recovered": True}
@@ -286,21 +325,7 @@ broker._state["position"] = None
 print("\n=== 撤停利單失敗：要照樣平倉，但要講出來 ===")
 
 
-class CancelFails:
-    def place_order(self, contract, order):
-        return FakeTrade()
-
-    def update_status(self, acc=None):
-        raise RuntimeError("StatusCode: 400, Detail: Please run update_status")
-
-    def cancel_order(self, t):
-        raise RuntimeError("cancel failed")
-
-    def list_positions(self, acc=None):
-        return []          # 平倉會成功
-
-
-connect(CancelFails())
+connect(BrokerSim("Action.Buy", cancel_ok=False))
 broker.is_live = lambda: True
 broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
                              "entry_time": "11:44", "target_trade": FakeTrade(),
