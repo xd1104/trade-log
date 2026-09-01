@@ -223,6 +223,9 @@ recs = [json.loads(l) for l in
         (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
 chk("  空單平倉送出的是 Buy（舊版會送 Sell，等於再加一口空單）",
     recs[-1]["action"], "Action.Buy")
+chk("  有留下「本機方向被券商修正」的紀錄",
+    any(r["kind"] == "position_fixed" for r in recs), True)
+chk("  本機那份也被改正了", broker._state["position"]["dir"], "short")
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
 

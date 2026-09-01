@@ -186,6 +186,19 @@ def reconcile():
             _state["position"] = {"dir": pos["dir"], "entry": pos["entry"],
                                   "qty": pos["qty"], "entry_time": None,
                                   "target_trade": None, "recovered": True}
+        else:
+            # 【券商永遠是真相】本機那份跟券商不一樣時要以券商為準。
+            # 舊版只在本機是空的時候才採用券商的資料，本機一旦記錯方向就**永遠改不回來** ——
+            # 2026-09-01 就是這樣：本機記成做多、券商是空單，reconcile() 照樣回傳做多，
+            # 平倉因此送出同方向的單。這一段就是在補那個洞（測試 FAIL 抓出來的）。
+            cur = _state["position"]
+            if cur.get("dir") != pos["dir"]:
+                _log("position_fixed", {"ok": True,
+                                        "was": cur.get("dir"), "now": pos["dir"],
+                                        "why": "本機方向跟券商不符，以券商為準"})
+            cur["dir"] = pos["dir"]
+            cur["entry"] = pos["entry"]
+            cur["qty"] = pos["qty"]
     return _state["position"]
 
 
