@@ -218,6 +218,13 @@ broker.is_live = lambda: True
 # 故意把本機記成相反方向，重現 2026-09-01 那個狀況
 broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
                              "entry_time": "11:23", "target_trade": None, "recovered": True}
+# 先單獨驗對帳：本機那份要被券商改正
+fixed = broker.reconcile()
+chk("  對帳之後本機那份被改正成 short", (fixed or {}).get("dir"), "short")
+
+# 再驗平倉送出去的是哪一邊
+# ⚠️ 平倉成功後 _state["position"] 會變成 None（本來就該這樣），
+#    所以「本機被改正了」要在 close() **之前**驗，不能在之後（會 NoneType 爆掉）。
 broker.close("test")
 recs = [json.loads(l) for l in
         (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -225,7 +232,7 @@ chk("  空單平倉送出的是 Buy（舊版會送 Sell，等於再加一口空�
     recs[-1]["action"], "Action.Buy")
 chk("  有留下「本機方向被券商修正」的紀錄",
     any(r["kind"] == "position_fixed" for r in recs), True)
-chk("  本機那份也被改正了", broker._state["position"]["dir"], "short")
+chk("  平倉成功後本機部位清空", broker._state["position"], None)
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
 
