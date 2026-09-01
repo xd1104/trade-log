@@ -548,6 +548,101 @@ broker.is_live = lambda: broker.REAL_FLAG.exists()
 broker._state["position"] = None
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink(missing_ok=True)
 
+print("\n=== 成績單：一趟來回要記得起來，而且問不到成交價時要留白 ===")
+broker.TRADE_DIR = TMP / "real_trades"
+
+
+class DealAPI:
+    """平倉會成交，而且回報得出成交明細。"""
+
+    def __init__(self, deal=None):
+        self.deal = deal
+        self.flat = False
+
+    def place_order(self, contract, order):
+        self.flat = True                       # 一送平倉單就變空手
+        t = FakeTrade()
+        if self.deal is not None:
+            t.status = type("S", (), {"deals": [
+                type("D", (), {"price": self.deal, "quantity": 1})()]})()
+        return t
+
+    def update_status(self, acc=None):
+        pass
+
+    def cancel_order(self, t):
+        pass
+
+    def list_positions(self, acc=None):
+        if self.flat:
+            return []
+        return [type("P", (), {"code": "TMFI6", "quantity": 1,
+                               "direction": "Action.Buy", "price": 47144})()]
+
+
+def fresh_pos(direction="long", entry=47144):
+    broker._state["position"] = {"dir": direction, "entry": float(entry), "qty": 1,
+                                 "entry_time": "13:39:21", "target_trade": None,
+                                 "recovered": False}
+
+
+connect(DealAPI(deal=47166))
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.2
+broker.realized_today = lambda: []          # 這一段不要去問券商損益，測的是自己記的那條路
+fresh_pos()
+ok, err = broker.close("manual")
+chk("  平倉成功", ok, True)
+tr = broker.trades_today()
+chk("  成績單有一筆", len(tr), 1)
+chk("  記到實際出場價（不是送單時的 0）", tr[0]["exit"], 47166.0)
+chk("  算得出點數：做多 47144→47166 ＝ +22", tr[0]["points"], 22.0)
+chk("  記得住是為什麼平的", tr[0]["reason"], "manual")
+
+# 做空要反過來算 —— 又是一個「只測一邊會過」的地方
+(broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
+api2 = DealAPI(deal=47100)
+api2.list_positions = lambda acc=None: ([] if api2.flat else [
+    type("P", (), {"code": "TMFI6", "quantity": -1,
+                   "direction": "Action.Sell", "price": 47144})()])
+connect(api2)
+broker.is_live = lambda: True
+fresh_pos("short")
+broker.close("sl")
+tr = broker.trades_today()
+chk("  做空 47144→47100 ＝ +44（不是 −44）", tr[0]["points"], 44.0)
+
+# 問不到成交價：**留白，不可以拿別的價冒充**
+(broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
+connect(DealAPI(deal=None))
+broker.is_live = lambda: True
+fresh_pos()
+broker.close("manual")
+tr = broker.trades_today()
+chk("  問不到成交價 → 出場價留白", tr[0]["exit"], None)
+chk("  點數也跟著留白，不編一個數字", tr[0]["points"], None)
+
+print("\n=== 停利在券商成交：面板沒送過單，也要記得起來 ===")
+# 面板**永遠不送停利單**（那張掛在券商），所以停利成交時 close() 根本不會被呼叫。
+# 部位是在對帳時「自己不見的」—— 不在那裡記一筆，這趟來回就完全不會進成績單。
+(broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
+tp_trade = FakeTrade()
+tp_trade.status = type("S", (), {"deals": [
+    type("D", (), {"price": 47244, "quantity": 1})()]})()
+connect(FakeAPI())                          # FakeAPI 回報「券商沒有部位」
+broker.is_live = lambda: True
+broker._state["position"] = {"dir": "long", "entry": 47144.0, "qty": 1,
+                             "entry_time": "13:39:21", "target_trade": tp_trade,
+                             "recovered": False}
+broker.reconcile()
+tr = broker.trades_today()
+chk("  部位自己不見了也要留下紀錄", len(tr), 1)
+chk("  出場價 = 停利單的成交價", tr[0]["exit"], 47244.0)
+chk("  +100 點", tr[0]["points"], 100.0)
+chk("  理由標成停利", tr[0]["reason"], "tp")
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")
 sys.exit(1 if FAIL else 0)

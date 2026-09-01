@@ -29,7 +29,18 @@ def state():
                  "entries_today": 0, "max_entries": 3, "account": "0000000",   # 假的，repo 是公開的
                  "last_error": None, "stale_sec": None,
                  "code": {"broker": "09-01 12:45", "panel": "09-01 12:45",
-                          "started": "09-01 12:50"}}
+                          "started": "09-01 12:50", "stale": False},
+                 # 成績單：一筆停利、一筆停損、一筆問不到成交價（要留白）
+                 "trades": [
+                     {"dir": "long", "qty": 1, "entry_time": "09:05:11", "entry": 47144.0,
+                      "exit_time": "09:12:40", "exit": 47244.0, "reason": "tp",
+                      "points": 100.0},
+                     {"dir": "short", "qty": 1, "entry_time": "10:31:02", "entry": 47010.0,
+                      "exit_time": "10:44:19", "exit": 47110.0, "reason": "sl",
+                      "points": -100.0},
+                     {"dir": "long", "qty": 1, "entry_time": "13:39:21", "entry": 47144.0,
+                      "exit_time": "13:41:17", "exit": None, "reason": "manual",
+                      "points": None}]}
     if MODE["v"] == "flat":
         s["real"].update({"position": None, "can_enter": True, "why": None})
     else:

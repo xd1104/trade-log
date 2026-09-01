@@ -200,6 +200,18 @@ const flatTxt = await evalJS(`document.querySelector('.card.real').innerText`);
 chk("  有印出 broker.py 的版本與啟動時間", /程式 \S+ \S+.啟動 \S+ \S+/.test(flatTxt), true);
 if (!/程式 \S+ \S+.啟動 \S+ \S+/.test(flatTxt)) console.log("    卡片實際內容：\n      " + flatTxt.replace(/\n/g, "\n      "));
 
+console.log("\n=== ⑧ 今天的真實交易成績單 ===");
+const led = await evalJS(`(()=>{const rows=[...document.querySelectorAll('.rtrow')].map(r=>r.innerText);
+  const net=document.querySelector('.rnet');
+  const up=[...document.querySelectorAll('.rtn')].map(e=>e.className);
+  return {n:rows.length, rows, net:net&&net.innerText, cls:up,
+          note:!!document.querySelector('.rtrades .whyoff')};})()`);
+chk("  三筆都列出來", led.n, 3);
+chk("  賺的那筆是紅色（台股慣例，紅＝賺）", /\bup\b/.test(led.cls[0]), true);
+chk("  賠的那筆是綠色", /\bdown\b/.test(led.cls[1]), true);
+chk("  問不到成交價的那筆顯示破折號、不編數字", /—/.test(led.rows[2]), true);
+chk("  而且有寫清楚為什麼那筆沒有點數", led.note, true);
+
 c.close();
 ch.kill();
 try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* Chrome 還握著暫存檔，無所謂 */ }

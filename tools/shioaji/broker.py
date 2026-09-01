@@ -40,6 +40,11 @@ from datetime import date, datetime
 HERE = pathlib.Path(__file__).resolve().parent
 REAL_FLAG = HERE / "REAL_ORDERS_ON"      # 這個檔存在＝真的送單；不存在＝dry run
 ORDER_DIR = HERE / "real_orders"
+# 【跟 real_orders 的差別】real_orders 是「每一張委託單」的原始 log，給程式與除錯看的；
+# real_trades 是「一趟來回」的成績單，給人看的：幾點進、幾點出、賺賠幾點。
+# ⛔ 兩個都**不上傳**。repo 是公開的，Benson 2026-08 決定真實交易只留在這台電腦
+#    （練習單才會同步到 data/practice.json 與手機）。
+TRADE_DIR = HERE / "real_trades"
 QTY = 1                                   # 口數。寫死，不從介面讀
 MAX_ENTRIES = 3                           # 每天最多進場幾次
 STALE_ALARM = 20                          # 有真實部位時，報價超過幾秒沒更新就示警
@@ -103,6 +108,139 @@ def _log(kind, payload):
     with (ORDER_DIR / f"{date.today()}.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rec
+
+
+def _fill_price(trade):
+    """
+    跟券商問「這張單實際成交在哪裡」。
+
+    市價單送出時價格欄是 0，所以**成交價只能事後問**。問不到就回 None ——
+    ⛔ 絕對不可以拿參考價或現價冒充：那會讓成績單上出現一個看起來精確、
+       其實是編的數字，比留白更糟。
+    """
+    if trade is None or not is_live() or _state["api"] is None:
+        return None
+    try:
+        _state["api"].update_status(_state["account"])
+    except Exception:
+        pass                                   # 更新失敗就用手上這份，頂多問不到
+    try:
+        deals = list(getattr(getattr(trade, "status", None), "deals", None) or [])
+        qty = sum(float(getattr(d, "quantity", 0) or 0) for d in deals)
+        if qty <= 0:
+            return None
+        # 一口單通常只有一筆成交，但分批撮合時要用加權平均
+        return round(sum(float(d.price) * float(d.quantity) for d in deals) / qty, 2)
+    except Exception:
+        return None
+
+
+def record_trade(pos, exit_price, reason):
+    """
+    把一趟來回寫進成績單。**只在部位真的結束時叫。**
+
+    exit_price 可以是 None（問不到成交價）—— 那就照實留白，points 也留白。
+    """
+    if not pos:
+        return None
+    entry = pos.get("entry")
+    pts = None
+    if entry is not None and exit_price is not None:
+        d = 1 if pos.get("dir") == "long" else -1
+        pts = round(d * (float(exit_price) - float(entry)), 1)
+    rec = {"date": str(date.today()),
+           "dir": pos.get("dir"), "qty": pos.get("qty", QTY),
+           "entry_time": pos.get("entry_time"), "entry": entry,
+           "exit_time": datetime.now().strftime("%H:%M:%S"), "exit": exit_price,
+           "reason": reason, "points": pts,
+           "recovered": bool(pos.get("recovered"))}
+    try:
+        TRADE_DIR.mkdir(exist_ok=True)
+        with (TRADE_DIR / f"{date.today()}.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        _log("trade_record_failed", {"ok": False, "err": str(e)[:200]})
+    return rec
+
+
+_REALIZED = {"at": 0.0, "rows": []}
+REALIZED_TTL = 60.0        # 秒。這是要跟券商拿的，不能每 0.25 秒問一次
+
+
+def realized_today():
+    """
+    跟券商要今天的**已實現損益**。⚠️ 唯讀，不送任何單。
+
+    這是損益的真相 —— 券商自己算的，含實際成交價。我們自己記的 deal_price 只是快路徑，
+    對不上時以這裡為準。問不到就回空陣列，不要編。
+    """
+    if not is_live() or _state["api"] is None:
+        return []
+    now = time.time()
+    if now - _REALIZED["at"] < REALIZED_TTL:
+        return _REALIZED["rows"]
+    d = str(date.today())
+    try:
+        rows = _state["api"].list_profit_loss(_state["account"], d, d) or []
+    except Exception as e:
+        _state["last_error"] = "問不到已實現損益：" + str(e)[:120]
+        return _REALIZED["rows"]
+    out = []
+    for r in rows:
+        try:
+            act = str(getattr(r, "direction", "")).lower()
+            out.append({
+                "entry": float(getattr(r, "entry_price", 0) or 0),
+                "exit": float(getattr(r, "cover_price", 0) or 0),
+                "pnl": float(getattr(r, "pnl", 0) or 0),
+                "qty": int(getattr(r, "quantity", 0) or 0),
+                # 期貨的 direction 是**進場**那一邊：Buy ＝ 做多
+                "dir": "long" if "buy" in act else ("short" if "sell" in act else None)})
+        except Exception:
+            pass
+    _REALIZED["at"], _REALIZED["rows"] = now, out
+    return out
+
+
+def trades_today():
+    """
+    今天的成績單，舊到新。
+
+    自己記的那份如果缺出場價（市價單送出時價格欄是 0，事後又問不到成交明細），
+    就拿券商的已實現損益補 —— **補得起來才顯示數字，補不起來就留白**。
+    """
+    f = TRADE_DIR / f"{date.today()}.jsonl"
+    rows = []
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    holes = [t for t in rows if t.get("points") is None]
+    if not holes:
+        return rows
+    pool = list(realized_today())
+    for t in holes:
+        hit = None
+        for r in pool:
+            if r["dir"] and t.get("dir") and r["dir"] != t["dir"]:
+                continue
+            if t.get("entry") is not None and abs(r["entry"] - float(t["entry"])) > 1.0:
+                continue
+            hit = r
+            break
+        if hit is None:
+            continue
+        pool.remove(hit)
+        d = 1 if hit["dir"] == "long" else -1
+        t["entry"] = t.get("entry") if t.get("entry") is not None else hit["entry"]
+        t["exit"] = hit["exit"]
+        t["points"] = round(d * (hit["exit"] - hit["entry"]), 1)
+        t["pnl"] = hit["pnl"]
+        t["src"] = "broker"          # 這一筆的數字是跟券商對來的，不是面板自己記的
+    return rows
 
 
 def entries_today():
@@ -221,7 +359,18 @@ def reconcile():
             #    要保護的只有「演練自己造出來的部位」（entry() 寫 recovered=False），
             #    從券商撿回來的那種本來就是真的，券商說沒了就要清掉。
             if is_live() or (_state["position"] or {}).get("recovered"):
+                gone = _state["position"]
                 _state["position"] = None
+                if gone is not None:
+                    # 【部位是自己不見的】面板沒送過平倉，所以幾乎一定是**停利單在券商成交了**
+                    # ——那是好事，但如果不在這裡記一筆，這趟來回就完全不會出現在成績單上
+                    # （面板永遠不送停利單，close() 也就不會被呼叫）。
+                    # 也可能是他自己用別的工具平掉的，所以成交價一律去問那張停利單，
+                    # 問不到就留白、理由寫「不是面板平的」，不猜。
+                    px = _fill_price(gone.get("target_trade"))
+                    record_trade(gone, px, "tp" if px is not None else "closed_elsewhere")
+                    _log("position_gone", {"ok": True, "exit": px,
+                                           "why": "券商那邊已經沒有部位（停利成交或他自己平掉）"})
         elif _state["position"] is None:
             # 重啟後撿回部位：只知道方向與均價，停利單的下落要另外查
             _state["position"] = {"dir": pos["dir"], "entry": pos["entry"],
@@ -485,10 +634,15 @@ def _close_locked(reason):
         for _ in range(int(FILL_WAIT / 0.4)):
             time.sleep(0.4)
             if broker_position() is None:
+                # 平掉了才去問成交價 —— 問不到就留白，不要拿現價冒充
+                exit_px = _fill_price(res)
+                rec = record_trade(pos, exit_px, reason)
                 with _lock:
                     _state["position"] = None
                 _log("close_confirmed", {"ok": True, "tries": attempt + 1,
-                                         "stray_target": stray})
+                                         "stray_target": stray,
+                                         "exit": exit_px,
+                                         "points": (rec or {}).get("points")})
                 return True, ("平倉成功，但那張停利單沒撤掉，請自己到大戶投刪除"
                               if stray else None)
         _log("close_nofill", {"ok": False, "try": attempt + 1,
@@ -515,7 +669,7 @@ def snapshot():
     if pos is not None:
         pos = {k: v for k, v in pos.items() if k != "target_trade"}
         pos["has_target"] = _state["position"].get("target_trade") is not None
-    return {"live": is_live(), "position": pos,
+    return {"live": is_live(), "position": pos, "trades": trades_today(),
             "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"],
             "entries_today": entries_today(), "max_entries": MAX_ENTRIES,
             "account": str(getattr(_state["account"], "account_id", "")) or None,

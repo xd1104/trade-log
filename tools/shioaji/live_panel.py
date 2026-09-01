@@ -1910,6 +1910,17 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .rbtn span{position:relative}
 .quota{font-size:11px; color:var(--faint); font-family:var(--font-mono);
   text-align:right; margin-top:9px}
+/* 今天的真實交易成績單。⚠️ 這一塊每 0.5 秒跟著卡片重繪，所以不掛任何動畫。 */
+.rtrades{margin-top:12px; padding-top:10px; border-top:1px solid var(--line)}
+.rth{display:flex; align-items:baseline; gap:8px; font-size:12px; margin-bottom:6px}
+.rnet{margin-left:auto; font-family:var(--font-mono); font-size:13px; font-weight:600}
+.rtrow{display:flex; align-items:center; gap:8px; padding:4px 0;
+  font-size:12px; font-family:var(--font-mono)}
+.rtrow+.rtrow{border-top:1px solid var(--line)}
+.rtt{color:var(--faint)}
+.rtp{color:var(--text)}
+.rtw{margin-left:auto; font-size:11px}
+.rtn{min-width:52px; text-align:right; font-weight:600}
 /* 有真實部位：整張卡換成部位的顏色，一眼看得出在玩真的 */
 .real.holding{border-color:var(--up-line);
   background:linear-gradient(180deg,rgba(238,90,84,.10),#161C24)}
@@ -2416,7 +2427,38 @@ function realBox(s){
         ? '<div class="whyoff"><b>面板跑的不是最新的程式</b>　關視窗再開沒有用（會接回同一個舊的），'
           +'要跑 restart-panel.py 才會真的換掉</div>' : '');
  }
+ h+=realTrades(R.trades);
  return h+'</div></div>';
+}
+
+// 今天的真實交易成績單。
+// 【為什麼不放進「練習成績」那一區】那一區會同步到 data/practice.json、推上公開的 repo、
+// 再拉到手機。真實交易不上傳是 Benson 的決定，混進去就等於上傳了。
+// 所以真單只活在這張卡裡，也只活在這台電腦上。
+function realTrades(list){
+  if(!list||!list.length) return '';
+  const done=list.filter(t=>t.points!=null);
+  const net=done.reduce((a,t)=>a+t.points,0);
+  let h='<div class="rtrades"><div class="rth">今天的真實交易　<span class="faint">'
+    +list.length+' 筆</span>'
+    +(done.length?'<span class="rnet '+sgn(net)+'">'+pm(Math.round(net*10)/10)+' 點</span>':'')
+    +'</div>';
+  for(const t of list){
+    const why={sl:'停損', tp:'停利', manual:'手動平倉',
+               closed_elsewhere:'不是面板平的'}[t.reason]||esc(t.reason||'');
+    h+='<div class="rtrow">'
+      +'<span class="tag '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲':'▼')+'</span>'
+      +'<span class="rtt">'+esc(t.entry_time||'—')+' → '+esc(t.exit_time||'—')+'</span>'
+      +'<span class="rtp">'+f(t.entry)+' → '+(t.exit==null?'—':f(t.exit))+'</span>'
+      +'<span class="rtw faint">'+why+'</span>'
+      +'<span class="rtn '+(t.points==null?'':sgn(t.points))+'">'
+      +(t.points==null?'—':pm(t.points))+'</span></div>';
+  }
+  // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
+  if(list.some(t=>t.points==null))
+    h+='<div class="whyoff">有一筆問不到成交價，所以算不出點數 —— '
+      +'那筆的損益請到大戶投看</div>';
+  return h+'</div>';
 }
 function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
 function fireBtn(dir,px,dis){

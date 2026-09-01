@@ -34,3 +34,4 @@ tools/shioaji/REAL_ORDERS_ON
 # 憑證：絕對不進版控
 *.pfx
 *.p12
+tools/shioaji/real_trades/
