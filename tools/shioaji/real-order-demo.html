@@ -1,0 +1,248 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>真實下單・介面 demo</title>
+<style>
+/* 色票與元件一律沿用面板現在那一套（A 沉穩案），這樣 demo 看到的就是接上去之後的樣子 */
+:root{
+  --bg:#0E1116; --surface:#151A22; --surface-2:#1C222C; --raise:#1A212B;
+  --line:#242C38; --line-soft:#1E2530;
+  --text:#E9ECF1; --dim:#8D95A3; --faint:#5C6472; --ghost:#39414F;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14); --gold-line:rgba(227,169,81,.42);
+  --up:#EE5A54; --up-soft:rgba(238,90,84,.15); --up-line:rgba(238,90,84,.38);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.15); --down-line:rgba(52,179,126,.38);
+  --r-lg:16px; --r-md:12px; --r-sm:9px; --r-xs:6px;
+  --shadow-1:0 18px 40px -22px rgba(0,0,0,.85);
+  --shadow-2:0 24px 60px -20px rgba(0,0,0,.7);
+  --ease:cubic-bezier(.22,.68,.36,1);
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
+  background-image:radial-gradient(1100px 460px at 50% -10%, rgba(227,169,81,.055), transparent 72%);
+  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased; padding:26px}
+.wrap{max-width:420px; margin:0 auto}
+.card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg);
+  padding:18px 20px; position:relative}
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 2px 8px; gap:10px}
+.sec-head h2{font-size:11.5px; margin:0; color:var(--dim); letter-spacing:1.6px; font-weight:650}
+.warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:999px; padding:3px 9px; letter-spacing:.3px}
+.btn{flex:1; padding:14px; border-radius:var(--r-md); cursor:pointer; border:1px solid transparent;
+  font-family:inherit; font-size:14.5px; font-weight:650; transition:background .15s var(--ease)}
+.btn.long{background:var(--up-soft); color:var(--up); border-color:var(--up-line)}
+.btn.short{background:var(--down-soft); color:var(--down); border-color:var(--down-line)}
+.btn.flat2{background:var(--surface-2); color:var(--text); border-color:var(--line)}
+.btn.ghost{flex:0 0 auto; background:transparent; color:var(--faint); font-size:13px;
+  border:1px solid var(--line); padding:14px 16px}
+.btn:active:not(:disabled){transform:scale(.985)}
+.btn:disabled{opacity:.3; cursor:not-allowed}
+.btns{display:flex; gap:9px; margin-top:12px}
+.whyoff{font-size:11.5px; color:var(--faint); line-height:1.6; margin-top:9px}
+
+/* ── 真實下單卡：刻意跟練習長得不一樣 ───────────────────────────────
+   誤按是這件事最大的風險，所以不用練習那組紅綠按鈕，改成
+   「金色外框 ＋ 明確寫著真實」的樣子，而且預設是收起來的。 */
+.real{margin-top:14px; border:1px solid var(--gold-line); background:linear-gradient(180deg,var(--raise),#161C24)}
+.real .sec-head h2{color:var(--gold)}
+.rtop{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.rlabel{font-size:12.5px; color:var(--dim)}
+.rlabel b{color:var(--text); font-weight:650}
+.sw{width:46px; height:26px; border-radius:999px; background:var(--surface-2);
+  border:1px solid var(--line); position:relative; cursor:pointer; flex:none;
+  transition:background .18s var(--ease), border-color .18s var(--ease)}
+.sw i{position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
+  background:var(--ghost); transition:transform .18s var(--ease), background .18s var(--ease)}
+.sw.on{background:var(--gold-soft); border-color:var(--gold-line)}
+.sw.on i{transform:translateX(20px); background:var(--gold)}
+.rbody{margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft)}
+.rrow{display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0}
+.rrow .k{color:var(--faint)}
+.rrow .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.rbtns{display:flex; gap:9px; margin-top:13px}
+.rbtn{flex:1; padding:15px 10px; border-radius:var(--r-md); cursor:pointer; font-family:inherit;
+  font-size:14.5px; font-weight:700; border:1px solid; letter-spacing:.5px}
+.rbtn.b{background:var(--up-soft); color:var(--up); border-color:var(--up-line)}
+.rbtn.s{background:var(--down-soft); color:var(--down); border-color:var(--down-line)}
+.rbtn:disabled{opacity:.28; cursor:not-allowed}
+.rbtn small{display:block; font-size:10.5px; font-weight:500; opacity:.8; margin-top:2px}
+.quota{font-size:11px; color:var(--faint); font-family:var(--font-mono); text-align:right; margin-top:9px}
+
+/* 有真實部位：整張卡換底，一眼看得出現在是玩真的 */
+.real.holding{border-color:var(--up-line); background:linear-gradient(180deg,rgba(238,90,84,.10),#161C24)}
+.real.holding.sh{border-color:var(--down-line); background:linear-gradient(180deg,rgba(52,179,126,.10),#161C24)}
+.pos{display:flex; align-items:baseline; gap:10px; margin-bottom:6px}
+.pos .big{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1}
+.pos .tag{font-size:11px; font-weight:700; padding:3px 9px; border-radius:var(--r-xs)}
+.tag.l{background:var(--up-soft); color:var(--up)} .tag.s{background:var(--down-soft); color:var(--down)}
+.up{color:var(--up)} .down{color:var(--down)} .faint{color:var(--faint)}
+
+/* 斷線警報：他選了「停損交給面板」，這是唯一還能替他做的事 —— 讓他知道 */
+.alarm{background:var(--up-soft); border:1px solid var(--up-line); border-radius:var(--r-md);
+  padding:11px 13px; margin-top:12px; font-size:12.5px; line-height:1.6}
+.alarm b{color:var(--up)}
+@keyframes puls{0%,100%{opacity:1}50%{opacity:.55}}
+.alarm.blink{animation:puls 1.1s ease-in-out infinite}
+
+/* 確認框 */
+.scrim{position:fixed; inset:0; background:rgba(6,8,11,.72); backdrop-filter:blur(3px);
+  display:none; align-items:center; justify-content:center; z-index:9; padding:20px}
+.scrim.on{display:flex}
+.dlg{background:var(--surface); border:1px solid var(--gold-line); border-radius:var(--r-lg);
+  padding:22px; width:min(400px,100%); box-shadow:var(--shadow-2)}
+.dlg h3{font-size:16px; margin-bottom:4px}
+.dlg .sub{font-size:12px; color:var(--faint); margin-bottom:14px}
+.dlg .rrow{padding:6px 0; border-bottom:1px solid var(--line-soft); font-size:13px}
+.dlg .rrow:last-of-type{border-bottom:0}
+.dlg .v.hl{font-size:15px; font-weight:700}
+.dlgbtns{display:flex; gap:9px; margin-top:16px}
+.dlgbtns .btn{padding:13px}
+.btn.go{background:var(--gold); color:#17130A; font-weight:700}
+
+/* demo 控制台 */
+.ctl{position:fixed; right:16px; bottom:16px; background:var(--surface); border:1px solid var(--line);
+  border-radius:var(--r-md); padding:12px 14px; font-size:12px; z-index:20; box-shadow:var(--shadow-1)}
+.ctl b{display:block; color:var(--gold); font-size:10.5px; letter-spacing:1.2px; margin-bottom:8px}
+.ctl button{display:block; width:100%; text-align:left; margin:3px 0; padding:6px 9px; cursor:pointer;
+  background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:var(--r-xs);
+  font-family:inherit; font-size:12px}
+.ctl button.on{border-color:var(--gold-line); color:var(--gold)}
+.note{font-size:11.5px; color:var(--faint); line-height:1.7; margin-top:14px}
+</style></head><body>
+
+<div class="wrap">
+  <div class="sec-head"><h2>練習下單</h2><span class="warn">模擬・不會送單</span></div>
+  <div class="card">
+    <div class="btns">
+      <button class="btn long">▲ 做多</button>
+      <button class="btn short">▼ 做空</button>
+    </div>
+    <div class="whyoff">練習單維持原樣，位置也沒動 —— 真實下單另外一張卡，不放在一起。</div>
+  </div>
+
+  <div class="card real" id="rcard">
+    <div class="rtop">
+      <div>
+        <div class="sec-head" style="margin-bottom:2px"><h2>真實下單</h2></div>
+        <div class="rlabel" id="rstate">關閉中・按右邊打開</div>
+      </div>
+      <div class="sw" id="sw" onclick="toggle()"><i></i></div>
+    </div>
+    <div id="rbody" style="display:none"></div>
+  </div>
+
+  <div class="note" id="foot"></div>
+</div>
+
+<div class="scrim" id="scrim"><div class="dlg" id="dlg"></div></div>
+
+<div class="ctl">
+  <b>DEMO 控制台</b>
+  <button onclick="set('ready')"  id="b-ready">可以下單</button>
+  <button onclick="set('noquote')" id="b-noquote">沒有即時報價</button>
+  <button onclick="set('quota')"  id="b-quota">今天已達 3 次上限</button>
+  <button onclick="set('holding')" id="b-holding">手上有真實部位</button>
+  <button onclick="set('stale')"  id="b-stale">有部位 ＋ 斷線</button>
+  <button onclick="set('dry')"    id="b-dry">演練模式（未開真單）</button>
+</div>
+
+<script>
+var S = 'ready', ON = false, PRICE = 46812;
+
+function toggle(){ ON = !ON; render(); }
+
+function set(s){ S = s; if(s!=='dry') ON = true; render(); }
+
+function fmt(n){ return n.toLocaleString('en-US'); }
+
+function render(){
+  var sw = document.getElementById('sw'), card = document.getElementById('rcard');
+  var body = document.getElementById('rbody'), st = document.getElementById('rstate');
+  sw.className = 'sw' + (ON ? ' on' : '');
+  body.style.display = ON ? '' : 'none';
+  card.className = 'card real';
+  ['ready','noquote','quota','holding','stale','dry'].forEach(function(k){
+    var b = document.getElementById('b-' + k); if(b) b.className = (k===S ? 'on' : '');
+  });
+
+  if(!ON){
+    st.textContent = '關閉中・按右邊打開';
+    document.getElementById('foot').innerHTML =
+      '預設就是關的。<b>每次開面板都要重新打開</b> —— 不會記住昨天的狀態，'
+      + '免得哪天心不在焉點到做多就送出去了。';
+    return;
+  }
+
+  var live = (S !== 'dry');
+  st.innerHTML = live
+    ? '<b style="color:var(--gold)">真的會送單</b>　微台 1 口・停利掛券商'
+    : '<b>演練模式</b>　單子照組、照記錄，<b>不會送出去</b>';
+
+  if(S === 'holding' || S === 'stale'){
+    card.className = 'card real holding';
+    var pl = S === 'stale' ? -38 : 62;
+    body.innerHTML =
+      '<div class="pos"><div class="big ' + (pl>0?'up':'down') + '">' + (pl>0?'+':'') + pl + '</div>'
+      + '<span class="tag l">▲ 做多 1 口</span><span class="faint" style="font-size:12px">09:07 進場</span></div>'
+      + row('進場價', fmt(46750))
+      + row('停利　+100', fmt(46850) + '　<span class="faint">已掛在券商</span>')
+      + row('停損　−100', fmt(46650) + '　<span class="up">由面板監控</span>')
+      + '<div class="rbtns"><button class="rbtn s" onclick="alert(\'demo：這裡會跳確認框\')">立刻平倉</button></div>'
+      + (S === 'stale'
+          ? '<div class="alarm blink"><b>⚠ 報價已中斷 24 秒</b><br>'
+            + '停損是由這台電腦監控的，現在監控不到。<b>請立刻到大戶投確認部位</b>。</div>'
+          : '<div class="alarm" style="background:var(--gold-soft);border-color:var(--gold-line)">'
+            + '停損靠這台電腦。<b style="color:var(--gold)">面板關掉、電腦睡著、網路斷掉都會失效</b>。</div>');
+    document.getElementById('foot').innerHTML =
+      '有部位時整張卡換成部位的顏色（多紅空綠），一眼看得出現在是玩真的。';
+    return;
+  }
+
+  var blocked = null;
+  if(S === 'noquote') blocked = '現在沒有即時報價，不能用舊價下單';
+  if(S === 'quota')   blocked = '今天真實進場已經 3 次，達到上限';
+
+  body.innerHTML =
+      row('現價', fmt(PRICE))
+    + row('口數', '1 口　<span class="faint">固定，不能改</span>')
+    + row('停利', fmt(PRICE+100) + ' / ' + fmt(PRICE-100) + '　<span class="faint">掛券商</span>')
+    + row('停損', fmt(PRICE-100) + ' / ' + fmt(PRICE+100) + '　<span class="up">面板監控</span>')
+    + '<div class="rbtns">'
+    + '<button class="rbtn b" ' + (blocked?'disabled':'') + ' onclick="ask(\'long\')">買進 做多<small>停利 ' + fmt(PRICE+100) + '</small></button>'
+    + '<button class="rbtn s" ' + (blocked?'disabled':'') + ' onclick="ask(\'short\')">賣出 做空<small>停利 ' + fmt(PRICE-100) + '</small></button>'
+    + '</div>'
+    + (blocked ? '<div class="whyoff">' + blocked + '</div>' : '')
+    + '<div class="quota">今天真實進場 ' + (S==='quota'?3:0) + ' / 3</div>';
+
+  document.getElementById('foot').innerHTML = blocked
+    ? '擋下來的時候<b>一定寫出原因</b>。按鈕變灰卻不說為什麼最讓人火大。'
+    : '按下去不會直接送 —— 會先跳確認框，把方向、價格、口數、停利停損寫給你看過。';
+}
+
+function row(k, v){
+  return '<div class="rrow"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>';
+}
+
+function ask(dir){
+  var d = document.getElementById('dlg');
+  var long = dir === 'long';
+  var live = (S !== 'dry');
+  d.innerHTML =
+      '<h3>' + (live ? '確認送出真實委託' : '確認（演練，不會送出）') + '</h3>'
+    + '<div class="sub">送出之後就在市場上了，這個視窗是最後一道。</div>'
+    + row('商品', '微型臺指期貨 TMF')
+    + row('方向', '<span class="v hl ' + (long?'up':'down') + '">' + (long?'買進 做多':'賣出 做空') + '</span>')
+    + row('口數', '<span class="v hl">1 口</span>')
+    + row('價格', '範圍市價　<span class="faint">參考 ' + fmt(PRICE) + '</span>')
+    + row('停利', fmt(long?PRICE+100:PRICE-100) + '　<span class="faint">成交後自動掛在券商</span>')
+    + row('停損', fmt(long?PRICE-100:PRICE+100) + '　<span class="up">由面板監控，電腦關掉就失效</span>')
+    + '<div class="dlgbtns"><button class="btn ghost" onclick="close_()">取消</button>'
+    + '<button class="btn go" onclick="done()">' + (live?'確定送出':'確定（演練）') + '</button></div>';
+  document.getElementById('scrim').className = 'scrim on';
+}
+function close_(){ document.getElementById('scrim').className = 'scrim'; }
+function done(){ close_(); S = 'holding'; render(); }
+
+render();
+</script>
+</body></html>
