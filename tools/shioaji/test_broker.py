@@ -141,6 +141,16 @@ pos = broker.reconcile()
 chk("  對帳撿回方向", pos["dir"], "long")
 chk("  標記為『重啟後撿回來的』", pos["recovered"], True)
 
+print("\n=== 演練模式的部位不可以被對帳清掉 ===")
+connect(FakeAPI())          # FakeAPI 回報「券商沒有部位」
+broker._state["position"] = {"dir": "long", "entry": 45000, "qty": 1,
+                             "entry_time": "09:05", "target_trade": None,
+                             "recovered": False}
+kept = broker.reconcile()
+chk("  演練時本機部位留著（不然持倉畫面演練不到）", (kept or {}).get("entry"), 45000)
+blocked("  演練時已有部位一樣擋住再進場", broker.can_enter(45000, True), "已經有部位")
+broker._state["position"] = None
+
 print("\n=== dry run 真的沒送出去 ===")
 connect(FakeAPI())
 ok, err, pos = broker.enter("long", 45000, 100)

@@ -48,6 +48,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import broker            # 真實下單。預設 dry run，見那個檔開頭的說明
+
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -461,6 +463,37 @@ def check_position(price):
         close_position(POSITION["tp"], "tp")
     elif d * (float(price) - POSITION["sl"]) <= 0:
         close_position(POSITION["sl"], "sl")
+
+
+REAL_STALE = {"since": None}      # 有真實部位而報價中斷，從何時開始
+
+
+def check_real_position(price, age):
+    """
+    真實部位的停損。**停利不在這裡** —— 那一張是限價單，進場後就掛在券商那邊，
+    電腦關機也有效；這裡只顧永豐 API 給不了的那一半。
+
+    Benson 2026-08-28 知情選擇「停損交給面板」。所以這幾行是他的停損，
+    程式死掉／斷線／電腦睡著就沒有了 —— `REAL_STALE` 是為了讓他**知道**，
+    不是為了消除風險。
+    """
+    pos = broker._state.get("position")
+    if pos is None:
+        REAL_STALE["since"] = None
+        return
+    # 報價斷了就記下起點，前端據此示警。斷線時不可以拿舊價去判停損。
+    if age is None or age > broker.STALE_ALARM:
+        if REAL_STALE["since"] is None:
+            REAL_STALE["since"] = time.time()
+        return
+    REAL_STALE["since"] = None
+    if price is None:
+        return
+    d = 1 if pos["dir"] == "long" else -1
+    sl = pos["entry"] - d * SL_POINTS
+    if d * (float(price) - sl) <= 0:
+        ok, err = broker.close("sl")
+        print(f"[真實] 觸及停損 {sl:.0f} → 平倉：{'成功' if ok else err}")
 
 
 def save_trades():
@@ -1829,6 +1862,65 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .btn:disabled{opacity:.3; cursor:not-allowed}
 .btn:disabled:active{transform:none}
 .whyoff{margin-top:10px; font-size:11.5px; color:var(--faint); line-height:1.6}
+/* ═══ 真實下單 ═══
+   刻意跟練習長得不一樣：誤按是這件事最大的風險，兩組按鈕長得像就遲早會出事。
+   金色外框＋明確寫「真實下單」，而且預設收起來、每次開面板都要重新打開。 */
+.real{margin-top:14px; border-color:var(--gold-line);
+  background:linear-gradient(180deg,var(--raise),#161C24)}
+.real .sec-head h2{color:var(--gold)}
+.rtop{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.rlabel{font-size:12.5px; color:var(--dim)}
+.rlabel b{color:var(--text); font-weight:650}
+.sw{width:46px; height:26px; border-radius:999px; background:var(--surface-2);
+  border:1px solid var(--line); position:relative; cursor:pointer; flex:none;
+  transition:background .18s var(--ease), border-color .18s var(--ease)}
+.sw i{position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
+  background:var(--ghost); transition:transform .18s var(--ease), background .18s var(--ease)}
+.sw.on{background:var(--gold-soft); border-color:var(--gold-line)}
+.sw.on i{transform:translateX(20px); background:var(--gold)}
+.rbody{margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft)}
+.rrow{display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0}
+.rrow .k{color:var(--faint)}
+.rrow .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.rbtns{display:flex; gap:9px; margin-top:13px}
+.rbtn{flex:1; padding:15px 10px; border-radius:var(--r-md); cursor:pointer; font-family:inherit;
+  font-size:14.5px; font-weight:700; border:1px solid; letter-spacing:.5px;
+  position:relative; overflow:hidden}
+.rbtn.b{background:var(--up-soft); color:var(--up); border-color:var(--up-line)}
+.rbtn.s{background:var(--down-soft); color:var(--down); border-color:var(--down-line)}
+.rbtn:disabled{opacity:.28; cursor:not-allowed}
+/* 長按送出：確認框要多一次移動＋點擊，下單當下那一兩秒很要命（Benson 2026-08-28）。
+   長按只有一個動作、原地不動，而且誤觸點一下不會送。
+   按住的過程中才把停利停損長出來 —— 把確認塞進等待裡，不另外花時間。 */
+.rbtn .fill{position:absolute; left:0; top:0; bottom:0; width:0; background:currentColor;
+  opacity:.22; pointer-events:none}
+.rbtn.holding .fill{transition:width var(--hold,650ms) linear; width:100%}
+.rbtn .hint{display:block; font-size:10.5px; font-weight:600; margin-top:3px;
+  font-family:var(--font-mono); opacity:0; transition:opacity .12s var(--ease)}
+.rbtn.holding .hint{opacity:.95}
+.rbtn span{position:relative}
+.quota{font-size:11px; color:var(--faint); font-family:var(--font-mono);
+  text-align:right; margin-top:9px}
+/* 有真實部位：整張卡換成部位的顏色，一眼看得出在玩真的 */
+.real.holding{border-color:var(--up-line);
+  background:linear-gradient(180deg,rgba(238,90,84,.10),#161C24)}
+.real.holding.sh{border-color:var(--down-line);
+  background:linear-gradient(180deg,rgba(52,179,126,.10),#161C24)}
+.rpos{display:flex; align-items:baseline; gap:10px; margin-bottom:6px}
+.rpos .big{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1}
+.rpos .tag{font-size:11px; font-weight:700; padding:3px 9px; border-radius:var(--r-xs)}
+.rpos .tag.l{background:var(--up-soft); color:var(--up)}
+.rpos .tag.s{background:var(--down-soft); color:var(--down)}
+.ralarm{background:var(--gold-soft); border:1px solid var(--gold-line);
+  border-radius:var(--r-md); padding:11px 13px; margin-top:12px; font-size:12.5px; line-height:1.6}
+.ralarm.bad{background:var(--up-soft); border-color:var(--up-line)}
+@keyframes kk-puls{0%,100%{opacity:1}50%{opacity:.55}}
+.ralarm.bad{animation:kk-puls 1.1s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){
+  .ralarm.bad{animation:none}
+  .rbtn.holding .fill{transition:none; width:100%}
+}
+
 .warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
   border-radius:20px; padding:2px 9px; font-weight:600}
 .pnl{text-align:center; padding:4px 0 8px}
@@ -2172,7 +2264,7 @@ body.boot .right>#stats>.card{animation-delay:.16s}
       <div class="rail"><span class="sk"></span><span class="sk"></span><span class="sk"></span>
         <span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
     </div>
-  </div><div class="right"><div id="trade"></div><div id="stats"></div></div></div>
+  </div><div class="right"><div id="trade"></div><div id="real"></div><div id="stats"></div></div></div>
 </div>
 
 <!-- 【回顧】：容器只建這一次，之後只換裡面的內容（重繪不打斷縮放／拖曳、也不閃） -->
@@ -2207,7 +2299,81 @@ const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
 const sgn=v=>v>0?'up':v<0?'down':'flat';
 const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
 
-var lastMkt='', lastTrade='', lastStats='', lastWarn='', statsCache=null, statsAt=0;
+var lastMkt='', lastTrade='', lastStats='', lastWarn='', lastReal='', statsCache=null, statsAt=0;
+
+/* ---------------- 真實下單 ----------------
+   ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。
+   記住狀態的話，某天心不在焉點到就是一個真實部位。 */
+var REAL_ON=false, HOLD_MS=650, holdTimer=null;
+function realToggle(){ REAL_ON=!REAL_ON; lastReal=''; tick(true); }
+function holdStart(el,dir){
+  el.classList.add('holding');
+  clearTimeout(holdTimer);
+  holdTimer=setTimeout(function(){ el.classList.remove('holding'); realFire(dir); },HOLD_MS);
+}
+function holdEnd(el){
+  if(!el.classList.contains('holding')) return;
+  clearTimeout(holdTimer); el.classList.remove('holding');
+}
+function realFire(dir){
+  fetch('/api/real/enter',{method:'POST',headers:{'Content-Type':'application/json'},
+                           body:JSON.stringify({dir:dir})})
+   .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'送不出去'); lastReal=''; tick(true); })
+   .catch(()=>alert('送不出去，面板可能剛好在重啟'));
+}
+function realClose(){
+  fetch('/api/real/close',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+   .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'平不掉'); lastReal=''; tick(true); })
+   .catch(()=>{});
+}
+function realBox(s){
+ const R=s.real||{}, P=R.position;
+ let h='<div class="card real'+(P?(' holding'+(P.dir==='short'?' sh':'')):'')+'">'+
+   '<div class="rtop"><div>'+
+   '<div class="sec-head" style="margin-bottom:2px"><h2>真實下單</h2></div>'+
+   '<div class="rlabel">'+(!REAL_ON?'關閉中・按右邊打開'
+     :(R.live?'<b style="color:var(--gold)">真的會送單</b>　微台 1 口・固定 ±100'
+             :'<b>演練模式</b>　單子照組、照記錄，<b>不會送出去</b>'))+'</div>'+
+   '</div><div class="sw'+(REAL_ON?' on':'')+'" data-rt="1"><i></i></div></div>';
+ if(!REAL_ON) return h+'</div>';
+ h+='<div class="rbody">';
+ if(R.error){ h+='<div class="whyoff">'+esc(R.error)+'</div></div></div>'; return h; }
+ if(P){
+   const fl=R.float_pts;
+   h+='<div class="rpos"><div class="big '+sgn(fl)+'">'+(fl==null?'—':pm(fl))+'</div>'+
+      '<span class="tag '+(P.dir==='long'?'l':'s')+'">'+(P.dir==='long'?'▲ 做多':'▼ 做空')+
+      ' '+P.qty+' 口</span>'+
+      (P.entry_time?'<span class="faint" style="font-size:12px">'+P.entry_time+' 進場</span>':'')+
+      '</div>'+
+      rrow('進場價',f(P.entry))+
+      rrow('停利　+'+f(100),f(R.tp)+'　<span class="faint">已掛在券商</span>')+
+      rrow('停損　−'+f(100),f(R.sl)+'　<span class="up">由面板監控</span>')+
+      '<div class="rbtns"><button class="rbtn s" data-rclose="1">立刻平倉</button></div>';
+   h+= R.stale_sec!=null
+     ? '<div class="ralarm bad"><b style="color:var(--up)">⚠ 報價已中斷 '+R.stale_sec+' 秒</b><br>'+
+       '停損是由這台電腦監控的，現在監控不到。<b>請立刻到大戶投確認部位</b>。</div>'
+     : '<div class="ralarm">停損靠這台電腦。<b style="color:var(--gold)">'+
+       '面板關掉、電腦睡著、網路斷掉都會失效</b>。</div>';
+   if(P.recovered) h+='<div class="whyoff">這筆是面板重啟後從券商對帳撿回來的，'+
+     '停利單的下落請自己到大戶投確認。</div>';
+ } else {
+   const px=(s.chips||{}).price, ok=R.can_enter;
+   // 還沒選方向就不列停利停損 —— 兩個方向的數字互相干擾（Benson 2026-08-28）
+   h+=rrow('現價',f(px))+rrow('口數','1 口　<span class="faint">固定，不能改</span>')+
+      '<div class="rbtns">'+fireBtn('long',px,!ok)+fireBtn('short',px,!ok)+'</div>'+
+      (ok?'':'<div class="whyoff">'+esc(R.why||'現在不能下單')+'</div>')+
+      '<div class="quota">今天真實進場 '+(R.entries_today||0)+' / '+(R.max_entries||3)+'</div>';
+ }
+ return h+'</div></div>';
+}
+function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
+function fireBtn(dir,px,dis){
+ const long=dir==='long';
+ const tp=px==null?null:(long?px+100:px-100), sl=px==null?null:(long?px-100:px+100);
+ return '<button class="rbtn '+(long?'b':'s')+'"'+(dis?' disabled':'')+
+   ' data-rdir="'+dir+'"><span class="fill"></span><span>'+(long?'買進 做多':'賣出 做空')+
+   '</span><span class="hint">'+(tp==null?'&nbsp;':'停利 '+f(tp)+'　停損 '+f(sl))+'</span></button>';
+}
 
 /* ---------------- 心得：跟手機 App 同一個 note 欄位 ----------------
    面板是即時下單，成交當下沒空打字，所以心得一律「事後補寫」：
@@ -2291,13 +2457,14 @@ async function tick(nf){
  // 骨架留著就好 —— 不然那半秒會先塞一張小卡，圖回來時整個被頂掉，版面跳一下。
  if(!paintChart(s) && barsCache!==null) paintFallback(s,q);
  if(nf||!nEditing('t')) setHTML('trade',tradeBox(s));
+ setHTML('real',realBox(s));
  if(nf||!nEditing('s')) setHTML('stats',statsBox(statsCache));
 }
 
 // 只有內容真的變了才動 DOM。否則每 0.5 秒重建一次，
 // 使用者剛好在那一瞬間按下去，按鈕會連同事件一起被換掉 → 第一下沒反應。
 function setHTML(id,html){
- const box={mkt:'lastMkt',trade:'lastTrade',stats:'lastStats',warn:'lastWarn'}[id];
+ const box={mkt:'lastMkt',trade:'lastTrade',stats:'lastStats',warn:'lastWarn',real:'lastReal'}[id];
  if(window[box]===html) return;
  window[box]=html;
  document.getElementById(id).innerHTML=html;
@@ -3143,6 +3310,24 @@ document.addEventListener('click', function(e){
  }
  if(e.target.closest('[data-ncancel]')){ NOTE={key:null,text:''}; nrepaint(); return; }
 });
+/* 真實下單：開關與平倉用 click，送單用長按（mousedown/up） */
+document.addEventListener('click', function(e){
+ if(TAB!=='live') return;
+ if(e.target.closest('[data-rt]')){ realToggle(); return; }
+ if(e.target.closest('[data-rclose]')){
+   if(confirm('確定要立刻平倉？')) realClose();
+   return; }
+});
+document.addEventListener('mousedown', function(e){
+ const b=e.target.closest('[data-rdir]');
+ if(b&&!b.disabled) holdStart(b,b.getAttribute('data-rdir'));
+});
+['mouseup','mouseleave','blur'].forEach(function(ev){
+ document.addEventListener(ev, function(e){
+   document.querySelectorAll('.rbtn.holding').forEach(holdEnd);
+ }, true);
+});
+
 document.addEventListener('click', function(e){
  if(TAB!=='live') return;
  if(e.target.closest('[data-pick]')){
@@ -4079,6 +4264,28 @@ class Handler(BaseHTTPRequestHandler):
         st = CURRENT_STATE.get("today")
         price = st.price if st else None
 
+        if self.path == "/api/real/enter":
+            d = body.get("dir")
+            if d not in ("long", "short"):
+                return self._json(400, {"ok": False, "msg": "方向要是 long 或 short"})
+            with state_lock:
+                q = STATE.get("quote", "closed")
+            st2 = CURRENT_STATE.get("today")
+            px = st2.price if st2 else None
+            ok, why = broker.can_enter(px, q == "live")
+            if not ok:
+                return self._json(409, {"ok": False, "msg": why})
+            ok, err, pos = broker.enter(d, px, TP_POINTS)
+            return self._json(200 if ok else 500,
+                              {"ok": ok, "msg": err or ("已送出" if broker.is_live()
+                                                        else "演練：單子已組好，沒有送出")})
+
+        if self.path == "/api/real/close":
+            ok, err = broker.close("manual")
+            return self._json(200 if ok else 409,
+                              {"ok": ok, "msg": err or ("已送出平倉" if broker.is_live()
+                                                        else "演練：平倉單已組好，沒有送出")})
+
         if self.path == "/api/enter":
             d = body.get("dir")
             if d not in ("long", "short"):
@@ -4376,6 +4583,29 @@ def prev_trading_close(api, contract, today):
     return float(day[day["ts"].dt.date == last_day]["Close"].iloc[-1])
 
 
+def real_state(price, quote, age):
+    """真實下單那張卡要的資料。順便在這裡跑停損監控 —— 兩者看的是同一組數字。"""
+    try:
+        check_real_position(price, age)
+        snap = broker.snapshot()
+        pos = snap.get("position")
+        if pos:
+            d = 1 if pos["dir"] == "long" else -1
+            snap["float_pts"] = (round(d * ((price or pos["entry"]) - pos["entry"]), 1)
+                                 if price else None)
+            snap["tp"] = pos["entry"] + d * TP_POINTS
+            snap["sl"] = pos["entry"] - d * SL_POINTS
+        stale = REAL_STALE["since"]
+        snap["stale_sec"] = round(time.time() - stale) if stale else None
+        ok, why = broker.can_enter(price, quote == "live")
+        snap["can_enter"], snap["why"] = ok, why
+        return snap
+    except Exception as e:
+        # 真實下單這一區出問題，絕不可以把整個面板帶掉
+        return {"error": str(e)[:150], "live": False, "position": None,
+                "can_enter": False, "why": "真實下單模組出錯，先不要用"}
+
+
 def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"):
     """
     phase: 'recording' = 08:45~09:30 下單時段（會記錄資料）
@@ -4402,6 +4632,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
             "today_trades": list(TODAY_TRADES),
             "age_sec": 0 if replay else age,
             "conn": CONN.copy(),
+            "real": real_state(today_state.price, quote, age),
         })
         if today_state.price is None:
             # 【Bug A】一筆報價都還沒收到 ≠ 什麼都不能顯示。
@@ -4567,6 +4798,7 @@ def main():
         api = sj.Shioaji()
         api.login(api_key=api_key, secret_key=secret)
         contract = pick_live_contract(api)
+        broker.configure(api, contract)      # 真實下單要用同一個連線與同一個合約
         api.set_on_tick_fop_v1_callback(on_tick)
         api.set_on_bidask_fop_v1_callback(on_bidask)
         # 成交 + 五檔都訂：成交價進模型，五檔負責讓畫面跟得上市場

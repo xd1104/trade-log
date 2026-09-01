@@ -144,6 +144,12 @@ def broker_position():
 
 def reconcile():
     """啟動時／每次要動作之前叫。把券商的實況寫回 _state。"""
+    if not is_live():
+        # 【演練模式不對帳】券商那邊當然沒有部位，拿它去清掉演練部位的話，
+        # 按下去的部位下一秒就被抹掉 —— 持倉那一整塊畫面根本演練不到
+        # （2026-09-01 實測：長按送出後部位出現，1 秒後自己消失）。
+        # 演練時本機的 _state 就是唯一的真相。
+        return _state["position"]
     pos = broker_position()
     if pos == "unknown":
         return "unknown"
