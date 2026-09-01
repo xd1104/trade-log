@@ -25,7 +25,14 @@ import broker
 import shioaji as sj
 
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="broker-test-"))
+# ⛔ broker 每一個會寫檔的地方都要導到暫存區。**漏掉一個就是污染他的真實紀錄。**
+#    2026-09-01 踩過：加了 real_trades/ 之後只在成績單那一節改 TRADE_DIR，
+#    前面那些 close() 的測項照樣寫進真的 real_trades/ ⇒ 他的成績單多了 6 筆假交易
+#    （做空 46978、reason 寫著 "test"），是 lab-ux 在量畫面時發現數字不對才抓到的。
+#    新增任何會寫檔的常數時，這裡一定要跟著加，而且下面有一道收尾檢查在守。
+REAL_DIRS = {"ORDER_DIR": broker.ORDER_DIR, "TRADE_DIR": broker.TRADE_DIR}
 broker.ORDER_DIR = TMP / "real_orders"
+broker.TRADE_DIR = TMP / "real_trades"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"        # 不存在 → dry run
 TODAY = datetime.date.today()
 FAIL = 0
@@ -549,7 +556,8 @@ broker._state["position"] = None
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink(missing_ok=True)
 
 print("\n=== 成績單：一趟來回要記得起來，而且問不到成交價時要留白 ===")
-broker.TRADE_DIR = TMP / "real_trades"
+# 前面那些 close() 的測項也會寫成績單（那是對的行為），先清掉再測這一節
+(broker.TRADE_DIR / f"{TODAY}.jsonl").unlink(missing_ok=True)
 
 
 class DealAPI:
@@ -642,6 +650,23 @@ chk("  +100 點", tr[0]["points"], 100.0)
 chk("  理由標成停利", tr[0]["reason"], "tp")
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 broker._state["position"] = None
+
+print("\n=== 收尾：這支測試不可以碰到真正的紀錄 ===")
+# 這一節守的是「測試本身有沒有污染他的資料」，不是產品行為。
+# 09-01 就是漏了 TRADE_DIR，假交易寫進他的成績單，跑了兩輪都沒人發現。
+before = {k: sorted(p.name for p in v.glob("*.jsonl")) if v.exists() else []
+          for k, v in REAL_DIRS.items()}
+for name, real in REAL_DIRS.items():
+    cur = getattr(broker, name)
+    chk(f"  {name} 全程指向暫存區，沒有指回 {real.name}/",
+        str(cur).startswith(str(TMP)), True)
+today_real = [(k, v / f"{TODAY}.jsonl") for k, v in REAL_DIRS.items()]
+for name, f in today_real:
+    if not f.exists():
+        continue
+    n = len([l for l in f.read_text(encoding="utf-8").splitlines() if l.strip()])
+    # 只回報筆數給人眼看；真的被寫髒的話，上面那項會先紅
+    print(f"  ·      真正的 {name} 今天有 {n} 筆（這支測試不該讓它變多）")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")

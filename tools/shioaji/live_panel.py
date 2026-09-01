@@ -1911,14 +1911,18 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .quota{font-size:11px; color:var(--faint); font-family:var(--font-mono);
   text-align:right; margin-top:9px}
 /* 今天的真實交易成績單。⚠️ 這一塊每 0.5 秒跟著卡片重繪，所以不掛任何動畫。 */
+/* 筆數多了要能捲，不可以把整張卡撐長（lab-ux 實測 7 筆就把右欄撐到 1259.9px）。
+   ⚠️ 有 max-height 的 flex 直欄，子元素一定要 flex:none，否則每一列會被壓扁。 */
 .rtrades{margin-top:12px; padding-top:10px; border-top:1px solid var(--line)}
+.rtlist{max-height:168px; overflow-y:auto; display:flex; flex-direction:column}
+.rtlist>*{flex:none}
 .rth{display:flex; align-items:baseline; gap:8px; font-size:12px; margin-bottom:6px}
 .rnet{margin-left:auto; font-family:var(--font-mono); font-size:13px; font-weight:600}
 .rtrow{display:flex; align-items:center; gap:8px; padding:4px 0;
   font-size:12px; font-family:var(--font-mono)}
 .rtrow+.rtrow{border-top:1px solid var(--line)}
-.rtt{color:var(--faint)}
-.rtp{color:var(--text)}
+.rtt{color:var(--dim); min-width:132px}
+.rtp{color:var(--text); min-width:118px}
 .rtw{margin-left:auto; font-size:11px}
 .rtn{min-width:52px; text-align:right; font-weight:600}
 /* 有真實部位：整張卡換成部位的顏色，一眼看得出在玩真的 */
@@ -2438,14 +2442,18 @@ function realBox(s){
 function realTrades(list){
   if(!list||!list.length) return '';
   const done=list.filter(t=>t.points!=null);
+  const miss=list.length-done.length;
   const net=done.reduce((a,t)=>a+t.points,0);
-  let h='<div class="rtrades"><div class="rth">今天的真實交易　<span class="faint">'
-    +list.length+' 筆</span>'
+  // 【合計要說清楚算的是哪幾筆】舊版標題寫「N 筆」、旁邊卻只加總算得出點數的那幾筆，
+  // 看起來像 N 筆的總和 —— 有筆數對不起來時等於報了一個錯的成績（lab-ux 2026-09-01 抓到）。
+  let h='<div class="rtrades"><div class="rth">今天的真實交易　<span class="dim">'
+    +list.length+' 筆'+(miss?'（'+done.length+' 筆算得出點數）':'')+'</span>'
     +(done.length?'<span class="rnet '+sgn(net)+'">'+pm(Math.round(net*10)/10)+' 點</span>':'')
-    +'</div>';
+    +'</div><div class="rtlist">';
   for(const t of list){
+    // 認不得的理由一律寫「其他」——內部代號（sl_test 之類）不該印到他眼前
     const why={sl:'停損', tp:'停利', manual:'手動平倉',
-               closed_elsewhere:'不是面板平的'}[t.reason]||esc(t.reason||'');
+               closed_elsewhere:'不是面板平的'}[t.reason]||'其他';
     h+='<div class="rtrow">'
       +'<span class="tag '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲':'▼')+'</span>'
       +'<span class="rtt">'+esc(t.entry_time||'—')+' → '+esc(t.exit_time||'—')+'</span>'
@@ -2454,10 +2462,12 @@ function realTrades(list){
       +'<span class="rtn '+(t.points==null?'':sgn(t.points))+'">'
       +(t.points==null?'—':pm(t.points))+'</span></div>';
   }
+  h+='</div>';
   // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
-  if(list.some(t=>t.points==null))
-    h+='<div class="whyoff">有一筆問不到成交價，所以算不出點數 —— '
-      +'那筆的損益請到大戶投看</div>';
+  // 【筆數要照實數】舊版寫死「有一筆」，實際上可能好幾筆（lab-ux 2026-09-01 抓到）
+  if(miss)
+    h+='<div class="whyoff">有 '+miss+' 筆問不到成交價，算不出點數 —— '
+      +'那幾筆的損益請到大戶投看</div>';
   return h+'</div>';
 }
 function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }

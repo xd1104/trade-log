@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>早盤儀表板・真實下單區 v2 設計 demo</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   設計 demo：只做視覺與互動，零外部依賴、零網路請求。
+   色票與既有元件的 CSS 逐字沿用 live_panel.py（2026-08-25「沉穩」那一版），
+   新元件一律 n- 前綴，兩版可以並存對照。
+   ═══════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#0E1116; --surface:#151A22; --surface-2:#1C222C; --raise:#1A212B;
+  --line:#242C38; --line-soft:#1E2530;
+  --text:#E9ECF1; --dim:#8D95A3; --faint:#5C6472; --ghost:#39414F;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14); --gold-line:rgba(227,169,81,.42);
+  --up:#EE5A54; --up-soft:rgba(238,90,84,.15); --up-line:rgba(238,90,84,.38);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.15); --down-line:rgba(52,179,126,.38);
+  --r-lg:16px; --r-md:12px; --r-sm:9px; --r-xs:6px;
+  --shadow-1:0 18px 40px -22px rgba(0,0,0,.85);
+  --shadow-2:0 24px 60px -20px rgba(0,0,0,.7);
+  --ease:cubic-bezier(.22,.68,.36,1);
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
+  background-image:radial-gradient(1100px 460px at 50% -10%, rgba(227,169,81,.055), transparent 72%);
+  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased}
+button{font-family:inherit}
+
+/* ── demo 控制列（不是產品的一部分）─────────────────────── */
+.dbar{position:sticky; top:0; z-index:50; background:rgba(10,13,17,.94);
+  backdrop-filter:blur(8px); border-bottom:1px solid var(--line);
+  padding:9px 20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap}
+.dbar .dt{font-size:11px; color:var(--faint); letter-spacing:1.4px; font-weight:650}
+.dseg{display:flex; flex-wrap:wrap; gap:3px; background:var(--surface-2); border-radius:9px; padding:3px}
+.dseg button{border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-size:12px; font-weight:650; padding:5px 11px; border-radius:7px; white-space:nowrap;
+  transition:background .12s var(--ease), color .12s var(--ease)}
+.dseg button:hover{color:var(--text)}
+.dseg button.on{background:var(--gold-soft); color:var(--gold)}
+.dseg.big button{font-size:12.5px; padding:6px 13px}
+.dhint{font-size:11.5px; color:var(--faint); flex:1 1 260px; min-width:0; line-height:1.5}
+.dhint b{color:var(--dim); font-weight:600}
+.dsafe{font-size:11px; color:var(--gold); background:var(--gold-soft);
+  border:1px solid var(--gold-line); border-radius:20px; padding:3px 10px; font-weight:650;
+  white-space:nowrap}
+
+/* ── 產品版面（沿用）────────────────────────────────── */
+.app{max-width:1500px; margin:0 auto; padding:0 24px 40px}
+.cols{display:grid; grid-template-columns:minmax(0,1fr) 388px; gap:18px; align-items:start}
+@media(max-width:1160px){ .cols{grid-template-columns:minmax(0,1fr)} }
+.right{display:flex; flex-direction:column; gap:0}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 16px; gap:16px}
+.brand{display:flex; align-items:center; gap:11px}
+.brand .mark{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(150deg,rgba(227,169,81,.22),rgba(227,169,81,.06));
+  color:var(--gold); font-size:15px; box-shadow:inset 0 0 0 1px rgba(227,169,81,.2)}
+.brand .nm{font-size:15px; font-weight:680; letter-spacing:.3px}
+.brand .sub{font-size:11px; color:var(--faint); margin-top:1px; display:flex; align-items:center; gap:6px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--down);display:inline-block}
+.dot.off{background:var(--ghost)}
+/* 頂列這顆燈是獨立節點、不隨報價重繪 ⇒ 唯一准掛動畫的地方 */
+.dot.dead{background:var(--up); animation:n-blink 1.1s ease-in-out infinite}
+@keyframes n-blink{0%,100%{opacity:1}50%{opacity:.25}}
+.tabs{display:flex; gap:3px; background:var(--surface-2); border-radius:10px; padding:3px}
+.tabs button{border:0;background:transparent;color:var(--dim);cursor:pointer;font-size:12.5px;
+  font-weight:650;padding:6px 15px;border-radius:8px}
+.tabs button.on{background:var(--gold-soft); color:var(--gold)}
+.clock{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.clock .d{font-size:14px; font-weight:600; letter-spacing:.4px}
+.clock .w{font-size:11px; color:var(--faint)}
+.card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg);
+  padding:16px 18px; margin-bottom:12px}
+.card.l1{background:linear-gradient(180deg,var(--raise),#161C24); border-color:var(--line);
+  box-shadow:var(--shadow-1); padding:16px 18px 13px; position:relative}
+.card.l1::before{content:''; position:absolute; left:16px; right:16px; top:0; height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.07),transparent)}
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin:0 2px 8px; gap:10px}
+.sec-head h2{font-size:11.5px; margin:0; color:var(--dim); letter-spacing:1.6px; font-weight:650}
+.sec-head .count{font-size:11px; color:var(--faint); font-family:var(--font-mono)}
+.up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text)} .faint{color:var(--faint)}
+.chead{display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:10px;
+  gap:16px; flex-wrap:wrap}
+.qblock{display:flex; flex-direction:column; gap:6px; min-width:0}
+.qmain{display:flex; align-items:baseline; gap:11px; flex-wrap:wrap}
+.cpx{font-size:52px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:.94; letter-spacing:-1.6px}
+.cchg{display:inline-flex; align-items:baseline; gap:7px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:15px; font-weight:700; padding:4px 10px 5px;
+  border-radius:9px; line-height:1}
+.cchg.up{background:var(--up-soft); color:var(--up)}
+.cchg.down{background:var(--down-soft); color:var(--down)}
+.cchg.flat{background:var(--surface-2); color:var(--dim)}
+.cchg .pct{font-size:12.5px; font-weight:600; opacity:.85}
+.qsub{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); flex-wrap:wrap}
+.qsub .sep{color:var(--ghost)}
+.qsub .live{color:var(--gold); display:inline-flex; align-items:center; gap:5px}
+.qsub .live i{width:6px;height:6px;border-radius:50%;background:var(--gold);
+  box-shadow:0 0 0 3px var(--gold-soft)}
+.qsub .live.dead{color:var(--faint)}
+.qsub .live.dead i{background:var(--faint); box-shadow:0 0 0 3px rgba(255,255,255,.05)}
+.cwrap{overflow:hidden; border-radius:10px; position:relative}
+.cwrap svg{display:block; width:100%; height:auto}
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--dim);
+  font-family:var(--font-mono); margin:2px 0 8px}
+.legend b{color:var(--text); font-weight:600}
+.chint{font-size:11px; color:var(--faint); text-align:right; margin-top:5px}
+.pager{display:flex; flex-direction:column; align-items:flex-end; gap:2px}
+.pager .r1{display:flex; align-items:center; gap:6px; font-family:var(--font-mono)}
+.pager .r1 .num{font-size:15px; font-weight:650}
+.pager .r2{font-size:11px; color:var(--faint)}
+.rail{display:flex; align-items:stretch; flex-wrap:wrap; margin-top:12px; padding-top:11px;
+  border-top:1px solid var(--line-soft)}
+.rail .grp{display:flex; gap:18px; padding:0 18px; border-right:1px solid var(--line-soft)}
+.rail .grp:first-child{padding-left:0}
+.rail .grp:last-child{border-right:0; padding-right:0}
+.rail .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px; white-space:nowrap; line-height:1.3}
+.rail .v{font-size:15px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:1.25; margin-top:2px; white-space:nowrap}
+.rail .track{height:3px; border-radius:2px; background:var(--surface-2); margin-top:5px; position:relative}
+.rail .track i{position:absolute; top:0; bottom:0; left:0; border-radius:2px; background:var(--dim)}
+.rail .track i.hot{background:var(--gold)}
+
+/* ── 練習區（沿用，兩版共用）────────────────────────── */
+.btns{display:flex; gap:10px}
+.btn{flex:1; padding:14px; border-radius:var(--r-md); cursor:pointer; border:1px solid transparent;
+  font-family:var(--font-sans); font-size:15.5px; font-weight:700; letter-spacing:1px;
+  transition:transform .1s var(--ease), background .15s var(--ease)}
+.btn.long{background:var(--up-soft); color:var(--up); border-color:var(--up-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn.short{background:var(--down-soft); color:var(--down); border-color:var(--down-line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.btn:disabled{opacity:.3; cursor:not-allowed}
+.whyoff{margin-top:10px; font-size:11.5px; color:var(--faint); line-height:1.6}
+.pnl{text-align:center; padding:4px 0 8px}
+.pnl .v{font-size:44px; font-weight:700; font-family:var(--font-mono); line-height:1}
+.pnl .l{font-size:12px; color:var(--dim); margin-top:7px}
+.plimit{display:flex; justify-content:center; gap:14px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); margin-bottom:12px}
+.seg{display:flex; gap:4px; background:var(--surface-2); border-radius:10px; padding:3px; margin-bottom:14px}
+.seg button{flex:1; border:0; background:transparent; color:var(--dim); cursor:pointer;
+  font-size:12px; font-weight:600; padding:6px 0; border-radius:8px}
+.seg button.on{background:var(--gold-soft); color:var(--gold)}
+.score{display:flex; align-items:flex-start; justify-content:space-between; gap:14px}
+.score .rate .n{font-family:var(--font-mono); font-size:40px; font-weight:680; letter-spacing:-1.2px}
+.score .rate .p{font-size:19px; color:var(--dim)}
+.score .rate .lab{font-size:11px; color:var(--faint); letter-spacing:2px; margin-top:7px}
+.score .sum{text-align:right; font-family:var(--font-mono)}
+.score .sum .n{font-size:26px; font-weight:700; line-height:1.1}
+.score .sum .u{font-size:11px; color:var(--dim); margin-left:3px}
+.score .sum .cash{font-size:11.5px; color:var(--faint); margin-top:5px}
+.wlbar{display:flex; height:6px; border-radius:3px; overflow:hidden; margin-top:13px; gap:2px}
+.wlbar i.w{background:var(--up)} .wlbar i.l{background:var(--down)}
+.wlfoot{display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); margin-top:6px}
+.wlfoot .w b{color:var(--up)} .wlfoot .l b{color:var(--down)}
+.warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
+  border-radius:20px; padding:2px 9px; font-weight:600}
+
+/* ═══ v1＝現況（逐字沿用 live_panel.py 目前的真實下單區）═══ */
+.real{margin-top:14px; border-color:var(--gold-line);
+  background:linear-gradient(180deg,var(--raise),#161C24)}
+.real .sec-head h2{color:var(--gold)}
+.rtop{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.rlabel{font-size:12.5px; color:var(--dim)}
+.rlabel b{color:var(--text); font-weight:650}
+.sw{width:46px; height:26px; border-radius:999px; background:var(--surface-2);
+  border:1px solid var(--line); position:relative; cursor:pointer; flex:none}
+.sw i{position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
+  background:var(--ghost); transition:transform .18s var(--ease), background .18s var(--ease)}
+.sw.on{background:var(--gold-soft); border-color:var(--gold-line)}
+.sw.on i{transform:translateX(20px); background:var(--gold)}
+.rbody{margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft)}
+.rrow{display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0}
+.rrow .k{color:var(--faint)}
+.rrow .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.rbtns{display:flex; gap:9px; margin-top:13px}
+.rbtn{flex:1; padding:15px 10px; border-radius:var(--r-md); cursor:pointer; font-family:inherit;
+  font-size:14.5px; font-weight:700; border:1px solid; letter-spacing:.5px;
+  position:relative; overflow:hidden}
+.rbtn.b{background:var(--up-soft); color:var(--up); border-color:var(--up-line)}
+.rbtn.s{background:var(--down-soft); color:var(--down); border-color:var(--down-line)}
+.rbtn:disabled{opacity:.28; cursor:not-allowed}
+.rbtn .fill{position:absolute; left:0; top:0; bottom:0; width:0; background:currentColor;
+  opacity:.22; pointer-events:none}
+.rbtn.holding .fill{transition:width 650ms linear; width:100%}
+.rbtn .hint{display:block; font-size:10.5px; font-weight:600; margin-top:3px;
+  font-family:var(--font-mono); opacity:0; transition:opacity .12s var(--ease)}
+.rbtn.holding .hint{opacity:.95}
+.rbtn span{position:relative}
+.quota{font-size:11px; color:var(--faint); font-family:var(--font-mono);
+  text-align:right; margin-top:9px}
+.rtrades{margin-top:12px; padding-top:10px; border-top:1px solid var(--line)}
+.rth{display:flex; align-items:baseline; gap:8px; font-size:12px; margin-bottom:6px}
+.rnet{margin-left:auto; font-family:var(--font-mono); font-size:13px; font-weight:600}
+.rtrow{display:flex; align-items:center; gap:8px; padding:4px 0;
+  font-size:12px; font-family:var(--font-mono)}
+.rtrow+.rtrow{border-top:1px solid var(--line)}
+.rtt{color:var(--faint)}
+.rtp{color:var(--text)}
+.rtw{margin-left:auto; font-size:11px}
+.rtn{min-width:52px; text-align:right; font-weight:600}
+.tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
+.real.holding{border-color:var(--up-line);
+  background:linear-gradient(180deg,rgba(238,90,84,.10),#161C24)}
+.real.holding.sh{border-color:var(--down-line);
+  background:linear-gradient(180deg,rgba(52,179,126,.10),#161C24)}
+.rpos{display:flex; align-items:baseline; gap:10px; margin-bottom:6px}
+.rpos .big{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1}
+.rpos .tag{font-size:11px; font-weight:700; padding:3px 9px; border-radius:var(--r-xs); border:0}
+.rpos .tag.l{background:var(--up-soft); color:var(--up)}
+.rpos .tag.s{background:var(--down-soft); color:var(--down)}
+.ralarm{background:var(--gold-soft); border:1px solid var(--gold-line);
+  border-radius:var(--r-md); padding:11px 13px; margin-top:12px; font-size:12.5px; line-height:1.6}
+.ralarm.bad{background:var(--up-soft); border-color:var(--up-line);
+  animation:kk-puls 1.1s ease-in-out infinite}
+@keyframes kk-puls{0%,100%{opacity:1}50%{opacity:.55}}
+
+/* ═══════════════ v2＝提案（新元件，n- 前綴）═══════════════ */
+
+/* L0：真錢層。全頁唯一比 K 線卡更重的東西，而且只在真實模式開著時存在。 */
+.n-card{background:linear-gradient(180deg,#1D242F,#151A22); border:1px solid var(--line);
+  border-radius:var(--r-lg); margin-bottom:14px; position:relative; overflow:hidden}
+.n-card.on{border-color:var(--gold-line); box-shadow:0 0 0 1px rgba(227,169,81,.10), var(--shadow-1)}
+.n-card.hold{border-color:rgba(255,255,255,.16); box-shadow:0 0 0 1px rgba(255,255,255,.06), var(--shadow-2)}
+/* 頂端那條金線＝「這張卡是真的」的唯一標記，不靠底色染整張卡 */
+.n-card.on::before{content:''; position:absolute; left:0; right:0; top:0; height:2px;
+  background:linear-gradient(90deg,rgba(227,169,81,.15),var(--gold),rgba(227,169,81,.15))}
+.n-hd{display:flex; align-items:center; gap:12px; padding:14px 18px 13px}
+.n-hd .t{font-size:13px; font-weight:700; letter-spacing:1.4px; color:var(--text)}
+.n-hd .s{font-size:11.5px; color:var(--dim); margin-top:2px; font-family:var(--font-mono)}
+.n-hd .grow{flex:1; min-width:0}
+.n-live{font-size:10.5px; font-weight:700; letter-spacing:.6px; color:#151A22;
+  background:var(--gold); border-radius:5px; padding:2px 7px; white-space:nowrap}
+.n-live.sim{background:var(--surface-2); color:var(--dim)}
+.n-bd{padding:0 18px 16px}
+.n-sep{height:1px; background:var(--line-soft); margin:0 18px}
+
+/* 現價（空手態）*/
+.n-px{display:flex; align-items:baseline; justify-content:space-between; gap:10px; padding:12px 0 4px}
+.n-px .n{font-size:30px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; letter-spacing:-1px; line-height:1}
+.n-px .k{font-size:11px; color:var(--dim); letter-spacing:1.4px}
+.n-px .qty{font-size:11.5px; color:var(--dim); font-family:var(--font-mono)}
+
+/* 下單鈕：實心。跟練習區的「描邊＋淡底」在形狀上分家，不是只差顏色。 */
+.n-fire{display:flex; gap:10px; margin-top:12px}
+.n-fb{flex:1; position:relative; overflow:hidden; border:0; cursor:pointer; border-radius:var(--r-md);
+  padding:16px 10px 14px; color:#12151B; font-weight:800; font-size:16px; letter-spacing:1px;
+  text-align:center; line-height:1.15}
+.n-fb.b{background:var(--up)} .n-fb.s{background:var(--down)}
+.n-fb .sub{display:block; font-size:11px; font-weight:700; font-family:var(--font-mono);
+  letter-spacing:0; opacity:.72; margin-top:5px}
+.n-fb .bar{position:absolute; left:0; bottom:0; height:4px; width:0; background:#12151B; opacity:.55}
+.n-fb.holding .bar{transition:width 650ms linear; width:100%}
+.n-fb .hold{position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+  flex-direction:column; gap:3px; background:rgba(0,0,0,.30); font-size:13px; letter-spacing:.5px}
+.n-fb.holding .hold{display:flex}
+.n-fb:disabled{background:var(--surface-2); color:var(--faint); cursor:not-allowed}
+.n-fb:disabled .sub{opacity:.9; color:var(--faint)}
+.n-fb .txt{position:relative}
+.n-holdhint{font-size:11.5px; color:var(--dim); text-align:center; margin-top:9px;
+  font-family:var(--font-mono)}
+
+/* 擋單／狀態說明：最低 --dim（5.37:1），不准再用 --faint 講會影響決定的事 */
+.n-why{margin-top:11px; font-size:12.5px; color:var(--dim); line-height:1.6;
+  background:var(--surface-2); border-radius:var(--r-sm); padding:9px 11px}
+.n-why b{color:var(--text)}
+
+/* 配額：三顆點，滿了就是滿了，不用讀數字 */
+.n-quota{display:flex; align-items:center; gap:9px; margin-top:12px; font-size:11.5px;
+  color:var(--dim); font-family:var(--font-mono)}
+.n-quota .pips{display:flex; gap:4px}
+.n-quota .pips i{width:16px; height:5px; border-radius:3px; background:var(--ghost)}
+.n-quota .pips i.used{background:var(--dim)}
+.n-quota .pips i.full{background:var(--gold)}
+
+/* 送出中：不是灰掉，是佔住整條、寫清楚在等什麼 */
+.n-firing{margin-top:12px; background:var(--surface-2); border-radius:var(--r-md);
+  padding:13px 14px; font-size:13.5px; color:var(--text); font-weight:650}
+.n-firing .s{font-size:11.5px; color:var(--dim); font-weight:500; margin-top:4px; line-height:1.5}
+.n-firing .bar{height:3px; border-radius:2px; background:var(--line); margin-top:10px; overflow:hidden}
+.n-firing .bar i{display:block; height:100%; background:var(--gold); width:30%}
+
+/* 持倉態 ── 浮動點數升到 52px（跟報價區的大字同級） */
+.n-pos{display:flex; align-items:flex-end; justify-content:space-between; gap:14px; padding:14px 0 2px}
+.n-pos .big{font-size:52px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:.92; letter-spacing:-1.6px}
+.n-pos .u{font-size:15px; font-weight:650; margin-left:5px; letter-spacing:0}
+.n-pos .cash{font-size:12.5px; color:var(--dim); font-family:var(--font-mono); margin-top:6px}
+.n-dir{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:750;
+  padding:5px 10px; border-radius:var(--r-xs); white-space:nowrap}
+.n-dir.l{background:var(--up-soft); color:var(--up)}
+.n-dir.s{background:var(--down-soft); color:var(--down)}
+.n-meta{font-size:11.5px; color:var(--dim); font-family:var(--font-mono); text-align:right; margin-top:6px}
+
+/* 保護狀態列：兩條「錢在誰手上」。紅綠留給錢，系統狀態一律中性灰階＋填滿程度。 */
+.n-guard{margin-top:14px; border:1px solid var(--line-soft); border-radius:var(--r-md);
+  overflow:hidden; background:rgba(0,0,0,.16)}
+.n-g{display:flex; align-items:center; gap:11px; padding:11px 13px}
+.n-g+.n-g{border-top:1px solid var(--line-soft)}
+.n-g .ic{width:9px; height:9px; border-radius:50%; flex:none; box-sizing:content-box}
+.n-g .ic.solid{background:var(--text); box-shadow:0 0 0 3px rgba(233,236,241,.10)}
+.n-g .ic.hollow{background:transparent; border:2px solid var(--dim); width:5px; height:5px}
+.n-g .ic.bad{background:var(--up); box-shadow:0 0 0 3px var(--up-soft)}
+.n-g .lb{font-size:12.5px; color:var(--dim); min-width:74px}
+.n-g .lb b{color:var(--text); font-weight:650; font-family:var(--font-mono)}
+.n-g .st{margin-left:auto; font-size:12px; color:var(--dim); text-align:right; line-height:1.45}
+.n-g .st b{color:var(--text); font-weight:650}
+/* 要注意的那一列：底色用中性提亮，不用紅底 —— 紅底只留給頂端那條「請你動手」的橫幅。
+   紅色只出現在①錢的數字 ②狀態燈與「沒掛上」這種明確的故障字，不會兩者混淆。 */
+.n-g.warn{background:rgba(255,255,255,.045)}
+.n-g.warn .st b{color:var(--up)}
+.n-gfoot{font-size:11.5px; color:var(--dim); line-height:1.6; padding:0 13px 11px; margin-top:-3px}
+
+/* 需要你動手＝實心紅底。形狀跟「紅色的數字」完全不同，不會混淆成「賺」。 */
+.n-alarm{background:var(--up); color:#14171C; border-radius:var(--r-md); padding:12px 14px;
+  margin:0 0 14px; font-size:13px; font-weight:700; line-height:1.55}
+.n-alarm .s{font-weight:600; opacity:.86; font-size:12px; margin-top:3px}
+.n-alarm .num{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.n-alarm.soft{background:var(--gold); color:#14171C}
+
+/* 平倉：中性底。平倉不是方向動作，不該吃紅綠（做空的平倉送的是「買進」）。 */
+.n-close{width:100%; margin-top:14px; border:1px solid var(--line); background:var(--surface-2);
+  color:var(--text); font-size:15px; font-weight:750; letter-spacing:1px; padding:15px 10px 13px;
+  border-radius:var(--r-md); cursor:pointer; transition:background .14s var(--ease)}
+.n-close:hover{background:#232A36}
+.n-close .sub{display:block; font-size:11.5px; font-weight:600; color:var(--dim); letter-spacing:0;
+  margin-top:4px; font-family:var(--font-mono)}
+.n-close:disabled{opacity:.45; cursor:not-allowed}
+
+/* 成績單：固定欄，欄位不會隨內容跳；超過就捲，子元素 flex:none（鐵律 6） */
+.n-tr{margin-top:2px}
+.n-trh{display:flex; align-items:baseline; gap:8px; font-size:11.5px; color:var(--dim);
+  letter-spacing:1.2px; font-weight:650; padding:13px 18px 7px}
+.n-trh .net{margin-left:auto; font-family:var(--font-mono); font-size:14px; font-weight:700; letter-spacing:0}
+.n-trl{max-height:196px; overflow-y:auto; display:flex; flex-direction:column; padding:0 18px 4px}
+.n-trl::-webkit-scrollbar{width:6px}
+.n-trl::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+.n-row{flex:none; display:grid; grid-template-columns:18px 92px 1fr 68px 58px;
+  align-items:center; gap:9px; padding:8px 0; font-size:12px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; border-top:1px solid var(--line-soft)}
+.n-row:first-child{border-top:0}
+.n-row .d{font-size:11px; text-align:center}
+.n-row .d.l{color:var(--up)} .n-row .d.s{color:var(--down)}
+.n-row .tm{color:var(--dim)}
+.n-row .px{color:var(--text)}
+/* 理由固定寬 ＋ 不換行：欄位寬度不准隨內容跳，不然整張表每一列都對不齊 */
+.n-row .wy{color:var(--dim); font-size:11px; font-family:var(--font-sans); text-align:right;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.n-row .pt{text-align:right; font-weight:700; font-size:13px}
+.n-row .pt.na{color:var(--faint); font-weight:500}
+.n-trnote{font-size:11.5px; color:var(--dim); line-height:1.55; padding:8px 18px 0;
+  border-top:1px solid var(--line-soft); margin-top:6px}
+.n-foot{display:flex; align-items:center; gap:8px; padding:9px 18px 11px; font-size:10.5px;
+  color:var(--faint); font-family:var(--font-mono); border-top:1px solid var(--line-soft)}
+.n-foot .stale{color:var(--gold); font-weight:700}
+
+/* 有真實部位時，練習卡收合成一行 */
+.n-collapse{display:flex; align-items:center; gap:10px; background:var(--surface);
+  border:1px solid var(--line-soft); border-radius:var(--r-md); padding:11px 14px;
+  font-size:12.5px; color:var(--dim); margin-bottom:12px; cursor:default}
+.n-collapse .tag2{font-size:10.5px; color:var(--faint); border:1px solid var(--line);
+  border-radius:20px; padding:2px 8px; margin-left:auto}
+
+@media (prefers-reduced-motion: reduce){
+  .n-fb.holding .bar{transition:none; width:100%}
+  .ralarm.bad{animation:none}
+  .dot.dead{animation:none}
+}
+@media(max-width:640px){
+  .app{padding:0 12px 40px}
+  .dbar{padding:8px 12px}
+  .n-row{grid-template-columns:16px 78px 1fr 52px; }
+  .n-row .wy{display:none}
+  .n-pos .big{font-size:44px}
+}
+</style>
+</head>
+<body>
+
+<div class="dbar">
+  <span class="dt">DEMO</span>
+  <div class="dseg big" id="verSeg">
+    <button data-ver="v1">現況</button>
+    <button data-ver="v2" class="on">新版提案</button>
+  </div>
+  <div class="dseg" id="stSeg">
+    <button data-st="idle" class="on">空手</button>
+    <button data-st="long">持倉・做多</button>
+    <button data-st="short">持倉・做空</button>
+    <button data-st="stale">報價中斷</button>
+    <button data-st="notp">停利沒掛上</button>
+    <button data-st="firing">送出中</button>
+    <button data-st="closed">休市</button>
+  </div>
+  <div class="dhint" id="dhint"></div>
+  <span class="dsafe">不連伺服器・不會送單</span>
+</div>
+
+<div class="app">
+  <div class="topbar">
+    <div class="brand"><div class="mark">&#9702;</div>
+      <div><div class="nm">早盤儀表板</div>
+      <div class="sub" id="sub"><span class="dot"></span>微台 TMFI6</div></div></div>
+    <div class="tabs"><button class="on">即時</button><button>回顧</button></div>
+    <div class="clock"><div class="d" id="clk">09:14</div><div class="w" id="ph">記錄中</div></div>
+  </div>
+
+  <div class="cols">
+    <div id="mkt"></div>
+    <div class="right" id="right"></div>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   純前端 demo。所有數字都是假的，沒有任何 fetch。
+   ══════════════════════════════════════════════════════════════ */
+var VER='v2', ST='idle';
+var lastRealV1='', skelKey='', holdingNow=false, holdTimer=null, closing=false;
+
+var D={
+  px:47091, prevClose:46986, entry:47091,
+  entries:2, max:3,
+  code:{broker:'09-01 13:47', started:'09-01 13:52', stale:false}
+};
+
+/* 今天的真實交易（假的）。刻意留兩筆問不到成交價 ——
+   現況的文案寫死「有一筆」，那是這次要修的東西之一。 */
+var TRADES=[
+  {dir:'long', et:'08:52', ex:'09:04', ep:47010, xp:47110, why:'停利', pts:100},
+  {dir:'short',et:'09:11', ex:'09:19', ep:47122, xp:47222, why:'停損', pts:-100},
+  {dir:'long', et:'09:28', ex:'09:41', ep:47066, xp:47116, why:'手動平倉', pts:50},
+  {dir:'long', et:'10:05', ex:'10:18', ep:47044, xp:null,  why:'不是面板平的', pts:null},
+  {dir:'short',et:'11:23', ex:'11:40', ep:46978, xp:null,  why:'手動平倉', pts:null}
+];
+
+var HINTS={
+ idle:'空手、可以下單。看兩件事：<b>真實下單卡在右欄的第幾張</b>、還有<b>它的按鈕跟上面練習的按鈕分不分得出來</b>。按住紅／綠鈕 0.65 秒可以真的「送出」（假的），會進到持倉畫面。',
+ long:'做多持倉中。比較兩版的<b>浮動點數字級</b>（現況 34px、練習的假單反而是 44px）、<b>停利停損的呈現</b>、還有<b>平倉鈕的顏色</b>。',
+ short:'做空持倉中。現況的平倉鈕是綠色的 —— 但做空的平倉送出去的是<b>買進</b>。新版把平倉改成中性色，並直接寫出會送哪一邊。',
+ stale:'報價中斷（停損現在沒人看）。現況的警報在卡片<b>最底下</b>、而且掛了 CSS 動畫 —— 秒數每秒變一次、整塊被重繪，動畫每秒從頭跑，所以它是在抖不是在呼吸。新版把警報移到最上面、拿掉動畫，改讓<b>頂列那顆不會被重繪的燈</b>閃。',
+ notp:'進場成功但<b>停利沒掛上券商</b>。現況：跳一個 alert，按掉之後只剩一行 12.5px 紅字。新版：卡片頂端一條不會消失的橫幅，停利那一列同時標成「沒掛上」。',
+ firing:'送出中，等券商回報成交（最多 5 秒）。現況只有一行 11.5px 的灰字（對比度 2.72:1）＋按鈕淡成 28%。新版把這 5 秒做成一塊看得見的等待區。',
+ closed:'休市中。兩版都不准下單（拿舊價記成績＝假成績）。差別在<b>「為什麼不能按」寫得夠不夠大聲</b>。'
+};
+
+/* ── 小工具 ─────────────────────────────────── */
+function f(n){ return n==null?'—':Number(n).toFixed(0); }
+function pm(v){ return v==null?'—':(v>0?'+':'')+Number(v).toFixed(0); }
+function sgn(v){ return v>0?'up':v<0?'down':'flat'; }
+function esc(s){ return String(s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+function setEl(id,html){ var e=document.getElementById(id); if(!e) return;
+  if(e.__h===html) return; e.__h=html; e.innerHTML=html; }
+function pos(){
+  if(ST==='long'||ST==='notp') return {dir:'long', entry:D.entry, qty:1, time:'09:12:44',
+    tp:D.entry+100, sl:D.entry-100, hasTp:ST!=='notp'};
+  if(ST==='short'||ST==='stale') return {dir:'short', entry:D.entry, qty:1, time:'09:12:44',
+    tp:D.entry-100, sl:D.entry+100, hasTp:true};
+  return null;
+}
+function floatPts(){ var P=pos(); if(!P) return null;
+  return Math.round(P.dir==='long'? (D.px-P.entry) : (P.entry-D.px)); }
+function staleSec(){ return ST==='stale'? Math.floor((Date.now()-staleFrom)/1000) : null; }
+var staleFrom=Date.now();
+function isClosed(){ return ST==='closed'; }
+
+/* ── K 線圖（靜態、假資料；只是讓右欄的卡片墊在真實內容上）──── */
+var BARS=(function(){
+  var seed=20260901, r=function(){ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; };
+  var a=[], p=46940;
+  for(var i=0;i<96;i++){
+    var o=p, d=(r()-0.47)*26, c=o+d, h=Math.max(o,c)+r()*11, l=Math.min(o,c)-r()*11;
+    a.push({o:o,h:h,l:l,c:c,v:0.3+r()*0.7}); p=c;
+  }
+  return a;
+})();
+function chartHTML(){
+  var W=1040,H=470,R=64,TOP=14,BOT=26,n=BARS.length;
+  var hi=-1e9, lo=1e9;
+  BARS.forEach(function(b){ hi=Math.max(hi,b.h); lo=Math.min(lo,b.l); });
+  var P=pos();
+  if(P){ hi=Math.max(hi,P.tp,P.sl,P.entry); lo=Math.min(lo,P.tp,P.sl,P.entry); }
+  hi=Math.max(hi,D.px); lo=Math.min(lo,D.px);
+  var pad=(hi-lo)*0.08; hi+=pad; lo-=pad;
+  var x=function(i){ return (i+0.5)*((W-R)/n); };
+  var y=function(v){ return TOP+(hi-v)/(hi-lo)*(H-TOP-BOT); };
+  var s='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">';
+  for(var g=0;g<5;g++){ var yy=TOP+g*(H-TOP-BOT)/4;
+    s+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+       '" stroke="#1E2530" stroke-width="1"/>';
+    var pv=(hi-(g/4)*(hi-lo)).toFixed(0);
+    s+='<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5C6472" font-size="11" '+
+       'font-family="ui-monospace,monospace">'+pv+'</text>';
+  }
+  var cw=(W-R)/n, bw=Math.max(2,cw*0.62);
+  BARS.forEach(function(b,i){
+    var up=b.c>=b.o, col=up?'#EE5A54':'#34B37E', X=x(i);
+    s+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+
+       y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1.1" opacity=".85"/>';
+    var yo=y(b.o), yc=y(b.c), t=Math.min(yo,yc), hgt=Math.max(1.4,Math.abs(yc-yo));
+    s+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+t.toFixed(1)+'" width="'+bw.toFixed(1)+
+       '" height="'+hgt.toFixed(1)+'" fill="'+col+'" opacity=".9"/>';
+  });
+  /* 【v2 才有】真實部位的三條線畫上圖。現況：真單在圖上完全看不到，
+     反而是「練習」的假單有停利停損線。 */
+  if(P&&VER==='v2'){
+    var lines=[[P.entry,'#E9ECF1','進場 '+f(P.entry)],
+               [P.tp,'#EE5A54','停利 '+f(P.tp)],
+               [P.sl,'#34B37E','停損 '+f(P.sl)]];
+    lines.forEach(function(L){
+      var yy=y(L[0]);
+      s+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+         '" stroke="'+L[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".7"/>';
+      s+='<rect x="6" y="'+(yy-9).toFixed(1)+'" width="104" height="18" rx="4" fill="#0E1116" '+
+         'fill-opacity=".9" stroke="'+L[1]+'" stroke-opacity=".5"/>';
+      s+='<text x="14" y="'+(yy+4).toFixed(1)+'" fill="'+L[1]+'" font-size="11" font-weight="700" '+
+         'font-family="ui-monospace,monospace">'+L[2]+'</text>';
+    });
+  }
+  s+='</svg>';
+  return s;
+}
+function paintChart(){
+  var chg=D.px-D.prevClose, cls=sgn(chg), q=isClosed();
+  var el=document.getElementById('mkt');
+  if(!el.__built){
+    el.__built=1;
+    el.innerHTML='<div class="card chart l1">'+
+      '<div class="chead"><div id="qb"></div>'+
+      '<div class="pager"><div class="r1"><span class="faint">&#9664;</span>'+
+      '<span class="num">09-01</span><span class="faint" style="font-size:12px">（一）</span>'+
+      '<span class="faint">&#9654;</span></div>'+
+      '<div class="r2">08-29 夜 &rarr; 09-01　·　今天</div></div></div>'+
+      '<div class="legend"><span>開 <b>46940</b></span><span>高 <b>47188</b></span>'+
+      '<span>低 <b>46902</b></span><span>量 <b>96,412</b></span></div>'+
+      '<div class="cwrap" id="cw"></div>'+
+      '<div class="chint">滾輪縮放・拖曳平移・雙擊還原</div>'+
+      '<div class="rail">'+
+      '<div class="grp"><div><div class="k">5 分</div><div class="v up">+12</div></div>'+
+      '<div><div class="k">15 分</div><div class="v down">-6</div></div></div>'+
+      '<div class="grp"><div><div class="k">跳空</div><div class="v">+4</div></div>'+
+      '<div><div class="k">今日震幅</div><div class="v">286</div></div>'+
+      '<div><div class="k">位階</div><div class="v">0.66</div>'+
+      '<div class="track"><i style="width:66%"></i></div></div>'+
+      '<div><div class="k">量能</div><div class="v">1.8&times;</div>'+
+      '<div class="track"><i class="hot" style="width:60%"></i></div></div></div>'+
+      '<div class="grp"><div><div class="k">買 / 賣</div><div class="v">47090 / 47092</div></div></div>'+
+      '</div></div>';
+  }
+  setEl('qb','<div class="qblock"><div class="qmain">'+
+    '<span class="cpx '+cls+'">'+f(D.px)+'</span>'+
+    '<span class="cchg '+cls+'">'+pm(chg)+'<span class="pct">'+
+    (chg/D.prevClose*100).toFixed(2)+'%</span></span></div>'+
+    '<div class="qsub"><span class="live'+(q?' dead':'')+'"><i></i>'+(q?'休市中':'即時')+
+    '</span><span class="sep">·</span><span>昨收 '+f(D.prevClose)+'</span>'+
+    '<span class="sep">·</span><span>微台 TMFI6</span></div></div>');
+  var cw=document.getElementById('cw');
+  var key=VER+'|'+ST+'|'+(pos()?D.entry:'-')+'|'+Math.round(D.px/8);
+  if(cw.__k!==key){ cw.__k=key; cw.innerHTML=chartHTML(); }
+}
+
+/* ══════════════ 練習區（兩版共用，v2 有部位時收合）══════════════ */
+function practiceHTML(){
+  var P=pos();
+  if(VER==='v2'&&P){
+    return '<div class="n-collapse">練習下單<span class="tag2">真實部位進行中・已收合</span></div>';
+  }
+  var off=isClosed();
+  var h='<div class="sec-head"><h2>練習下單</h2><span class="warn">模擬・不會送單</span></div>'+
+        '<div class="card">'+
+    '<div class="btns"><button class="btn long"'+(off?' disabled':'')+'>&#9650; 做多</button>'+
+    '<button class="btn short"'+(off?' disabled':'')+'>&#9660; 做空</button></div>';
+  if(off) h+='<div class="whyoff">休市中，沒有即時報價 —— 練習下單要用當下的真實成交價才有意義，開盤後才能按。</div>';
+  return h+'</div>';
+}
+function statsHTML(){
+  return '<div class="sec-head"><h2>練習成績</h2><span class="count">共 34 筆</span></div>'+
+   '<div class="card"><div class="seg"><button>近 7 筆</button><button class="on">近 20 筆</button>'+
+   '<button>全部</button></div>'+
+   '<div class="score"><div class="rate"><span class="n">45</span><span class="p">%</span>'+
+   '<div class="lab">勝率</div></div>'+
+   '<div class="sum"><div><span class="n down">-140</span><span class="u">點</span></div>'+
+   '<div class="cash">-NT$1,400</div></div></div>'+
+   '<div class="wlbar"><i class="w" style="flex:9"></i><i class="l" style="flex:11"></i></div>'+
+   '<div class="wlfoot"><span class="w"><b>9</b> 勝</span><span>20 筆</span>'+
+   '<span class="l"><b>11</b> 敗</span></div></div>';
+}
+
+/* ══════════════ v1＝現況 ══════════════════════════════════ */
+function realV1(){
+  var P=pos(), fl=floatPts(), ss=staleSec();
+  var h='<div class="card real'+(P?(' holding'+(P.dir==='short'?' sh':'')):'')+'">'+
+    '<div class="rtop"><div>'+
+    '<div class="sec-head" style="margin-bottom:2px"><h2>真實下單</h2></div>'+
+    '<div class="rlabel"><b style="color:var(--gold)">真的會送單</b>　微台 1 口・固定 ±100</div>'+
+    '</div><div class="sw on"><i></i></div></div><div class="rbody">';
+  if(P){
+    h+='<div class="rpos"><div class="big '+sgn(fl)+'">'+pm(fl)+'</div>'+
+       '<span class="tag '+(P.dir==='long'?'l':'s')+'">'+(P.dir==='long'?'▲ 做多':'▼ 做空')+
+       ' 1 口</span><span class="faint" style="font-size:12px">'+P.time+' 進場</span></div>'+
+       rrow('進場價',f(P.entry))+
+       rrow('停利　+100', f(P.tp)+'　'+(P.hasTp?'<span class="faint">已掛在券商</span>'
+          :'<span class="up">沒掛上！請自己補掛或平倉</span>'))+
+       rrow('停損　−100', f(P.sl)+'　<span class="up">由面板監控</span>')+
+       '<div class="rbtns"><button class="rbtn s"'+(closing?' disabled':'')+' data-close="1">'+
+       (closing?'平倉中…':'立刻平倉')+'</button></div>';
+    h+= ss!=null
+      ? '<div class="ralarm bad"><b style="color:var(--up)">⚠ 報價已中斷 '+ss+' 秒</b><br>'+
+        '停損是由這台電腦監控的，現在監控不到。<b>請立刻到大戶投確認部位</b>。</div>'
+      : '<div class="ralarm">停損靠這台電腦。<b style="color:var(--gold)">'+
+        '面板關掉、電腦睡著、網路斷掉都會失效</b>。</div>';
+  } else {
+    var ok=!isClosed()&&ST!=='firing';
+    h+=rrow('現價',isClosed()?f(D.px)+'　<span class="faint">非即時</span>':f(D.px))+
+       rrow('口數','1 口　<span class="faint">固定，不能改</span>')+
+       '<div class="rbtns">'+fireV1('long',ok)+fireV1('short',ok)+'</div>'+
+       (ST==='firing'?'<div class="whyoff">送出中…等券商回報成交（最多 5 秒）</div>':'')+
+       (isClosed()?'<div class="whyoff">休市中，沒有即時報價，不能下單</div>':'')+
+       '<div class="quota">今天真實進場 '+D.entries+' / '+D.max+
+       '　·　程式 '+D.code.broker+'　啟動 '+D.code.started+'</div>';
+  }
+  h+=tradesV1();
+  return h+'</div></div>';
+}
+function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
+function fireV1(dir,ok){
+  var long=dir==='long', tp=long?D.px+100:D.px-100, sl=long?D.px-100:D.px+100;
+  return '<button class="rbtn '+(long?'b':'s')+'"'+(ok?'':' disabled')+' data-fire="'+dir+'">'+
+    '<span class="fill"></span><span>'+(long?'買進 做多':'賣出 做空')+'</span>'+
+    '<span class="hint">停利 '+f(tp)+'　停損 '+f(sl)+'</span></button>';
+}
+function tradesV1(){
+  if(!TRADES.length) return '';
+  var done=TRADES.filter(function(t){return t.pts!=null;});
+  var net=done.reduce(function(a,t){return a+t.pts;},0);
+  var h='<div class="rtrades"><div class="rth">今天的真實交易　<span class="faint">'+
+    TRADES.length+' 筆</span><span class="rnet '+sgn(net)+'">'+pm(net)+' 點</span></div>';
+  TRADES.forEach(function(t){
+    h+='<div class="rtrow"><span class="tag '+(t.dir==='long'?'l':'s')+'">'+
+      (t.dir==='long'?'▲':'▼')+'</span>'+
+      '<span class="rtt">'+t.et+' → '+t.ex+'</span>'+
+      '<span class="rtp">'+f(t.ep)+' → '+(t.xp==null?'—':f(t.xp))+'</span>'+
+      '<span class="rtw faint">'+esc(t.why)+'</span>'+
+      '<span class="rtn '+(t.pts==null?'':sgn(t.pts))+'">'+(t.pts==null?'—':pm(t.pts))+
+      '</span></div>';
+  });
+  if(TRADES.some(function(t){return t.pts==null;}))
+    h+='<div class="whyoff">有一筆問不到成交價，所以算不出點數 —— 那筆的損益請到大戶投看</div>';
+  return h+'</div>';
+}
+
+/* ══════════════ v2＝提案 ══════════════════════════════════ */
+function realV2Skeleton(){
+  var P=pos();
+  var h='<div class="n-card on'+(P?' hold':'')+'">'+
+    '<div class="n-hd"><div class="grow"><div class="t">真實下單</div>'+
+    '<div class="s">微台 TMF・1 口・固定 &plusmn;100 點</div></div>'+
+    '<span class="n-live">真的會送單</span><div class="sw on"><i></i></div></div>'+
+    '<div class="n-sep"></div><div class="n-bd" id="nbody"></div>'+
+    '<div class="n-tr" id="ntr"></div>'+
+    '<div class="n-foot" id="nfoot"></div></div>';
+  return h;
+}
+function bodyV2(){
+  var P=pos(), fl=floatPts(), ss=staleSec(), h='';
+  if(P){
+    /* 順序：警報 → 現在賺賠多少 → 保護在誰手上 → 動作。
+       最急的東西在最上面，不是在平倉鈕底下。 */
+    if(ss!=null)
+      h+='<div class="n-alarm" style="margin-top:14px">⚠ 報價已中斷 <span class="num" id="nss">'+
+         ss+'</span> 秒　停損現在沒人在看'+
+         '<div class="s">停損活在這台電腦裡，收不到報價就判斷不了。請立刻到大戶投確認部位。</div></div>';
+    if(!P.hasTp)
+      h+='<div class="n-alarm" style="margin-top:14px">⚠ 停利沒有掛上券商'+
+         '<div class="s">賺的那一邊現在沒有保護。請到大戶投自己補掛一張 '+f(P.tp)+
+         ' 的平倉限價單，或直接按下面的平倉。</div></div>';
+    h+='<div class="n-pos"><div><div class="big '+sgn(fl)+'" id="nbig">'+pm(fl)+
+       '<span class="u">點</span></div>'+
+       '<div class="cash" id="ncash">'+(fl==null?'—':(fl>0?'+':'')+'NT$'+(fl*10))+'　浮動</div></div>'+
+       '<div><span class="n-dir '+(P.dir==='long'?'l':'s')+'">'+
+       (P.dir==='long'?'▲ 做多':'▼ 做空')+' 1 口</span>'+
+       '<div class="n-meta">'+P.time+' 進場 '+f(P.entry)+'</div></div></div>';
+    h+='<div class="n-guard">'+
+       '<div class="n-g'+(P.hasTp?'':' warn')+'"><span class="ic '+(P.hasTp?'solid':'bad')+'"></span>'+
+       '<span class="lb">停利 <b>'+f(P.tp)+'</b></span>'+
+       '<span class="st">'+(P.hasTp?'<b>掛在券商</b><br>電腦關機也有效'
+          :'<b>沒掛上</b><br>賺的那一邊沒有保護')+'</span></div>'+
+       '<div class="n-g'+(ss!=null?' warn':'')+'"><span class="ic '+(ss!=null?'bad':'hollow')+'"></span>'+
+       '<span class="lb">停損 <b>'+f(P.sl)+'</b></span>'+
+       '<span class="st">'+(ss!=null?'<b>監控不到</b><br>收不到報價':'<b>這台電腦在看</b><br>券商端做不到停損')+
+       '</span></div>'+
+       '<div class="n-gfoot">面板關掉、電腦睡著、網路斷掉，停損就失效 —— 這是你 08-28 拍板承擔的風險。</div>'+
+       '</div>';
+    h+='<button class="n-close"'+(closing?' disabled':'')+' data-close="1">'+
+       (closing?'平倉中…':'立刻平倉')+
+       '<span class="sub">'+(closing?'等券商回報部位真的消失':
+       '會送出 '+(P.dir==='long'?'賣出':'買進')+' &times;1（'+
+       (P.dir==='long'?'賣掉多單':'回補空單')+'）')+'</span></button>';
+  } else if(ST==='firing'){
+    h+='<div class="n-px"><div><div class="k">現價</div>'+
+       '<div class="n" id="npx">'+f(D.px)+'</div></div>'+
+       '<div class="qty">1 口・固定</div></div>'+
+       '<div class="n-firing">送出中…　等券商回報成交'+
+       '<div class="s">範圍市價 IOC：當下撮不到就整張不成交。最多等 5 秒，'+
+       '沒成交會直接告訴你，不會偷偷掛停利。</div>'+
+       '<div class="bar"><i></i></div></div>';
+  } else {
+    var off=isClosed(), full=D.entries>=D.max, ok=!off&&!full;
+    h+='<div class="n-px"><div><div class="k">現價</div>'+
+       '<div class="n" id="npx">'+f(D.px)+(off?'<span class="qty" style="margin-left:8px">非即時</span>':'')+
+       '</div></div><div class="qty">1 口・固定不能改</div></div>';
+    h+='<div class="n-fire">'+fireV2('long',ok)+fireV2('short',ok)+'</div>';
+    if(ok) h+='<div class="n-holdhint">按住 0.65 秒送出　·　中途放開就取消</div>';
+    if(off) h+='<div class="n-why"><b>休市中，沒有即時報價</b><br>'+
+       '現在下單等於用一個不知道對不對的價格進場，所以按鈕是真的停用的。開盤後才能按。</div>';
+    else if(full) h+='<div class="n-why"><b>今天的 '+D.max+' 次進場已經用完</b><br>'+
+       '這是你自己設的上限，明天才會重新計算。</div>';
+    h+='<div class="n-quota"><div class="pips">'+
+       [0,1,2].map(function(i){
+         return '<i class="'+(i<D.entries?(D.entries>=D.max?'full':'used'):'')+'"></i>';
+       }).join('')+'</div><span>今天進場 '+D.entries+' / '+D.max+'</span></div>';
+  }
+  return h;
+}
+function fireV2(dir,ok){
+  var long=dir==='long', tp=long?D.px+100:D.px-100, sl=long?D.px-100:D.px+100;
+  return '<button class="n-fb '+(long?'b':'s')+'"'+(ok?'':' disabled')+' data-fire="'+dir+'">'+
+    '<span class="txt">'+(long?'買進 做多':'賣出 做空')+
+    '<span class="sub">停利 '+f(tp)+'　停損 '+f(sl)+'</span></span>'+
+    '<span class="hold">放開取消<span style="font-size:11px;opacity:.8">按住送出中…</span></span>'+
+    '<span class="bar"></span></button>';
+}
+function tradesV2(){
+  if(!TRADES.length) return '';
+  var done=TRADES.filter(function(t){return t.pts!=null;});
+  var miss=TRADES.length-done.length;
+  var net=done.reduce(function(a,t){return a+t.pts;},0);
+  var h='<div class="n-trh">今天的真實交易　<span style="color:var(--faint);letter-spacing:0">'+
+    TRADES.length+' 筆</span>'+
+    (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+'</div>'+
+    '<div class="n-trl">';
+  TRADES.slice().reverse().forEach(function(t){
+    h+='<div class="n-row">'+
+      '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲':'▼')+'</span>'+
+      '<span class="tm">'+t.et+'&rarr;'+t.ex+'</span>'+
+      '<span class="px">'+f(t.ep)+'&rarr;'+(t.xp==null?'—':f(t.xp))+'</span>'+
+      /* 現況那個「不是面板平的」太長，固定欄放不下 —— 改成 4 字的「別處平倉」 */
+      '<span class="wy">'+esc({'不是面板平的':'別處平倉'}[t.why]||t.why)+'</span>'+
+      '<span class="pt '+(t.pts==null?'na':sgn(t.pts))+'">'+(t.pts==null?'—':pm(t.pts))+'</span>'+
+      '</div>';
+  });
+  h+='</div>';
+  if(miss) h+='<div class="n-trnote"><b style="color:var(--text)">'+miss+
+    ' 筆</b>問不到成交價，所以算不出點數（那幾筆的損益請到大戶投看）。'+
+    '合計的 '+pm(net)+' 點只含算得出來的 '+done.length+' 筆。</div>';
+  return h;
+}
+function footV2(){
+  return (D.code.stale?'<span class="stale">面板跑的不是最新的程式</span>　':'')+
+    'broker '+D.code.broker+'　·　啟動 '+D.code.started;
+}
+
+/* ══════════════ 繪製 ══════════════════════════════════════ */
+function render(hard){
+  paintChart();
+  /* ⛔ 長按送單期間，含那顆按鈕的節點一律不准重繪。
+     每 0.5 秒重繪一次的話，按住的按鈕會在按到一半被換掉（畫面看起來像自己取消），
+     而計時器還握著那顆不在畫面上的按鈕、時間到照樣送單。
+     ⚠️ 這條是我自己在做這份 demo 時真的踩到的：忘了加，長按 900ms 完全送不出去。 */
+  if(holdingNow&&!hard) return;
+  var right=document.getElementById('right');
+  var key=VER+'|'+ST+'|'+closing+'|'+D.entries;
+  if(hard||right.__k!==key){
+    right.__k=key;
+    if(VER==='v1'){
+      lastRealV1='';
+      right.innerHTML='<div id="pr"></div><div id="real"></div><div id="stats"></div>';
+      setEl('pr',practiceHTML()); setEl('stats',statsHTML());
+    } else {
+      /* v2：真實卡在最上面。而且拆成三個節點，每一塊各自比對自己的字串 ——
+         成績單不會因為「秒數」變了就整塊被重建。 */
+      right.innerHTML='<div id="realv2">'+realV2Skeleton()+'</div>'+
+                      '<div id="pr"></div><div id="stats"></div>';
+      setEl('pr',practiceHTML()); setEl('stats',statsHTML());
+      setEl('ntr',tradesV2()); setEl('nfoot',footV2());
+    }
+  }
+  if(VER==='v1'){
+    var html=realV1();
+    if(lastRealV1!==html){ lastRealV1=html; document.getElementById('real').innerHTML=html; }
+  } else {
+    setEl('nbody',bodyV2());
+  }
+  var ss=staleSec();
+  var sub=document.getElementById('sub');
+  var dcls=isClosed()?'off':(ss!=null?'dead':'');
+  setEl('sub','<span class="dot '+dcls+'"></span>微台 TMFI6'+
+    (ss!=null?'　<span style="color:var(--up);font-weight:650">報價中斷</span>':''));
+  document.getElementById('ph').textContent=isClosed()?'休市中':(pos()?'持倉中':'記錄中');
+  setEl('dhint',HINTS[ST]||'');
+}
+
+/* 每 0.5 秒跳一次價 —— 跟真的面板一樣。
+   v1 會因為字串變了而整塊重建（斷線警報的動畫因此每秒從頭跑）；
+   v2 只換有變的那個節點。 */
+setInterval(function(){
+  if(isClosed()) { render(); return; }
+  D.px += Math.round((Math.random()-0.5)*6);
+  var d=new Date();
+  document.getElementById('clk').textContent=
+    ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+  render();
+},500);
+
+/* ── 長按送出（兩版都真的能玩）───────────────────── */
+function holdStart(el,dir){
+  if(el.disabled) return;
+  holdEnd(el);
+  holdingNow=true;
+  el.classList.add('holding');
+  el.addEventListener('mouseleave',onLeave);
+  window.addEventListener('mouseup',onUp,true);
+  window.addEventListener('touchend',onUp,true);
+  holdTimer=setTimeout(function(){
+    if(!document.body.contains(el)){ holdEnd(el); return; }
+    holdEnd(el); fire(dir);
+  },650);
+}
+function onLeave(e){ holdEnd(e.currentTarget); }
+function onUp(){ document.querySelectorAll('.holding').forEach(holdEnd); }
+function holdEnd(el){
+  clearTimeout(holdTimer); holdTimer=null; holdingNow=false;
+  if(!el||!el.classList) return;
+  el.classList.remove('holding');
+  el.removeEventListener('mouseleave',onLeave);
+  window.removeEventListener('mouseup',onUp,true);
+  window.removeEventListener('touchend',onUp,true);
+}
+function fire(dir){
+  D.entry=D.px;
+  D.entries=Math.min(D.max,D.entries+1);
+  ST=dir==='long'?'long':'short';
+  syncSeg(); render(true);
+}
+function doClose(){
+  if(closing) return;
+  closing=true; render(true);
+  setTimeout(function(){
+    var P=pos(), fl=floatPts();
+    if(P) TRADES.push({dir:P.dir, et:P.time.slice(0,5), ex:nowHM(), ep:P.entry,
+      xp:D.px, why:'手動平倉', pts:fl});
+    closing=false; ST='idle'; syncSeg(); render(true);
+  },900);
+}
+function nowHM(){ var d=new Date();
+  return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+
+document.addEventListener('mousedown',function(e){
+  if(e.button!==0) return;                       /* 右鍵不准送單 */
+  var b=e.target.closest('[data-fire]'); if(b) holdStart(b,b.getAttribute('data-fire'));
+});
+document.addEventListener('touchstart',function(e){
+  var b=e.target.closest('[data-fire]'); if(b){ e.preventDefault(); holdStart(b,b.getAttribute('data-fire')); }
+},{passive:false});
+document.addEventListener('click',function(e){
+  var v=e.target.closest('[data-ver]');
+  if(v){ VER=v.getAttribute('data-ver'); syncSeg(); render(true); return; }
+  var s=e.target.closest('[data-st]');
+  if(s){ ST=s.getAttribute('data-st'); staleFrom=Date.now()-27000;
+         if(ST==='idle') D.entries=2; syncSeg(); render(true); return; }
+  if(e.target.closest('[data-close]')) doClose();
+});
+function syncSeg(){
+  document.querySelectorAll('[data-ver]').forEach(function(b){
+    b.classList.toggle('on',b.getAttribute('data-ver')===VER); });
+  document.querySelectorAll('[data-st]').forEach(function(b){
+    b.classList.toggle('on',b.getAttribute('data-st')===ST); });
+}
+syncSeg(); render(true);
+</script>
+</body>
+</html>
