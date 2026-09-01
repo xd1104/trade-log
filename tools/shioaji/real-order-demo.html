@@ -175,7 +175,7 @@ function render(){
 
   var live = (S !== 'dry');
   st.innerHTML = live
-    ? '<b style="color:var(--gold)">真的會送單</b>　微台 1 口・停利掛券商'
+    ? '<b style="color:var(--gold)">真的會送單</b>　微台 1 口・固定 ±100'
     : '<b>演練模式</b>　單子照組、照記錄，<b>不會送出去</b>';
 
   if(S === 'holding' || S === 'stale'){
@@ -202,21 +202,23 @@ function render(){
   if(S === 'noquote') blocked = '現在沒有即時報價，不能用舊價下單';
   if(S === 'quota')   blocked = '今天真實進場已經 3 次，達到上限';
 
+  // 【還沒選方向就不要列停利停損】兩個方向的數字同時擺出來是雜訊 ——
+  // 那時候還不知道要做哪邊，兩組數字互相干擾。方向定了才有意義：
+  // 確認框（那時已經知道方向）與進場後的部位卡各顯示一次。
   body.innerHTML =
       row('現價', fmt(PRICE))
     + row('口數', '1 口　<span class="faint">固定，不能改</span>')
-    + row('停利', fmt(PRICE+100) + ' / ' + fmt(PRICE-100) + '　<span class="faint">掛券商</span>')
-    + row('停損', fmt(PRICE-100) + ' / ' + fmt(PRICE+100) + '　<span class="up">面板監控</span>')
     + '<div class="rbtns">'
-    + '<button class="rbtn b" ' + (blocked?'disabled':'') + ' onclick="ask(\'long\')">買進 做多<small>停利 ' + fmt(PRICE+100) + '</small></button>'
-    + '<button class="rbtn s" ' + (blocked?'disabled':'') + ' onclick="ask(\'short\')">賣出 做空<small>停利 ' + fmt(PRICE-100) + '</small></button>'
+    + '<button class="rbtn b" ' + (blocked?'disabled':'') + ' onclick="ask(\'long\')">買進 做多</button>'
+    + '<button class="rbtn s" ' + (blocked?'disabled':'') + ' onclick="ask(\'short\')">賣出 做空</button>'
     + '</div>'
     + (blocked ? '<div class="whyoff">' + blocked + '</div>' : '')
     + '<div class="quota">今天真實進場 ' + (S==='quota'?3:0) + ' / 3</div>';
 
   document.getElementById('foot').innerHTML = blocked
     ? '擋下來的時候<b>一定寫出原因</b>。按鈕變灰卻不說為什麼最讓人火大。'
-    : '按下去不會直接送 —— 會先跳確認框，把方向、價格、口數、停利停損寫給你看過。';
+    : '還沒選方向就不列停利停損 —— 那時候兩個方向的數字互相干擾。'
+      + '按下去會先跳確認框，<b>方向定了才把停利停損寫出來</b>。';
 }
 
 function row(k, v){
