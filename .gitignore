@@ -28,4 +28,5 @@ tools/shioaji/panel-app.log
 
 # 真實下單：紀錄與開關都只留本機（開關檔存在＝會真的送單）
 tools/shioaji/real_orders/
+tools/shioaji/sim_orders/
 tools/shioaji/REAL_ORDERS_ON
