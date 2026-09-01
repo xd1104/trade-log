@@ -2338,10 +2338,17 @@ function realFire(dir){
    .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'送不出去'); lastReal=''; tick(true); })
    .catch(()=>alert('送不出去，面板可能剛好在重啟'));
 }
+var closing=false;
 function realClose(){
+  // 【連按要擋】平倉是反向下單：送兩張的話第二張會開出一個反向的新部位。
+  // 拿掉確認框之後連點的機率更高，這道就更不能少。
+  if(closing) return;
+  closing=true;
+  lastReal=''; tick(true);                 // 立刻把按鈕變成「平倉中…」
   fetch('/api/real/close',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-   .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'平不掉'); lastReal=''; tick(true); })
-   .catch(()=>{});
+   .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'平不掉'); })
+   .catch(()=>alert('送不出去，請自己到大戶投平倉'))
+   .then(()=>{ closing=false; lastReal=''; tick(true); });
 }
 function realBox(s){
  const R=s.real||{}, P=R.position;
@@ -2365,7 +2372,8 @@ function realBox(s){
       rrow('進場價',f(P.entry))+
       rrow('停利　+'+f(100),f(R.tp)+'　<span class="faint">已掛在券商</span>')+
       rrow('停損　−'+f(100),f(R.sl)+'　<span class="up">由面板監控</span>')+
-      '<div class="rbtns"><button class="rbtn s" data-rclose="1">立刻平倉</button></div>';
+      '<div class="rbtns"><button class="rbtn s" data-rclose="1"'+(closing?' disabled':'')+'>'+
+      (closing?'平倉中…':'立刻平倉')+'</button></div>';
    h+= R.stale_sec!=null
      ? '<div class="ralarm bad"><b style="color:var(--up)">⚠ 報價已中斷 '+R.stale_sec+' 秒</b><br>'+
        '停損是由這台電腦監控的，現在監控不到。<b>請立刻到大戶投確認部位</b>。</div>'
@@ -3337,7 +3345,9 @@ document.addEventListener('click', function(e){
  if(TAB!=='live') return;
  if(e.target.closest('[data-rt]')){ realToggle(); return; }
  if(e.target.closest('[data-rclose]')){
-   if(confirm('確定要立刻平倉？')) realClose();
+   // 【平倉不跳確認】要平倉的時候通常是急的，多一個對話框是在最糟的時機加摩擦。
+   // 而且平倉是「安全方向」——誤按的代價是一點滑價，不是無上限的虧損（跟進場相反）。
+   realClose();
    return; }
 });
 document.addEventListener('mousedown', function(e){
