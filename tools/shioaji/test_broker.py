@@ -236,6 +236,83 @@ chk("  平倉成功後本機部位清空", broker._state["position"], None)
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
 
+print("\n=== 平倉沒撮到：不可以當成平掉了（09-01 真的發生）===")
+
+
+class CloseNeverFills:
+    """券商收得到單，但部位一直都在（IOC 沒撮到）。"""
+
+    def __init__(self):
+        self.sent = 0
+
+    def place_order(self, contract, order):
+        self.sent += 1
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        pass
+
+    def cancel_order(self, t):
+        pass
+
+    def list_positions(self, acc=None):
+        return [type("P", (), {"code": "TMFI6", "quantity": 1,
+                               "direction": "Action.Sell", "price": 46978})()]
+
+
+nofill_api = CloseNeverFills()
+connect(nofill_api)
+broker.is_live = lambda: True
+broker.FILL_WAIT = 0.8
+broker._state["position"] = {"dir": "short", "entry": 46978, "qty": 1,
+                             "entry_time": "11:44", "target_trade": None,
+                             "recovered": False}
+ok, err = broker.close("manual")
+chk("  回報失敗（不可以說成功）", ok, False)
+chk("  本機部位保留 —— 清掉的話停損就不跑了，再按平倉還會說「沒有部位」",
+    (broker._state["position"] or {}).get("dir"), "short")
+chk("  訊息叫他自己去平倉", "大戶投" in (err or ""), True)
+chk(f"  有重試（送了 {nofill_api.sent} 次）", nofill_api.sent >= 2, True)
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  有留下 close_failed 紀錄", any(r["kind"] == "close_failed" for r in recs), True)
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
+print("\n=== 撤停利單失敗：要照樣平倉，但要講出來 ===")
+
+
+class CancelFails:
+    def place_order(self, contract, order):
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        raise RuntimeError("StatusCode: 400, Detail: Please run update_status")
+
+    def cancel_order(self, t):
+        raise RuntimeError("cancel failed")
+
+    def list_positions(self, acc=None):
+        return []          # 平倉會成功
+
+
+connect(CancelFails())
+broker.is_live = lambda: True
+broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
+                             "entry_time": "11:44", "target_trade": FakeTrade(),
+                             "recovered": False}
+ok, err = broker.close("manual")
+chk("  還是要平掉（裸部位比殘單危險）", ok, True)
+chk("  訊息要提醒他去刪那張停利單", "停利單" in (err or ""), True)
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  cancel_target 記成失敗",
+    next(r for r in recs if r["kind"] == "cancel_target")["ok"], False)
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
 print("\n=== 有部位但方向不符 → 停手，不可以當成「沒成交」 ===")
 connect(pos_api("Action.Buy"))          # 券商說是多單
 broker.is_live = lambda: True

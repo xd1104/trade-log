@@ -260,6 +260,7 @@ def can_enter(price, quote_live):
 
 
 FILL_WAIT = 5.0        # 送出後最多等幾秒確認成交
+CLOSE_TRIES = 3        # 平倉沒撮到就再送，最多幾次（停損要的是「一定要出去」）
 
 
 def _wait_fill(direction):
@@ -370,25 +371,73 @@ def close(reason):
     if pos.get("dir") not in ("long", "short"):
         return False, "看不出部位方向，不敢送平倉單 —— 請自己到大戶投平倉"
     t = pos.get("target_trade")
+    stray = False
     if t is not None and is_live() and _state["api"] is not None:
         try:
+            # 【一定要先 update_status】不先更新，cancel_order 會回
+            # "StatusCode: 400, Detail: Please run update_status"（2026-09-01 實測）。
+            _state["api"].update_status(_state["account"])
             _state["api"].cancel_order(t)
             _log("cancel_target", {"ok": True, "why": "平倉前先撤掉還掛著的停利單"})
         except Exception as e:
-            _log("cancel_target", {"ok": False, "err": str(e)[:200]})
+            # 撤不掉不可以默默吞掉：那張平倉限價單留在場上，成交之後就是一個反向新倉。
+            # 但「有裸部位」比「有一張殘單」更危險，所以還是要繼續平倉，
+            # 只是要把這件事講出來讓他自己去刪。
+            stray = True
+            _log("cancel_target", {"ok": False, "err": str(e)[:200],
+                                   "why": "撤不掉，平倉後請自己到大戶投刪掉那張停利單"})
     act = sj.Action.Sell if pos["dir"] == "long" else sj.Action.Buy
-    ok, err, res = _send(
-        _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.Cover),
-        "close_" + reason)
-    if ok:
-        with _lock:
-            _state["position"] = None
-    return ok, err
+    last_err = None
+    for attempt in range(CLOSE_TRIES):
+        ok, err, res = _send(
+            _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC,
+                   sj.FuturesOCType.Cover),
+            "close_" + reason)
+        last_err = err
+        if not ok:
+            break
+        # 【「券商收到」不等於「平掉了」】範圍市價 IOC 當下沒撮到就整張不成交。
+        # 舊版把 ok=True 當成平倉完成、直接清掉本機部位 ⇒ 券商還有部位、
+        # 面板卻以為空手 ⇒ **停損不再監控，而且再按平倉會說「沒有部位」**
+        # （2026-09-01 真的發生，他最後自己用別的工具平掉）。
+        # 這跟進場那個 no-fill bug 是同一個形狀，當時只補了進場那邊。
+        if not is_live():
+            with _lock:
+                _state["position"] = None
+            return True, None
+        for _ in range(int(FILL_WAIT / 0.4)):
+            time.sleep(0.4)
+            if broker_position() is None:
+                with _lock:
+                    _state["position"] = None
+                _log("close_confirmed", {"ok": True, "tries": attempt + 1,
+                                         "stray_target": stray})
+                return True, ("平倉成功，但那張停利單沒撤掉，請自己到大戶投刪除"
+                              if stray else None)
+        _log("close_nofill", {"ok": False, "try": attempt + 1,
+                              "why": "送出了但沒撮到，再試一次"})
+    # 沒平掉：**絕對不可以清掉本機部位**，不然停損就停了
+    _log("close_failed", {"ok": False, "err": last_err,
+                          "why": "沒有平掉，部位還在，本機狀態保留"})
+    return False, ("平不掉（範圍市價 IOC 連續 %d 次沒撮到）—— 部位還在，"
+                   "請立刻自己到大戶投平倉" % CLOSE_TRIES if last_err is None else last_err)
 
 
 def snapshot():
-    """給面板顯示用。"""
-    return {"live": is_live(), "position": _state["position"],
+    """
+    給面板顯示用。
+
+    【一定要濾掉 target_trade】那是永豐的 Trade 物件，**json.dumps 序列化不了** ——
+    直接把 _state["position"] 丟出去的話，一旦真的掛上停利單，
+    /api/state 整支就會炸掉回空字串 ⇒ **前端拿不到任何狀態、畫面整個凍住**
+    （2026-09-01：他做空成功、單也對，但面板不顯示部位，就是這個）。
+    演練模式時 target_trade 是個 dict，序列化得了，所以演練永遠測不出來。
+    """
+    pos = _state["position"]
+    if pos is not None:
+        pos = {k: v for k, v in pos.items() if k != "target_trade"}
+        pos["has_target"] = _state["position"].get("target_trade") is not None
+    return {"live": is_live(), "position": pos,
             "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"],
             "entries_today": entries_today(), "max_entries": MAX_ENTRIES,
             "account": str(getattr(_state["account"], "account_id", "")) or None,

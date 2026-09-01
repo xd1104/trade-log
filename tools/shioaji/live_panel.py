@@ -4427,7 +4427,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/state"):
             LAST_CLIENT["at"] = time.time()      # 有人在看（桌面 App 靠這個判斷關窗）
             with state_lock:
-                payload = json.dumps(STATE, ensure_ascii=False).encode()
+                try:
+                    payload = json.dumps(STATE, ensure_ascii=False).encode()
+                except TypeError as e:
+                    # 【最後一道】STATE 裡混進不能序列化的東西時，舊版整支端點會炸掉、
+                    # 回空字串 ⇒ 前端拿不到任何狀態、**畫面整個凍住**
+                    # （2026-09-01：真實部位帶著永豐的 Trade 物件，他手上有單卻看不到）。
+                    # 根因已經在 broker.snapshot() 修掉，這裡是防下一次。
+                    # 寧可少一塊資料，也不要讓整個面板瞎掉。
+                    safe = {k: v for k, v in STATE.items()
+                            if k not in ("real",)}
+                    safe["real"] = {"error": f"狀態序列化失敗：{str(e)[:80]}",
+                                    "live": False, "position": None,
+                                    "can_enter": False,
+                                    "why": "面板狀態出問題，請去大戶投確認部位"}
+                    payload = json.dumps(safe, ensure_ascii=False, default=str).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
