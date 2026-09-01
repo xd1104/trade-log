@@ -66,6 +66,19 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .rbtn.s{background:var(--down-soft); color:var(--down); border-color:var(--down-line)}
 .rbtn:disabled{opacity:.28; cursor:not-allowed}
 .rbtn small{display:block; font-size:10.5px; font-weight:500; opacity:.8; margin-top:2px}
+
+/* ── 長按送單 ─────────────────────────────────────────────
+   確認框要多按一下、還要把游標移過去，下單當下那一兩秒很要命（Benson 反映）。
+   長按只有一個動作、原地不動，而且**誤觸點一下不會送**。
+   按住的過程中才把停利停損長出來 —— 等於把確認塞進等待裡，不另外花時間。 */
+.rbtn{position:relative; overflow:hidden}
+.rbtn .fill{position:absolute; left:0; top:0; bottom:0; width:0; background:currentColor;
+  opacity:.22; pointer-events:none}
+.rbtn.holding .fill{transition:width var(--hold) linear; width:100%}
+.rbtn .hint{display:block; font-size:10.5px; font-weight:600; margin-top:3px;
+  font-family:var(--font-mono); opacity:0; transition:opacity .12s var(--ease)}
+.rbtn.holding .hint{opacity:.95}
+.rbtn span{position:relative}
 .quota{font-size:11px; color:var(--faint); font-family:var(--font-mono); text-align:right; margin-top:9px}
 
 /* 有真實部位：整張卡換底，一眼看得出現在是玩真的 */
@@ -137,7 +150,11 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 <div class="scrim" id="scrim"><div class="dlg" id="dlg"></div></div>
 
 <div class="ctl">
-  <b>DEMO 控制台</b>
+  <b>送出方式</b>
+  <button onclick="setMode('hold')" id="m-hold">長按送出（推薦）</button>
+  <button onclick="setMode('tap')"  id="m-tap">點一下直接送</button>
+  <button onclick="setMode('dlg')"  id="m-dlg">確認框（原本的）</button>
+  <b style="margin-top:12px">狀態</b>
   <button onclick="set('ready')"  id="b-ready">可以下單</button>
   <button onclick="set('noquote')" id="b-noquote">沒有即時報價</button>
   <button onclick="set('quota')"  id="b-quota">今天已達 3 次上限</button>
@@ -148,6 +165,10 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 
 <script>
 var S = 'ready', ON = false, PRICE = 46812;
+var MODE = 'hold';        // hold＝長按送出（預設）／dlg＝確認框／tap＝點一下直接送
+var HOLD = 650;           // 長按要幾毫秒
+
+function setMode(m){ MODE = m; render(); }
 
 function toggle(){ ON = !ON; render(); }
 
@@ -163,6 +184,9 @@ function render(){
   card.className = 'card real';
   ['ready','noquote','quota','holding','stale','dry'].forEach(function(k){
     var b = document.getElementById('b-' + k); if(b) b.className = (k===S ? 'on' : '');
+  });
+  ['hold','tap','dlg'].forEach(function(k){
+    var b = document.getElementById('m-' + k); if(b) b.className = (k===MODE ? 'on' : '');
   });
 
   if(!ON){
@@ -208,22 +232,54 @@ function render(){
   body.innerHTML =
       row('現價', fmt(PRICE))
     + row('口數', '1 口　<span class="faint">固定，不能改</span>')
-    + '<div class="rbtns">'
-    + '<button class="rbtn b" ' + (blocked?'disabled':'') + ' onclick="ask(\'long\')">買進 做多</button>'
-    + '<button class="rbtn s" ' + (blocked?'disabled':'') + ' onclick="ask(\'short\')">賣出 做空</button>'
-    + '</div>'
+    + '<div class="rbtns">' + fireBtn('long', blocked) + fireBtn('short', blocked) + '</div>'
     + (blocked ? '<div class="whyoff">' + blocked + '</div>' : '')
     + '<div class="quota">今天真實進場 ' + (S==='quota'?3:0) + ' / 3</div>';
 
   document.getElementById('foot').innerHTML = blocked
     ? '擋下來的時候<b>一定寫出原因</b>。按鈕變灰卻不說為什麼最讓人火大。'
-    : '還沒選方向就不列停利停損 —— 那時候兩個方向的數字互相干擾。'
-      + '按下去會先跳確認框，<b>方向定了才把停利停損寫出來</b>。';
+    : (MODE === 'hold'
+        ? '<b>按住不放</b>，填滿就送出（' + HOLD + ' 毫秒）。原地一個動作、不用移游標，'
+          + '比確認框快，而且<b>誤觸點一下不會送</b>。按住的時候停利停損才長出來。'
+        : MODE === 'dlg'
+        ? '按下去先跳確認框。最安全，但下單當下要多一次移動＋點擊。'
+        : '<b>點一下直接送。</b>最快，但也最容易誤觸 —— 面板開著又打開了真實開關時，'
+          + '一次手滑就是一個真實部位。');
 }
 
 function row(k, v){
   return '<div class="rrow"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>';
 }
+
+/* 送單按鈕。三種送法共用同一顆，只差按下去怎麼處理 */
+function fireBtn(dir, blocked){
+  var long = dir === 'long';
+  var tp = long ? PRICE + 100 : PRICE - 100, sl = long ? PRICE - 100 : PRICE + 100;
+  var cls = 'rbtn ' + (long ? 'b' : 's');
+  var label = long ? '買進 做多' : '賣出 做空';
+  var hint = '停利 ' + fmt(tp) + '　停損 ' + fmt(sl);
+  var ev = MODE === 'hold'
+    ? ' onmousedown="holdStart(this,\'' + dir + '\')" onmouseup="holdEnd(this)"'
+      + ' onmouseleave="holdEnd(this)"'
+    : ' onclick="' + (MODE === 'dlg' ? 'ask' : 'fire') + '(\'' + dir + '\')"';
+  return '<button class="' + cls + '" ' + (blocked ? 'disabled' : '') + ev + '>'
+    + '<span class="fill"></span><span>' + label + '</span>'
+    + '<span class="hint">' + (MODE === 'hold' ? hint : '&nbsp;') + '</span></button>';
+}
+
+var holdTimer = null;
+function holdStart(el, dir){
+  el.style.setProperty('--hold', HOLD + 'ms');
+  el.classList.add('holding');
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(function(){ el.classList.remove('holding'); fire(dir); }, HOLD);
+}
+function holdEnd(el){
+  if(!el.classList.contains('holding')) return;
+  clearTimeout(holdTimer);
+  el.classList.remove('holding');
+}
+function fire(dir){ S = 'holding'; render(); }
 
 function ask(dir){
   var d = document.getElementById('dlg');
