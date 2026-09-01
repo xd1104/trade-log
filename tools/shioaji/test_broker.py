@@ -228,8 +228,11 @@ chk("  對帳之後本機那份被改正成 short", (fixed or {}).get("dir"), "s
 broker.close("test")
 recs = [json.loads(l) for l in
         (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+# ⚠️ 不可以用 recs[-1] —— 平倉成功後最後一筆是 close_confirmed（沒有 action 欄位）。
+#    要找的是「真的送出去的那張單」，也就是最後一筆帶 action 的紀錄。
+sent = [r for r in recs if r.get("action")]
 chk("  空單平倉送出的是 Buy（舊版會送 Sell，等於再加一口空單）",
-    recs[-1]["action"], "Action.Buy")
+    sent[-1]["action"], "Action.Buy")
 chk("  有留下「本機方向被券商修正」的紀錄",
     any(r["kind"] == "position_fixed" for r in recs), True)
 chk("  平倉成功後本機部位清空", broker._state["position"], None)
