@@ -161,11 +161,13 @@ except Exception:
 # 【鐵律】這裡只做紙上練習，不會送任何委託到永豐 —— 真實下單必須由 Benson 自己操作。
 POSITION = None
 TODAY_TRADES = []
+BOOT_AT = datetime.now()             # 這個行程什麼時候起來的（給程式版本指紋用）
 CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today 物件
 # 最後一次有瀏覽器來要資料的時間。桌面 App 靠它判斷「視窗是不是被關掉了」——
 # 用 Edge 的 --app-id 開視窗時，啟動的那個行程會立刻結束（Edge 交棒給既有的行程），
 # 所以不能用「等那個行程結束」來判斷關窗，會一開就誤判（實測 1 秒就誤判）。
 LAST_CLIENT = {"at": 0.0}
+ENTER_LOCK = threading.Lock()   # 真實進場的互斥：同一時間只准有一張新倉單在路上
 SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 
 # 加權指數（現貨）：Benson 下單時會看，所以面板一起顯示，並算出基差。
@@ -468,7 +470,7 @@ def check_position(price):
 REAL_STALE = {"since": None}      # 有真實部位而報價中斷，從何時開始
 
 
-def check_real_position(price, age):
+def check_real_position(price, age, sess="day"):
     """
     真實部位的停損。**停利不在這裡** —— 那一張是限價單，進場後就掛在券商那邊，
     電腦關機也有效；這裡只顧永豐 API 給不了的那一半。
@@ -479,6 +481,13 @@ def check_real_position(price, age):
     """
     pos = broker._state.get("position")
     if pos is None:
+        REAL_STALE["since"] = None
+        return
+    # 【休市不算斷線】13:45~15:00、夜盤收盤後、週末抱單，本來就沒有報價。
+    # 舊版一律當成「報價已中斷」跳紅色警報，一次響 75 分鐘以上 ——
+    # 狼來了喊多了，真的斷線那次他就不會理了（lab-qa 退件第 6 條）。
+    # CLAUDE.md 早就有「沒有報價」與「應該有卻收不到」要分兩態的鐵律。
+    if sess == "closed":
         REAL_STALE["since"] = None
         return
     # 報價斷了就記下起點，前端據此示警。斷線時不可以拿舊價去判停損。
@@ -2331,12 +2340,22 @@ function holdEnd(el){
   el.removeEventListener('mouseleave',onLeave);
   window.removeEventListener('mouseup',onUp,true);
 }
+var firing=false;
 function realFire(dir){
   holdingNow=false;
+  // 【擋連按】券商回報部位有 1~2 秒延遲，他以為沒送出去再按一次 ⇒ 兩張都出去、
+  // 變成 2 口，而且兩張停利單都掛了、面板只記得後面那張，先掛的**永遠撤不掉**
+  // （lab-qa 退件第 1 條）。平倉早就有 closing 擋著，進場一直沒有 —— 又是一邊做了一邊沒做。
+  if(firing) return;
+  firing=true; lastReal=''; tick(true);
   fetch('/api/real/enter',{method:'POST',headers:{'Content-Type':'application/json'},
                            body:JSON.stringify({dir:dir})})
-   .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'送不出去'); lastReal=''; tick(true); })
-   .catch(()=>alert('送不出去，面板可能剛好在重啟'));
+   .then(r=>r.json()).then(r=>{
+      // warn＝進場成功但停利沒掛上，那也要跳出來讓他知道（不是失敗，但不能沉默）
+      if(!r.ok||r.warn) alert(r.msg||'送不出去');
+    })
+   .catch(()=>alert('送不出去，面板可能剛好在重啟'))
+   .then(()=>{ firing=false; lastReal=''; tick(true); });
 }
 var closing=false;
 function realClose(){
@@ -2370,7 +2389,9 @@ function realBox(s){
       (P.entry_time?'<span class="faint" style="font-size:12px">'+P.entry_time+' 進場</span>':'')+
       '</div>'+
       rrow('進場價',f(P.entry))+
-      rrow('停利　+'+f(100),f(R.tp)+'　<span class="faint">已掛在券商</span>')+
+      rrow('停利　+'+f(100),f(R.tp)+'　'+(P.has_target
+        ? '<span class="faint">已掛在券商</span>'
+        : '<span class="up">沒掛上！請自己補掛或平倉</span>'))+
       rrow('停損　−'+f(100),f(R.sl)+'　<span class="up">由面板監控</span>')+
       '<div class="rbtns"><button class="rbtn s" data-rclose="1"'+(closing?' disabled':'')+'>'+
       (closing?'平倉中…':'立刻平倉')+'</button></div>';
@@ -2385,9 +2406,11 @@ function realBox(s){
    const px=(s.chips||{}).price, ok=R.can_enter;
    // 還沒選方向就不列停利停損 —— 兩個方向的數字互相干擾（Benson 2026-08-28）
    h+=rrow('現價',f(px))+rrow('口數','1 口　<span class="faint">固定，不能改</span>')+
-      '<div class="rbtns">'+fireBtn('long',px,!ok)+fireBtn('short',px,!ok)+'</div>'+
+      '<div class="rbtns">'+fireBtn('long',px,!ok||firing)+fireBtn('short',px,!ok||firing)+'</div>'+
+      (firing?'<div class="whyoff">送出中…等券商回報成交（最多 5 秒）</div>':'')+
       (ok?'':'<div class="whyoff">'+esc(R.why||'現在不能下單')+'</div>')+
-      '<div class="quota">今天真實進場 '+(R.entries_today||0)+' / '+(R.max_entries||3)+'</div>';
+      '<div class="quota">今天真實進場 '+(R.entries_today||0)+' / '+(R.max_entries||3)+
+      (R.code?'　·　程式 '+esc(R.code.broker)+'　啟動 '+esc(R.code.started):'')+'</div>';
  }
  return h+'</div></div>';
 }
@@ -3351,6 +3374,9 @@ document.addEventListener('click', function(e){
    return; }
 });
 document.addEventListener('mousedown', function(e){
+ // 【只認左鍵】Windows 的右鍵選單是放開才跳出來的，所以按住右鍵 650ms 也會送單
+ //（lab-qa 退件第 7 條）。中鍵同理。
+ if(e.button!==0) return;
  const b=e.target.closest('[data-rdir]');
  if(b&&!b.disabled) holdStart(b,b.getAttribute('data-rdir'));
 });
@@ -4286,6 +4312,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _real_enter(self, body):
+        d = body.get("dir")
+        if d not in ("long", "short"):
+            return self._json(400, {"ok": False, "msg": "方向要是 long 或 short"})
+        with state_lock:
+            q = STATE.get("quote", "closed")
+        st2 = CURRENT_STATE.get("today")
+        px = st2.price if st2 else None
+        ok, why = broker.can_enter(px, q == "live")
+        if not ok:
+            return self._json(409, {"ok": False, "msg": why})
+        ok, err, pos = broker.enter(d, px, TP_POINTS)
+        # ⚠️ ok=True 但 err 有值 ＝ **進場成功、可是停利沒掛上去**。
+        # 這種不可以當成無聲成功（他會以為賺的那邊有保護），要跳出來；
+        # 但也不可以當成失敗（部位是真的在）。所以另外用 warn 標記，
+        # 前端只在 warn 或失敗時才 alert —— 演練模式那句成功訊息不要每次都彈。
+        return self._json(200 if ok else 500,
+                          {"ok": ok, "warn": bool(ok and err),
+                           "msg": err or ("已送出" if broker.is_live()
+                                          else "演練：單子已組好，沒有送出")})
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         try:
@@ -4296,20 +4343,16 @@ class Handler(BaseHTTPRequestHandler):
         price = st.price if st else None
 
         if self.path == "/api/real/enter":
-            d = body.get("dir")
-            if d not in ("long", "short"):
-                return self._json(400, {"ok": False, "msg": "方向要是 long 或 short"})
-            with state_lock:
-                q = STATE.get("quote", "closed")
-            st2 = CURRENT_STATE.get("today")
-            px = st2.price if st2 else None
-            ok, why = broker.can_enter(px, q == "live")
-            if not ok:
-                return self._json(409, {"ok": False, "msg": why})
-            ok, err, pos = broker.enter(d, px, TP_POINTS)
-            return self._json(200 if ok else 500,
-                              {"ok": ok, "msg": err or ("已送出" if broker.is_live()
-                                                        else "演練：單子已組好，沒有送出")})
+            # 【伺服器端也要擋連按】ThreadingHTTPServer 會讓兩個請求真的同時跑。
+            # 前端的鎖擋得住手快，擋不住重整、兩個視窗、或前端出錯 ——
+            # 兩張都出去就是 2 口，而且先掛的那張停利單從此撤不掉
+            # （lab-qa 退件第 1 條，探針實測相隔 0.7 秒送出兩張新倉單）。
+            if not ENTER_LOCK.acquire(blocking=False):
+                return self._json(409, {"ok": False, "msg": "上一筆還在送，請稍候"})
+            try:
+                return self._real_enter(body)
+            finally:
+                ENTER_LOCK.release()
 
         if self.path == "/api/real/close":
             ok, err = broker.close("manual")
@@ -4318,6 +4361,7 @@ class Handler(BaseHTTPRequestHandler):
                                                         else "演練：平倉單已組好，沒有送出")})
 
         if self.path == "/api/enter":
+
             d = body.get("dir")
             if d not in ("long", "short"):
                 return self._json(400, {"error": "方向要是 long 或 short"})
@@ -4628,10 +4672,31 @@ def prev_trading_close(api, contract, today):
     return float(day[day["ts"].dt.date == last_day]["Close"].iloc[-1])
 
 
+def code_stamp():
+    """
+    正在跑的這份程式的指紋。
+
+    【為什麼需要】看門狗會自動重啟面板（永豐 SDK 斷線會把行程帶掉），
+    所以有人改了 broker.py 之後，下一次崩潰重啟就會自動載入那份改到一半的檔案，
+    沒有任何提示。今天要確認「畫面上的程式＝正在跑的程式」，得去比對檔案時間戳
+    跟行程啟動時間才推得出來 —— 那不該是判斷方式（lab-qa 退件第 9 條）。
+    """
+    out = []
+    for f in ("broker.py", "live_panel.py"):
+        p = HERE / f
+        try:
+            out.append(datetime.fromtimestamp(p.stat().st_mtime).strftime("%m-%d %H:%M"))
+        except Exception:
+            out.append("?")
+    return {"broker": out[0], "panel": out[1],
+            "started": BOOT_AT.strftime("%m-%d %H:%M")}
+
+
 def real_state(price, quote, age):
     """真實下單那張卡要的資料。順便在這裡跑停損監控 —— 兩者看的是同一組數字。"""
     try:
-        check_real_position(price, age)
+        check_real_position(price, age, quote if quote in ("live", "nodata") else "closed")
+        broker.reconcile_tick()      # 【一定要獨立對帳】不能只靠 can_enter，見那個函式的說明
         snap = broker.snapshot()
         pos = snap.get("position")
         if pos:
@@ -4644,6 +4709,7 @@ def real_state(price, quote, age):
         snap["stale_sec"] = round(time.time() - stale) if stale else None
         ok, why = broker.can_enter(price, quote == "live")
         snap["can_enter"], snap["why"] = ok, why
+        snap["code"] = code_stamp()
         return snap
     except Exception as e:
         # 真實下單這一區出問題，絕不可以把整個面板帶掉

@@ -155,8 +155,11 @@ def run(direction):
     new2 = marks()[before2:]
     closed = next((r for r in new2 if r["kind"].startswith("close_")), None)
     chk("  平倉方向正確（跟部位相反）", (closed or {}).get("action"), want_cover_act)
-    chk("  有先撤掉還掛著的停利單",
-        any(r["kind"] == "cancel_target" for r in new2), True)
+    # ⚠️ 不可以只檢查「有沒有出現 cancel_target」—— 撤失敗寫的是同一個字。
+    #    這一項要守的正是「殘留停利單變成反向新倉」，只看名字等於沒守
+    #    （lab-qa 2026-09-01 指出，同一件事 test_broker.py 有檢查 ok、這裡沒有）。
+    cx = next((r for r in new2 if r["kind"] == "cancel_target"), None)
+    chk("  有先撤掉還掛著的停利單，而且**真的撤掉了**", (cx or {}).get("ok"), True)
 
     head(f"⑦ {zh}：平完應該空手")
     time.sleep(2)

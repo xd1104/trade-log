@@ -49,6 +49,12 @@ STALE_ALARM = 20                          # 有真實部位時，報價超過幾
 CA_OK = {"ok": False, "msg": "尚未檢查憑證"}
 
 _lock = threading.Lock()
+# 平倉的互斥鎖。停損（主迴圈執行緒）與他手按平倉（HTTP 執行緒）會同時發生，
+# 沒有鎖的話兩邊各送一輪、每輪最多 3 張 —— 最壞情況反向開出好幾口
+# （lab-qa 退件第 5 條）。拿不到鎖就直接回報「正在平倉中」，不排隊。
+_close_lock = threading.Lock()
+_close_fail = {"at": 0.0}
+CLOSE_COOLDOWN = 15.0     # 秒。平倉失敗後隔多久才准再試（不然主迴圈每 0.25 秒就重送一輪）
 _state = {
     "api": None,
     "contract": None,
@@ -166,6 +172,30 @@ def broker_position():
     return None
 
 
+_LAST_RECONCILE = {"at": 0.0}
+RECONCILE_EVERY = 3.0     # 秒。面板每 0.25 秒跑一圈，不節流會把券商 API 打爆
+
+
+def reconcile_tick():
+    """
+    面板主迴圈每一圈都叫這個（自己節流）。
+
+    【為什麼要獨立出來】舊版對帳只寫在 `can_enter()` 的最後一步，
+    前面任何一關先擋下來就不會執行 —— 而「當天已達 3 次上限」與「憑證沒啟用」
+    都會先擋。於是：下完第 3 單、部位還開著 → 看門狗重啟面板（永豐 SDK 斷線會把
+    行程帶掉，是常態）→ 因為已達上限**永遠不再對帳** → 部位撿不回來 →
+    **停損完全不監控、畫面顯示空手、連斷線警報都不會響**（警報也要有部位才亮）。
+    lab-qa 2026-09-01 實測：達上限與憑證未啟用時，can_enter 呼叫券商查詢 0 次。
+    """
+    if not is_live():
+        return _state["position"]
+    now = time.time()
+    if now - _LAST_RECONCILE["at"] < RECONCILE_EVERY:
+        return _state["position"]
+    _LAST_RECONCILE["at"] = now
+    return reconcile()
+
+
 def reconcile():
     """啟動時／每次要動作之前叫。把券商的實況寫回 _state。"""
     pos = broker_position()
@@ -277,13 +307,28 @@ def _wait_fill(direction):
         return None                       # 演練沒有真的部位可以等
     deadline = time.time() + FILL_WAIT
     other = None
+    asked = failed = 0
     while time.time() < deadline:
         pos = broker_position()
-        if isinstance(pos, dict) and pos.get("entry"):
+        asked += 1
+        if pos == "unknown":
+            # 【查不到 ≠ 沒成交】網路抖一下就把它當成沒成交的話，會清掉本機部位、
+            # 跟他說「沒有成交」—— 但券商那邊其實已經有一口，沒停利也沒停損
+            # （lab-qa 2026-09-01 用探針重現）。查詢失敗要單獨算，最後另外處理。
+            failed += 1
+        elif isinstance(pos, dict) and pos.get("entry") is not None:
+            # ⚠️ 這裡以前寫 `pos.get("entry")`，成交價回報 0 就整條跳過 ——
+            #    要判斷的是「有沒有這個欄位」不是「值真不真」。
             if pos.get("dir") == direction:
                 return float(pos["entry"])
             other = pos          # 有部位但方向不是我們送的 —— 這很不對勁
         time.sleep(0.4)
+    if failed and failed >= asked / 2:
+        # 大半的查詢都失敗 ⇒ 我們根本不知道成交了沒。這種時候**絕不可以**說沒成交，
+        # 也不可以掛停利（方向與價格都還不確定）。停手、講清楚、讓他自己去看。
+        raise RuntimeError(
+            "送出去了，但跟券商對帳一直失敗，**不知道有沒有成交** —— "
+            "沒有掛停利，請立刻自己到大戶投確認部位")
     if other is not None:
         # 【不可以當成「沒成交」】那樣會清掉本機部位、讓畫面顯示空手，
         # 但券商那邊其實有東西。2026-09-01 就是這樣，還連帶讓後續平倉送錯邊。
@@ -329,7 +374,13 @@ def enter(direction, price, tp_points):
                               "ref_price": float(price)}
     # 停利一律用**實際成交價**算，不是送單當下的參考價
     tp = entry + (tp_points if direction == "long" else -tp_points)
-    place_target(tp)
+    tok, terr = place_target(tp)
+    if not tok:
+        # 【不可以吞掉】停利掛不上去卻回報一切正常的話，他會以為賺的那邊有保護，
+        # 其實只剩下面板的停損 —— 而那個電腦關機就沒了（lab-qa 退件第 3 條）。
+        return True, ("已經進場，但**停利單沒掛上去**（%s）—— "
+                      "請立刻自己到大戶投補掛，或直接平倉" % (terr or "券商拒絕")), \
+               _state["position"]
     return True, None, _state["position"]
 
 
@@ -360,6 +411,21 @@ def close(reason):
     所以這裡寧可拒絕，也不用記憶體裡那份可能過期的資料。
     """
     import shioaji as sj
+    if not _close_lock.acquire(blocking=False):
+        return False, "正在平倉中，請稍候"
+    try:
+        return _close_locked(reason)
+    finally:
+        _close_lock.release()
+
+
+def _close_locked(reason):
+    import shioaji as sj
+    # 失敗之後的冷卻：主迴圈每 0.25 秒就會再叫一次停損檢查，沒有冷卻的話
+    # 只要價格還在停損之外就會一直重送（lab-qa 退件第 6 條）。
+    if time.time() - _close_fail["at"] < CLOSE_COOLDOWN:
+        return False, "剛剛平倉失敗，%.0f 秒後才會再試 —— 等不及請自己到大戶投平倉" % (
+            CLOSE_COOLDOWN - (time.time() - _close_fail["at"]))
     pos = _state["position"]
     if is_live():
         fresh = reconcile()
@@ -417,6 +483,7 @@ def close(reason):
         _log("close_nofill", {"ok": False, "try": attempt + 1,
                               "why": "送出了但沒撮到，再試一次"})
     # 沒平掉：**絕對不可以清掉本機部位**，不然停損就停了
+    _close_fail["at"] = time.time()
     _log("close_failed", {"ok": False, "err": last_err,
                           "why": "沒有平掉，部位還在，本機狀態保留"})
     return False, ("平不掉（範圍市價 IOC 連續 %d 次沒撮到）—— 部位還在，"

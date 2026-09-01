@@ -30,8 +30,15 @@ FAIL = 0
 CALLS = []
 
 
+CLOSE_OK = {"v": True}
+
+
 def fake_close(reason):
     CALLS.append(reason)
+    if not CLOSE_OK["v"]:
+        # 【平不掉的情況也要測】舊版的假 close 永遠回成功，
+        # 所以「停損送不出去之後會怎樣」一次都沒被測過（lab-qa 2026-09-01 指出）。
+        return False, "平不掉"
     broker._state["position"] = None      # 真的 close 成功後也會清掉
     return True, None
 
@@ -108,6 +115,27 @@ chk("  瞎的時候沒動作", CALLS, [])
 LP.check_real_position(44800, 1)                        # 報價回來了
 chk("  報價一回來就平倉", CALLS, ["sl"])
 chk("  瞎掉的計時清掉", LP.REAL_STALE["since"], None)
+
+print("\n=== 停損平不掉：部位要留著，而且不可以每 0.25 秒狂重送 ===")
+setup("long", 45000)
+CLOSE_OK["v"] = False
+for _ in range(8):                     # 模擬主迴圈連續跑 8 圈
+    LP.check_real_position(44800, 1)
+chk("  平不掉時部位要留著（清掉的話停損就停了）",
+    (broker._state.get("position") or {}).get("dir"), "long")
+chk("  有嘗試平倉", len(CALLS) >= 1, True)
+print(f"    （8 圈裡實際送出 {len(CALLS)} 次）")
+CLOSE_OK["v"] = True
+
+print("\n=== 休市時不可以喊「報價中斷」 ===")
+setup("long", 45000)
+LP.REAL_STALE["since"] = 123.0
+LP.check_real_position(44800, 9999, "closed")
+chk("  休市：不平倉（沒有報價，判什麼停損）", CALLS, [])
+chk("  休市：不算斷線，警報要收掉", LP.REAL_STALE["since"], None)
+setup("long", 45000)
+LP.check_real_position(44800, broker.STALE_ALARM + 5, "live")
+chk("  盤中收不到報價：這才要記成斷線", LP.REAL_STALE["since"] is not None, True)
 
 print("\n=== 沒有部位時什麼都不做 ===")
 CALLS.clear()

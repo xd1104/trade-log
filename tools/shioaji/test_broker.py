@@ -318,6 +318,25 @@ chk(f"  有重試（送了 {nofill_api.sent} 次）", nofill_api.sent >= 2, True
 recs = [json.loads(l) for l in
         (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
 chk("  有留下 close_failed 紀錄", any(r["kind"] == "close_failed" for r in recs), True)
+
+# 【失敗後要冷卻】主迴圈每 0.25 秒就叫一次停損檢查，沒有冷卻的話只要價格還在
+# 停損之外就一直重送 —— 每一輪最多 CLOSE_TRIES 張，一分鐘幾百張反向單出去。
+before_sent = nofill_api.sent
+ok2, err2 = broker.close("sl")
+chk("  剛失敗完不准馬上再送（冷卻中）", nofill_api.sent, before_sent)
+chk("  而且要說得出還要等多久", "秒後" in (err2 or ""), True)
+
+# 【互斥】停損跑在主迴圈執行緒、他手按平倉跑在 HTTP 執行緒，兩邊會同時進來。
+# 沒有鎖的話兩邊各送一輪，最壞情況反向開出好幾口。
+broker._close_fail["at"] = 0.0
+held = broker._close_lock.acquire(blocking=False)
+ok3, err3 = broker.close("manual")
+chk("  已經有人在平倉時，第二個要被擋下來", ok3, False)
+chk("  被擋下來的那個一張單都不准送", nofill_api.sent, before_sent)
+if held:
+    broker._close_lock.release()
+broker._close_fail["at"] = 0.0          # 冷卻只針對這一段，別影響後面的測試
+
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 broker._state["position"] = None
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
@@ -395,6 +414,126 @@ chk("  有記到進場與停利兩筆", [r["kind"] for r in recs], ["entry", "ta
 chk("  兩筆都標記 dry_run", all(r.get("dry_run") for r in recs), True)
 chk("  停利掛在 45100（做多 +100）", recs[1]["price"], 45100)
 chk("  dry run 不計入當日真實進場次數", broker.entries_today(), 0)
+
+print("\n=== 對帳查不到 ≠ 沒成交（送出去了但問不到，絕不可以說沒成交）===")
+
+
+class BlindAPI:
+    """單送得出去，但之後每一次查詢部位都爆炸（網路抖、券商忙）。"""
+
+    def __init__(self):
+        self.sent = 0
+
+    def place_order(self, contract, order):
+        self.sent += 1
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        pass
+
+    def cancel_order(self, t):
+        pass
+
+    def list_positions(self, acc=None):
+        raise RuntimeError("timeout")
+
+
+blind = BlindAPI()
+connect(blind)
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.2
+ok, err, pos = broker.enter("long", 45000, 100)
+chk("  不可以回報成功", ok, False)
+chk("  要明講「不知道有沒有成交」", "不知道有沒有成交" in (err or ""), True)
+chk("  要叫他自己去看部位", "大戶投" in (err or ""), True)
+chk("  只送了進場那一張，沒有補掛停利（方向與價格都還不確定）", blind.sent, 1)
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink(missing_ok=True)
+
+print("\n=== 停利掛不上去：進場成功，但一定要講出來 ===")
+
+
+class NoTargetAPI:
+    """進場撮得到，但停利那一張券商不收。"""
+
+    def __init__(self):
+        self.sent = 0
+
+    def place_order(self, contract, order):
+        self.sent += 1
+        if str(getattr(order, "octype", "")).endswith("Cover"):
+            raise RuntimeError("停利單被拒絕")
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        pass
+
+    def cancel_order(self, t):
+        pass
+
+    def list_positions(self, acc=None):
+        return [type("P", (), {"code": "TMFI6", "quantity": 1,
+                               "direction": "Action.Buy", "price": 45010})()]
+
+
+connect(NoTargetAPI())
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.2
+ok, err, pos = broker.enter("long", 45000, 100)
+chk("  進場本身算成功（部位真的在）", ok, True)
+chk("  但要回報停利沒掛上", "停利單沒掛上去" in (err or ""), True)
+chk("  部位保留著（面板的停損還要靠它）", (pos or {}).get("dir"), "long")
+chk("  snapshot 要照實說沒有停利單", broker.snapshot()["position"]["has_target"], False)
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink(missing_ok=True)
+
+print("\n=== 對帳要獨立於 can_enter：達上限、憑證沒過，照樣要對帳 ===")
+
+
+class CountingAPI:
+    """只數「被查了幾次部位」。"""
+
+    def __init__(self):
+        self.asked = 0
+
+    def place_order(self, contract, order):
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        pass
+
+    def cancel_order(self, t):
+        pass
+
+    def list_positions(self, acc=None):
+        self.asked += 1
+        return [type("P", (), {"code": "TMFI6", "quantity": 1,
+                               "direction": "Action.Sell", "price": 46978})()]
+
+
+counting = CountingAPI()
+connect(counting)
+broker.is_live = lambda: True
+broker.CA_OK["ok"] = False                    # 憑證沒過 → can_enter 會在第一關就擋下來
+broker._state["position"] = None
+broker._LAST_RECONCILE["at"] = 0.0
+ok, why = broker.can_enter(46978, True)
+chk("  can_enter 的確被前面的關卡擋住了", ok, False)
+chk("  它一次都沒去問券商（所以不能只靠它對帳）", counting.asked, 0)
+broker.reconcile_tick()
+chk("  reconcile_tick 有去問券商", counting.asked >= 1, True)
+chk("  重啟後的部位撿得回來（停損才會繼續跑）",
+    (broker._state["position"] or {}).get("dir"), "short")
+asked_after = counting.asked
+broker.reconcile_tick()
+chk(f"  但要節流，不可以每 0.25 秒打一次（{broker.RECONCILE_EVERY:.0f} 秒一次）",
+    counting.asked, asked_after)
+broker.CA_OK["ok"] = True
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink(missing_ok=True)
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")
