@@ -46,6 +46,12 @@ def blocked(name, res, expect_reason_has):
 
 
 class FakeAPI:
+    # place_order 故意用「一被呼叫就爆炸」的寫法：這個假券商是給演練模式用的，
+    # 演練模式**永遠不該送出任何單**。哪天有人把 dry run 的判斷改壞了，
+    # 這裡會當場炸開，而不是安靜地把單送出去。
+    def place_order(self, contract, order):
+        raise AssertionError("演練模式竟然真的送單了！這是重大錯誤")
+
     def list_positions(self, acc=None):
         return []
 
@@ -156,7 +162,17 @@ print("\n=== 停利要用實際成交價算，不是送單當下的參考價 ===
 FILLED = {"code": "TMFI6", "quantity": 1, "direction": "Buy", "price": 46835}
 
 
+class FakeTrade:
+    """place_order 回傳的東西。broker 只會拿它去 cancel_order，不會讀內容。"""
+
+
 class FilledAPI:
+    # ⚠️ 假券商一定要有 place_order。少了它 _send() 會丟 AttributeError，
+    #    enter() 直接在第一關就失敗 —— 後面「用成交價算停利」那段根本走不到，
+    #    測試看起來是紅的，但驗到的其實是「假物件沒做好」（2026-09-01 踩過）。
+    def place_order(self, contract, order):
+        return FakeTrade()
+
     def list_positions(self, acc=None):
         return [type("P", (), FILLED)()]
 
@@ -174,8 +190,11 @@ print("\n=== IOC 沒成交就不可以掛停利 ===")
 
 
 class NoFillAPI:
+    def place_order(self, contract, order):
+        return FakeTrade()              # 送得出去
+
     def list_positions(self, acc=None):
-        return []                       # 送出了但沒撮到
+        return []                       # 但沒撮到
 
 
 connect(NoFillAPI())
