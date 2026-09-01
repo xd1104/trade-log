@@ -187,7 +187,9 @@ def reconcile_tick():
     **停損完全不監控、畫面顯示空手、連斷線警報都不會響**（警報也要有部位才亮）。
     lab-qa 2026-09-01 實測：達上限與憑證未啟用時，can_enter 呼叫券商查詢 0 次。
     """
-    if not is_live():
+    # 演練模式本來不必一直去問券商（那邊沒有我們的單），**但撿回來的真部位例外** ——
+    # 那是券商真的有的東西，券商說平掉了就要跟著清，不然畫面會卡在一個鬼部位上。
+    if not is_live() and not (_state["position"] or {}).get("recovered"):
         return _state["position"]
     now = time.time()
     if now - _LAST_RECONCILE["at"] < RECONCILE_EVERY:
@@ -209,7 +211,16 @@ def reconcile():
             # ⚠️ 但**只跳過「清掉」這一件事**。第一版整個 return 掉，
             #    連「對帳失敗就不送單」「券商已有部位就不送單」兩道也一起失效 ——
             #    等於演練模式跟正式模式行為不一樣，那樣的演練就白練了。
-            if is_live():
+            #
+            # ⛔ 【recovered 的部位不算演練部位】2026-09-01 12:43 在他機器上實測到：
+            #    面板在真實模式時從券商撿回一口多單（recovered=True），之後他把
+            #    `REAL_ORDERS_ON` 刪掉改回演練、並自己在別的工具平掉了那口單 ——
+            #    券商已經空手，面板卻因為「演練不准清」永遠掛著那口鬼部位：
+            #    `can_enter` 一直回「已經有部位了，先平倉才能再進場」⇒ **從此不能再進場**，
+            #    畫面上的浮動損益也是拿現價去對一個不存在的部位算的。
+            #    要保護的只有「演練自己造出來的部位」（entry() 寫 recovered=False），
+            #    從券商撿回來的那種本來就是真的，券商說沒了就要清掉。
+            if is_live() or (_state["position"] or {}).get("recovered"):
                 _state["position"] = None
         elif _state["position"] is None:
             # 重啟後撿回部位：只知道方向與均價，停利單的下落要另外查

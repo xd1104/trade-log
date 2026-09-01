@@ -195,6 +195,19 @@ chk("  演練時本機部位留著（不然持倉畫面演練不到）", (kept o
 blocked("  演練時已有部位一樣擋住再進場", broker.can_enter(45000, True), "已經有部位")
 broker._state["position"] = None
 
+# ⛔ 但「從券商撿回來的部位」不是演練部位 —— 2026-09-01 12:43 在他機器上真的卡住：
+#    面板在真實模式撿回一口多單，之後改回演練、他自己用別的工具平掉，
+#    券商已經空手、面板卻永遠掛著那口鬼部位 ⇒ **從此不能再進場**，
+#    浮動損益還一直拿現價去對一個不存在的部位算。
+broker._state["position"] = {"dir": "long", "entry": 47091, "qty": 1,
+                             "entry_time": None, "target_trade": None,
+                             "recovered": True}       # ← 差別只在這一個欄位
+gone = broker.reconcile()
+chk("  券商說平掉了，撿回來的那種要跟著清掉", gone, None)
+ok_again, why_again = broker.can_enter(45000, True)
+chk("  清掉之後才進得了場（不然他從此下不了單）", ok_again, True)
+broker._state["position"] = None
+
 print("\n=== 停利要用實際成交價算，不是送單當下的參考價 ===")
 # 模擬帳戶實測：參考價 46833、實際成交 46835 ⇒ 停利要 46935 不是 46933
 FILLED = {"code": "TMFI6", "quantity": 1, "direction": "Buy", "price": 46835}
