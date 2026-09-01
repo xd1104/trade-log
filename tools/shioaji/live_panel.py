@@ -170,7 +170,7 @@ SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 # 【只顯示，不做分析】永豐的指數歷史 1 分 K 只有 54 個破碎的交易日，
 # 測不出東西 —— 這裡純粹是多一個客觀數字，不是訊號。
 # 現貨 09:00 才開盤、13:30 收，比期貨晚開早收，所以會有「尚未開盤」的空窗。
-INDEX = {"price": None, "at": None, "contract": None}
+INDEX = {"price": None, "chg": None, "pct": None, "at": None, "contract": None}
 CASH_OPEN = pd.Timestamp("09:00").time()
 CASH_CLOSE = pd.Timestamp("13:35").time()
 
@@ -1797,6 +1797,12 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   font-variant-numeric:tabular-nums; line-height:1.25; margin-top:2px; white-space:nowrap}
 .rail .v small{font-size:10.5px; font-weight:500; color:var(--faint); margin-left:2px}
 .rail .v i{font-style:normal; color:var(--faint)}      /* 「未開盤」這種非數值 */
+/* 加權後面的漲跌：比點數小一級，紅漲綠跌。用 em 不用 small ——
+   small 已經被單位（「倍」）佔走，兩者字級與顏色都不一樣。 */
+.rail .v em{font-style:normal; font-size:11.5px; font-weight:600; margin-left:6px;
+  letter-spacing:0}
+.rail .v em.up{color:var(--up)} .rail .v em.down{color:var(--down)}
+.rail .v em.flat{color:var(--faint)}
 .rail .track{height:3px; border-radius:2px; background:var(--surface-2); margin-top:5px;
   overflow:hidden; position:relative}
 .rail .track i{position:absolute; top:0; bottom:0; left:0; border-radius:2px; background:var(--dim)}
@@ -2656,7 +2662,16 @@ function chartSVG(s){
      {k:'量能',v:f(c.vol_ratio,2),u:'倍',track:c.vol_ratio/3*100,hot:c.vol_ratio>1.5}]);
    if(c.bid!=null) grp.push([{k:'買 / 賣',v:f(c.bid)+' / '+f(c.ask)}]);
    // 加權指數與基差：現貨 09:00 才開盤、13:30 收，空窗期明講「未開盤」而不是消失
-   const spot=[{k:'加權',v:c.idx==null?'<i>未開盤</i>':f(c.idx)}];
+   // 加權要看得到「今天漲跌多少」，只給點數等於少一半資訊（Benson 2026-08-28 提的，
+   // 說要跟大戶投一樣）。漲跌與百分比接在點數後面，紅漲綠跌跟全站一致。
+   let idxv='<i>未開盤</i>';
+   if(c.idx!=null){
+     idxv=f(c.idx);
+     if(c.idx_chg!=null)
+       idxv+='<em class="d '+sgn(c.idx_chg)+'">'+pm(c.idx_chg,1)+
+             (c.idx_pct==null?'':' ('+pm(c.idx_pct,2)+'%)')+'</em>';
+   }
+   const spot=[{k:'加權',v:idxv}];
    if(c.basis!=null) spot.push({k:'基差',v:pm(c.basis),cls:sgn(c.basis)});
    grp.push(spot);
    rail=railHTML(grp);
@@ -4246,6 +4261,37 @@ def port_taken():
         sk.close()
 
 
+def _index_change(snap, px):
+    """
+    從快照取「今天漲跌幾點、幾 %」。
+
+    永豐的快照本身就帶 change_price / change_rate（跟大戶投顯示的是同一組數字），
+    直接用它最準。不同版本的 SDK 欄位名不保證一致，所以逐個 getattr、
+    取不到就退回自己算（現價 − 昨收）；再取不到就回 None，畫面顯示「—」而不是亂編。
+    """
+    def num(*names):
+        for nm in names:
+            v = getattr(snap, nm, None)
+            if v not in (None, ""):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    chg = num("change_price", "price_change", "change")
+    pct = num("change_rate", "change_percent", "pct_change")
+    if chg is None:
+        prev = num("yesterday_close", "prev_close", "reference_price")
+        if prev:
+            chg = px - prev
+    if pct is None and chg is not None:
+        prev = px - chg
+        pct = (chg / prev * 100) if prev else None
+    return {"chg": None if chg is None else round(chg, 2),
+            "pct": None if pct is None else round(pct, 2)}
+
+
 def poll_index():
     """
     背景每 3 秒抓一次加權指數快照。
@@ -4271,11 +4317,14 @@ def poll_index():
                             pass
                         time.sleep(1)
                 if c is not None:
-                    px = api.snapshots([c])[0].close
+                    snap = api.snapshots([c])[0]
+                    px = snap.close
                     if px:
-                        INDEX.update({"price": float(px), "at": time.time()})
+                        INDEX.update({"price": float(px), "at": time.time(),
+                                      **_index_change(snap, float(px))})
             else:
-                INDEX["price"] = None          # 現貨沒開盤就不要顯示舊值
+                # 現貨沒開盤就不要顯示舊值（連漲跌一起清掉）
+                INDEX.update({"price": None, "chg": None, "pct": None})
         except Exception:
             pass
         time.sleep(3)
@@ -4370,6 +4419,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                           "bid": today_state.bid, "ask": today_state.ask,
                           "is_mid": today_state.price_is_mid,
                           "idx": INDEX.get("price"),
+                          "idx_chg": INDEX.get("chg"), "idx_pct": INDEX.get("pct"),
                           "basis": (round(today_state.price - INDEX["price"], 1)
                                     if INDEX.get("price") and today_state.price else None),
                           "mom5": today_state.price - today_state._price_ago(min_idx, 5),
@@ -4388,6 +4438,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "bid": today_state.bid, "ask": today_state.ask,
                 "is_mid": today_state.price_is_mid,
                 "idx": INDEX.get("price"),
+                "idx_chg": INDEX.get("chg"), "idx_pct": INDEX.get("pct"),
                 "basis": (round(today_state.price - INDEX["price"], 1)
                           if INDEX.get("price") and today_state.price else None),
             },
