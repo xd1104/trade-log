@@ -1945,6 +1945,234 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   .rbtn.holding .fill{transition:none; width:100%}
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   【右欄兩個分頁：練習 ／ 真實】2026-09-01（lab-ux v2 提案，老闆已拍板）
+   -----------------------------------------------------------------------
+   一眼看得出站在哪一區＝四個訊號同時變，沒有一個需要讀字：
+     ① 頁籤填色（練習深灰實心／真實金色實心）
+     ② 整區外框（真實有金線＋陰影，全頁最重）
+     ③ 左緣 4px 直帶貫穿整區（灰／金漸層）
+     ④ 下單鈕形狀（練習描邊＋淡底／真實實心）—— 形狀在餘光裡最強
+   結構本身就是防呆：站在練習分頁時，畫面上根本沒有真實下單鈕。
+
+   ⛔ 修飾字一律加前綴（t- / z- / c- / n-）。裸寫 .real 會被既有的
+      .real{margin-top:14px; background:linear-gradient(...)} 套中 ——
+      lab-ux 實測第二顆頁籤整個往下掉 14px、未選取時還吃到別人的漸層底。
+   ⛔ 也不可以拿 .warn 當修飾字：既有的 .warn 是金色圓角藥丸，
+      套到 .n-g 上整列會變成藥丸。要標「該注意」一律用 .n-att。
+   ⚠️ 這一整區每 0.5 秒會被重繪，所以一個 CSS animation 都不掛。
+   ═══════════════════════════════════════════════════════════════════════ */
+/* 【鐵律】有 max-height 的 flex 直欄，子元素一定要 flex:none，否則不是捲動
+   而是把每一列壓扁 —— 筆數少的時候完全看不出來。 */
+#tab-live .right>*{flex:none}
+/* 沒有警報時完全不佔位（.right 有 gap:14px，空的節點照樣會多一段空隙） */
+#tab-live #xal:empty{display:none}
+#tab-live #xal{position:sticky; top:8px; z-index:20}
+
+/* ── ① 跨分頁警報：站在練習分頁也看得到 ───────────────────────── */
+.n-x{border-radius:var(--r-md); padding:12px 14px; font-size:13px; font-weight:700;
+  line-height:1.5; display:flex; align-items:center; gap:12px}
+.n-x.n-bad{background:var(--up); color:#14171C}
+.n-x.n-att{background:var(--gold); color:#14171C}
+.n-x .g{flex:1; min-width:0}
+.n-x .s{font-weight:600; opacity:.85; font-size:11.5px; margin-top:2px}
+.n-x .num{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.n-x .go{flex:none; border:0; background:rgba(0,0,0,.24); color:inherit; font-weight:750;
+  font-family:inherit; font-size:12px; padding:8px 12px; border-radius:8px; cursor:pointer;
+  white-space:nowrap}
+.n-x .go:hover{background:rgba(0,0,0,.36)}
+
+/* ── ② 頁籤 ───────────────────────────────────────────────────── */
+.n-tabs{display:flex; gap:8px; align-items:flex-start}
+.n-tab{position:relative; flex:1 1 0; min-width:0; display:flex; flex-direction:column;
+  justify-content:center; border:1px solid var(--line); background:transparent; cursor:pointer;
+  border-radius:13px; padding:11px 10px 10px; text-align:center; color:var(--dim);
+  font-family:var(--font-sans);
+  /* 高度寫死：兩顆頁籤必須分毫不差。改字級要重量一次，不准用字級推算。 */
+  height:62px;
+  transition:background .14s var(--ease), color .14s var(--ease), border-color .14s var(--ease)}
+.n-tab .t{font-size:14.5px; font-weight:800; letter-spacing:2px; line-height:1.2}
+.n-tab .s{font-size:10.5px; font-weight:600; letter-spacing:.4px; margin-top:2px; opacity:.85}
+.n-tab:hover{color:var(--text); border-color:var(--ghost)}
+.n-tab.on.t-sim{background:var(--surface-2); color:var(--text); border-color:var(--ghost)}
+.n-tab.on.t-real{background:var(--gold); color:#14171C; border-color:var(--gold);
+  box-shadow:0 6px 18px -10px rgba(227,169,81,.8)}
+/* 沒站在真實分頁而真實有部位：頁籤右上角直接掛浮動點數（連賺還賠都不用點進去看）。
+   ⚠️ 它是獨立節點，不跟著整條頁籤重建（點頁籤的那一瞬間按鈕不可以被換掉）。 */
+.n-tab .badge{position:absolute; top:-8px; right:-6px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; font-size:12px; font-weight:800; padding:3px 8px;
+  border-radius:20px; border:2px solid var(--bg); line-height:1.15}
+.n-tab .badge.up{background:var(--up); color:#14171C}
+.n-tab .badge.down{background:var(--down); color:#0E1116}
+.n-tab .badge.flat{background:var(--ghost); color:var(--text)}
+.n-tab .badge.alert{background:var(--up); color:#14171C}
+
+/* ── ③ 分區容器 ───────────────────────────────────────────────── */
+.n-zone{position:relative; border-radius:var(--r-lg); border:1px solid; overflow:hidden}
+.n-zone::before{content:''; position:absolute; left:0; top:0; bottom:0; width:4px}
+.n-zone.z-sim{background:#12161C; border-color:var(--line-soft)}
+.n-zone.z-sim::before{background:var(--ghost)}
+.n-zone.z-real{background:linear-gradient(180deg,#1D242F,#151A22); border-color:var(--gold-line);
+  box-shadow:0 0 0 1px rgba(227,169,81,.10), var(--shadow-1)}
+.n-zone.z-real::before{background:linear-gradient(180deg,var(--gold),rgba(227,169,81,.25))}
+.n-hd{display:flex; align-items:center; gap:12px; padding:14px 18px 13px 20px}
+.n-hd .t{font-size:13px; font-weight:750; letter-spacing:1.4px; color:var(--text)}
+.n-hd .s{font-size:11.5px; color:var(--dim); margin-top:2px; font-family:var(--font-mono)}
+.n-hd .grow{flex:1; min-width:0}
+.n-chip{font-size:10.5px; font-weight:700; letter-spacing:.6px; border-radius:5px;
+  padding:3px 8px; white-space:nowrap}
+.n-chip.c-real{background:var(--gold); color:#151A22}
+.n-chip.c-sim{background:var(--surface-2); color:var(--dim); border:1px solid var(--line)}
+.n-chip.c-off{background:transparent; color:var(--faint); border:1px solid var(--line)}
+.n-sep{height:1px; background:var(--line-soft); margin:0 18px 0 20px}
+.n-bd{padding:0 18px 16px 20px}
+.n-bd.n-bd-t{padding-top:14px}
+
+/* 現價（空手態）*/
+.n-px{display:flex; align-items:baseline; justify-content:space-between; gap:10px; padding:12px 0 4px}
+.n-px .n{font-size:30px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; letter-spacing:-1px; line-height:1}
+.n-px .k{font-size:11px; color:var(--dim); letter-spacing:1.4px}
+.n-px .qty{font-size:11.5px; color:var(--dim); font-family:var(--font-mono)}
+
+/* 真實下單鈕：實心。跟練習區的「描邊＋淡底」在形狀上分家。 */
+.n-fire{display:flex; gap:10px; margin-top:12px}
+.n-fb{flex:1; position:relative; overflow:hidden; border:0; cursor:pointer;
+  border-radius:var(--r-md); padding:16px 10px 14px; color:#12151B; font-weight:800;
+  font-size:16px; letter-spacing:1px; text-align:center; line-height:1.15;
+  font-family:var(--font-sans)}
+.n-fb.b{background:var(--up)} .n-fb.s{background:var(--down)}
+.n-fb:disabled{background:var(--surface-2); color:var(--faint); cursor:not-allowed}
+.n-fb .txt{position:relative; z-index:2}
+/* 【停利停損：還沒選方向就不顯示】兩個方向的數字互相干擾（Benson 2026-08-28 要求）。
+   按住之後才浮出來 —— 那時方向已經選定了。 */
+.n-fb .sub{display:block; font-size:11px; font-weight:700; font-family:var(--font-mono);
+  letter-spacing:0; opacity:0; margin-top:5px; transition:opacity .12s var(--ease)}
+.n-fb.holding .sub{opacity:.78}
+.n-fb .lb2{display:none}
+.n-fb.holding .lb{display:none}
+.n-fb.holding .lb2{display:inline}
+.n-fb.holding{box-shadow:inset 0 0 0 999px rgba(0,0,0,.20)}
+.n-fb .bar{position:absolute; left:0; bottom:0; height:4px; width:0; background:#12151B;
+  opacity:.55; z-index:3}
+.n-fb.holding .bar{transition:width var(--hold,650ms) linear; width:100%}
+.n-holdhint{font-size:11.5px; color:var(--dim); text-align:center; margin-top:9px;
+  font-family:var(--font-mono)}
+
+/* 會影響他決定的說明字：最低只能用 --dim（5.37:1）。--faint（2.72:1）只留給版本指紋。 */
+.n-why{margin-top:11px; font-size:12.5px; color:var(--dim); line-height:1.6;
+  background:var(--surface-2); border-radius:var(--r-sm); padding:9px 11px}
+.n-why b{color:var(--text)}
+.n-quota{display:flex; align-items:center; gap:9px; margin-top:12px; font-size:11.5px;
+  color:var(--dim); font-family:var(--font-mono)}
+.n-quota .pips{display:flex; gap:4px}
+.n-quota .pips i{width:16px; height:5px; border-radius:3px; background:var(--ghost)}
+.n-quota .pips i.used{background:var(--dim)}
+.n-quota .pips i.full{background:var(--gold)}
+.n-firing{margin-top:12px; background:var(--surface-2); border-radius:var(--r-md);
+  padding:13px 14px; font-size:13.5px; color:var(--text); font-weight:650}
+.n-firing .s{font-size:11.5px; color:var(--dim); font-weight:500; margin-top:4px; line-height:1.5}
+.n-firing .bar{height:3px; border-radius:2px; background:var(--line); margin-top:10px; overflow:hidden}
+.n-firing .bar i{display:block; height:100%; background:var(--gold); width:30%}
+
+/* 持倉態：浮動點數 34px → 52px（全頁最大的損益數字不可以是模擬的） */
+.n-pos{display:flex; align-items:flex-end; justify-content:space-between; gap:14px; padding:14px 0 2px}
+.n-pos .big{font-size:52px; font-weight:700; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; line-height:.92; letter-spacing:-1.6px}
+.n-pos .u{font-size:15px; font-weight:650; margin-left:5px; letter-spacing:0}
+.n-pos .cash{font-size:12.5px; color:var(--dim); font-family:var(--font-mono); margin-top:6px}
+.n-dir{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:750;
+  padding:5px 10px; border-radius:var(--r-xs); white-space:nowrap}
+.n-dir.l{background:var(--up-soft); color:var(--up)}
+.n-dir.s{background:var(--down-soft); color:var(--down)}
+.n-dir.u{background:var(--surface-2); color:var(--text); border:1px solid var(--gold-line)}
+.n-meta{font-size:11.5px; color:var(--dim); font-family:var(--font-mono); text-align:right; margin-top:6px}
+
+/* 保護狀態列：紅綠只描述錢（漲跌／賺賠），系統狀態一律中性灰階＋填滿程度。
+   ● 實心白＝掛在券商（電腦關機也有效）／○ 空心＝這台電腦在看（正常，不是警告）／● 紅＝沒掛上或監控不到 */
+.n-guard{margin-top:14px; border:1px solid var(--line-soft); border-radius:var(--r-md);
+  overflow:hidden; background:rgba(0,0,0,.16)}
+.n-g{display:flex; align-items:center; gap:11px; padding:11px 13px}
+.n-g+.n-g{border-top:1px solid var(--line-soft)}
+.n-g .ic{width:9px; height:9px; border-radius:50%; flex:none; box-sizing:content-box}
+.n-g .ic.solid{background:var(--text); box-shadow:0 0 0 3px rgba(233,236,241,.10)}
+.n-g .ic.hollow{background:transparent; border:2px solid var(--dim); width:5px; height:5px}
+.n-g .ic.bad{background:var(--up); box-shadow:0 0 0 3px var(--up-soft)}
+.n-g .lb{font-size:12.5px; color:var(--dim); min-width:74px}
+.n-g .lb b{color:var(--text); font-weight:650; font-family:var(--font-mono)}
+.n-g .st{margin-left:auto; font-size:12px; color:var(--dim); text-align:right; line-height:1.45}
+.n-g .st b{color:var(--text); font-weight:650}
+/* 要注意的那一列：底色用中性提亮，不用紅底 —— 紅底只留給「請你立刻動手」的橫幅 */
+.n-g.n-att{background:rgba(255,255,255,.045)}
+.n-g.n-att .st b{color:var(--up)}
+.n-gfoot{font-size:11.5px; color:var(--dim); line-height:1.6; padding:0 13px 11px; margin-top:-3px}
+
+/* 平倉：中性底。平倉不是方向動作，不該吃紅綠 —— 做空的平倉送出去的是「買進」，
+   09-01 就出過「平倉送錯邊、變成再加一口空單」的事故。鈕上直接寫會送出什麼。 */
+.n-close{width:100%; margin-top:14px; border:1px solid var(--line); background:var(--surface-2);
+  color:var(--text); font-size:15px; font-weight:750; letter-spacing:1px; padding:15px 10px 13px;
+  border-radius:var(--r-md); cursor:pointer; font-family:var(--font-sans);
+  transition:background .14s var(--ease)}
+.n-close:hover:not(:disabled){background:#232A36}
+.n-close .sub{display:block; font-size:11.5px; font-weight:600; color:var(--dim); letter-spacing:0;
+  margin-top:4px; font-family:var(--font-mono)}
+.n-close:disabled{opacity:.45; cursor:not-allowed}
+
+/* ── ④ 紀錄表：固定五欄，欄寬不隨內容跳；超過就捲，每一列 flex:none ── */
+.n-trh{display:flex; align-items:baseline; gap:8px; font-size:11.5px; color:var(--dim);
+  letter-spacing:1.2px; font-weight:650; padding:13px 18px 7px 20px;
+  border-top:1px solid var(--line-soft); margin-top:2px}
+.n-trh .c{letter-spacing:0; color:var(--faint); font-weight:500}
+.n-trh .net{margin-left:auto; font-family:var(--font-mono); font-size:14px; font-weight:700;
+  letter-spacing:0; font-variant-numeric:tabular-nums}
+.n-trl{max-height:186px; overflow-y:auto; display:flex; flex-direction:column;
+  padding:0 18px 4px 20px}
+.n-trl>*{flex:none}
+.n-trl::-webkit-scrollbar{width:6px}
+.n-trl::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
+.n-item{padding:2px 0 6px; border-top:1px solid var(--line-soft)}
+.n-item:first-child{border-top:0}
+.n-row{display:grid; grid-template-columns:18px 92px 1fr 68px 58px; align-items:center;
+  gap:9px; padding:8px 0; font-size:12px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; border-top:1px solid var(--line-soft)}
+.n-trl>.n-row:first-child, .n-item .n-row{border-top:0}
+.n-row .d{font-size:11px; text-align:center}
+.n-row .d.l{color:var(--up)} .n-row .d.s{color:var(--down)}
+.n-row .tm{color:var(--dim)}
+.n-row .px{color:var(--text)}
+.n-row .wy{color:var(--dim); font-size:11px; font-family:var(--font-sans); text-align:right;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.n-row .pt{text-align:right; font-weight:700; font-size:13px}
+.n-row .pt.na{color:var(--faint); font-weight:500}
+/* 練習紀錄還是要能補心得（跟手機 App 同一個 note 欄位），壓成一行掛在那一列底下 */
+.n-item .noteline{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  background:none; border:0; padding:0; margin-top:0; font-size:11.5px;
+  color:var(--faint); line-height:1.5}
+.n-item .noteline[data-nedit]:hover{color:var(--gold); border-color:transparent}
+.n-trnote{font-size:11.5px; color:var(--dim); line-height:1.55; padding:8px 18px 0 20px;
+  border-top:1px solid var(--line-soft); margin-top:6px}
+.n-trnote b{color:var(--text)}
+.n-empty{font-size:12.5px; color:var(--dim); line-height:1.6; padding:2px 18px 14px 20px}
+/* 版本指紋：純除錯、不影響決定 ⇒ 這裡是唯一還能用 --faint 的地方。整區最底。 */
+.n-foot{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:9px 18px 11px 20px;
+  font-size:10.5px; color:var(--faint); font-family:var(--font-mono);
+  border-top:1px solid var(--line-soft)}
+.n-foot .stale{color:var(--gold); font-weight:700; font-family:var(--font-sans)}
+/* 練習成績的小標（分區裡不再包一張卡，所以不用 .sec-head） */
+.n-sh{display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  font-size:11.5px; color:var(--dim); letter-spacing:1.6px; font-weight:650; margin-bottom:9px}
+.n-sh .c{font-size:11px; color:var(--faint); letter-spacing:0; font-weight:500;
+  font-family:var(--font-mono)}
+
+@media (prefers-reduced-motion: reduce){
+  .n-fb.holding .bar{transition:none; width:100%}
+}
+@media(max-width:640px){
+  .n-row{grid-template-columns:16px 78px 1fr 52px}
+  .n-row .wy{display:none}
+  .n-pos .big{font-size:44px}
+}
+
 .warn{font-size:10.5px; color:var(--gold); background:var(--gold-soft);
   border-radius:20px; padding:2px 9px; font-weight:600}
 .pnl{text-align:center; padding:4px 0 8px}
@@ -2043,8 +2271,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 body.boot .topbar{animation:kk-rise .40s var(--ease) both}
 body.boot #mkt>*{animation:kk-rise .46s var(--ease) both .04s}
 body.boot .right>*>.card{animation:kk-rise .46s var(--ease) both}
-body.boot .right>#trade>.card{animation-delay:.10s}
-body.boot .right>#stats>.card{animation-delay:.16s}
+body.boot .right>#ntabs{animation:kk-rise .46s var(--ease) both .08s}
+body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 /* 真圖接手骨架：淡入就好，不要再 rise 一次（同一個位置動兩次看起來很躁） */
 .card.chart.kk-in{animation:kk-fade .34s ease both}
 .cwrap.kk-draw svg{animation:kk-wipe .52s var(--ease) both}
@@ -2288,7 +2516,13 @@ body.boot .right>#stats>.card{animation-delay:.16s}
       <div class="rail"><span class="sk"></span><span class="sk"></span><span class="sk"></span>
         <span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
     </div>
-  </div><div class="right"><div id="trade"></div><div id="real"></div><div id="stats"></div></div></div>
+  </div><div class="right">
+    <!-- 右欄拆成三個各自比對自己字串的節點：
+         #xal  跨分頁警報（兩個分頁都看得到，沒警報時 :empty 完全不佔位）
+         #ntabs 頁籤（浮動點數是裡面的獨立節點 #tabbadge）
+         #zone  練習／真實其中一區（切分頁時才重建骨架） -->
+    <div id="xal"></div><div id="ntabs"></div><div id="zone"></div>
+  </div></div>
 </div>
 
 <!-- 【回顧】：容器只建這一次，之後只換裡面的內容（重繪不打斷縮放／拖曳、也不閃） -->
@@ -2329,6 +2563,20 @@ var lastMkt='', lastTrade='', lastStats='', lastWarn='', lastReal='', statsCache
    ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。
    記住狀態的話，某天心不在焉點到就是一個真實部位。 */
 var REAL_ON=false, HOLD_MS=650, holdTimer=null, holdingNow=false;
+/* ---------------- 右欄分頁：練習 ／ 真實 ----------------
+   老闆 2026-09-01 拍板：**不自動切分頁**（lab-ux 提案 §2 的 A 案）。
+   有真實部位時靠「頁籤上的浮動點數」＋「跨分頁警報橫幅」讓他知道，
+   不搶他的畫面 —— 被搶走畫面本身也是一種傷害。
+   ⚠️ RTAB 跟 REAL_ON 一樣只活在記憶體裡：重新整理一律回到練習分頁。 */
+var RTAB='sim';
+var LASTS=null;                    // 最後一次拿到的 /api/state，切分頁時直接拿它重畫
+function setRTab(t){
+  if(RTAB===t) return;
+  RTAB=t;
+  // 先用手上的狀態立刻換過去（不等 fetch 回來，也不會因為 /api/state 掛掉就卡住）
+  if(LASTS) paintRight(LASTS,true);
+  tick(true);
+}
 function realToggle(){ REAL_ON=!REAL_ON; lastReal=''; tick(true); }
 function holdStart(el,dir){
   holdEnd(el);
@@ -2347,7 +2595,8 @@ function holdStart(el,dir){
   },HOLD_MS);
 }
 function onLeave(e){ holdEnd(e.currentTarget); }
-function onUp(){ document.querySelectorAll('.rbtn.holding').forEach(holdEnd); }
+// 認 data-rdir 不認 class：按鈕的樣式名稱會改，「它是不是下單鈕」不會改
+function onUp(){ document.querySelectorAll('[data-rdir].holding').forEach(holdEnd); }
 function holdEnd(el){
   clearTimeout(holdTimer); holdTimer=null; holdingNow=false;
   if(!el) return;
@@ -2384,55 +2633,242 @@ function realClose(){
    .catch(()=>alert('送不出去，請自己到大戶投平倉'))
    .then(()=>{ closing=false; lastReal=''; tick(true); });
 }
-function realBox(s){
- const R=s.real||{}, P=R.position;
- let h='<div class="card real'+(P?(' holding'+(P.dir==='short'?' sh':'')):'')+'">'+
-   '<div class="rtop"><div>'+
-   '<div class="sec-head" style="margin-bottom:2px"><h2>真實下單</h2></div>'+
-   '<div class="rlabel">'+(!REAL_ON?'關閉中・按右邊打開'
-     :(R.live?'<b style="color:var(--gold)">真的會送單</b>　微台 1 口・固定 ±100'
-             :'<b>演練模式</b>　單子照組、照記錄，<b>不會送出去</b>'))+'</div>'+
-   '</div><div class="sw'+(REAL_ON?' on':'')+'" data-rt="1"><i></i></div></div>';
- if(!REAL_ON) return h+'</div>';
- h+='<div class="rbody">';
- if(R.error){ h+='<div class="whyoff">'+esc(R.error)+'</div></div></div>'; return h; }
- if(P){
-   const fl=R.float_pts;
-   h+='<div class="rpos"><div class="big '+sgn(fl)+'">'+(fl==null?'—':pm(fl))+'</div>'+
-      '<span class="tag '+(P.dir==='long'?'l':'s')+'">'+(P.dir==='long'?'▲ 做多':'▼ 做空')+
-      ' '+P.qty+' 口</span>'+
-      (P.entry_time?'<span class="faint" style="font-size:12px">'+P.entry_time+' 進場</span>':'')+
-      '</div>'+
-      rrow('進場價',f(P.entry))+
-      rrow('停利　+'+f(100),f(R.tp)+'　'+(P.has_target
-        ? '<span class="faint">已掛在券商</span>'
-        : '<span class="up">沒掛上！請自己補掛或平倉</span>'))+
-      rrow('停損　−'+f(100),f(R.sl)+'　<span class="up">由面板監控</span>')+
-      '<div class="rbtns"><button class="rbtn s" data-rclose="1"'+(closing?' disabled':'')+'>'+
-      (closing?'平倉中…':'立刻平倉')+'</button></div>';
-   h+= R.stale_sec!=null
-     ? '<div class="ralarm bad"><b style="color:var(--up)">⚠ 報價已中斷 '+R.stale_sec+' 秒</b><br>'+
-       '停損是由這台電腦監控的，現在監控不到。<b>請立刻到大戶投確認部位</b>。</div>'
-     : '<div class="ralarm">停損靠這台電腦。<b style="color:var(--gold)">'+
-       '面板關掉、電腦睡著、網路斷掉都會失效</b>。</div>';
-   if(P.recovered) h+='<div class="whyoff">這筆是面板重啟後從券商對帳撿回來的，'+
-     '停利單的下落請自己到大戶投確認。</div>';
- } else {
-   const px=(s.chips||{}).price, ok=R.can_enter;
-   // 還沒選方向就不列停利停損 —— 兩個方向的數字互相干擾（Benson 2026-08-28）
-   h+=rrow('現價',f(px))+rrow('口數','1 口　<span class="faint">固定，不能改</span>')+
-      '<div class="rbtns">'+fireBtn('long',px,!ok||firing)+fireBtn('short',px,!ok||firing)+'</div>'+
-      (firing?'<div class="whyoff">送出中…等券商回報成交（最多 5 秒）</div>':'')+
-      (ok?'':'<div class="whyoff">'+esc(R.why||'現在不能下單')+'</div>')+
-      '<div class="quota">今天真實進場 '+(R.entries_today||0)+' / '+(R.max_entries||3)+
-      (R.code?'　·　程式 '+esc(R.code.broker)+'　啟動 '+esc(R.code.started):'')+'</div>'+
-      // 硬碟上的程式比跑著的這個新 ⇒ 他以為重開過了，其實沒有。一定要講出來。
-      (R.code&&R.code.stale
-        ? '<div class="whyoff"><b>面板跑的不是最新的程式</b>　關視窗再開沒有用（會接回同一個舊的），'
-          +'要跑 restart-panel.py 才會真的換掉</div>' : '');
- }
- h+=realTrades(R.trades);
- return h+'</div></div>';
+/* ══════════════════════════════════════════════════════════════════════
+   右欄：跨分頁警報 ＋ 頁籤 ＋ 練習／真實兩個分區
+   ----------------------------------------------------------------------
+   ⛔ 每一塊各自比對「上次自己設進去的字串」（快取在節點上，見 setEl）——
+      整塊 innerHTML 每 0.5 秒重建的話，使用者按下去的那一瞬間按鈕會連同
+      事件一起被換掉；長按送單的那顆更嚴重（時間到照樣送單，他以為取消了）。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 沒有即時報價時，現價退回「最後一根 K 棒的收盤」，並在旁邊明寫「非即時」。
+   ⚠️ 這只是顯示用；沒有即時報價時兩區的下單鈕都是真的 disabled。 */
+function livePx(s){
+  const p=(s.chips||{}).price;
+  if(p!=null) return p;
+  const B=(barsCache&&barsCache.bars)||[];
+  return B.length?B[B.length-1].c:null;
+}
+
+/* ---------------- 跨分頁警報 ----------------
+   停損活在這台電腦的 Python 迴圈裡。他站在練習分頁時，真錢那一邊照樣要看得到。
+   ⚠️ 秒數每秒在變，所以骨架與秒數拆成兩個節點：寫在一起的話「去看部位」
+      那顆鈕會跟著每秒被重建，滑鼠停在上面剛好碰到就按不動（跟 #cupd 同一個坑）。
+   ⚠️ 這一塊不掛任何 CSS 動畫（舊版 .ralarm.bad 的 1.1 秒呼吸永遠演不完半個循環，
+      因為每 0.5 秒就從頭開始 —— 看起來是在抖不是在呼吸）。 */
+function xalHTML(R){
+  const P=R.position;
+  if(!P) return '';
+  const go=(RTAB==='real')?'':'<button class="go" data-rgo="1">去看部位 &rarr;</button>';
+  if(R.stale_sec!=null)
+    return '<div class="n-x n-bad"><div class="g">&#9888; 報價已中斷 '+
+      '<span class="num" id="xalsec"></span> 秒　停損現在沒人在看'+
+      '<div class="s">停損活在這台電腦裡，收不到報價就判斷不了。'+
+      '請立刻到大戶投確認部位。</div></div>'+go+'</div>';
+  if(!P.has_target)
+    return '<div class="n-x n-att"><div class="g">&#9888; 停利沒有掛上券商　賺的那一邊沒有保護'+
+      '<div class="s">請到大戶投自己補掛一張 '+f(R.tp)+' 的平倉限價單，或直接平倉。</div></div>'+
+      go+'</div>';
+  return '';
+}
+
+/* ---------------- 頁籤 ---------------- */
+function tabsHTML(R){
+  return '<div class="n-tabs">'+
+    '<button class="n-tab t-sim'+(RTAB==='sim'?' on':'')+'" data-rtab="sim">'+
+      '<div class="t">練習</div><div class="s">模擬・不會送單</div></button>'+
+    '<button class="n-tab t-real'+(RTAB==='real'?' on':'')+'" data-rtab="real">'+
+      '<div class="t">真實</div><div class="s">'+(R.live?'真的會送單':'演練模式')+'</div>'+
+      '<span class="badge" id="tabbadge" hidden></span></button></div>';
+}
+/* 浮動點數是獨立節點：整條頁籤不可以因為點數跳動就被重建。 */
+function paintBadge(R){
+  const e=document.getElementById('tabbadge');
+  if(!e) return;
+  const P=R.position;
+  let cls='', txt='';
+  if(P&&RTAB!=='real'){
+    if(R.stale_sec!=null||!P.has_target){ cls='alert'; txt='!'; }
+    else { cls=sgn(R.float_pts); txt=(R.float_pts==null?'—':pm(R.float_pts)); }
+  }
+  const k=cls+'|'+txt;
+  if(e.__k===k) return;
+  e.__k=k;
+  e.className='badge'+(cls?' '+cls:'');
+  e.textContent=txt;
+  e.hidden=!txt;
+}
+
+/* ══════════════ 練習分頁 ══════════════════════════════════════════
+   結構跟真實那一區對稱：下單區 → 今天的練習交易 → 練習成績。
+   下單維持**單擊**（練習不需要長按防呆），按鈕維持描邊＋淡底 ——
+   那是它跟真實區在形狀上的分界，不要改成實心。 */
+function simZone(){
+  return '<div class="n-zone z-sim">'+
+    '<div class="n-hd"><div class="grow"><div class="t">練習下單</div>'+
+    '<div class="s">微台 TMF・1 口・固定 &plusmn;100 點</div></div>'+
+    '<span class="n-chip c-sim">模擬・不會送單</span></div>'+
+    '<div class="n-sep"></div><div class="n-bd" id="simbody"></div>'+
+    '<div id="simtr"></div><div id="simstats"></div></div>';
+}
+function simBody(s){
+  const P=s.position;
+  if(P)
+    return '<div class="pnl"><div class="v '+sgn(P.float_pts)+'">'+pm(P.float_pts)+'</div>'+
+      '<div class="l">'+(P.dir==='long'?'做多':'做空')+'　進場 '+f(P.entry)+'　'+P.entry_time+'</div></div>'+
+      '<div class="plimit"><span>停利 '+f(P.tp)+'</span><span>停損 '+f(P.sl)+'</span></div>'+
+      '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
+      '<button class="btn ghost" data-act="undo">取消</button></div>'+
+      noteBox('t|open',P.note,'data-nopen="1"','＋ 記下現在為什麼這樣做',
+              '現在為什麼想這樣做？（平倉後會留在這筆紀錄裡）');
+  // 【紀錄正確性】沒有即時報價就不能開單 —— 拿舊價／收盤價記進練習成績，那筆成績是假的。
+  // 這不是 UX 取捨，所以按鈕真的停用（後端 /api/enter 也擋一次）。
+  const q=quoteState(s), off=q!=='live', dis=off?' disabled':'';
+  let h='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(livePx(s))+
+    (off?'<span class="qty" style="margin-left:8px">非即時</span>':'')+'</div></div>'+
+    '<div class="qty">1 口・固定</div></div>'+
+    '<div class="btns" style="margin-top:12px">'+
+    '<button class="btn long" data-act="long"'+dis+'>&#9650; 做多</button>'+
+    '<button class="btn short" data-act="short"'+dis+'>&#9660; 做空</button></div>';
+  if(off) h+='<div class="n-why">'+(q==='closed'
+    ? '<b>休市中，沒有即時報價</b><br>練習下單要用當下的真實成交價才有意義，'+
+      '不然記進成績的是假成績。開盤後才能按。'
+    : '<b>目前收不到報價</b><br>無法確定進場價 —— 恢復報價後才能按。')+'</div>';
+  return h;
+}
+/* 今天的練習交易：跟真實那一區同一套固定欄表格。
+   ⚠️ 心得（note）要留著 —— 那是跟手機 App 同一個欄位，事後補寫的。
+      所以每一筆包成 .n-item：上面一列固定欄、下面掛心得。 */
+function simTrades(s){
+  const T=s.today_trades||[];
+  if(!T.length)
+    return '<div class="n-trh">今天的練習交易</div>'+
+      '<div class="n-empty">今天還沒有練習紀錄。進場之後這裡會一筆一筆長出來。</div>';
+  let sum=0; T.forEach(t=>sum+=t._net);
+  let h='<div class="n-trh">今天的練習交易　<span class="c">'+T.length+' 筆</span>'+
+    '<span class="net '+sgn(sum)+'">'+pm(Math.round(sum*10)/10)+' 點</span></div>'+
+    '<div class="n-trl">';
+  T.slice().reverse().forEach(t=>{ h+=simRow(t); });      // 新的在上面
+  return h+'</div>';
+}
+function simRow(t){
+  const why={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'其他';
+  return '<div class="n-item"><div class="n-row">'+
+    '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
+    '<span class="tm">'+esc(String(t.time||'—').slice(0,5))+'&rarr;'+
+      esc(String(t._exit_time||'—').slice(0,5))+'</span>'+
+    '<span class="px">'+f(t.entry)+'&rarr;'+f(t.exit)+'</span>'+
+    '<span class="wy">'+why+'</span>'+
+    '<span class="pt '+sgn(t._net)+'">'+pm(t._net)+'</span></div>'+
+    noteBox(nkey('t',t),t.note,nattr(t),'＋ 寫下今天的心得',
+            '今天的盤感、進出場理由、紀律有沒有守…')+'</div>';
+}
+
+/* ══════════════ 真實分頁 ══════════════════════════════════════════
+   ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。 */
+function realZone(R){
+  const chip = !REAL_ON ? '<span class="n-chip c-off">關閉中・按右邊打開</span>'
+    : (R.live ? '<span class="n-chip c-real">真的會送單</span>'
+              // 藥丸太長會把標頭那行「微台 TMF・1 口・固定 ±100 點」擠成兩行（實測）
+              : '<span class="n-chip c-sim">演練模式・不送出</span>');
+  return '<div class="n-zone z-real">'+
+    '<div class="n-hd"><div class="grow"><div class="t">真實下單</div>'+
+    '<div class="s">微台 TMF・1 口・固定 &plusmn;100 點</div></div>'+
+    chip+'<div class="sw'+(REAL_ON?' on':'')+'" data-rt="1"><i></i></div></div>'+
+    // ⛔ 【有部位就一定要看得到，開關關著也一樣】
+    //    `REAL_ON` 只是「要不要露出下單按鈕」的保險蓋，不是「有沒有部位」。
+    //    舊寫法在開關關著時整個 body 都不畫 ⇒ **站在寫著「真實」的那一頁，
+    //    反而看不到自己的真實部位、也沒有平倉鈕**，唯一的提示（頁籤上的浮動點數）
+    //    又剛好只在「不在真實頁」時才掛 ⇒ 站在真實頁＝知道得最少（lab-qa 退件第 2 條）。
+    //    而且看門狗重啟是常態、`REAL_ON` 又刻意不記憶 ⇒ **重啟後一定是關的**，
+    //    偏偏 reconcile 會把券商那口單撿回來 —— 這個組合遲早會遇到。
+    ((REAL_ON || R.position) ?
+      '<div class="n-sep"></div><div class="n-bd" id="realbody"></div>'+
+      '<div id="realtr"></div>' : '')+
+    '<div class="n-foot" id="realfoot"></div></div>';
+}
+function realBody(s){
+  const R=s.real||{}, P=R.position;
+  if(R.error) return '<div class="n-why"><b>真實下單模組出錯，先不要用</b><br>'+esc(R.error)+'</div>';
+  let h='';
+  if(P){
+    const fl=R.float_pts;
+    // 浮動點數 52px：全頁最大的損益數字不可以是模擬的（舊版真單 34px、練習 44px）
+    h+='<div class="n-pos"><div><div class="big '+sgn(fl)+'">'+(fl==null?'—':pm(fl))+
+       '<span class="u">點</span></div><div class="cash">'+
+       (fl==null?'—':(fl>0?'+':fl<0?'-':'')+'NT$'+Math.abs(Math.round(fl*10)).toLocaleString())+
+       '　浮動</div></div><div>'+
+       '<span class="n-dir '+(P.dir==='long'?'l':P.dir==='short'?'s':'u')+'">'+
+       (P.dir==='long'?'&#9650; 做多':P.dir==='short'?'&#9660; 做空':'? 方向不明')+
+       ' '+(P.qty==null?1:P.qty)+' 口</span>'+
+       '<div class="n-meta">'+(P.entry_time?esc(P.entry_time)+' 進場 ':'進場 ')+f(P.entry)+
+       '</div></div></div>';
+    // 【顏色分工】紅綠只描述錢；系統狀態一律中性灰階＋填滿程度。
+    // ⚠️「已掛在券商」不可以寫死，一定要讀 has_target（QC 退件第 4 條）。
+    const noTp=!P.has_target, blind=R.stale_sec!=null;
+    h+='<div class="n-guard">'+
+       '<div class="n-g'+(noTp?' n-att':'')+'"><span class="ic '+(noTp?'bad':'solid')+'"></span>'+
+       '<span class="lb">停利 <b>'+f(R.tp)+'</b></span><span class="st">'+
+       (noTp?'<b>沒掛上</b><br>賺的那一邊沒有保護，請自己補掛或平倉'
+            :'<b>已掛在券商</b><br>電腦關機也有效')+'</span></div>'+
+       '<div class="n-g'+(blind?' n-att':'')+'"><span class="ic '+(blind?'bad':'hollow')+'"></span>'+
+       '<span class="lb">停損 <b>'+f(R.sl)+'</b></span><span class="st">'+
+       (blind?'<b>監控不到</b><br>收不到報價'
+             :'<b>由這台電腦監控</b><br>券商端做不到停損')+'</span></div>'+
+       '<div class="n-gfoot">停損靠這台電腦：面板關掉、電腦睡著、網路斷掉都會失效 —— '+
+       '這是 2026-08-28 拍板承擔的風險。</div></div>';
+    // 【平倉鈕中性底】做空的平倉送出去的是「買進」，09-01 出過送錯邊、變成再加一口空單的事故。
+    // 【不跳確認視窗】要平倉的時候通常是急的，多一個對話框是在最糟的時機加摩擦。
+    h+='<button class="n-close"'+(closing?' disabled':'')+' data-rclose="1">'+
+       (closing?'平倉中…':'立刻平倉')+'<span class="sub">'+
+       (closing?'等券商回報部位真的消失'
+         :(P.dir==='long'?'會送出 賣出 &times;1（賣掉多單）'
+          :P.dir==='short'?'會送出 買進 &times;1（回補空單）'
+          :'方向不明 —— 送出前會再跟券商對帳'))+'</span></button>';
+    if(P.recovered) h+='<div class="n-why">這筆是面板重啟後從券商對帳撿回來的，'+
+      '停利單的下落請自己到大戶投確認。</div>';
+  } else {
+    const q=quoteState(s), px=livePx(s), ok=R.can_enter&&!firing;
+    h+='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(px)+
+       (q!=='live'?'<span class="qty" style="margin-left:8px">非即時</span>':'')+
+       '</div></div><div class="qty">1 口・固定不能改</div></div>'+
+       '<div class="n-fire">'+fireBtn('long',px,!ok)+fireBtn('short',px,!ok)+'</div>';
+    h+= firing
+      ? '<div class="n-firing">送出中…<div class="s">等券商回報成交（最多 5 秒）。'+
+        '這段時間再按也不會變成第二張單。</div><div class="bar"><i></i></div></div>'
+      : (R.can_enter?'<div class="n-holdhint">按住 0.65 秒送出　·　中途放開就取消</div>':'');
+    // 擋單原因：會影響他決定的字，最低只能用 --dim（.n-why），不准再用 --faint
+    if(!R.can_enter) h+='<div class="n-why">'+esc(R.why||'現在不能下單')+'</div>';
+    const used=R.entries_today||0, max=R.max_entries||3;
+    let pips='';
+    for(let i=0;i<max;i++) pips+='<i class="'+(i<used?(used>=max?'full':'used'):'')+'"></i>';
+    h+='<div class="n-quota"><div class="pips">'+pips+'</div><span>今天進場 '+used+' / '+max+
+       '</span></div>';
+  }
+  return h;
+}
+/* 真實下單鈕：實心（練習是描邊＋淡底）——形狀在餘光裡最強，這是第四個訊號。
+   【停利停損還沒選方向就不顯示】兩個方向的數字互相干擾（Benson 2026-08-28 要求）。
+   .sub 平常 opacity:0，按住時才浮出來，同時把標籤換成「放開取消」。 */
+function fireBtn(dir,px,dis){
+  const long=dir==='long';
+  const tp=px==null?null:(long?px+100:px-100), sl=px==null?null:(long?px-100:px+100);
+  return '<button class="n-fb '+(long?'b':'s')+'"'+(dis?' disabled':'')+
+    ' data-rdir="'+dir+'"><span class="txt">'+
+    '<span class="lb">'+(long?'買進 做多':'賣出 做空')+'</span>'+
+    '<span class="lb2">放開取消</span>'+
+    '<span class="sub">'+(tp==null?'&nbsp;':'停利 '+f(tp)+'　停損 '+f(sl))+'</span>'+
+    '</span><span class="bar"></span></button>';
+}
+/* 版本指紋降到整區最底：純除錯、不影響決定，所以是唯一還准用 --faint 的地方。
+   ⚠️ stale＝硬碟上的程式比跑著的這個新 ⇒ 他以為重開過了，其實沒有。一定要講出來。 */
+function realFoot(R){
+  const c=R.code;
+  if(!c) return '';
+  return (c.stale
+    ? '<span class="stale">面板跑的不是最新的程式　關視窗再開沒有用（會接回同一個舊的），'+
+      '要跑 restart-panel.py 才會真的換掉</span>' : '')+
+    '<span>程式 '+esc(c.broker)+'　啟動 '+esc(c.started)+'</span>';
 }
 
 // 今天的真實交易成績單。
@@ -2440,43 +2876,73 @@ function realBox(s){
 // 再拉到手機。真實交易不上傳是 Benson 的決定，混進去就等於上傳了。
 // 所以真單只活在這張卡裡，也只活在這台電腦上。
 function realTrades(list){
-  if(!list||!list.length) return '';
+  if(!list||!list.length)
+    return '<div class="n-trh">今天的真實交易</div>'+
+      '<div class="n-empty">今天還沒有真實交易。進場之後這裡會一筆一筆長出來。</div>';
   const done=list.filter(t=>t.points!=null);
   const miss=list.length-done.length;
-  const net=done.reduce((a,t)=>a+t.points,0);
+  const net=Math.round(done.reduce((a,t)=>a+t.points,0)*10)/10;
   // 【合計要說清楚算的是哪幾筆】舊版標題寫「N 筆」、旁邊卻只加總算得出點數的那幾筆，
-  // 看起來像 N 筆的總和 —— 有筆數對不起來時等於報了一個錯的成績（lab-ux 2026-09-01 抓到）。
-  let h='<div class="rtrades"><div class="rth">今天的真實交易　<span class="dim">'
-    +list.length+' 筆'+(miss?'（'+done.length+' 筆算得出點數）':'')+'</span>'
-    +(done.length?'<span class="rnet '+sgn(net)+'">'+pm(Math.round(net*10)/10)+' 點</span>':'')
-    +'</div><div class="rtlist">';
-  for(const t of list){
+  // 看起來像 N 筆的總和 —— 有筆數對不起來時等於報了一個錯的成績。
+  let h='<div class="n-trh">今天的真實交易　<span class="c">'+list.length+' 筆'+
+    (miss?'（'+done.length+' 筆算得出點數）':'')+'</span>'+
+    (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+
+    '</div><div class="n-trl">';
+  for(let i=list.length-1;i>=0;i--){            // 新的在上面
+    const t=list[i];
     // 認不得的理由一律寫「其他」——內部代號（sl_test 之類）不該印到他眼前
     const why={sl:'停損', tp:'停利', manual:'手動平倉',
                closed_elsewhere:'不是面板平的'}[t.reason]||'其他';
-    h+='<div class="rtrow">'
-      +'<span class="tag '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲':'▼')+'</span>'
-      +'<span class="rtt">'+esc(t.entry_time||'—')+' → '+esc(t.exit_time||'—')+'</span>'
-      +'<span class="rtp">'+f(t.entry)+' → '+(t.exit==null?'—':f(t.exit))+'</span>'
-      +'<span class="rtw faint">'+why+'</span>'
-      +'<span class="rtn '+(t.points==null?'':sgn(t.points))+'">'
-      +(t.points==null?'—':pm(t.points))+'</span></div>';
+    h+='<div class="n-row">'+
+      '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
+      '<span class="tm">'+esc(String(t.entry_time||'—').slice(0,5))+'&rarr;'+
+        esc(String(t.exit_time||'—').slice(0,5))+'</span>'+
+      '<span class="px">'+f(t.entry)+'&rarr;'+(t.exit==null?'—':f(t.exit))+'</span>'+
+      '<span class="wy">'+why+'</span>'+
+      '<span class="pt '+(t.points==null?'na':sgn(t.points))+'">'+
+      (t.points==null?'—':pm(t.points))+'</span></div>';
   }
   h+='</div>';
   // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
-  // 【筆數要照實數】舊版寫死「有一筆」，實際上可能好幾筆（lab-ux 2026-09-01 抓到）
   if(miss)
-    h+='<div class="whyoff">有 '+miss+' 筆問不到成交價，算不出點數 —— '
-      +'那幾筆的損益請到大戶投看</div>';
-  return h+'</div>';
+    h+='<div class="n-trnote"><b>'+miss+' 筆</b>問不到成交價，算不出點數 —— '+
+      '那幾筆的損益請到大戶投看。'+
+      (done.length?'合計的 '+pm(net)+' 點只含算得出來的 '+done.length+' 筆。':'')+'</div>';
+  return h;
 }
 function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
-function fireBtn(dir,px,dis){
- const long=dir==='long';
- const tp=px==null?null:(long?px+100:px-100), sl=px==null?null:(long?px-100:px+100);
- return '<button class="rbtn '+(long?'b':'s')+'"'+(dis?' disabled':'')+
-   ' data-rdir="'+dir+'"><span class="fill"></span><span>'+(long?'買進 做多':'賣出 做空')+
-   '</span><span class="hint">'+(tp==null?'&nbsp;':'停利 '+f(tp)+'　停損 '+f(sl))+'</span></button>';
+
+/* ---------------- 右欄總繪製 ----------------
+   ⛔ 呼叫端一定要用 holdingNow 擋著：長按送單期間含那顆按鈕的節點不准重繪。 */
+function paintRight(s,nf){
+  const R=s.real||{};
+  // ① 跨分頁警報（骨架與秒數分成兩個節點）
+  setEl('xal', xalHTML(R));
+  setEl('xalsec', R.stale_sec==null?'':String(R.stale_sec));
+  // ② 頁籤（浮動點數是裡面的獨立節點）
+  setEl('ntabs', tabsHTML(R));
+  paintBadge(R);
+  // ③ 整區：只有切分頁／開關真實下單／演練↔真實 才重建骨架
+  const zone=document.getElementById('zone');
+  if(!zone) return;
+  // 骨架的識別鍵。⚠️ 一定要帶「有沒有部位」——開關關著時 body 的存在與否由部位決定，
+  // 不帶的話，部位出現時骨架不會重建，那口真錢就永遠畫不出來（配合 realZone 那條註解看）。
+  const zk=RTAB+'|'+(RTAB==='real'?(REAL_ON?'on':'off')+'|'+(R.live?'live':'dry')
+                                  +'|'+(R.position?'pos':'flat'):'');
+  if(zone.__zk!==zk){
+    zone.__zk=zk;
+    zone.innerHTML=(RTAB==='real'?realZone(R):simZone());
+  }
+  if(RTAB==='real'){
+    setEl('realbody', realBody(s));
+    setEl('realtr', realTrades(R.trades));
+    setEl('realfoot', realFoot(R));
+  } else {
+    // 編輯心得時不重畫那一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
+    // 「展開輸入框」本身也是一次重繪，所以刻意的重繪帶 nf 旗標繞過去。
+    if(nf||!nEditing('t')){ setEl('simbody', simBody(s)); setEl('simtr', simTrades(s)); }
+    if(nf||!nEditing('s')) setEl('simstats', statsBox(statsCache));
+  }
 }
 
 /* ---------------- 心得：跟手機 App 同一個 note 欄位 ----------------
@@ -2532,6 +2998,7 @@ const QMSG={
 
 async function tick(nf){
  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
+ LASTS=s;
  // 成績每 5 秒抓一次就好 —— 它會讀所有紀錄檔，沒必要跟著報價跳
  if(Date.now()-statsAt>5000){
    statsAt=Date.now();
@@ -2560,14 +3027,11 @@ async function tick(nf){
  // barsCache===null 這一關一定要擋在前面：那是開站的頭 0.3~0.5 秒，一根 K 棒都還沒回來，
  // 骨架留著就好 —— 不然那半秒會先塞一張小卡，圖回來時整個被頂掉，版面跳一下。
  if(!paintChart(s) && barsCache!==null) paintFallback(s,q);
- if(nf||!nEditing('t')) setHTML('trade',tradeBox(s));
- // 【長按期間不准重繪這張卡】卡片裡有現價，每次報價變動整塊 innerHTML 就被換掉，
- // 按住的那顆按鈕當場被銷毀 —— 畫面看起來像「按到一半自己취消」。
+ // 【長按期間不准重繪整個右欄】下單鈕那一區有現價，每次報價變動 innerHTML 就被換掉，
+ // 按住的那顆按鈕當場被銷毀 —— 畫面看起來像「按到一半自己取消」。
  // 更糟的是計時器還握著那顆已經不在畫面上的按鈕，時間到照樣送單：
- // 使用者以為取消了，單卻出去了（2026-09-01 Benson 回報，查證後沒送出是因為
- // 剛好還有另一個 bug 把它擋掉，不是設計正確）。
- if(!holdingNow) setHTML('real',realBox(s));
- if(nf||!nEditing('s')) setHTML('stats',statsBox(statsCache));
+ // 使用者以為取消了，單卻出去了（2026-09-01 Benson 回報）。
+ if(!holdingNow) paintRight(s,nf);
 }
 
 // 只有內容真的變了才動 DOM。否則每 0.5 秒重建一次，
@@ -2736,6 +3200,11 @@ function chartSVG(s){
  const inView=t=>{ const i=idxAll(t); return i>=G.from&&i<G.to; };
  T.forEach(t=>{ if(inView(t.time)){ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit);} });
  if(P&&live&&G.live){ hi=Math.max(hi,P.tp); lo=Math.min(lo,P.sl); }
+ // 【真實部位也要畫在圖上】舊版 chartSVG 只畫 s.position（練習部位），
+ // 真實部位在 s.real.position ⇒ **假單有標記、真單一條線都沒有**（提案 §3.H）。
+ // 圖是兩個分頁共用的，所以站在練習分頁也看得到這三條線。
+ const RQ=(s.real&&s.real.position&&s.real.tp!=null&&s.real.sl!=null)?s.real:null;
+ if(RQ&&live&&G.live){ hi=Math.max(hi,RQ.tp,RQ.sl); lo=Math.min(lo,RQ.tp,RQ.sl); }
  const pad=(hi-lo)*0.08||10; hi+=pad; lo-=pad;
  // 直向縮放／平移：以自動範圍的中心為基準伸縮，再整體上下位移
  { const mid=(hi+lo)/2+VIEW.voff, half=((hi-lo)/2)/VIEW.vz;
@@ -2819,6 +3288,23 @@ function chartSVG(s){
      g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
         '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".8"/>'+
         '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="11.5">'+z[2]+' '+z[0].toFixed(0)+'</text>';
+   });
+ }
+ // 真實部位：進場（白）／停利（紅）／停損（綠）。虛線點法跟練習不同（2 5 vs 5 4），
+ // 標籤帶底色掛在線的**下方** —— 練習的標籤在上方，兩組同時存在也不會疊在一起。
+ if(RQ&&live&&G.live){
+   [[RQ.position.entry,'#E9ECF1','真實進場'],[RQ.tp,'#EE5A54','真實停利'],
+    [RQ.sl,'#34B37E','真實停損']].forEach(z=>{
+     if(z[0]==null) return;
+     const yy=y(z[0]); if(yy<TOP||yy>PB-16) return;
+     const txt=z[2]+' '+z[0].toFixed(0);
+     let w=12; for(let i=0;i<txt.length;i++) w+=(txt.charCodeAt(i)>255?10.5:6.3);
+     g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
+        '" stroke="'+z[1]+'" stroke-width="1.4" stroke-dasharray="2 5" opacity=".95"/>'+
+        '<rect x="4" y="'+(yy+2).toFixed(1)+'" width="'+w.toFixed(1)+'" height="15" rx="4" '+
+        'fill="#0E1116" fill-opacity=".92" stroke="'+z[1]+'" stroke-opacity=".55"/>'+
+        '<text x="'+(4+w/2).toFixed(1)+'" y="'+(yy+13).toFixed(1)+'" text-anchor="middle" fill="'+
+        z[1]+'" font-size="10.5" font-weight="700">'+txt+'</text>';
    });
  }
  // ---- 進出場標記：圖區只留形狀，文字全部搬到本來就空著的兩條軌 ----
@@ -3289,35 +3775,6 @@ function bindChart(){
 }
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 
-function tradeBox(s){
- const P=s.position, T=s.today_trades||[];
- let h='<div class="sec-head"><h2>練習下單</h2><span class="warn">模擬・不會送單</span></div><div class="card">';
- if(P){
-   h+='<div class="pnl"><div class="v '+sgn(P.float_pts)+'">'+pm(P.float_pts)+'</div>'+
-      '<div class="l">'+(P.dir==='long'?'做多':'做空')+'　進場 '+f(P.entry)+'　'+P.entry_time+'</div></div>'+
-      '<div class="plimit"><span>停利 '+f(P.tp)+'</span><span>停損 '+f(P.sl)+'</span></div>'+
-      '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
-      '<button class="btn ghost" data-act="undo">取消</button></div>'+
-      noteBox('t|open',P.note,'data-nopen="1"','＋ 記下現在為什麼這樣做',
-              '現在為什麼想這樣做？（平倉後會留在這筆紀錄裡）');
- } else {
-   // 【紀錄正確性】沒有即時報價就不能開單 —— 拿舊價／收盤價記進練習成績，那筆成績是假的。
-   // 這不是 UX 取捨，所以按鈕真的停用（後端 /api/enter 也擋一次）。
-   const q=quoteState(s), off=q!=='live', dis=off?' disabled':'';
-   h+='<div class="btns"><button class="btn long" data-act="long"'+dis+'>&#9650; 做多</button>'+
-      '<button class="btn short" data-act="short"'+dis+'>&#9660; 做空</button></div>';
-   if(off) h+='<div class="whyoff">'+(q==='closed'
-     ?'休市中，沒有即時報價 —— 練習下單要用當下的真實成交價才有意義，開盤後才能按。'
-     :'目前收不到報價，無法確定進場價 —— 恢復報價後才能按。')+'</div>';
- }
- if(T.length){
-   let sum=0; T.forEach(t=>sum+=t._net);
-   h+='<div class="list">';
-   T.slice().reverse().forEach(t=>h+=row(t,'t'));
-   h+='</div><div class="plimit" style="margin:12px 0 0">今天 '+T.length+' 筆　合計 '+pm(sum)+' 點</div>';
- }
- return h+'</div>';
-}
 function row(t,ns){
  const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'';
  // App 匯入的那幾筆在 my_trades.json，面板不去改它 —— 有心得就顯示，但不給編輯，
@@ -3349,8 +3806,8 @@ function statsBox(ST){
  const cls=w.total>0?'up':w.total<0?'down':'flat';
  // 勝率是「已經發生的統計」，用中性色；金色只留給「即時／現在」一個意思，
  // 紅綠讓給真正的結果（合計點數）。勝敗條讓比例一眼看得出來，不必讀數字。
- let h='<div class="sec-head"><h2>練習成績</h2><span class="count">共 '+ST.total+' 筆</span></div>'+
-  '<div class="card">'+seg+
+ let h='<div class="n-sep"></div><div class="n-bd n-bd-t">'+
+  '<div class="n-sh">練習成績<span class="c">共 '+ST.total+' 筆</span></div>'+seg+
   '<div class="score"><div class="rate"><span class="n">'+w.win_rate.toFixed(0)+
   '</span><span class="p">%</span><div class="lab">勝率</div></div>'+
   '<div class="sum"><div><span class="n '+cls+'">'+pm(w.total)+
@@ -3422,6 +3879,11 @@ document.addEventListener('click', function(e){
 /* 真實下單：開關與平倉用 click，送單用長按（mousedown/up） */
 document.addEventListener('click', function(e){
  if(TAB!=='live') return;
+ // 切分頁：不自動切是老闆拍板的（A 案），所以只有他自己點才會換
+ const rtb=e.target.closest('[data-rtab]');
+ if(rtb){ setRTab(rtb.getAttribute('data-rtab')); return; }
+ // 跨分頁警報上的「去看部位 →」
+ if(e.target.closest('[data-rgo]')){ setRTab('real'); return; }
  if(e.target.closest('[data-rt]')){ realToggle(); return; }
  if(e.target.closest('[data-rclose]')){
    // 【平倉不跳確認】要平倉的時候通常是急的，多一個對話框是在最糟的時機加摩擦。
@@ -3438,7 +3900,7 @@ document.addEventListener('mousedown', function(e){
 });
 // 切走視窗（Alt+Tab、鎖螢幕）也算放開 —— 手離開鍵鼠了就不該繼續倒數
 window.addEventListener('blur',function(){
- document.querySelectorAll('.rbtn.holding').forEach(holdEnd);
+ document.querySelectorAll('[data-rdir].holding').forEach(holdEnd);
 });
 
 document.addEventListener('click', function(e){

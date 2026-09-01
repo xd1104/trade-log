@@ -1,5 +1,11 @@
 /*
-  長按送單那顆按鈕的真滑鼠探針。
+  長按送單那顆按鈕的真滑鼠探針（36 項）。
+
+  2026-09-01 右欄改成「練習／真實」兩個分頁之後，這支多守兩件事：
+    - 站在練習分頁時，畫面上**一顆真實下單鈕都沒有**（結構上的防誤按）
+    - 站在練習分頁時，真實那一邊出事（報價中斷）**照樣看得到**
+  選擇器跟著新版改（.card.real → .n-zone.z-real、.rtrow → .n-row …），
+  但每一項斷言的**意思一個字都沒放寬**。
 
   ================================================================
   為什麼一定要真滑鼠
@@ -79,6 +85,13 @@ c.on("Page.javascriptDialogOpening", async p => {
 await c.send("Page.navigate", { url: URL_ });
 await sleep(2500);
 
+// 右欄現在是兩個分頁，預設停在「練習」（老闆拍板：不自動切）。
+// 真實下單開關住在真實那一區裡，所以要先切過去。
+async function goTab(t) {
+  await evalJS(`(()=>{const b=document.querySelector('[data-rtab="${t}"]'); if(b) b.click();})()`);
+  await sleep(900);
+}
+await goTab("real");
 // 打開「真實下單」開關（預設是關的，而且刻意不記憶狀態）
 await evalJS(`document.querySelector('[data-rt]').click()`);
 await sleep(900);
@@ -155,12 +168,27 @@ await ctl("/reset");
 await ctl("/mode/flat");
 await sleep(700);
 const pos4 = await box('[data-rdir="short"]');
+// ⛔ 這一項以前是**結構上永遠成立**的假斷言（lab-qa 2026-09-01 用變異測試抓到）：
+//    舊寫法在按到一半時 `querySelector` **重新查一次 DOM** —— 按鈕就算被重繪換掉了，
+//    查到的也是新生出來的那一顆，`contains()` 當然為真。
+//    把 `if(!holdingNow) paintRight(...)` 這道守衛整個刪掉（＝09-01 那個 bug 完整復活），
+//    35 項照樣全綠、什麼都抓不到。
+//    正確做法：**在按下去之前**先掛監聽，把 mousedown 當下的那一顆節點抓住，
+//    之後驗的是同一顆還在不在。（監聽一定要在 mousePressed 之前掛，不然抓不到。）
+await evalJS(`window.__held=null;
+  document.addEventListener('mousedown', function(e){
+    var b=e.target.closest && e.target.closest('[data-rdir]'); if(b) window.__held=b;
+  }, true); true`);
 await c.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pos4.x, y: pos4.y, button: "none", buttons: 0 });
 await c.send("Input.dispatchMouseEvent", { type: "mousePressed", x: pos4.x, y: pos4.y, button: "left", buttons: 1, clickCount: 1 });
 await sleep(HOLD - 120);
-const alive = await evalJS(`(()=>{const e=document.querySelector('[data-rdir="short"]');
-  return {inDoc: !!e && document.body.contains(e), holding: !!window.holdingNow};})()`);
-chk("  按到一半按鈕還在畫面上", alive.inDoc, true);
+const alive = await evalJS(`(()=>({
+  captured: !!window.__held,
+  inDoc: !!window.__held && document.body.contains(window.__held),
+  holding: !!window.holdingNow}))()`);
+// 尺的自證：沒抓到節點的話下面那項會變成「假的通過」，所以先驗抓到了
+chk("  （尺自證）真的抓到按下去的那一顆節點", alive.captured, true);
+chk("  按到一半，按住的**那一顆**按鈕還在（不是被換掉的新的）", alive.inDoc, true);
 chk("  面板知道自己正在長按（重繪要被擋住）", alive.holding, true);
 await sleep(400);
 await c.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos4.x, y: pos4.y, button: "left", buttons: 0, clickCount: 1 });
@@ -184,33 +212,107 @@ chk("  連按第二下沒有變成第二張單", (await posts()).length, 1);
 console.log("\n=== ⑥ 停利沒掛上去，卡片要照實說 ===");
 await ctl("/mode/holding");        // has_target=false
 await sleep(1200);
-const holdTxt = await evalJS(`document.querySelector('.card.real').innerText`);
+const holdTxt = await evalJS(`document.querySelector('.n-zone.z-real').innerText`);
 chk("  有寫「沒掛上」", /沒掛上/.test(holdTxt), true);
 chk("  不可以還寫「已掛在券商」", /已掛在券商/.test(holdTxt), false);
 await ctl("/mode/with_target");    // has_target=true
 await sleep(1200);
-const okTxt = await evalJS(`document.querySelector('.card.real').innerText`);
+const okTxt = await evalJS(`document.querySelector('.n-zone.z-real').innerText`);
 chk("  真的掛上時才寫「已掛在券商」", /已掛在券商/.test(okTxt), true);
 
 console.log("\n=== ⑦ 卡片要看得出載入的是哪一版程式 ===");
 // 版本那一行在「空手」那張卡上（有部位時卡片長得不一樣）
 await ctl("/mode/flat");
 await sleep(1300);
-const flatTxt = await evalJS(`document.querySelector('.card.real').innerText`);
+const flatTxt = await evalJS(`document.querySelector('.n-zone.z-real').innerText`);
 chk("  有印出 broker.py 的版本與啟動時間", /程式 \S+ \S+.啟動 \S+ \S+/.test(flatTxt), true);
 if (!/程式 \S+ \S+.啟動 \S+ \S+/.test(flatTxt)) console.log("    卡片實際內容：\n      " + flatTxt.replace(/\n/g, "\n      "));
 
-console.log("\n=== ⑧ 今天的真實交易成績單 ===");
-const led = await evalJS(`(()=>{const rows=[...document.querySelectorAll('.rtrow')].map(r=>r.innerText);
-  const net=document.querySelector('.rnet');
-  const up=[...document.querySelectorAll('.rtn')].map(e=>e.className);
-  return {n:rows.length, rows, net:net&&net.innerText, cls:up,
-          note:!!document.querySelector('.rtrades .whyoff')};})()`);
-chk("  三筆都列出來", led.n, 3);
-chk("  賺的那筆是紅色（台股慣例，紅＝賺）", /\bup\b/.test(led.cls[0]), true);
-chk("  賠的那筆是綠色", /\bdown\b/.test(led.cls[1]), true);
-chk("  問不到成交價的那筆顯示破折號、不編數字", /—/.test(led.rows[2]), true);
+console.log("\n=== ⑧ 今天的真實交易成績單（固定欄 ＋ 會捲不會壓扁）===");
+// ⚠️ 新版是固定五欄的表格，順序改成「新的在上面」，所以不能再用陣列位序認人 ——
+//    用那一筆自己的時間去找，斷言的意思跟舊版一樣。
+const led = await evalJS(`(()=>{
+  const rows=[...document.querySelectorAll('.n-zone.z-real .n-row')];
+  const find=re=>rows.find(r=>new RegExp(re).test(r.innerText));
+  const cls=r=>{const p=r&&r.querySelector('.pt'); return p?p.className:'';};
+  const net=document.querySelector('.n-zone.z-real .n-trh .net');
+  const rl=document.querySelector('.n-zone.z-real .n-trl');
+  const hs=rows.map(r=>Math.round(r.getBoundingClientRect().height));
+  const ih=rows.map(r=>r.clientHeight);
+  return {n:rows.length, net:net&&net.innerText,
+          winCls:cls(find('09:12')), lossCls:cls(find('10:44')),
+          naTxt:(find('13:41')||{innerText:''}).innerText, naCls:cls(find('13:41')),
+          note:!!document.querySelector('.n-zone.z-real .n-trnote'),
+          minH:Math.min(...hs), maxH:Math.max(...hs),
+          // clientHeight 不含 border：第一列刻意 border-top:0，拿含框的高度比會差 1px，
+          // 那是尺壞了不是版面壞了（第一版就在這裡誤報過一次紅燈）。
+          minIn:Math.min(...ih), maxIn:Math.max(...ih),
+          scrolls: rl ? rl.scrollHeight > rl.clientHeight+2 : false};})()`);
+chk("  八筆都列出來", led.n, 8);
+chk("  賺的那筆是紅色（台股慣例，紅＝賺）", /\bup\b/.test(led.winCls), true);
+chk("  賠的那筆是綠色", /\bdown\b/.test(led.lossCls), true);
+chk("  問不到成交價的那筆顯示破折號、不編數字", /—/.test(led.naTxt), true);
 chk("  而且有寫清楚為什麼那筆沒有點數", led.note, true);
+// 【鐵律】有 max-height 的 flex 直欄，子元素沒有 flex:none 的話不是捲動而是把每一列壓扁。
+// 筆數少的時候完全看不出來，所以治具刻意給了會超過容器高度的筆數。
+chk("  筆數超過容器高度時是捲動", led.scrolls, true);
+// 壓扁的話會掉到 20px 出頭（鐵律那次實測 107px 被壓成 21.6px），所以門檻放在 28px；
+// 「每一列一樣高」用不含 border 的內容高度比，才不會被第一列的 border-top:0 誤導。
+chk("  每一列沒有被壓扁（>= 28px）", led.minH >= 28, true);
+chk("  而且每一列一樣高（沒有誰被擠掉）", led.minIn === led.maxIn, true);
+console.log(`    實測列高 ${led.minH}~${led.maxH}px（含框）／${led.minIn}~${led.maxIn}px（內容）`);
+
+console.log("\n=== ⑨ 站在練習分頁：畫面上一顆真實下單鈕都沒有（結構防呆）===");
+await ctl("/mode/flat");
+await sleep(700);
+await goTab("sim");
+const s9 = await evalJS(`(()=>({
+  fire: document.querySelectorAll('[data-rdir]').length,
+  fb: document.querySelectorAll('.n-fb').length,
+  close: document.querySelectorAll('[data-rclose]').length,
+  realZone: document.querySelectorAll('.n-zone.z-real').length,
+  simZone: document.querySelectorAll('.n-zone.z-sim').length,
+  simBtns: document.querySelectorAll('[data-act="long"],[data-act="short"]').length}))()`);
+chk("  真實下單鈕一顆都沒有", s9.fire, 0);
+chk("  真實那一整區都不在畫面上", s9.realZone, 0);
+chk("  （負控組）練習那一區確實在，而且下單鈕看得到", [s9.simZone, s9.simBtns], [1, 2]);
+
+console.log("\n=== ⑩ 站在練習分頁：真實那一邊出事照樣看得到 ===");
+await ctl("/mode/stale");          // 有部位 ＋ 報價已中斷 27 秒
+await sleep(1500);
+const s10 = await evalJS(`(()=>{
+  const x=document.querySelector('.n-x.n-bad'), r=x&&x.getBoundingClientRect();
+  const b=document.getElementById('tabbadge');
+  return {onSim:!!document.querySelector('.n-zone.z-sim'),
+          alarm:!!x, txt:x?x.innerText:'',
+          visible:!!(r&&r.width>0&&r.height>0),
+          go:!!document.querySelector('[data-rgo]'),
+          badge:(b&&!b.hidden)?b.textContent:null};})()`);
+chk("  人還站在練習分頁", s10.onSim, true);
+chk("  報價中斷的警報照樣看得到", s10.alarm, true);
+chk("  而且是真的畫出來（不是有節點但沒尺寸）", s10.visible, true);
+chk("  警報上寫著中斷了幾秒", /27/.test(s10.txt), true);
+chk("  有一顆「去看部位」可以直接跳過去", s10.go, true);
+chk("  真實頁籤上掛著「有事」的標記", s10.badge, "!");
+
+console.log("\n=== ⑪ 做空的部位：平倉鈕要寫清楚送出去的是「買進」 ===");
+// 09-01 出過事：做空按平倉送出 Sell，等於又加一口空單。鈕上直接寫會送出什麼。
+await ctl("/mode/short");
+await sleep(1500);
+const s11 = await evalJS(`(()=>{const b=document.getElementById('tabbadge');
+  return {badge:(b&&!b.hidden)?b.textContent:null};})()`);
+// ⚠️ 不可以斷言固定數字。治具的浮動點數**刻意會跳**（靜態假狀態驗不出任何「重繪」
+//    類的 bug，見 fe_harness.py 的 tick_px），所以這裡驗的是格式與**正負號**：
+//    做空是虧的（現價高於進場）就一定要是負的 —— 號誌搞反才是會害到他的錯。
+chk("  站在練習分頁時，真實頁籤直接把浮動點數掛出來（做空虧損 → 負號）",
+  /^-\d+$/.test(String(s11.badge || "")), true);
+await goTab("real");
+const s11b = await evalJS(`(()=>{const c=document.querySelector('[data-rclose]');
+  const d=document.querySelector('.n-dir');
+  return {txt:c?c.innerText:'', dir:d?d.innerText:''};})()`);
+chk("  部位顯示的是做空", /做空/.test(s11b.dir), true);
+chk("  平倉鈕寫「買進」＋「回補空單」", /買進/.test(s11b.txt) && /回補空單/.test(s11b.txt), true);
+chk("  而且沒有寫成賣出", /賣出/.test(s11b.txt), false);
 
 c.close();
 ch.kill();
