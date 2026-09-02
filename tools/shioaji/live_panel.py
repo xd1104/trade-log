@@ -827,9 +827,10 @@ def day_bars(day=None, tf=CHART_TF, full=False):
 
     if full:
         try:
-            g, base = session_frame(d)
+            g, base, partial = session_frame(d)
             if g is None or g.empty:
                 return {"date": str(d), "bars": [], "trades": [], "tf": tf, "full": True,
+                        "partial": partial,
                         "error": None if SESSION_REF.get("api") else "尚未連線，且本機沒有這幾天的資料"}
             if d == date.today():
                 g = overlay_live(g)          # 先在 1 分 K 這一層換掉還沒收完的那幾分鐘
@@ -837,7 +838,9 @@ def day_bars(day=None, tf=CHART_TF, full=False):
         except Exception as e:
             return {"error": str(e)[:120]}
         return {"date": str(d), "bars": bars, "trades": _day_trades(d), "tf": tf,
-                "full": True, "night_open": base.strftime("%Y-%m-%d"),
+                # partial＝夜盤那一段還沒到齊（通常是剛啟動、還沒連上永豐）。
+                # 前端據此顯示「夜盤載入中」，不要讓他以為圖已經完整。
+                "full": True, "partial": partial, "night_open": base.strftime("%Y-%m-%d"),
                 # 漲跌的基準是上一個交易日的日盤收盤（跟看盤軟體一致）。
                 # 含夜盤之後不能再拿「圖上第一根的開盤」當基準 —— 那是昨晚 15:00。
                 "ref": prev_day_close(d)}
@@ -972,6 +975,8 @@ _SESS_BACK = {}     # 交易日 → 它前五天的原始 K 棒（過去的資�
 _SESS_OWN = {}      # 日期 → 該日的原始 K 棒（只快取過去的日子，今天的還在長）
 _TODAY_RAW = {}     # 今天的原始 K 棒：短期快取，見 TODAY_TTL
 SESS_RETRY = 60     # 抓不到資料時隔多久再試一次
+# 「拿到了但不完整」要更勤地重試：那段期間畫面上是缺夜盤的，撐 60 秒太久
+SESS_RETRY_PARTIAL = 8
 # 今天的 kbars 一分鐘才變一次，不必每次要圖都跟永豐重抓（實測整支 0.5~0.85 秒）。
 # 還沒收完的那幾分鐘由 overlay_live() 用即時 tick 換掉，所以壓成 20 秒不會讓畫面變舊。
 TODAY_TTL = 20
@@ -983,7 +988,7 @@ def _csv_stamp():
     return f.stat().st_mtime if f.exists() else None
 
 
-def _cached_raw(cache, key, days):
+def _cached_raw(cache, key, days, flags=None):
     """
     _raw_days 的快取層。抓到就留著；抓不到隔 SESS_RETRY 秒再試。
 
@@ -1003,12 +1008,18 @@ def _cached_raw(cache, key, days):
         # 夜盤基準往回跳到更早的日子（2026-08-25：週二的圖接的是上週五的夜盤）。
         if hit["df"] is not None and not hit.get("partial"):
             return hit["df"]
-        if time.time() - hit["at"] < SESS_RETRY:
+        # 不完整的那份重試要勤一點：舊值 60 秒代表「畫面上的錯資料要撐一分鐘」
+        wait = SESS_RETRY_PARTIAL if hit.get("partial") else SESS_RETRY
+        if time.time() - hit["at"] < wait:
+            if flags is not None and hit.get("partial"):
+                flags["partial"] = True
             return hit["df"]
     rep = {}
     df = _raw_days(days, report=rep)
-    cache[key] = {"df": df, "at": time.time(), "mt": stamp,
-                  "partial": bool(rep.get("incomplete"))}
+    part = bool(rep.get("incomplete"))
+    cache[key] = {"df": df, "at": time.time(), "mt": stamp, "partial": part}
+    if flags is not None and part:
+        flags["partial"] = True
     return df
 
 
@@ -1047,18 +1058,31 @@ def session_frame(d):
     today = date.today()
     key = str(d)
 
-    back = _cached_raw(_SESS_BACK, key, [d - timedelta(days=k) for k in range(5, 0, -1)])
+    flags = {}
+    back = _cached_raw(_SESS_BACK, key, [d - timedelta(days=k) for k in range(5, 0, -1)],
+                       flags)
     # 今天的 K 棒還在長，不能快取；過去的日子抓一次就夠
-    own = _today_raw(d) if d == today else _cached_raw(_SESS_OWN, key, [d])
+    own = _today_raw(d) if d == today else _cached_raw(_SESS_OWN, key, [d], flags)
+    partial = bool(flags.get("partial"))
 
     pool = [x for x in (back, own) if x is not None and not x.empty]
     if not pool:
-        return None, None
+        return None, None, partial
     px = pd.concat(pool, ignore_index=True).drop_duplicates("ts").sort_values("ts")
     tt, dd = px["ts"].dt.time, px["ts"].dt.date
 
     rows, n = [], None
+    # ⛔ 【資料不完整時，絕對不可以猜夜盤是哪一天】2026-09-02 他回報「K 線圖一直變來變去」，
+    #    截圖是重啟後第 60 秒與第 93 秒：先畫出**前天**的夜盤，連上永豐後才換成昨晚的。
+    #    根因就在下面這兩行 —— `n` 取的是「**手上這批資料裡**最近一個有夜盤的日子」。
+    #    面板剛啟動還沒連上永豐時只讀得到本機 csv，而 csv 的最後一天永遠缺夜盤
+    #    （排程 14:10 跑，那時夜盤還沒發生）⇒ 它就理直氣壯地挑到前天，畫出錯的一晚。
+    #    程式其實知道這份不完整（`partial`），只是沒拿它擋畫面。
+    #    現在：不完整就**只畫當天日盤**（那段是對的），夜盤等資料到齊再接上去。
+    #    少一段可以看得出來，畫錯一天看不出來 —— 他早上是照這張圖決定要不要進場的。
     nights = px[(tt >= NIGHT_OPEN) & (dd < d)]
+    if partial:
+        nights = nights.iloc[0:0]
     if not nights.empty:
         n = nights["ts"].dt.date.max()                     # 夜盤開盤日
         rows.append(px[(dd == n) & (tt >= NIGHT_OPEN)])    # 當晚 15:00~23:59
@@ -1070,11 +1094,11 @@ def session_frame(d):
 
     rows = [r for r in rows if not r.empty]
     if not rows:
-        return None, None
+        return None, None, partial
     g = pd.concat(rows, ignore_index=True).drop_duplicates("ts").sort_values("ts")
     base = (pd.Timestamp.combine(n, NIGHT_OPEN) if n is not None
             else pd.Timestamp.combine(d, SESSION_OPEN))
-    return g, base
+    return g, base, partial
 
 
 def overlay_live(g):
@@ -3547,9 +3571,16 @@ function pagerHTML(T){
  const net=T?T.reduce((a,t)=>a+t._net,0):((me&&me.net)||0);
  // 下排：純說明。即時那天也照樣寫日期（金點已經在講「現在」了，再寫「今天」是重複）；
  // 沒練習寫「未練習」而不是整段消失 —— 消失會讓上下兩行的位置跳動。
+ // partial＝夜盤那一段還沒到齊（剛啟動、還沒連上永豐）。
+ // ⛔ 這種時候後端**不會**再猜夜盤是哪一天了（猜錯會畫出前天的夜盤，他早上就是照這張圖
+ //    決定要不要進場的），所以圖上只有當天日盤 —— 一定要講出來，不然他會以為圖是完整的。
+ const partial=!!(barsCache&&barsCache.partial);
  const r2=loading
    ? '<span>載入中…</span>'
-   : ((noS&&noS!==dayS)?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
+   : (partial?'<span class="warn">夜盤資料載入中，圖上只有今天日盤</span>'+
+              '<span class="sep">·</span>':'')+
+     ((!partial&&noS&&noS!==dayS)
+       ?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
      '<span>'+(n
        // 負號用 U+2212 不用 hyphen，等寬字型下跟 + 對得齊（只改這裡，不動全域的 pm()）
        ? '練習 '+n+' 筆 <b class="'+sgn(net)+'">'+pm(net).replace('-','−')+'</b> 點'
