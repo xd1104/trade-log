@@ -230,6 +230,25 @@ chk("  標成 real（存進 real_trades，不走練習那條同步鏈）", nt.ki
 chk("  分區字母是大寫 R（小寫 r 是回顧，撞了會兩個輸入框打架）",
   nt.keys.every(k => String(k).startsWith("R|")), true);
 chk("  已經寫過的心得會顯示出來", nt.written >= 1, true);
+// 「跟練習那邊一模一樣」是他明確要求的（2026-09-02）。純功能測試看不出樣式差別，
+// 所以直接量兩邊的 computed style —— 這是「醜有時候不是品味問題」那條的同一招。
+const same = await evalJS(`(async()=>{
+  const pick=sel=>{const e=document.querySelector(sel); if(!e) return null;
+    const cs=getComputedStyle(e);
+    return {cls:e.className, font:cs.fontSize, color:cs.color, border:cs.border,
+            pad:cs.padding, ff:cs.fontFamily, txt:e.innerText.slice(0,20)};};
+  const click=t=>{const b=document.querySelector('[data-rtab="'+t+'"]'); if(b) b.click();};
+  const wait=ms=>new Promise(r=>setTimeout(r,ms));
+  click('sim'); await wait(1000);
+  const a=pick('.n-zone.z-sim .n-item .noteline');
+  click('real'); await wait(1200);
+  const b=pick('.n-zone.z-real .n-item .noteline');
+  return {a,b};})()`);
+chk("  兩邊都用 .n-item 包住（一列＋底下心得，同一種結構）",
+  [same.a && same.a.cls, same.b && same.b.cls], [same.a && same.a.cls, same.a && same.a.cls]);
+for (const k of ["font", "color", "border", "pad", "ff", "txt"]) {
+  chk(`  心得的 ${k} 跟練習一致`, same.b && same.b[k], same.a && same.a[k]);
+}
 // 點開來要真的出現輸入框，而且 0.5 秒的重繪不可以把它洗掉（中文輸入法會掉字）
 // ⚠️ 要挑「已經寫過心得」的那一列 —— 清單是新的在上面，有心得的那筆在最下面，
 //    抓第一個 [data-nedit] 會拿到還沒寫過的，然後誤判成「舊心得沒帶進來」。

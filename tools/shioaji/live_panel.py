@@ -2996,7 +2996,10 @@ function realTrades(list){
     // 認不得的理由一律寫「其他」——內部代號（sl_test 之類）不該印到他眼前
     const why={sl:'停損', tp:'停利', manual:'手動平倉',
                closed_elsewhere:'不是面板平的'}[t.reason]||'其他';
-    h+='<div class="n-row">'+
+    // 【結構要跟練習一樣】練習那邊每一筆是 `.n-item` 包住「一列 ＋ 底下的心得」，
+    // 心得的樣式掛在 `.n-item .noteline` 上。真實這邊本來只丟一個裸的 .n-row，
+    // 吃不到那組樣式 ⇒ 心得長得跟練習不一樣（他 2026-09-02 要求對齊）。
+    h+='<div class="n-item"><div class="n-row">'+
       '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
       '<span class="tm">'+esc(String(t.entry_time||'—').slice(0,5))+'&rarr;'+
         esc(String(t.exit_time||'—').slice(0,5))+'</span>'+
@@ -3009,8 +3012,9 @@ function realTrades(list){
     // nEditing() 分不出是誰在編輯，兩邊的輸入框會互相打架。
     // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（跟成績單一樣）。
     const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry};
+    // 提示字與 placeholder 也用練習那邊同一組 —— 他要的是「一模一樣」
     h+=noteBox(nkey('R',nt), t.note, nattr(nt)+' data-nkind="real"',
-               '＋ 寫下這筆的心得', '這一筆為什麼進場？出場後回頭看，哪裡做對做錯？');
+               '＋ 寫下今天的心得', '今天的盤感、進出場理由、紀律有沒有守…')+'</div>';
   }
   h+='</div>';
   // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
