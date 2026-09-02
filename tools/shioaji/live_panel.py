@@ -1933,6 +1933,15 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   font-family:var(--font-mono); opacity:0; transition:opacity .12s var(--ease)}
 .rbtn.holding .hint{opacity:.95}
 .rbtn span{position:relative}
+/* 載入中的三個點。⚠️ 這一塊**不是**每 0.5 秒重繪的節點（只有 partial 變了才換），
+   所以可以掛動畫；報價那些每 tick 重建的地方一律不准掛（面板開發鐵律）。 */
+.dots{display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle}
+.dots i{width:5px; height:5px; border-radius:50%; background:var(--gold);
+  animation:dotpulse 1.1s var(--ease) infinite}
+.dots i:nth-child(2){animation-delay:.18s}
+.dots i:nth-child(3){animation-delay:.36s}
+@keyframes dotpulse{0%,60%,100%{opacity:.22} 30%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.dots i{animation:none; opacity:.6}}
 .quota{font-size:11px; color:var(--faint); font-family:var(--font-mono);
   text-align:right; margin-top:9px}
 /* 今天的真實交易成績單。⚠️ 這一塊每 0.5 秒跟著卡片重繪，所以不掛任何動畫。 */
@@ -2966,6 +2975,13 @@ function realTrades(list){
       '<span class="wy">'+why+'</span>'+
       '<span class="pt '+(t.points==null?'na':sgn(t.points))+'">'+
       (t.points==null?'—':pm(t.points))+'</span></div>';
+    // 心得：跟練習同一套（點一下展開輸入框、事後補寫）。
+    // 分區字母用大寫 R —— 小寫 r 已經被回顧分頁佔走，同一個字母會讓
+    // nEditing() 分不出是誰在編輯，兩邊的輸入框會互相打架。
+    // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（跟成績單一樣）。
+    const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry};
+    h+=noteBox(nkey('R',nt), t.note, nattr(nt)+' data-nkind="real"',
+               '＋ 寫下這筆的心得', '這一筆為什麼進場？出場後回頭看，哪裡做對做錯？');
   }
   h+='</div>';
   // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
@@ -3000,7 +3016,9 @@ function paintRight(s,nf){
   }
   if(RTAB==='real'){
     setEl('realbody', realBody(s));
-    setEl('realstats', realStats(R));
+    // 編輯心得時不重畫這一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
+    // 「展開輸入框」本身也是一次重繪，所以刻意的重繪帶 nf 旗標繞過去（跟練習那邊同一招）。
+    if(nf||!nEditing('R')) setEl('realstats', realStats(R));
     setEl('realfoot', realFoot(R));
   } else {
     // 編輯心得時不重畫那一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
@@ -3145,7 +3163,14 @@ function paintFallback(s,q){
    '</div></div>');
  setEl('mfpager',pagerHTML(null));
  setEl('cpick',pickOpen?calHTML():'');
- setEl('mfbody',
+ // 【還在載入 ≠ 這天沒有資料】兩者的文案完全不同：前者叫他等，後者叫他換一天。
+ // 剛啟動還沒跟永豐要到資料時說「這一天沒有 K 線」，等於叫他去做沒有用的事。
+ const still=barsLoading()||barsPending;
+ setEl('mfbody', still
+   ? '<div class="note skel-note"><b>K 線資料載入中…</b>　'+
+     '正在跟永豐要這個交易日的 K 棒。<span class="dots"><i></i><i></i><i></i></span>'+
+     (s.msg?'<br><span style="color:var(--faint)">'+s.msg+'</span>':'')+'</div>'
+   :
    '<div class="note"><b>這一天沒有 K 線可以畫</b>　'+
    '本機的歷史檔沒有這一天，也還沒跟永豐要到。'+
    '用上面的 ◀ ▶、月曆或鍵盤 ← → 換到別的交易日就看得到。'+
@@ -3161,6 +3186,18 @@ function paintFallback(s,q){
 // 價格軸自動貼合「畫面上看得到的那幾根」，跟看盤軟體一樣。
 var barsCache=null, barsAt=0, viewDate='', pickOpen=false, calMonth='';
 var barsPending=false;        // 換日的資料還在路上（見 fetchBars）
+// 夜盤資料還沒到齊（後端 partial）的起算時間。
+// 他 2026-09-02：「如果 k 圖還沒有畫好，可以顯示 loading 動畫，不要直接讓我看到錯的 k 圖」。
+// ⚠️ 要有上限：永豐真的連不上時 partial 會一直是 true，沒有上限的話他會對著
+//    一張永遠在轉的圖乾等。超過 PARTIAL_WAIT 就把圖照常畫出來，靠標題那行說明。
+var partialSince=null;
+const PARTIAL_WAIT=30000;
+function barsLoading(){
+  const part=!!(barsCache&&barsCache.partial);
+  if(!part){ partialSince=null; return false; }
+  if(partialSince==null) partialSince=Date.now();
+  return (Date.now()-partialSince)<PARTIAL_WAIT;
+}
 var barsSeq=0;                // 換日請求的流水號，只採用最後一次的回應（見 fetchBars）
 // n＝看得到幾根；end＝最右邊那根的索引（null＝跟著最新）
 // vz＝價格軸縮放倍率（>1 放大、<1 壓縮）；voff＝價格軸平移量（單位：點）
@@ -3259,7 +3296,17 @@ function dayRail(BC,q,live){
 }
 function chartSVG(s){
  const G=chartGeom(); if(!G) return null;
- const B=G.all.slice(G.from,G.to), T=(barsCache.trades)||[], P=s.position;
+ const B=G.all.slice(G.from,G.to), P=s.position;
+ // 【真實交易也要標在圖上】本來只有練習單有標記 —— 他 2026-09-02 說「真實交易也可以
+ // 像練習一樣在 K 圖上顯示我哪裡進哪裡出嗎」。真實那幾筆在 s.real.trades（只有今天），
+ // 所以**只有看今天的即時圖時才畫**，切到別天不可以把今天的單畫上去。
+ // 形狀沿用練習那一套（三角形／菱形／持有區間），另外加一圈金色光環區分真假。
+ const T0=(barsCache.trades)||[];
+ const RT=(!viewDate&&s.real&&s.real.trades)?s.real.trades:[];
+ const T=T0.concat(RT.filter(t=>t.entry!=null&&t.entry_time).map(t=>({
+     time:String(t.entry_time).slice(0,5), entry:t.entry, exit:t.exit,
+     dir:t.dir, _exit_time:t.exit==null?null:String(t.exit_time||''),
+     _net:t.points==null?0:t.points, _real:true})));
  const live=!viewDate;
  const cname=(s.conn&&s.conn.contract_name)||'微台';
  const first=G.all[0], last=G.all[G.all.length-1];
@@ -3274,7 +3321,13 @@ function chartSVG(s){
  // 價格軸只貼合看得到的那幾根
  let hi=Math.max(...B.map(b=>b.h)), lo=Math.min(...B.map(b=>b.l));
  const inView=t=>{ const i=idxAll(t); return i>=G.from&&i<G.to; };
- T.forEach(t=>{ if(inView(t.time)){ hi=Math.max(hi,t.entry,t.exit); lo=Math.min(lo,t.entry,t.exit);} });
+ // ⛔ 【出場價可能是 null】練習單一定有出場價，**真實單不一定**（問不到成交價時會留白）。
+ //    舊寫法 Math.min(lo, entry, null) 會把 null 當成 0 ⇒ **價格軸整個掉到 0**，
+ //    K 棒被壓成畫面頂端一條線（2026-09-02 加真實標記時當場踩到，截圖才看見）。
+ //    又是同一個形狀的坑：練習那邊一定有的欄位，真實那邊可能沒有。
+ T.forEach(t=>{ if(!inView(t.time)) return;
+   [t.entry,t.exit].forEach(v=>{ if(typeof v==='number'&&isFinite(v)){
+     hi=Math.max(hi,v); lo=Math.min(lo,v); } }); });
  if(P&&live&&G.live){ hi=Math.max(hi,P.tp); lo=Math.min(lo,P.sl); }
  // 【真實部位也要畫在圖上】舊版 chartSVG 只畫 s.position（練習部位），
  // 真實部位在 s.real.position ⇒ **假單有標記、真單一條線都沒有**（提案 §3.H）。
@@ -3462,6 +3515,9 @@ function chartSVG(s){
    // 引導線：從標記垂直落到時間軸帶，眼睛才接得起來（不壓 K 棒）
    g+='<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+(H-BOT)+
       '" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>';
+   // 真實單多一圈金色光環：形狀跟練習一樣（他認得），但一眼分得出是真錢
+   if(t._real) g+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+
+     '" r="9.5" fill="none" stroke="#E3A951" stroke-width="1.6" opacity=".85"/>';
    const tri=long?('M'+(X-7.5)+' '+(Y+16)+' L'+X+' '+(Y+3.5)+' L'+(X+7.5)+' '+(Y+16)+' Z')
                  :('M'+(X-7.5)+' '+(Y-16)+' L'+X+' '+(Y-3.5)+' L'+(X+7.5)+' '+(Y-16)+' Z');
    g+='<path d="'+tri+'" fill="'+col+'" stroke="#0E1116" stroke-width="1.8" stroke-linejoin="round"/>'+
@@ -3470,8 +3526,9 @@ function chartSVG(s){
    g+=axisChip(Y,String(Math.round(t.entry)),col);
    // 進出場很近就把兩枚膠囊合併成一枚，不要互相推擠（他的單多半 5~15 分鐘就結束）
    const near=hasExit&&(XE-X)<110;
-   if(!near) laneX.push([X,(long?'▲ 進 ':'▼ 進 ')+t.time,col]);
-   else laneX.push([(X+XE)/2,(long?'▲ ':'▼ ')+t.time+'→'+t._exit_time.slice(0,5)+
+   const tag=t._real?'真 ':'';
+   if(!near) laneX.push([X,tag+(long?'▲ 進 ':'▼ 進 ')+t.time,col]);
+   else laneX.push([(X+XE)/2,tag+(long?'▲ ':'▼ ')+t.time+'→'+t._exit_time.slice(0,5)+
      '　'+pm(t._net),ec]);
    if(hasExit){
      g+='<line x1="'+XE.toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+(H-BOT)+
@@ -3479,8 +3536,11 @@ function chartSVG(s){
         '<rect x="'+(XE-5.6).toFixed(1)+'" y="'+(YE-5.6).toFixed(1)+'" width="11.2" height="11.2"'+
         ' rx="2.4" transform="rotate(45 '+XE.toFixed(1)+' '+YE.toFixed(1)+')" fill="'+ec+
         '" stroke="#0E1116" stroke-width="1.8"/>';
+     if(t._real) g+='<circle cx="'+XE.toFixed(1)+'" cy="'+YE.toFixed(1)+
+       '" r="9.5" fill="none" stroke="#E3A951" stroke-width="1.6" opacity=".85"/>';
      g+=axisChip(YE,String(Math.round(t.exit)),ec);
-     if(!near) laneX.push([XE,'出 '+t._exit_time.slice(0,5)+'　'+pm(t._net),ec]);
+     if(!near) laneX.push([XE,(t._real?'真 ':'')+'出 '+t._exit_time.slice(0,5)+
+       '　'+pm(t._net),ec]);
    }
  });
  // ---- 游標所在那根：畫垂直參考線 ----
@@ -3770,7 +3830,7 @@ function paintChart(s){
  // 只切 class，不動 innerHTML —— 動 innerHTML 會打斷他的縮放與拖曳。
  { const card=document.getElementById('cchart');
    if(card){
-     const busy=barsPending||curDay()!==((barsCache&&barsCache.date)||'');
+     const busy=barsPending||curDay()!==((barsCache&&barsCache.date)||'')||barsLoading();
      if(busy!==card.classList.contains('kk-load')) card.classList.toggle('kk-load',busy);
      if(!busy&&kkWasBusy) kkDraw();     // 新的一天到齊了 → 再展開一次
      kkWasBusy=busy;
@@ -3954,14 +4014,17 @@ document.addEventListener('click', function(e){
  if(ed){
    NOTE={key:ed.getAttribute('data-nedit'), text:ed.getAttribute('data-note')||'',
          date:ed.getAttribute('data-nd')||'', time:ed.getAttribute('data-nt')||'',
-         entry:ed.getAttribute('data-ne')||'', open:ed.hasAttribute('data-nopen')};
+         entry:ed.getAttribute('data-ne')||'', open:ed.hasAttribute('data-nopen'),
+         kind:ed.getAttribute('data-nkind')||''};
    nrepaint(); return;
  }
  const sv=e.target.closest('[data-nsave]');
  if(sv){
    const el=document.getElementById('tnote'), txt=el?el.value:NOTE.text;
    const b=NOTE.open?{open:true,text:txt}
-     :{date:NOTE.date,time:NOTE.time,entry:Number(NOTE.entry),text:txt};
+     :{date:NOTE.date,time:NOTE.time,entry:Number(NOTE.entry),text:txt,
+       // 真實交易的心得存進 real_trades/，不走練習那條同步鏈
+       kind:(NOTE.kind==='real'?'real':undefined)};
    sv.disabled=true;
    fetch('/api/note',{method:'POST',headers:{'Content-Type':'application/json'},
                       body:JSON.stringify(b)})
@@ -5006,6 +5069,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/api/note":
             try:
+                # 真實交易的心得走 broker（存在 real_trades/，**不上傳**）。
+                # ⚠️ 刻意不放在 /api/real/* 底下 —— 那個前綴的意思是「會送出委託單」，
+                #    寫心得不該混進去（有部位時我們有一條「不碰 /api/real/*」的鐵律）。
+                if body.get("kind") == "real":
+                    ok, msg = broker.set_trade_note(
+                        body.get("date"), body.get("time"),
+                        body.get("entry"), body.get("text"))
+                    return self._json(200 if ok else 409, {"ok": ok, "msg": msg})
                 if body.get("open"):
                     ok, msg = set_note(None, None, None, body.get("text"), on_open=True)
                 else:

@@ -243,6 +243,49 @@ def trades_today():
     return rows
 
 
+def set_trade_note(day, entry_time, entry, text):
+    """
+    給某一筆真實交易補心得。
+
+    【認人方式跟練習那邊同一套】(日期 ＋ 進場時間 ＋ 進場價)，**不可以用陣列位序** ——
+    位序會被「撤銷最後一筆」之類的動作弄歪（CLAUDE.md 記過）。
+    進場時間只比到分（HH:MM）：畫面上顯示的就是分，秒是我們自己記的。
+
+    ⛔ 真實交易的心得**只留在這台電腦**，跟成績單一樣不上傳
+       （練習的才會同步到 data/practice.json 與手機）。
+    """
+    f = TRADE_DIR / f"{day}.jsonl"
+    if not f.exists():
+        return False, "找不到那一天的真實交易紀錄"
+    rows = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    want_t = str(entry_time or "")[:5]
+    hit = None
+    for r in rows:
+        if str(r.get("entry_time") or "")[:5] != want_t:
+            continue
+        if entry is not None and r.get("entry") is not None:
+            if round(float(r["entry"])) != round(float(entry)):
+                continue
+        hit = r
+        break
+    if hit is None:
+        return False, "對不到那一筆交易（時間或進場價不符）"
+    hit["note"] = (text or "").strip() or None
+    hit["note_at"] = datetime.now().isoformat(timespec="seconds")
+    tmp = f.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                   encoding="utf-8")
+    tmp.replace(f)                       # 換檔是原子的，寫到一半斷電不會留半個檔
+    _HIST["at"] = 0.0                    # 快取作廢，畫面才會立刻看到新的字
+    return True, None
+
+
 _HIST = {"at": 0.0, "rows": []}
 HIST_TTL = 5.0          # 秒。面板每 0.5 秒問一次，不快取就是每秒讀兩次磁碟
 

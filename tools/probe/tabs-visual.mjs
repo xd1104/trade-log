@@ -213,6 +213,85 @@ chk("  今天的交易清單看得到", off.rows > 0, true);
 chk("  算不出點數的那幾筆有講出來，不是默默不算",
   /沒有算進勝率/.test(off.txt), true);
 
+console.log("\n=== ⑧ 每一筆真實交易都要能寫心得（跟練習一樣）===");
+// Benson 2026-09-02：「我還想要可以輸入每一筆交易的心得，就跟練習的一模一樣。」
+await ctl("/mode/flat");
+await goTab("real");
+await sleep(1000);
+const nt = await evalJS(`(()=>{
+  const rows=[...document.querySelectorAll('.n-zone.z-real .n-row')];
+  const eds=[...document.querySelectorAll('.n-zone.z-real [data-nedit]')];
+  return {rows:rows.length, edits:eds.length,
+          kinds:[...new Set(eds.map(e=>e.getAttribute('data-nkind')))],
+          keys:eds.slice(0,2).map(e=>e.getAttribute('data-nedit')),
+          written:eds.filter(e=>(e.getAttribute('data-note')||'').length>0).length};})()`);
+chk("  每一筆底下都有心得入口", nt.edits, nt.rows);
+chk("  標成 real（存進 real_trades，不走練習那條同步鏈）", nt.kinds, ["real"]);
+chk("  分區字母是大寫 R（小寫 r 是回顧，撞了會兩個輸入框打架）",
+  nt.keys.every(k => String(k).startsWith("R|")), true);
+chk("  已經寫過的心得會顯示出來", nt.written >= 1, true);
+// 點開來要真的出現輸入框，而且 0.5 秒的重繪不可以把它洗掉（中文輸入法會掉字）
+// ⚠️ 要挑「已經寫過心得」的那一列 —— 清單是新的在上面，有心得的那筆在最下面，
+//    抓第一個 [data-nedit] 會拿到還沒寫過的，然後誤判成「舊心得沒帶進來」。
+await evalJS(`(()=>{const e=[...document.querySelectorAll('.n-zone.z-real [data-nedit]')]
+  .find(x=>(x.getAttribute('data-note')||'').length>0);
+  if(e) e.click();})()`);
+await sleep(1600);
+const ed = await evalJS(`(()=>{const t=document.getElementById('tnote');
+  return {open:!!t, val:t?t.value:null};})()`);
+chk("  點一下會展開輸入框", ed.open, true);
+chk("  舊的心得帶進輸入框裡（不是空的）", (ed.val || "").length > 0, true);
+await evalJS(`(()=>{const t=document.getElementById('tnote');
+  if(t){ t.value='探針打的字'; t.dispatchEvent(new Event('input',{bubbles:true})); }})()`);
+await sleep(1800);                       // 撐過 3 次 tick
+const kept = await evalJS(`(()=>{const t=document.getElementById('tnote');
+  return t?t.value:null;})()`);
+chk("  ⛔ 打到一半不可以被重繪洗掉", kept, "探針打的字");
+await evalJS(`(()=>{const b=document.querySelector('[data-ncancel]'); if(b) b.click();})()`);
+await sleep(900);
+
+console.log("\n=== ⑨ 真實交易要標在 K 線圖上（本來只有練習有）===");
+const mk = await evalJS(`(()=>{const sv=document.getElementById('csvg');
+  if(!sv) return {svg:false};
+  const t=[...sv.querySelectorAll('text')].map(e=>e.textContent);
+  const gold=[...sv.querySelectorAll('circle')]
+    .filter(c=>(c.getAttribute('stroke')||'').toLowerCase()==='#e3a951').length;
+  return {svg:true, real:t.filter(x=>/^真 /.test(x)).length, halo:gold};})()`);
+chk("  圖畫得出來", mk.svg, true);
+chk("  有標出真實交易（膠囊上寫「真」）", mk.real > 0, true);
+chk("  真實那幾筆有金色光環，跟練習分得出來", mk.halo > 0, true);
+// ⛔ 價格軸的合理性 —— 沒有這道，「軸掉到 0、K 棒被壓成一條線」不會被抓到。
+//    2026-09-02 真的發生：真實單的出場價可能是 null，Math.min(lo, entry, null) 當成 0。
+// ⚠️ 不要用「掃 svg 裡所有像價格的數字」當尺 —— 那會把**成交量軸**的數字也刮進來
+//    （量是 1250 之類的四位數），第一版就這樣誤判成「軸被拉爆」。
+//    直接驗程式算出來的自動範圍 window.AXIS，那才是被 bug 弄壞的東西。
+const ax9 = await evalJS(`(()=>{const bars=(window.barsCache&&window.barsCache.bars)||[];
+  return {axis:window.AXIS,
+          hi:Math.max(...bars.map(b=>b.h)), lo:Math.min(...bars.map(b=>b.l))};})()`);
+chk("  價格軸下緣沒有掉到 K 棒範圍外（null 被當成 0 的話會掉到 0）",
+  ax9.axis.lo > ax9.lo - 3000, true);
+chk("  價格軸上緣也合理", ax9.axis.hi < ax9.hi + 3000, true);
+console.log(`    實測 軸 ${ax9.axis.lo}~${ax9.axis.hi}　K 棒 ${ax9.lo}~${ax9.hi}`);
+
+console.log("\n=== ⑩ 資料還沒到齊 → 顯示載入中，不要給他看半成品 ===");
+// Benson：「如果 k 圖還沒有畫好的話，可以顯示 loading 動畫，不要直接讓我看到錯的 k 圖。」
+await ctl("/mode/loading");
+await evalJS(`(()=>{ if(window.fetchBars) fetchBars(true); })()`);
+await sleep(2200);
+const ld = await evalJS(`(()=>{const card=document.getElementById('cchart');
+  return {partial:!!(window.barsCache&&window.barsCache.partial),
+          dimmed:!!(card&&card.classList.contains('kk-load')),
+          caption:(document.querySelector('.chead')||{innerText:''}).innerText};})()`);
+chk("  後端有回報還沒到齊", ld.partial, true);
+chk("  圖要進入載入狀態（淡下去＋進度條）", ld.dimmed, true);
+chk("  而且要寫出來是在載入什麼", /夜盤資料載入中/.test(ld.caption), true);
+await ctl("/mode/flat");
+await evalJS(`(()=>{ if(window.fetchBars) fetchBars(true); })()`);
+await sleep(1800);
+const done2 = await evalJS(`(()=>{const card=document.getElementById('cchart');
+  return !!(card&&card.classList.contains('kk-load'));})()`);
+chk("  資料到齊之後要退出載入狀態（不可以一直轉）", done2, false);
+
 // ⛔ 這一項以前只在第 ① 節做過，後面幾節（休市、K 線圖、練習紀錄）產生的 console error
 //    **只會被印出來，不算失敗、不影響 exit code** ⇒ 掛排程或只看「總結」的人會被安靜放行
 //    （lab-qa 2026-09-01 退件第 3 條）。錯誤要在**全部跑完之後**再驗一次。

@@ -31,23 +31,26 @@ SLOW = {"v": 0.0}
 
 # ── 今天的真實交易：前 5 筆是墊高用的（讓清單真的超過 max-height 而要捲），
 #    後 3 筆是有意義的三種狀態：停利、停損、問不到成交價（要留白）。
+DAY = "2026-09-01"          # 治具的假交易日（K 棒與交易共用）
+
 REAL_TRADES = [
-    {"dir": "long", "qty": 1, "entry_time": "08:52:03", "entry": 47080.0,
-     "exit_time": "08:58:44", "exit": 47180.0, "reason": "tp", "points": 100.0},
-    {"dir": "short", "qty": 1, "entry_time": "09:20:15", "entry": 47190.0,
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "08:52:03", "entry": 47080.0,
+     "exit_time": "08:58:44", "exit": 47180.0, "reason": "tp", "points": 100.0,
+     "note": "開盤追多，這次對了"},
+    {"date": DAY, "dir": "short", "qty": 1, "entry_time": "09:20:15", "entry": 47190.0,
      "exit_time": "09:26:02", "exit": 47090.0, "reason": "tp", "points": 100.0},
-    {"dir": "long", "qty": 1, "entry_time": "09:41:30", "entry": 47120.0,
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "09:41:30", "entry": 47120.0,
      "exit_time": "09:48:12", "exit": 47020.0, "reason": "sl", "points": -100.0},
-    {"dir": "short", "qty": 1, "entry_time": "10:02:44", "entry": 47005.0,
+    {"date": DAY, "dir": "short", "qty": 1, "entry_time": "10:02:44", "entry": 47005.0,
      "exit_time": "10:08:51", "exit": 47041.0, "reason": "manual", "points": -36.0},
-    {"dir": "long", "qty": 1, "entry_time": "10:15:09", "entry": 47060.0,
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "10:15:09", "entry": 47060.0,
      "exit_time": "10:22:37", "exit": 47083.0, "reason": "closed_elsewhere", "points": 23.0},
-    {"dir": "long", "qty": 1, "entry_time": "09:05:11", "entry": 47144.0,
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "09:05:11", "entry": 47144.0,
      "exit_time": "09:12:40", "exit": 47244.0, "reason": "tp", "points": 100.0},
-    {"dir": "short", "qty": 1, "entry_time": "10:31:02", "entry": 47010.0,
+    {"date": DAY, "dir": "short", "qty": 1, "entry_time": "10:31:02", "entry": 47010.0,
      "exit_time": "10:44:19", "exit": 47110.0, "reason": "sl", "points": -100.0},
     # 問不到成交價：出場價與點數都要留白，絕對不可以拿現價冒充
-    {"dir": "long", "qty": 1, "entry_time": "13:39:21", "entry": 47144.0,
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "13:39:21", "entry": 47144.0,
      "exit_time": "13:41:17", "exit": None, "reason": "manual", "points": None},
 ]
 
@@ -75,7 +78,6 @@ SIM_TRADES = [
 # ── 假的 5 分 K：讓 paintChart() 真的畫得出來 ──────────────────────────────
 #    沒有這一段的話 /api/bars 回 {}，前端會退到 paintFallback，
 #    K 線圖那一整段（含新加的「真實部位三條線」）等於完全沒被測到。
-DAY = "2026-09-01"
 
 
 def bars():
@@ -187,7 +189,11 @@ class H(BaseHTTPRequestHandler):
         if self.path.startswith("/api/state"):
             return self._send(200, json.dumps(state(), ensure_ascii=False))
         if self.path.startswith("/api/bars"):
-            return self._send(200, json.dumps(bars(), ensure_ascii=False))
+            b = bars()
+            if MODE["v"] == "loading":
+                # 夜盤還沒到齊：後端會回 partial=True 且只給當天日盤
+                b["partial"] = True
+            return self._send(200, json.dumps(b, ensure_ascii=False))
         if self.path.startswith("/api/stats"):
             return self._send(200, json.dumps(stats(), ensure_ascii=False))
         if self.path.startswith("/manifest.webmanifest"):

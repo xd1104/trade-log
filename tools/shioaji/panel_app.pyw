@@ -14,6 +14,7 @@
 【為什麼不用 Edge 的 --app】視窗擁有者是 Edge ⇒ 工作列一律顯示 Edge 的圖示
 （安裝成 PWA 也一樣），而且關窗時機測不準。詳見 open_window() 的說明。
 """
+import ctypes
 import json
 import os
 import subprocess
@@ -135,6 +136,51 @@ def watchdog(started):
             time.sleep(0.1)
 
 
+def window_box(want_w, want_h):
+    """
+    算出視窗要多大、擺在哪 —— **置中**，而且保證整個視窗都在螢幕的可用區內。
+
+    【為什麼要自己算】不給 x/y 的話 pywebview 會用系統預設位置，每次開都不一樣，
+    常常黏在左上角或跨到螢幕外（Benson 2026-09-02 截圖：視窗貼在左上、右邊切掉）。
+
+    ⛔ 【一定要先設 DPI 感知再量】pywebview 自己會在建立視窗時呼叫 `SetProcessDPIAware()`
+       （`webview/platforms/winforms.py`），之後它的座標是**實體像素**。
+       我們如果在那之前量，系統回的是**被虛擬化過的邏輯像素**（他的機器縮放 125%：
+       量到 1536×816，實際是 1920×1040）—— 兩套座標差 1.25 倍，算出來的中心會整個偏掉。
+       所以這裡先自己呼叫一次（pywebview 再呼叫是無害的），確保兩邊同一套。
+    ⚠️ 用「工作區」不是整個螢幕：扣掉工作列，視窗才不會被工作列蓋住底部。
+
+    【他遇到的其實是這個】原本寫死 1520×980，而他的可用高度只有 1040 —— 視窗比螢幕
+    還高，Windows 只好隨便擺，右邊與底部就被切掉了（2026-09-02 截圖）。所以除了置中，
+    **一定要夾住尺寸**。
+    """
+    try:
+        u32 = ctypes.windll.user32
+        try:
+            u32.SetProcessDPIAware()
+        except Exception:
+            pass
+        # 可用工作區（扣掉工作列）。SPI_GETWORKAREA = 0x0030
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+        r = RECT()
+        if not u32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
+            raise OSError("SystemParametersInfoW 失敗")
+        aw, ah = r.right - r.left, r.bottom - r.top
+        # 螢幕比視窗小就縮到塞得下（留一點邊，不要頂滿）
+        w = max(900, min(want_w, aw - 40))
+        h = max(640, min(want_h, ah - 40))
+        x = r.left + max(0, (aw - w) // 2)
+        y = r.top + max(0, (ah - h) // 2)
+        log(f"視窗 {w}x{h} @ ({x},{y})　工作區 {aw}x{ah}（實體像素）")
+        return w, h, x, y
+    except Exception as e:
+        # 算不出來就退回原本的行為（讓系統決定位置），不要因為擺位失敗就開不了視窗
+        log(f"算不出視窗位置（{e}），用系統預設")
+        return want_w, want_h, None, None
+
+
 def open_window():
     """
     自己開一個視窗，不要交給 Edge。
@@ -158,7 +204,8 @@ def open_window():
     except Exception:
         pass
 
-    webview.create_window("早盤儀表板", URL, width=1520, height=980,
+    w, h, x, y = window_box(1520, 980)
+    webview.create_window("早盤儀表板", URL, width=w, height=h, x=x, y=y,
                           min_size=(1100, 700))
     kw = {"private_mode": False, "storage_path": PROFILE}
     if os.path.exists(ICON):
