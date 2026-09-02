@@ -174,7 +174,8 @@ SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 # 【只顯示，不做分析】永豐的指數歷史 1 分 K 只有 54 個破碎的交易日，
 # 測不出東西 —— 這裡純粹是多一個客觀數字，不是訊號。
 # 現貨 09:00 才開盤、13:30 收，比期貨晚開早收，所以會有「尚未開盤」的空窗。
-INDEX = {"price": None, "chg": None, "pct": None, "at": None, "contract": None}
+INDEX = {"price": None, "chg": None, "pct": None, "at": None, "contract": None, "ms": None}
+INDEX_EVERY = 2.0        # 秒。指數輪詢的目標週期（實際週期 = max(這個值, 單次耗時)）
 CASH_OPEN = pd.Timestamp("09:00").time()
 CASH_CLOSE = pd.Timestamp("13:35").time()
 
@@ -3127,6 +3128,17 @@ function fetchBars(force){
   .catch(()=>{ if(my===barsSeq) barsPending=false; });
 }
 
+// 價格軸的「上次算出來的自動範圍」——給遲滯用，見 chartSVG() 裡的說明
+var AXIS={key:null, hi:0, lo:0, step:0};
+
+/* 把「一格大概多少」修成好看的刻度：1／2／2.5／5／10 × 10^n。
+   貼齊之後刻度線會落在整數（46500、46600…），而且價格動個幾點不會再牽動整條軸。 */
+function niceStep(raw){
+  if(!(raw>0)) return 10;
+  const p=Math.pow(10,Math.floor(Math.log10(raw))), n=raw/p;
+  return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p;
+}
+
 function chartGeom(){
  const all=(barsCache&&barsCache.bars)||[];
  if(!all.length) return null;
@@ -3205,7 +3217,24 @@ function chartSVG(s){
  // 圖是兩個分頁共用的，所以站在練習分頁也看得到這三條線。
  const RQ=(s.real&&s.real.position&&s.real.tp!=null&&s.real.sl!=null)?s.real:null;
  if(RQ&&live&&G.live){ hi=Math.max(hi,RQ.tp,RQ.sl); lo=Math.min(lo,RQ.tp,RQ.sl); }
- const pad=(hi-lo)*0.08||10; hi+=pad; lo-=pad;
+ const pad=(hi-lo)*0.08||10;
+ // ⛔ 【價格軸要黏住，不可以每根新 K 棒就重算一次】2026-09-02 他回報「開盤時 K 線圖
+ //    一直變來變去」。實測回放今天的資料：**08:45~09:30 之間軸變了 7 次、09:30 之後 0 次**。
+ //    原因不是價格創新高低，是**視窗固定只顯示最後 60 根**：每多一根新的，
+ //    左邊就掉一根舊的 ⇒ 昨晚夜盤的最高點被一根一根擠出畫面 ⇒ hi 一路縮
+ //    （實測上緣 46962→46934→46868→46836→46815）⇒ **整張圖所有 K 棒重新定位**。
+ //    最後那根還是「沒收完」的即時棒，高低點每個 tick 都在動，中間還會再抖。
+ //    修法兩層：① 貼齊整數刻度（差幾點根本不會動到軸，順便讓刻度變成好讀的整數）；
+ //             ② 遲滯 —— 舊軸只要還包得住新資料、而且沒有空太多，就沿用。
+ //    ⚠️ 縮放／平移／換日要能重新貼合，所以那些會進 key。
+ const axHi=hi+pad, axLo=lo-pad;
+ const astep=niceStep((axHi-axLo)/6);
+ let sHi=Math.ceil(axHi/astep)*astep, sLo=Math.floor(axLo/astep)*astep;
+ const axKey=(barsCache&&barsCache.date||'')+'|'+VIEW.n+'|'+(VIEW.end==null?'live':VIEW.end);
+ if(AXIS.key===axKey && AXIS.hi>=axHi && AXIS.lo<=axLo
+    && (axHi-axLo)>=(AXIS.hi-AXIS.lo)*0.55){ sHi=AXIS.hi; sLo=AXIS.lo; }
+ AXIS={key:axKey, hi:sHi, lo:sLo, step:astep};
+ hi=sHi; lo=sLo;
  // 直向縮放／平移：以自動範圍的中心為基準伸縮，再整體上下位移
  { const mid=(hi+lo)/2+VIEW.voff, half=((hi-lo)/2)/VIEW.vz;
    hi=mid+half; lo=mid-half; }
@@ -3242,8 +3271,13 @@ function chartSVG(s){
      '" height="'+(H-TOP-BOT)+'" fill="#E3A951" opacity=".05"/>';
  }
  g+='<rect x="'+(W-R)+'" y="0" width="'+R+'" height="'+H+'" fill="#1C222C" opacity=".45"/>';
- for(let k=0;k<=5;k++){
-   const v=lo+(hi-lo)*k/5, yy=y(v);
+ // 刻度線畫在 step 的整數倍上（軸已貼齊 step，線就會落在整數價位）。
+ // ⚠️ 縮放／平移之後 hi/lo 被 vz/voff 改過、不再是 step 的倍數，
+ //    所以從 lo 往上取第一個整數倍開始，不能假設 lo 本身就是；
+ //    倍率拉很大時線會太多，那就退回原本的「切成 5 等分」。
+ const gs=(AXIS.step>0 && (hi-lo)/AXIS.step<=12) ? AXIS.step : (hi-lo)/5;
+ for(let v=Math.ceil(lo/gs)*gs; v<=hi+1e-9; v+=gs){
+   const yy=y(v);
    g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(W-R)+'" y2="'+yy.toFixed(1)+
       '" stroke="#232A35" stroke-width="1"/>'+
       '<text x="'+(W-R+8)+'" y="'+(yy+4).toFixed(1)+'" fill="#5C6472" font-size="12" '+
@@ -5075,6 +5109,12 @@ def port_taken():
         sk.close()
 
 
+def _index_age():
+    """加權指數這個數字是幾秒前的。給前端顯示與量測用（None = 還沒抓到過）。"""
+    at = INDEX.get("at")
+    return None if at is None else round(time.time() - at, 1)
+
+
 def _index_change(snap, px):
     """
     從快照取「今天漲跌幾點、幾 %」。
@@ -5108,12 +5148,20 @@ def _index_change(snap, px):
 
 def poll_index():
     """
-    背景每 3 秒抓一次加權指數快照。
+    背景固定每 INDEX_EVERY 秒抓一次加權指數快照。
 
     用快照輪詢而非訂閱：指數的 tick callback 型別跟期貨不同，
-    而 3 秒一次成本極低，也不會卡住主迴圈（主迴圈 0.25 秒一圈）。
+    成本極低，也不會卡住主迴圈（主迴圈 0.25 秒一圈）。
+
+    ⛔ 【節奏要扣掉工作時間，不可以做完再固定睡 N 秒】2026-09-02 他回報
+       「加權指數更新有點慢」。實測：期貨成交價 0.4 秒跳一次，**指數 6.2 秒才動一次**，
+       但程式寫的是 3 秒 —— 因為 `api.snapshots()` 本身要花約 3 秒，
+       `sleep(3)` 又疊在後面 ⇒ 實際週期 = 工作時間 ＋ 3 秒。
+       現在改成「補足到固定週期」，順便把單次耗時記進 INDEX["ms"]，
+       這樣下次要判斷「慢在網路還是慢在我們」有數字可看。
     """
     while True:
+        t_start = time.time()
         try:
             api = SESSION_REF.get("api")
             t = datetime.now().time()
@@ -5141,7 +5189,10 @@ def poll_index():
                 INDEX.update({"price": None, "chg": None, "pct": None})
         except Exception:
             pass
-        time.sleep(3)
+        took = time.time() - t_start
+        INDEX["ms"] = round(took * 1000)
+        # 補足到固定週期；工作本身就超過週期時至少留 0.3 秒，不要把 API 打爆
+        time.sleep(max(0.3, INDEX_EVERY - took))
 
 
 def serve():
@@ -5285,7 +5336,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "chips": {"price": today_state.price,
                           "bid": today_state.bid, "ask": today_state.ask,
                           "is_mid": today_state.price_is_mid,
-                          "idx": INDEX.get("price"),
+                          "idx": INDEX.get("price"), "idx_age": _index_age(),
                           "idx_chg": INDEX.get("chg"), "idx_pct": INDEX.get("pct"),
                           "basis": (round(today_state.price - INDEX["price"], 1)
                                     if INDEX.get("price") and today_state.price else None),
@@ -5304,7 +5355,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
                 "mom5": feats["mom5"], "mom15": feats["mom15"],
                 "bid": today_state.bid, "ask": today_state.ask,
                 "is_mid": today_state.price_is_mid,
-                "idx": INDEX.get("price"),
+                "idx": INDEX.get("price"), "idx_age": _index_age(),
                 "idx_chg": INDEX.get("chg"), "idx_pct": INDEX.get("pct"),
                 "basis": (round(today_state.price - INDEX["price"], 1)
                           if INDEX.get("price") and today_state.price else None),
