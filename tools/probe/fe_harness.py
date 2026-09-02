@@ -139,7 +139,9 @@ def state():
                  "last_error": None, "stale_sec": None,
                  "code": {"broker": "09-01 12:45", "panel": "09-01 12:45",
                           "started": "09-01 12:50", "stale": False},
-                 "trades": json.loads(json.dumps(REAL_TRADES))}
+                 "trades": json.loads(json.dumps(REAL_TRADES)),
+                 # 勝率是拿「所有留下來的」算的，不是只算今天
+                 "trades_all": json.loads(json.dumps(REAL_TRADES))}
     m = MODE["v"]
     if m == "closed":
         # 休市：沒有即時報價。兩區的下單鈕都必須真的 disabled（紀錄正確性，不是 UX 取捨）

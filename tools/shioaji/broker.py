@@ -243,6 +243,41 @@ def trades_today():
     return rows
 
 
+_HIST = {"at": 0.0, "rows": []}
+HIST_TTL = 5.0          # 秒。面板每 0.5 秒問一次，不快取就是每秒讀兩次磁碟
+
+
+def trades_history(limit=120):
+    """
+    留下來的每一筆真實交易，**新的在前**（今天的在最上面）。給勝率統計用。
+
+    今天那一份走 trades_today()，因為它會跟券商的已實現損益補出場價；
+    過去的日子在平倉當下就記完了，直接讀檔。
+    """
+    now = time.time()
+    if now - _HIST["at"] < HIST_TTL:
+        return _HIST["rows"]
+    out = list(reversed(trades_today()))
+    today_file = f"{date.today()}.jsonl"
+    if TRADE_DIR.exists():
+        for f in sorted(TRADE_DIR.glob("*.jsonl"), reverse=True):
+            if f.name == today_file:
+                continue
+            day = []
+            for line in f.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    try:
+                        day.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+            out.extend(reversed(day))
+            if len(out) >= limit:
+                break
+    out = out[:limit]
+    _HIST.update({"at": now, "rows": out})
+    return out
+
+
 def entries_today():
     """今天已經真的送出幾次進場單。從檔案數，重啟不會歸零。"""
     f = ORDER_DIR / f"{date.today()}.jsonl"
@@ -670,6 +705,8 @@ def snapshot():
         pos = {k: v for k, v in pos.items() if k != "target_trade"}
         pos["has_target"] = _state["position"].get("target_trade") is not None
     return {"live": is_live(), "position": pos, "trades": trades_today(),
+            # 勝率要看得夠多筆才有意義，所以另外給「所有留下來的」
+            "trades_all": trades_history(),
             "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"],
             "entries_today": entries_today(), "max_entries": MAX_ENTRIES,
             "account": str(getattr(_state["account"], "account_id", "")) or None,

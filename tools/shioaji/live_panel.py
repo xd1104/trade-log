@@ -2164,7 +2164,9 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .n-row .d{font-size:11px; text-align:center}
 .n-row .d.l{color:var(--up)} .n-row .d.s{color:var(--down)}
 .n-row .tm{color:var(--dim)}
-.n-row .px{color:var(--text)}
+/* ⚠️ 價格欄是 1fr，容器一變窄就會折行、那一列就比別列高（實測 52 vs 36.5px）——
+   成績單搬進「真實成績」區之後多了一層 padding 就踩到了。價格本來就不該換行。 */
+.n-row .px{color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .n-row .wy{color:var(--dim); font-size:11px; font-family:var(--font-sans); text-align:right;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .n-row .pt{text-align:right; font-weight:700; font-size:13px}
@@ -2808,8 +2810,11 @@ function realZone(R){
     //    而且看門狗重啟是常態、`REAL_ON` 又刻意不記憶 ⇒ **重啟後一定是關的**，
     //    偏偏 reconcile 會把券商那口單撿回來 —— 這個組合遲早會遇到。
     ((REAL_ON || R.position) ?
-      '<div class="n-sep"></div><div class="n-bd" id="realbody"></div>'+
-      '<div id="realtr"></div>' : '')+
+      '<div class="n-sep"></div><div class="n-bd" id="realbody"></div>' : '')+
+    // ⛔ 【成績單不受保險蓋管】Benson 2026-09-02：「不用打開真實下單也可以看得到」。
+    //    `REAL_ON` 管的是「會不會送單」，看自己過去的成績跟送不送單無關 ——
+    //    而且開關刻意不記憶（重啟後一定是關的），綁在一起等於每天早上都看不到昨天的成績。
+    '<div id="realstats"></div>'+
     '<div class="n-foot" id="realfoot"></div></div>';
 }
 function realBody(s){
@@ -2900,6 +2905,41 @@ function realFoot(R){
 // 【為什麼不放進「練習成績」那一區】那一區會同步到 data/practice.json、推上公開的 repo、
 // 再拉到手機。真實交易不上傳是 Benson 的決定，混進去就等於上傳了。
 // 所以真單只活在這張卡裡，也只活在這台電腦上。
+/* 真實成績：勝率、勝敗、淨點數 —— 版面與「練習成績」一致，他一眼就認得。
+   ⚠️ 勝敗的定義要跟練習那邊同一套（點數 > 0 才算勝，0 算敗），
+      兩邊用不同定義的話，同一批交易會算出兩個勝率。 */
+function realStats(R){
+  const all=(R&&R.trades_all)||[];
+  const done=all.filter(t=>t.points!=null);
+  let h='<div class="n-sep"></div><div class="n-bd n-bd-t">'+
+    '<div class="n-sh">真實成績<span class="c">共 '+all.length+' 筆</span></div>';
+  if(!done.length){
+    h+='<div class="n-empty">還沒有算得出點數的真實交易。'+
+       '進場、平倉之後這裡就會有勝率。</div>';
+  } else {
+    const wins=done.filter(t=>t.points>0).length, losses=done.length-wins;
+    const net=Math.round(done.reduce((a,t)=>a+t.points,0)*10)/10;
+    const cls=net>0?'up':net<0?'down':'flat';
+    const ntd=Math.round(net*10);          // 微台 1 點 = NT$10
+    h+='<div class="score"><div class="rate"><span class="n">'+
+       Math.round(wins/done.length*100)+'</span><span class="p">%</span>'+
+       '<div class="lab">勝率</div></div>'+
+       '<div class="sum"><div><span class="n '+cls+'">'+pm(net)+
+       '</span><span class="u">點</span></div>'+
+       '<div class="cash">'+(ntd<0?'-':'+')+'NT$'+Math.abs(ntd).toLocaleString()+'</div>'+
+       '</div></div>'+
+       '<div class="wlbar"><i class="w" style="flex:'+Math.max(wins,0.001)+'"></i>'+
+       '<i class="l" style="flex:'+Math.max(losses,0.001)+'"></i></div>'+
+       '<div class="wlfoot"><span class="w"><b>'+wins+'</b> 勝</span>'+
+       '<span>'+done.length+' 筆</span><span class="l"><b>'+losses+'</b> 敗</span></div>';
+    // 算不出點數的那幾筆不能默默不算進勝率 —— 要講出來
+    if(all.length>done.length)
+      h+='<div class="n-why">另有 '+(all.length-done.length)+
+         ' 筆問不到成交價，沒有算進勝率</div>';
+  }
+  return h+realTrades((R&&R.trades)||[])+'</div>';
+}
+
 function realTrades(list){
   if(!list||!list.length)
     return '<div class="n-trh">今天的真實交易</div>'+
@@ -2960,7 +3000,7 @@ function paintRight(s,nf){
   }
   if(RTAB==='real'){
     setEl('realbody', realBody(s));
-    setEl('realtr', realTrades(R.trades));
+    setEl('realstats', realStats(R));
     setEl('realfoot', realFoot(R));
   } else {
     // 編輯心得時不重畫那一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。

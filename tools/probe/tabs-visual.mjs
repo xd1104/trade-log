@@ -183,6 +183,36 @@ const of = await evalJS(`(()=>{const r=document.querySelector('.right');
 chk("  整頁沒有橫向捲軸", of.docOverflow, false);
 chk("  右欄裡沒有東西跑出畫面（含刻意凸出的浮動點數）", of.bad, []);
 
+console.log("\n=== ⑦ 真實成績不受「真實下單」開關管 ===");
+// Benson 2026-09-02：「不用打開真實下單也可以看得到，然後也會顯示勝率」。
+// 開關管的是「會不會送單」，看自己過去的成績跟送不送單無關；
+// 而且開關刻意不記憶（重啟後一定是關的），綁在一起等於每天早上都看不到昨天的成績。
+await ctl("/mode/flat");
+await goTab("real");
+await sleep(900);
+const swOn = await evalJS(`!!window.REAL_ON`);
+if (swOn) {                       // 前面幾節把它打開了，這裡要關掉才測得到
+  await evalJS(`(()=>{const s=document.querySelector('[data-rt]'); if(s) s.click();})()`);
+  await sleep(1100);
+}
+const off = await evalJS(`(()=>{const z=document.querySelector('.n-zone.z-real');
+  const rate=document.querySelector('.n-zone.z-real .score .rate .n');
+  return {realOn:!!window.REAL_ON,
+          fire:document.querySelectorAll('[data-rdir]').length,
+          hasScore:!!document.querySelector('.n-zone.z-real .score'),
+          hasBar:!!document.querySelector('.n-zone.z-real .wlbar'),
+          rate:rate?rate.textContent:null,
+          rows:document.querySelectorAll('.n-zone.z-real .n-row').length,
+          txt:z?z.innerText:''};})()`);
+chk("  開關確實是關著的", off.realOn, false);
+chk("  ⛔ 但一顆真實下單鈕都不准出現（保險蓋還是要有效）", off.fire, 0);
+chk("  勝率看得到", off.hasScore, true);
+chk("  勝率是個數字", /^\d+$/.test(String(off.rate || "")), true);
+chk("  勝敗條也在（跟練習成績同一套版面）", off.hasBar, true);
+chk("  今天的交易清單看得到", off.rows > 0, true);
+chk("  算不出點數的那幾筆有講出來，不是默默不算",
+  /沒有算進勝率/.test(off.txt), true);
+
 // ⛔ 這一項以前只在第 ① 節做過，後面幾節（休市、K 線圖、練習紀錄）產生的 console error
 //    **只會被印出來，不算失敗、不影響 exit code** ⇒ 掛排程或只看「總結」的人會被安靜放行
 //    （lab-qa 2026-09-01 退件第 3 條）。錯誤要在**全部跑完之後**再驗一次。
