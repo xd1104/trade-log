@@ -143,23 +143,24 @@ def window_box(want_w, want_h):
     【為什麼要自己算】不給 x/y 的話 pywebview 會用系統預設位置，每次開都不一樣，
     常常黏在左上角或跨到螢幕外（Benson 2026-09-02 截圖：視窗貼在左上、右邊切掉）。
 
-    ⛔ 【一定要先設 DPI 感知再量】pywebview 自己會在建立視窗時呼叫 `SetProcessDPIAware()`
-       （`webview/platforms/winforms.py`），之後它的座標是**實體像素**。
-       我們如果在那之前量，系統回的是**被虛擬化過的邏輯像素**（他的機器縮放 125%：
-       量到 1536×816，實際是 1920×1040）—— 兩套座標差 1.25 倍，算出來的中心會整個偏掉。
-       所以這裡先自己呼叫一次（pywebview 再呼叫是無害的），確保兩邊同一套。
+    ⛔ 【pywebview 收的是「邏輯像素」，它會自己再乘上縮放】
+       `webview/platforms/winforms.py`：
+           self.Size     = Size(int(window.initial_width * scale), ...)
+           self.Location = Point(int(window.initial_x * scale), ...)
+       `scale = GetDpiForWindow()/96`。所以**絕對不可以**先呼叫 `SetProcessDPIAware()`
+       再拿實體像素餵它 —— 那會被再乘一次。2026-09-02 我就是這樣弄反的：
+       算出 1520×980 @ (200,20)（實體），pywebview 乘 1.25 變成 1900×1225 @ (250,25)，
+       **比螢幕還大** ⇒ Windows 把它推到左上角、右邊與底部切掉，跟修之前一模一樣。
+       這裡一律用系統回報的值（行程沒有 DPI 感知 ⇒ 那本來就是邏輯像素），不做任何換算。
+
     ⚠️ 用「工作區」不是整個螢幕：扣掉工作列，視窗才不會被工作列蓋住底部。
 
-    【他遇到的其實是這個】原本寫死 1520×980，而他的可用高度只有 1040 —— 視窗比螢幕
-    還高，Windows 只好隨便擺，右邊與底部就被切掉了（2026-09-02 截圖）。所以除了置中，
-    **一定要夾住尺寸**。
+    【他遇到的原始問題】寫死 1520×980，而他的邏輯工作區只有 1536×816 —— 視窗比桌面
+    還高，Windows 只好隨便擺。所以除了置中，**一定要夾住尺寸**，而且要留看得出來的邊，
+    不然「幾乎滿版」看起來仍然不像有置中。
     """
     try:
         u32 = ctypes.windll.user32
-        try:
-            u32.SetProcessDPIAware()
-        except Exception:
-            pass
         # 可用工作區（扣掉工作列）。SPI_GETWORKAREA = 0x0030
         class RECT(ctypes.Structure):
             _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
@@ -168,12 +169,12 @@ def window_box(want_w, want_h):
         if not u32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
             raise OSError("SystemParametersInfoW 失敗")
         aw, ah = r.right - r.left, r.bottom - r.top
-        # 螢幕比視窗小就縮到塞得下（留一點邊，不要頂滿）
-        w = max(900, min(want_w, aw - 40))
-        h = max(640, min(want_h, ah - 40))
+        # 塞不下就縮，並且**留邊**（左右各 3%、上下各 4%），置中才看得出來是刻意的
+        w = max(900, min(want_w, int(aw * 0.94)))
+        h = max(640, min(want_h, int(ah * 0.92)))
         x = r.left + max(0, (aw - w) // 2)
         y = r.top + max(0, (ah - h) // 2)
-        log(f"視窗 {w}x{h} @ ({x},{y})　工作區 {aw}x{ah}（實體像素）")
+        log(f"視窗 {w}x{h} @ ({x},{y})　工作區 {aw}x{ah}（邏輯像素，pywebview 會自己乘縮放）")
         return w, h, x, y
     except Exception as e:
         # 算不出來就退回原本的行為（讓系統決定位置），不要因為擺位失敗就開不了視窗

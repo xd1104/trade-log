@@ -95,7 +95,8 @@ print("=== ① 還沒連上永豐：本機 csv 只到前天的夜盤，今天的
 # 這就是他截圖那一刻：today 的 K 棒拿得到（已連線），但 back 那份還是啟動時的殘缺快取
 install({OLDER: bars(OLDER, NIGHT, 45800.0), D: bars(D, DAY, 46500.0)}, incomplete=True)
 g, base, partial = LP.session_frame(D)
-chk("  要回報「這份不完整」", partial, True)
+# partial 現在回的是「哪一種不完整」：'night'＝夜盤沒到、'today'＝今天的整個拿不到、''＝都齊
+chk("  要回報「夜盤那份不完整」", partial, "night")
 chk("  ⛔ 絕對不可以畫出前天的夜盤", night_dates(g), [])
 chk("  今天的日盤照樣要畫出來（那段是對的）",
     len(g) if g is not None else 0, len(DAY))
@@ -107,7 +108,7 @@ install({OLDER: bars(OLDER, NIGHT, 45800.0),
          PREV: bars(PREV, NIGHT, 46700.0),
          D: bars(D, DAY, 46500.0)}, incomplete=False)
 g, base, partial = LP.session_frame(D)
-chk("  不再回報不完整", partial, False)
+chk("  不再回報不完整", partial, "")
 chk("  夜盤接的是昨晚（09-01），不是前天（08-31）", night_dates(g), [str(PREV)])
 chk("  base 落在昨晚 15:00",
     str(base), str(pd.Timestamp.combine(PREV, LP.NIGHT_OPEN)))
@@ -117,13 +118,31 @@ print("\n=== ③ 完全沒有資料：不可以炸掉，要照實說不完整 ==
 install({}, incomplete=True)
 g, base, partial = LP.session_frame(D)
 chk("  沒有資料時回 None", g, None)
-chk("  但仍然回報不完整（前端才知道是在載入、不是休市）", partial, True)
+chk("  但仍然回報不完整（前端才知道是在載入、不是休市）", partial, "night")
 
 print("\n=== ④ 只有夜盤、還沒開盤（早上 08:45 之前）===")
 install({PREV: bars(PREV, NIGHT, 46700.0)}, incomplete=False)
 g, base, partial = LP.session_frame(D)
 chk("  夜盤畫得出來", night_dates(g), [str(PREV)])
 chk("  不會因為當天還沒有日盤就整個回 None", g is not None and not g.empty, True)
+
+print("\n=== ⑤ 今天的 K 棒完全拿不到：圖整片是昨晚，一定要講出來 ===")
+# 2026-09-02 他回報「加載完了但 K 圖還是不是最新的」。實測面板：109 根、最後一根
+# 停在 23:45、**全部都是前一晚** —— 圖上卻掛著今天的日期，什麼都沒說。
+# 跟夜盤那次同一個道理：少一段看得出來，掛錯日期看不出來。
+NIGHT_FULL = ["%02d:%02d" % (15 + (m // 60), m % 60) for m in range(0, 9 * 60, 5)]
+install({PREV: bars(PREV, NIGHT_FULL, 46800.0)}, incomplete=False)
+g, base, partial = LP.session_frame(D)
+chk("  要回報是「今天的拿不到」，不是夜盤沒到", partial, "today")
+chk("  昨晚的還是要畫（那是手上唯一真的資料）", night_dates(g), [str(PREV)])
+chk("  但圖上一根今天的 K 棒都沒有",
+    [str(x) for x in g["ts"].dt.date if x == D], [])
+
+print("\n=== ⑥ 兩種不完整要分得開（畫面上的文案完全不同）===")
+install({OLDER: bars(OLDER, NIGHT, 45800.0), D: bars(D, DAY, 46500.0)}, incomplete=True)
+chk("  夜盤沒到 → night", LP.session_frame(D)[2], "night")
+install({PREV: bars(PREV, NIGHT, 46700.0), D: bars(D, DAY, 46500.0)}, incomplete=False)
+chk("  都到齊 → 不回報不完整", LP.session_frame(D)[2], "")
 
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")
 sys.exit(1 if FAIL else 0)

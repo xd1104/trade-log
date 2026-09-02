@@ -124,6 +124,22 @@ def quote_state(price, age, sess):
     return "nodata" if sess in ("day", "night") else "closed"
 
 
+def boot_msg(now=None):
+    """
+    剛啟動、還沒收到第一筆報價時要說的話 —— **要看時鐘**。
+
+    盤中重開面板時說「等待 08:45 開盤」是錯的：那時盤早就開了，
+    真正的狀況是「連上了，還沒收到第一筆 tick」。
+    """
+    t = (now or datetime.now()).time()
+    sess = market_session(now)
+    if sess == "closed":
+        return "已連線。現在不是交易時段，開盤後會自動進入即時模式。"
+    if sess == "day" and t < SESSION_OPEN:
+        return "已連線，等待 08:45 開盤…"
+    return "已連線，正在等第一筆報價…（剛啟動時要幾秒）"
+
+
 QUOTE_MSG = {
     "closed": "休市中 —— 現在不是交易時段，圖上顯示的是最後一根 K 棒的收盤價，不是即時價。",
     "nodata": "盤中卻收不到報價 —— 若今天是國定假日就是正常休市，否則是連線問題（程式每分鐘會自動重連）。",
@@ -830,7 +846,7 @@ def day_bars(day=None, tf=CHART_TF, full=False):
             g, base, partial = session_frame(d)
             if g is None or g.empty:
                 return {"date": str(d), "bars": [], "trades": [], "tf": tf, "full": True,
-                        "partial": partial,
+                        "partial": bool(partial), "partial_what": partial,
                         "error": None if SESSION_REF.get("api") else "尚未連線，且本機沒有這幾天的資料"}
             if d == date.today():
                 g = overlay_live(g)          # 先在 1 分 K 這一層換掉還沒收完的那幾分鐘
@@ -840,7 +856,8 @@ def day_bars(day=None, tf=CHART_TF, full=False):
         return {"date": str(d), "bars": bars, "trades": _day_trades(d), "tf": tf,
                 # partial＝夜盤那一段還沒到齊（通常是剛啟動、還沒連上永豐）。
                 # 前端據此顯示「夜盤載入中」，不要讓他以為圖已經完整。
-                "full": True, "partial": partial, "night_open": base.strftime("%Y-%m-%d"),
+                "full": True, "partial": bool(partial), "partial_what": partial,
+                "night_open": base.strftime("%Y-%m-%d"),
                 # 漲跌的基準是上一個交易日的日盤收盤（跟看盤軟體一致）。
                 # 含夜盤之後不能再拿「圖上第一根的開盤」當基準 —— 那是昨晚 15:00。
                 "ref": prev_day_close(d)}
@@ -1063,7 +1080,17 @@ def session_frame(d):
                        flags)
     # 今天的 K 棒還在長，不能快取；過去的日子抓一次就夠
     own = _today_raw(d) if d == today else _cached_raw(_SESS_OWN, key, [d], flags)
-    partial = bool(flags.get("partial"))
+    # 「不完整」有兩種，文案完全不同，所以要分得出來：
+    #   night ＝ 夜盤那一段還沒到齊（剛啟動、還沒連上永豐）
+    #   today ＝ **今天的 K 棒完全拿不到** ⇒ 圖上會整片都是昨晚，卻掛著今天的日期
+    # 後者是 2026-09-02 他回報「加載完了但 K 圖還是不是最新的」的那個
+    # （實測：109 根、最後一根停在 23:45，全部都是前一晚）。
+    partial = "night" if flags.get("partial") else ""
+    if (not partial and d == today
+            and (own is None or getattr(own, "empty", True))
+            and datetime.now().time() >= SESSION_OPEN):
+        # 已經開盤了卻一根今天的 K 棒都沒有 ⇒ 拿不到，不是「還沒開始交易」
+        partial = "today"
 
     pool = [x for x in (back, own) if x is not None and not x.empty]
     if not pool:
@@ -1081,7 +1108,9 @@ def session_frame(d):
     #    現在：不完整就**只畫當天日盤**（那段是對的），夜盤等資料到齊再接上去。
     #    少一段可以看得出來，畫錯一天看不出來 —— 他早上是照這張圖決定要不要進場的。
     nights = px[(tt >= NIGHT_OPEN) & (dd < d)]
-    if partial:
+    # ⚠️ 只有「夜盤那份不完整」才不准猜；「今天拿不到」的時候**夜盤反而要畫出來**
+    #    —— 那是手上唯一真的資料。（第一版沒分，把「只有夜盤」那個測項打紅了。）
+    if partial == "night":
         nights = nights.iloc[0:0]
     if not nights.empty:
         n = nights["ts"].dt.date.max()                     # 夜盤開盤日
@@ -3675,9 +3704,13 @@ function pagerHTML(T){
  // ⛔ 這種時候後端**不會**再猜夜盤是哪一天了（猜錯會畫出前天的夜盤，他早上就是照這張圖
  //    決定要不要進場的），所以圖上只有當天日盤 —— 一定要講出來，不然他會以為圖是完整的。
  const partial=!!(barsCache&&barsCache.partial);
+ // night＝夜盤還沒到；today＝**今天的 K 棒整個拿不到**，圖上會是昨晚（最容易被誤認成最新）
+ const pwhat=(barsCache&&barsCache.partial_what)||'night';
  const r2=loading
    ? '<span>載入中…</span>'
-   : (partial?'<span class="warn">夜盤資料載入中，圖上只有今天日盤</span>'+
+   : (partial?'<span class="warn">'+(pwhat==='today'
+        ? '今天的 K 棒還沒拿到，圖上是昨晚的夜盤'
+        : '夜盤資料載入中，圖上只有今天日盤')+'</span>'+
               '<span class="sep">·</span>':'')+
      ((!partial&&noS&&noS!==dayS)
        ?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
@@ -5731,7 +5764,11 @@ def main():
     start_day(date.today())
     session["opened"] = datetime.now().time() >= pd.Timestamp("08:30").time()
     with state_lock:
-        STATE.update({"status": "waiting", "msg": "已連線，等待 08:45 開盤…",
+        # ⛔ 【這句不可以寫死】舊版不管幾點都說「等待 08:45 開盤」——
+        #    他 2026-09-02 10:14 重開面板，畫面同時出現「盤中卻收不到報價」與
+        #    「已連線，等待 08:45 開盤」，兩句互相打臉，看了只會更慌。
+        #    盤中剛啟動時真正的情況是「還沒收到第一筆 tick」，那才是該說的話。
+        STATE.update({"status": "waiting", "msg": boot_msg(),
                       "quote": quote_state(None, None, market_session()),
                       "market": market_session(),
                       "period": hist.period, "n_days_total": hist.n_days})
