@@ -585,16 +585,16 @@ class DealAPI:
         if self.flat:
             return []
         return [type("P", (), {"code": "TMFI6", "quantity": 1,
-                               "direction": "Action.Buy", "price": 47144})()]
+                               "direction": "Action.Buy", "price": 47088})()]
 
 
-def fresh_pos(direction="long", entry=47144):
+def fresh_pos(direction="long", entry=47088):
     broker._state["position"] = {"dir": direction, "entry": float(entry), "qty": 1,
-                                 "entry_time": "13:39:21", "target_trade": None,
+                                 "entry_time": "10:41:08", "target_trade": None,
                                  "recovered": False}
 
 
-connect(DealAPI(deal=47166))
+connect(DealAPI(deal=47110))
 broker.is_live = lambda: True
 broker.FILL_WAIT = 1.2
 broker.realized_today = lambda: []          # 這一段不要去問券商損益，測的是自己記的那條路
@@ -603,22 +603,22 @@ ok, err = broker.close("manual")
 chk("  平倉成功", ok, True)
 tr = broker.trades_today()
 chk("  成績單有一筆", len(tr), 1)
-chk("  記到實際出場價（不是送單時的 0）", tr[0]["exit"], 47166.0)
-chk("  算得出點數：做多 47144→47166 ＝ +22", tr[0]["points"], 22.0)
+chk("  記到實際出場價（不是送單時的 0）", tr[0]["exit"], 47110.0)
+chk("  算得出點數：做多 47088→47110 ＝ +22", tr[0]["points"], 22.0)
 chk("  記得住是為什麼平的", tr[0]["reason"], "manual")
 
 # 做空要反過來算 —— 又是一個「只測一邊會過」的地方
 (broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
-api2 = DealAPI(deal=47100)
+api2 = DealAPI(deal=47044)
 api2.list_positions = lambda acc=None: ([] if api2.flat else [
     type("P", (), {"code": "TMFI6", "quantity": -1,
-                   "direction": "Action.Sell", "price": 47144})()])
+                   "direction": "Action.Sell", "price": 47088})()])
 connect(api2)
 broker.is_live = lambda: True
 fresh_pos("short")
 broker.close("sl")
 tr = broker.trades_today()
-chk("  做空 47144→47100 ＝ +44（不是 −44）", tr[0]["points"], 44.0)
+chk("  做空 47088→47044 ＝ +44（不是 −44）", tr[0]["points"], 44.0)
 
 # 問不到成交價：**留白，不可以拿別的價冒充**
 (broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
@@ -636,16 +636,16 @@ print("\n=== 停利在券商成交：面板沒送過單，也要記得起來 ===
 (broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
 tp_trade = FakeTrade()
 tp_trade.status = type("S", (), {"deals": [
-    type("D", (), {"price": 47244, "quantity": 1})()]})()
+    type("D", (), {"price": 47188, "quantity": 1})()]})()
 connect(FakeAPI())                          # FakeAPI 回報「券商沒有部位」
 broker.is_live = lambda: True
-broker._state["position"] = {"dir": "long", "entry": 47144.0, "qty": 1,
-                             "entry_time": "13:39:21", "target_trade": tp_trade,
+broker._state["position"] = {"dir": "long", "entry": 47088.0, "qty": 1,
+                             "entry_time": "10:41:08", "target_trade": tp_trade,
                              "recovered": False}
 broker.reconcile()
 tr = broker.trades_today()
 chk("  部位自己不見了也要留下紀錄", len(tr), 1)
-chk("  出場價 = 停利單的成交價", tr[0]["exit"], 47244.0)
+chk("  出場價 = 停利單的成交價", tr[0]["exit"], 47188.0)
 chk("  +100 點", tr[0]["points"], 100.0)
 chk("  理由標成停利", tr[0]["reason"], "tp")
 broker.is_live = lambda: broker.REAL_FLAG.exists()
@@ -658,13 +658,20 @@ broker._state["position"] = None
 # **整個檔案重寫**——寫壞就是弄丟那一天的成績單。
 print("\n=== 過去的成績單：跨日要讀得回來，補心得不可以弄丟同一天的其他筆 ===")
 broker.TRADE_DIR.mkdir(exist_ok=True)
-# 刻意用很舊的日期，不會跟 today 撞；價格與心得也**全部自己編** ——
-# 這個 repo 是公開的，照抄他真實的成交價等於把不上傳的東西推上去。
+# 刻意用很舊的日期，不會跟 today 撞。
+# ⛔⛔ 底下每一個欄位都是**自己編的**，包含**進出場時間**與**賺賠點數** ——
+#    這個 repo 是公開的，而一筆交易的每一個欄位單獨拿出來都是他的真實紀錄：
+#    幾點進場、賺賠幾點，跟成交價一樣不可以上傳。
+#    這一段的第一版只換了價格、時間與點數照抄 real_trades/ 那三筆（2026-09-03 修）。
+#    ⚠️ 換數字要保留測試意圖：這三筆是要驗「同一天之內新到舊」，
+#       所以時間必須是**遞增且分得出先後**的三個。
+#    守衛：`py tools/probe/leak-scan.py`（掃 git ls-files 全部，不是只掃 git diff ——
+#          這個檔就是因為「這輪沒改到」而躲過上一次的掃描）。
 DAY_A, DAY_B = "2020-01-02", "2020-01-03"
-for day, rows in ((DAY_A, [("09:02:03", 47200.0, "sl", -104.0, "假心得（測試用）"),
-                           ("09:20:04", 47090.0, "sl", -101.0, None),
-                           ("09:50:17", 46980.0, "tp", 100.0, None)]),
-                  (DAY_B, [("09:11:40", 47310.0, "tp", 100.0, None)])):
+for day, rows in ((DAY_A, [("10:06:11", 47200.0, "sl", -88.0, "假心得（測試用）"),
+                           ("10:33:47", 47090.0, "sl", -117.0, None),
+                           ("11:14:52", 46980.0, "tp", 63.0, None)]),
+                  (DAY_B, [("10:52:29", 47310.0, "tp", 74.0, None)])):
     with (broker.TRADE_DIR / f"{day}.jsonl").open("w", encoding="utf-8") as fh:
         for t, e, why, pts, note in rows:
             fh.write(json.dumps({"date": day, "dir": "long", "qty": 1, "entry_time": t,
@@ -678,22 +685,22 @@ chk("  過去兩天的 4 筆都讀得回來", len(old), 4)
 chk("  舊的日子排在今天後面，而且新的那天在前",
     [t["date"] for t in hist[-4:]], [DAY_B] + [DAY_A] * 3)
 chk("  同一天之內是新到舊", [t["entry_time"] for t in hist[-3:]],
-    ["09:50:17", "09:20:04", "09:02:03"])
+    ["11:14:52", "10:33:47", "10:06:11"])
 
 # 補心得：認人靠（日期＋進場時間到分＋進場價），不是陣列位序
-ok, msg = broker.set_trade_note(DAY_A, "09:20", 47090, "事後回頭看，這筆是可以接受的輸")
+ok, msg = broker.set_trade_note(DAY_A, "10:33", 47090, "__測試用假心得__補寫的那一段")
 chk("  補得進過去那一天", (ok, msg), (True, None))
 rows = [json.loads(l) for l in
         (broker.TRADE_DIR / f"{DAY_A}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
 chk("  那一天還是 3 筆（沒有被整檔覆蓋掉）", len(rows), 3)
-chk("  心得寫進對的那一筆", rows[1]["note"], "事後回頭看，這筆是可以接受的輸")
+chk("  心得寫進對的那一筆", rows[1]["note"], "__測試用假心得__補寫的那一段")
 chk("  同一天的其他筆原封不動", (rows[0]["note"], rows[2]["note"]), ("假心得（測試用）", None))
 chk("  心得有記時間戳", isinstance(rows[1].get("note_at"), str), True)
 chk("  ⛔ 沒有動到別天", (broker.TRADE_DIR / f"{DAY_B}.jsonl").read_text(
     encoding="utf-8").count("\n"), 1)
 # 認不得的一律拒絕，不可以「猜一筆最像的」寫進去
-blocked("  進場價對不上就不寫", broker.set_trade_note(DAY_A, "09:20", 99999, "x"), "對不到")
-blocked("  沒有那一天就不寫", broker.set_trade_note("1999-12-31", "09:20", 47090, "x"),
+blocked("  進場價對不上就不寫", broker.set_trade_note(DAY_A, "10:33", 99999, "x"), "對不到")
+blocked("  沒有那一天就不寫", broker.set_trade_note("1999-12-31", "10:33", 47090, "x"),
         "找不到")
 broker._HIST["at"] = 0.0
 

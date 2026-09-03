@@ -2195,16 +2195,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .n-trl::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
 .n-item{padding:2px 0 6px; border-top:1px solid var(--line-soft)}
 .n-item:first-child{border-top:0}
-/* 過去那一段的日期標頭。日期放這裡不放進 .n-row —— .n-row 是固定五欄的格線，
-   多塞一欄就跟「今天」那份對不齊，同一筆交易過了午夜會長得不一樣。 */
-.n-dayh{display:flex; align-items:baseline; gap:8px; padding:10px 0 4px;
-  font-size:11px; color:var(--dim); font-family:var(--font-mono);
-  font-variant-numeric:tabular-nums; border-top:1px solid var(--line-soft)}
-.n-dayh:first-child{border-top:0}
-.n-dayh+.n-item{border-top:0}
-.n-dayh .dt{color:var(--text); font-weight:700; letter-spacing:.5px}
-.n-dayh .c{color:var(--faint)}
-.n-dayh .net{margin-left:auto; font-weight:700; font-size:12px}
+/* （2026-09-03 A 版拿掉了 .n-dayh —— 那是舊「過去的真實交易」分日標頭專用的，
+    跨日紀錄改由成績區底下的 .trade 卡片清單承擔，見 realCard()。） */
 .n-row{display:grid; grid-template-columns:18px 92px 1fr 68px 58px; align-items:center;
   gap:9px; padding:8px 0; font-size:12px; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; border-top:1px solid var(--line-soft)}
@@ -2212,8 +2204,13 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .n-row .d{font-size:11px; text-align:center}
 .n-row .d.l{color:var(--up)} .n-row .d.s{color:var(--down)}
 .n-row .tm{color:var(--dim)}
-/* ⚠️ 價格欄是 1fr，容器一變窄就會折行、那一列就比別列高（實測 52 vs 36.5px）——
-   成績單搬進「真實成績」區之後多了一層 padding 就踩到了。價格本來就不該換行。 */
+/* ⚠️ 價格欄是 1fr ＝ 容器一變窄就是它先被吃掉。nowrap 是為了「不准折行」
+   （折行那一列會比別列高，實測 52 vs 36.5px），ellipsis 只是最後的安全網。
+   ⛔ 這條規則**擋不住**「容器變窄」——2026-09-03 就是這樣：成績單被包進 .n-bd
+      多吃一層左右 38px，價格欄 76px → 38px，畫面上是「4701…」而不是完整成交價，
+      而且筆數少的時候看起來完全正常，活了兩天沒人發現。
+      看到成交價變成「…」時要去查**容器寬度**（.n-trl 有沒有被多包一層有 padding
+      的祖先），不要來這裡加寬度覆寫。守衛：hold-to-fire.mjs ⑧c。 */
 .n-row .px{color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .n-row .wy{color:var(--dim); font-size:11px; font-family:var(--font-sans); text-align:right;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
@@ -2319,6 +2316,9 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .tr-res{font-family:var(--font-mono); font-size:15px; font-weight:700; text-align:right;
   min-width:52px; flex:none; font-variant-numeric:tabular-nums}
 .r-win{color:var(--up)} .r-loss{color:var(--down)}
+/* 真實交易問不到成交價時算不出點數 ⇒ 印「—」、灰、不加粗（跟 .n-row .pt.na 同一套）。
+   ⛔ 不可以拿現價冒充，也不可以猜輸贏 —— 留白看得出來是缺，編的數字看不出來。 */
+.tr-res.na{color:var(--faint); font-weight:500}
 .tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
 .alert{background:var(--up-soft); border:1px solid var(--up-line); border-radius:var(--r-md);
   padding:12px 14px; font-size:12.5px; margin-bottom:12px; line-height:1.6}
@@ -2628,6 +2628,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 </div>
 <script>
 var WIN=7;
+// 真實成績的分段窗口。⚠️ 跟練習的 WIN 分開 —— 共用的話在一邊按會讓另一邊也跳，
+// 而且兩邊的筆數差很多（真實只有個位數），可選的窗口本來就不一樣。
+var RWIN=7;
 const f=(n,d=0)=>n==null?'—':Number(n).toFixed(d);
 const sgn=v=>v>0?'up':v<0?'down':'flat';
 const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
@@ -2955,39 +2958,178 @@ function realFoot(R){
 // 所以真單只活在這張卡裡，也只活在這台電腦上。
 /* 真實成績：勝率、勝敗、淨點數 —— 版面與「練習成績」一致，他一眼就認得。
    ⚠️ 勝敗的定義要跟練習那邊同一套（點數 > 0 才算勝，0 算敗），
-      兩邊用不同定義的話，同一批交易會算出兩個勝率。 */
+      兩邊用不同定義的話，同一批交易會算出兩個勝率。
+
+   【A 版：完全照練習抄】（Benson 2026-09-03 拍板）
+   順序也跟練習一樣：**今天的清單在上、成績區在下**（舊版是反的）。
+   過去的紀錄改由成績區底下那份 `.list` 卡片清單承擔，`realPast()` / `.t-past`
+   / `.n-dayh` 因此整段移除 —— 同一批資料不要用兩種長相各列一次。
+   ⛔ **刻意不放「下載紀錄」那顆鈕**：練習那顆寫著「可匯入 App」，而 App 會同步到
+      公開 repo。真實區放一顆長一樣的鈕，他哪天順手匯進去就把真實紀錄推上公開網路，
+      而且沒有任何一道防線會擋。這是 Benson 拍板的，不要「順手補上」。 */
 function realStats(R){
   const all=(R&&R.trades_all)||[];
   const done=all.filter(t=>t.points!=null);
-  let h='<div class="n-sep"></div><div class="n-bd n-bd-t">'+
-    '<div class="n-sh">真實成績<span class="c">共 '+all.length+' 筆</span></div>';
-  if(!done.length){
-    h+='<div class="n-empty">還沒有算得出點數的真實交易。'+
-       '進場、平倉之後這裡就會有勝率。</div>';
-  } else {
-    const wins=done.filter(t=>t.points>0).length, losses=done.length-wins;
-    const net=Math.round(done.reduce((a,t)=>a+t.points,0)*10)/10;
-    const cls=net>0?'up':net<0?'down':'flat';
-    const ntd=Math.round(net*10);          // 微台 1 點 = NT$10
-    h+='<div class="score"><div class="rate"><span class="n">'+
-       Math.round(wins/done.length*100)+'</span><span class="p">%</span>'+
-       '<div class="lab">勝率</div></div>'+
-       '<div class="sum"><div><span class="n '+cls+'">'+pm(net)+
-       '</span><span class="u">點</span></div>'+
-       '<div class="cash">'+(ntd<0?'-':'+')+'NT$'+Math.abs(ntd).toLocaleString()+'</div>'+
-       '</div></div>'+
-       '<div class="wlbar"><i class="w" style="flex:'+Math.max(wins,0.001)+'"></i>'+
-       '<i class="l" style="flex:'+Math.max(losses,0.001)+'"></i></div>'+
-       '<div class="wlfoot"><span class="w"><b>'+wins+'</b> 勝</span>'+
-       '<span>'+done.length+' 筆</span><span class="l"><b>'+losses+'</b> 敗</span></div>';
-    // 算不出點數的那幾筆不能默默不算進勝率 —— 要講出來
-    if(all.length>done.length)
-      h+='<div class="n-why">另有 '+(all.length-done.length)+
-         ' 筆問不到成交價，沒有算進勝率</div>';
+  // ⛔ 今天的清單一定要掛在 .n-bd 外面（見 realTrades 上面那段註解）——
+  //    包進去會多吃左右 38px，全部從 .n-row 唯一的 1fr（價格欄）身上扣，成交價被截。
+  let h=realTrades((R&&R.trades)||[])+
+    '<div class="n-sep"></div><div class="n-bd n-bd-t">'+
+    '<div class="n-sh">真實成績<span class="c">共 '+all.length+' 筆</span></div>'+
+    // ⛔ 【分段那一段要能單獨重畫】按 .seg 的時候底下的 .list 裡可能正有人在打心得，
+    //    整塊 #realstats 重畫會把 textarea 換掉 ⇒ 重繪守衛只好整塊擋下來 ⇒
+    //    **按了畫面完全不動、關掉編輯器才突然跳**（比不動更像壞掉）。
+    //    把「共用窗口的那幾塊」包成獨立節點，按鈕就能只換這一塊、不碰 .list。
+    '<div id="realscore">'+realScore(all)+'</div>';
+  // 卡片清單：跟練習成績底下那份同一種 .trade 卡（含事後補心得）。
+  // ⛔ 【清單固定是「最近 12 筆」，不跟著分段窗口縮】練習那邊就是這樣
+  //    （statsBox 畫的是 ST.recent，跟 WIN 無關）——分段只換上面的勝率／合計。
+  //    跟著縮的話，預設「近 7 筆」剛好只涵蓋今天，**昨天的紀錄又會從畫面上消失**，
+  //    等於把他 2026-09-03 早上問的那個問題原封不動放回來（只是這次藏在按鈕後面）。
+  // ⚠️ .list 是有 max-height 的 flex 直欄，靠既有的 `.list>*{flex:none}` 才是捲動
+  //    而不是把每張卡壓扁 —— 筆數少的時候看不出來，測試一定要用會捲的筆數。
+  const cards=realSorted(all).slice(0,12);
+  if(cards.length){
+    h+='<div class="list">';
+    cards.forEach(t=>{ h+=realCard(t); });
+    h+='</div>';
   }
-  // 今天的在上面、過去的在下面。過去那一段不受「真實下單」開關管，
-  // 理由跟勝率同一條：看自己過去的成績跟送不送單無關（realZone 那段註解）。
-  return h+realTrades((R&&R.trades)||[])+realPast(R)+'</div>';
+  // ⛔ 這裡**不放**「下載紀錄」——理由見函式開頭那段。
+  return h+'</div>';
+}
+
+/* 只跟「選中哪個窗口」有關的那幾塊：.seg／.score／.wlbar／.wlfoot／.n-why。
+   ⛔ 【為什麼要獨立成一個函式＋一個節點】按分段按鈕時，底下的 .list 裡可能正有人
+      在打心得。整塊 #realstats 重畫會把那個 textarea 換掉（中文輸入法會掉字），
+      所以重繪守衛會把整塊擋下來 ⇒ **按了畫面完全不動，關掉編輯器才突然跳**。
+      「按了不動」正是我們當初要避免的那個毛病，延遲跳動又更像壞掉。
+      切開之後，[data-rwin] 的處理只換 #realscore，.list 一個節點都不碰 ——
+      正在打的字活著，數字也立刻變。
+   ⚠️ 心得**不在**這一段裡（心得在 .list 的卡片與上面那份 .n-row 裡），
+      所以這一塊可以隨時重畫。要往這裡加任何帶輸入框的東西之前先想一下這件事。
+   守衛：hold-to-fire.mjs ⑧b7。 */
+function realScore(all){
+  const wins2=realWindows(all);
+  const cur=wins2.find(x=>x.k===RWIN)||wins2[wins2.length-1];
+  let h='';
+  // ⚠️ 算完**去重**，只剩一個窗口就整條不畫 —— 真實筆數少，那四顆常常對到同一批資料，
+  //    按了畫面完全不動比沒有這排按鈕更糟。
+  if(wins2.length>1){
+    h+='<div class="seg">';
+    wins2.forEach(x=>{ h+='<button class="'+(x===cur?'on':'')+'" data-rwin="'+x.k+'">'+
+      x.label+'</button>'; });
+    h+='</div>';
+  }
+  // 勝率／勝敗條算的是**選中那個窗口**（跟練習的 statsBox 同一套），
+  // 而上面「共 N 筆」講的是全部 —— 兩個數字的口徑不一樣，所以窗口的筆數印在勝敗條下面。
+  const win=cur.rows, wdone=win.filter(t=>t.points!=null);
+  if(!wdone.length)
+    return h+'<div class="n-empty">還沒有算得出點數的真實交易。'+
+      '進場、平倉之後這裡就會有勝率。</div>';
+  const wins=wdone.filter(t=>t.points>0).length, losses=wdone.length-wins;
+  const net=Math.round(wdone.reduce((a,t)=>a+t.points,0)*10)/10;
+  const cls=net>0?'up':net<0?'down':'flat';
+  const ntd=Math.round(net*10);          // 微台 1 點 = NT$10
+  h+='<div class="score"><div class="rate"><span class="n">'+
+     Math.round(wins/wdone.length*100)+'</span><span class="p">%</span>'+
+     '<div class="lab">勝率</div></div>'+
+     '<div class="sum"><div><span class="n '+cls+'">'+pm(net)+
+     '</span><span class="u">點</span></div>'+
+     '<div class="cash">'+(ntd<0?'-':'+')+'NT$'+Math.abs(ntd).toLocaleString()+'</div>'+
+     '</div></div>'+
+     '<div class="wlbar"><i class="w" style="flex:'+Math.max(wins,0.001)+'"></i>'+
+     '<i class="l" style="flex:'+Math.max(losses,0.001)+'"></i></div>'+
+     '<div class="wlfoot"><span class="w"><b>'+wins+'</b> 勝</span>'+
+     '<span>'+wdone.length+' 筆</span><span class="l"><b>'+losses+'</b> 敗</span></div>';
+  // 算不出點數的那幾筆不能默默不算進勝率 —— 要講出來（講的是這個窗口裡的）
+  if(win.length>wdone.length)
+    h+='<div class="n-why">另有 '+(win.length-wdone.length)+
+       ' 筆問不到成交價，沒有算進勝率</div>';
+  return h;
+}
+
+/* 分段窗口（近 7／近 10／近 30／全部）。
+   ⛔ **算完要去重**：真實筆數少，四個窗口常常對到同一批資料 ——
+      按了畫面完全不動比沒有這排按鈕更糟（練習那邊 11 筆時「近10」與「近30」就一模一樣）。
+      去重之後只剩一個窗口的話，realStats() 整條 .seg 都不畫。
+   ⚠️ 排序自己來（date + entry_time，新到舊），不要依賴 trades_all 的既有順序 ——
+      那份是「今天那段反過來、再一個檔案一個檔案接上去」，剛好是新到舊但那是實作細節。 */
+/* 平倉理由的中文標籤。**今天那份 .n-row 與成績區的卡片共用這一份**，
+   不要各自帶一份 map —— 同一筆交易在同一個畫面上出現兩次，字不一樣看起來像兩件事。
+   ⛔ 認不得的一律寫「其他」：內部代號（sl_test 之類）不該印到他眼前。
+   ⛔ **每個標籤最多 4 個字，這是量出來的版面硬限制，不是文案偏好。**
+      這個數字是怎麼來的（2026-09-03 實測，字級/字距沒改就一直成立）：
+        · 卡片那一行是 `.tr-date`(42px 固定) ＋ `.dir` ＋ `.tr-px`(flex:1) ＋ `.tr-res`(52px 固定)，
+          扣掉 gap 之後 **`.tr-px` 只剩 157.6px**，而它裡面要塞「價格→價格 ＋ 標籤」。
+        · 量到的需求寬度：2 字標籤 **120.5px**、4 字 **140.5px**（都放得下，餘裕 17.1px）、
+          **6 字 161px ⇒ 超出 157.6px**。
+        · `.tr-px` 沒有 nowrap ⇒ 超出時是**折行**（不是截斷、不會報錯），
+          **那張卡從 65px 變成 80px**，跟練習的卡片就不一樣高了 ——
+          而「形式長的一樣」是老闆對這一版的主要要求。
+      所以 closed_elsewhere 從「不是面板平的」（6 字）縮成「別處平的」（4 字）。
+      ⚠️ 縮寫要保留原本的語氣（這支面板從頭到尾講人話），不要寫成公文腔。
+      ⚠️ 不可以改用 text-overflow:ellipsis 把它藏起來 —— 那是把問題藏起來不是修好，
+         而且筆數少的時候看起來完全正常（09-03 成交價那個 bug 就是這樣活了兩天）。
+      守衛：`hold-to-fire.mjs` ⑧b6（每一種理由各造一張卡，斷言全部不折行）。 */
+const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的'};
+function rwhy(t){ return RWHY[t&&t.reason]||'其他'; }
+
+/* 新到舊排序。⚠️ 明著照 date + entry_time 排，不要依賴 trades_all 的既有順序 ——
+   那份是「今天那段反過來、再一個檔案一個檔案接上去」，它現在剛好是新到舊，
+   但那是後端的實作細節不是保證。 */
+function realSorted(all){
+  return all.slice().sort((a,b)=>
+    ((b.date||'')+' '+(b.entry_time||'')).localeCompare((a.date||'')+' '+(a.entry_time||'')));
+}
+function realWindows(all){
+  const sorted=realSorted(all);
+  const out=[], seen={};
+  [[7,'近 7 筆'],[10,'近 10 筆'],[30,'近 30 筆'],[0,'全部']].forEach(function(p){
+    const rows=p[0]?sorted.slice(0,p[0]):sorted;
+    if(seen[rows.length]) return;          // 筆數一樣＝同一批資料，不重複給一顆按鈕
+    seen[rows.length]=1;
+    // 這個窗口其實已經涵蓋全部時，標籤就寫「全部」不要寫「近 30 筆」——
+    // 練習那邊的窗口是後端給的（近 7／近 10／全部），從來不會出現「近 30 筆」
+    // 卻剛好等於全部的情況。寫「近 30 筆」會讓人以為還有更早的沒被算進去。
+    const all=rows.length===sorted.length;
+    out.push({k:all?0:p[0], label:all?'全部':p[1], rows:rows});
+  });
+  return out;
+}
+
+/* 一筆真實交易的卡片（成績區底下那份清單）。版面完全照練習的 row(t,'s')。
+   左緣 2px 色條照練習掛 .win / .loss（2026-09-03 Benson 拍板）——
+   兩區並排時，練習是一排紅綠條紋、真實卻是一片灰，那是兩邊看起來最不一樣的地方。
+   勝敗定義跟練習同一套：**點數 > 0 才算勝，0 算敗**（兩邊用不同定義，同一批交易會算出兩個勝率）。
+   ⛔ 但**算不出點數的那一筆維持 --ghost 灰、不掛 .win/.loss** —— 那筆問不到成交價，
+      猜輸贏就是編數字。留白看得出來是缺，猜出來的看不出來。
+   ⛔ `t.exit` 在真實那邊**可能是 null**（問不到成交價時留白）。這裡只印字串所以安全，
+      但凡是把真實資料餵進練習的算式（例如 Math.min(lo, t.entry, t.exit)）都要先問一次
+      「這個欄位在真實那邊會不會是 null」—— null 會被當成 0，把價格軸整個拉到 0。
+   ⚠️ 練習的 row() 對 App 匯入的那幾筆是唯讀的（_source==='app'），
+      真實這邊**每一筆都要可編輯**，那段唯讀邏輯不要抄過來。 */
+function realCard(t){
+  const why=rwhy(t), na=t.points==null;
+  // ⚠️ exit_time 要一起帶：entry 是 null 時 nkey() 拿它當識別，少帶的話
+  //    兩張同日同分鐘的卡會生出同一個 key（見 nkey 的註解）。nattr() 不用它。
+  const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry,
+            exit_time:t.exit_time};
+  // 算得出點數才有輸贏色；算不出的留空 ⇒ .trade::before 保持 --ghost 灰
+  return '<div class="trade'+(na?'':(t.points>0?' win':' loss'))+'"><div class="tr-top">'+
+    '<span class="tr-date">'+esc(t.date?t.date.slice(5):'')+'</span>'+
+    '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
+    '<span class="tr-px">'+f(t.entry)+'<span class="arrow">&rarr;</span>'+
+      (t.exit==null?'—':f(t.exit))+' <span class="tag">'+why+'</span></span>'+
+    '<span class="tr-res '+(na?'na':(t.points>0?'r-win':'r-loss'))+'">'+
+      (na?'—':pm(t.points))+'</span></div>'+
+    // ⛔ 【分區字母是大寫 S，不是 R】同一筆今天的交易會**同時**出現在上面那份
+    //    「今天的真實交易」（.n-row，用 R）與這份卡片清單裡。兩邊用同一個 nkey 的話，
+    //    點一下會展開**兩個** id 都叫 tnote 的 textarea，
+    //    `document.getElementById('tnote')` 只拿得到第一個 ⇒ 在第二個打的字存不進去。
+    //    練習那邊本來就是這樣分的（今天的清單用 't'、成績區的卡片用 's'），
+    //    真實這邊照抄成 R / S。小寫 r／s 已經被回顧與練習佔走，不可以共用。
+    // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（走 /api/note 的 kind:"real"）。
+    noteBox(nkey('S',nt), t.note, nattr(nt)+' data-nkind="real"',
+            '＋ 補寫心得', '現在回頭看，這一筆做對了什麼、做錯了什麼？')+'</div>';
 }
 
 function realTrades(list){
@@ -3002,8 +3144,9 @@ function realTrades(list){
   let h='<div class="n-trh">今天的真實交易　<span class="c">'+list.length+' 筆'+
     (miss?'（'+done.length+' 筆算得出點數）':'')+'</span>'+
     (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+
-    // t-today / t-past 純粹是「這是哪一份清單」的標記（沒有樣式）——
-    // 真實區現在有兩個 .n-trl，探針與日後的程式不可以再靠「第幾個」認人。
+    // t-today 純粹是「這是哪一份清單」的標記（沒有樣式）。A 版之後真實區只剩這一份
+    // .n-trl（.t-past 已隨 realPast() 移除），但標記留著 —— 探針與日後的程式
+    // 一律靠這個 class 認人，不可以靠「第幾個 .n-trl」。
     '</div><div class="n-trl t-today">';
   for(let i=list.length-1;i>=0;i--)              // 新的在上面
     h+=realRow(list[i], '＋ 寫下今天的心得', '今天的盤感、進出場理由、紀律有沒有守…');
@@ -3021,9 +3164,7 @@ function realTrades(list){
    心得的樣式掛在 `.n-item .noteline` 上；裸的 .n-row 吃不到那組樣式
    （他 2026-09-02 要求對齊）。 */
 function realRow(t, hint, ph){
-  // 認不得的理由一律寫「其他」——內部代號（sl_test 之類）不該印到他眼前
-  const why={sl:'停損', tp:'停利', manual:'手動平倉',
-             closed_elsewhere:'不是面板平的'}[t.reason]||'其他';
+  const why=rwhy(t);
   let h='<div class="n-item"><div class="n-row">'+
     '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
     '<span class="tm">'+esc(String(t.entry_time||'—').slice(0,5))+'&rarr;'+
@@ -3036,51 +3177,22 @@ function realRow(t, hint, ph){
   // 分區字母用大寫 R —— 小寫 r 已經被回顧分頁佔走，同一個字母會讓
   // nEditing() 分不出是誰在編輯，兩邊的輸入框會互相打架。
   // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（跟成績單一樣）。
-  const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry};
+  // ⚠️ exit_time 要一起帶：entry 是 null 時 nkey() 拿它當識別，少帶的話
+  //    兩張同日同分鐘的卡會生出同一個 key（見 nkey 的註解）。nattr() 不用它。
+  const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry,
+            exit_time:t.exit_time};
   return h+noteBox(nkey('R',nt), t.note, nattr(nt)+' data-nkind="real"', hint, ph)+'</div>';
 }
 
-/* 過去的真實交易。
-   【為什麼一定要有】舊版整個真實區只列「今天」的那幾筆，過了午夜就從畫面上消失，
-   只剩併進上面勝率裡的數字 ⇒ 他 2026-09-03 早上問「昨天的交易紀錄都不見了」，
-   檔案其實好好的在 real_trades/2026-09-02.jsonl。**留得住不等於看得到。**
-   ⚠️ 「今天」用伺服器給的 R.today，不是瀏覽器的 new Date() —— 見 broker.snapshot()。
-      治具沒給這個欄位時才退回本機日期（欄位缺就整份當過去，今天那幾筆會重複出現）。 */
-function realPast(R){
-  const all=(R&&R.trades_all)||[];
-  const today=(R&&R.today)||new Date().toLocaleDateString('sv-SE');   // sv-SE ＝ YYYY-MM-DD
-  const past=all.filter(t=>t.date&&t.date!==today);
-  if(!past.length)
-    return '<div class="n-trh">過去的真實交易</div>'+
-      '<div class="n-empty">還沒有更早的真實交易。以後每天收盤後，'+
-      '前幾天的紀錄都會留在這裡。</div>';
-  // 分日。用 date 當鍵查既有的那一組，不是只比對上一筆 ——
-  // 只比上一筆的話，同一天的紀錄一旦不連續就會冒出兩個一樣的日期標頭。
-  const byDay={}, days=[];
-  past.forEach(t=>{
-    if(!byDay[t.date]){ byDay[t.date]={date:t.date, rows:[]}; days.push(byDay[t.date]); }
-    byDay[t.date].rows.push(t);
-  });
-  days.sort((a,b)=>b.date.localeCompare(a.date));       // 新的日子在上面
-  let h='<div class="n-trh">過去的真實交易　<span class="c">'+days.length+' 天・'+
-    past.length+' 筆</span></div><div class="n-trl t-past">';
-  days.forEach(d=>{
-    const done=d.rows.filter(t=>t.points!=null);
-    const net=Math.round(done.reduce((a,t)=>a+t.points,0)*10)/10;
-    // 日期在標頭不在每一列 —— 塞進 .n-row 會多一欄，跟今天那份對不齊
-    h+='<div class="n-dayh"><span class="dt">'+esc(d.date.slice(5))+'</span>'+
-       '<span class="c">'+d.rows.length+' 筆</span>'+
-       (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+'</div>';
-    // 一天之內也是新的在上面（跟今天那份同一個方向）。
-    // ⚠️ 明著照進場時間排，不要靠 trades_all 的既有順序 —— 那份是「今天那段反過來、
-    //    再一個檔案一個檔案接上去」，它現在剛好是新到舊，但那是實作細節不是保證。
-    d.rows.slice()
-      .sort((a,b)=>String(b.entry_time||'').localeCompare(String(a.entry_time||'')))
-      .forEach(t=>{ h+=realRow(t, '＋ 補寫心得',
-                 '現在回頭看，這一筆做對了什麼、做錯了什麼？'); });
-  });
-  return h+'</div>';
-}
+/* ⛔ 【realPast() / .t-past / .n-dayh 已於 2026-09-03 的 A 版整段移除】
+   舊版真實區底下另有一份「過去的真實交易」，照日期分組、每天一個 .n-dayh 小計。
+   A 版（Benson 拍板「完全照練習抄」）改成：跨日的紀錄由**成績區底下那份卡片清單**
+   （realCard，取 trades_all 前 12 筆）承擔 —— 同一批資料不要用兩種長相各列一次。
+   **「昨天的紀錄不見了」那個需求仍然被滿足**（他 2026-09-03 早上問的那件事）：
+   卡片上有日期欄（.tr-date），過去幾天的每一筆都列得出來、也都能事後補心得。
+   ⚠️ 跟著移除的還有「今天／過去」的切分，所以這一版**不再需要** R.today ——
+      但 realTrades() 用的 R.trades 仍然是後端按日期切好的今天那份，
+      前端一樣不可以用 new Date() 自己算今天（跨午夜兩邊會不同一天）。 */
 function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
 
 /* ---------------- 右欄總繪製 ----------------
@@ -3108,7 +3220,9 @@ function paintRight(s,nf){
     setEl('realbody', realBody(s));
     // 編輯心得時不重畫這一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
     // 「展開輸入框」本身也是一次重繪，所以刻意的重繪帶 nf 旗標繞過去（跟練習那邊同一招）。
-    if(nf||!nEditing('R')) setEl('realstats', realStats(R));
+    // ⚠️ #realstats 裡有**兩份**清單：今天那份 .n-row 用分區 R、成績區的卡片用 S。
+    //    只擋 R 的話，在卡片上打字會被下一輪重繪洗掉（漏一個字母就等於沒有這道保護）。
+    if(nf||(!nEditing('R')&&!nEditing('S'))) setEl('realstats', realStats(R));
     setEl('realfoot', realFoot(R));
   } else {
     // 編輯心得時不重畫那一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
@@ -3125,7 +3239,19 @@ function paintRight(s,nf){
    因為同一筆交易會同時出現在好幾個清單裡，不分區就會有兩個 id 相同的輸入框。 */
 var NOTE={key:null,text:''};
 function nkey(ns,t){
-  return ns+'|'+(t.date||'')+'|'+String(t.time||'').slice(0,5)+'|'+Math.round(t.entry);
+  // ⚠️ entry 認不出數字時不可以退成 0 —— `Math.round(null)` 是 0，兩筆這種資料就會
+  //    生出一模一樣的 key（`S|||0`），點一下會展開兩個 id 都叫 tnote 的輸入框。
+  //    真實那邊的欄位不保證都有值（見 CLAUDE.md「練習那邊一定有的欄位，真實那邊不一定有」）。
+  // ⛔ **`null` 一定要單獨擋**：`Number(null)` 是 **0**、`Number.isFinite(0)` 為真 ⇒
+  //    只寫 `Number.isFinite()` 的話 null 走的還是舊路徑，防呆等於沒做
+  //    （QA 2026-09-03 實測 `nkey('S',{entry:null})` 還是回 `S|||0`）。
+  //    只有 `undefined` / 非數字字串才會變 NaN，那是最不可能發生的那一種。
+  // ⚠️ 退路要用**這一筆自己才有的東西**當識別：`exit_time` 由呼叫端一起帶進來
+  //    （realRow / realCard 的 nt 物件），少帶的話兩張同日同分鐘的卡照樣會撞。
+  const e=Number(t.entry);
+  const bad=(t.entry==null||!Number.isFinite(e));
+  return ns+'|'+(t.date||'')+'|'+String(t.time||'').slice(0,5)+'|'+
+    (bad?'na'+String(t.exit_time||t.time||''):Math.round(e));
 }
 function noteBox(key,note,attrs,hint,ph){
   if(NOTE.key===key)
@@ -4184,6 +4310,18 @@ document.addEventListener('click', function(e){
    if(v===''){ viewDate=''; pickOpen=false; fetchBars(true); tick(); setTimeout(tick,250); }
    else goDay(v);
    return; }
+ // 真實成績的分段窗口。⚠️ 用自己的 RWIN，不要跟練習的 WIN 共用（見宣告處註解）。
+ // ⛔ 【按下去就要生效，正在打心得時也一樣】只換 #realscore 這一個節點 ——
+ //    整塊 #realstats 重畫會把 .list 裡正在編輯的 textarea 換掉，所以重繪守衛會擋，
+ //    於是變成「按了畫面完全不動、關掉編輯器才突然跳」（QA 2026-09-03 退件）。
+ //    這裡直接就地更新，不必等 tick()；再叫一次 tick() 讓其他區塊跟上。
+ const rw=e.target.closest('[data-rwin]');
+ if(rw){
+   RWIN=parseInt(rw.getAttribute('data-rwin'))||0; pickOpen=false;
+   const R=(LASTS&&LASTS.real)||{};
+   setEl('realscore', realScore(R.trades_all||[]));
+   tick(); return;
+ }
  const b=e.target.closest('[data-win]');
  if(!b){
    // 月曆現在浮在圖上面（以前掛在圖下面，蓋不到東西）——

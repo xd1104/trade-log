@@ -28,6 +28,11 @@ BASE = json.loads((SCRATCH / "state_template.json").read_text(encoding="utf-8"))
 POSTS = []
 MODE = {"v": "flat"}
 SLOW = {"v": 0.0}
+# 成績區分段按鈕（近 7／近 10／近 30／全部）的資料量。
+#   full ＝ 12 筆 ⇒ 窗口去重後剩 3 個  ⇒ .seg 要畫得出來、按了數字要真的變
+#   few  ＝  5 筆 ⇒ 四個窗口全部同一批 ⇒ 去重後只剩 1 個，.seg 整條不准畫
+# ⛔ 兩種都要驗：只驗一種的話，「去重」跟「按了會變」永遠有一半是假綠。
+VOL = {"v": "full"}
 
 # ── 今天的真實交易：前 5 筆是墊高用的（讓清單真的超過 max-height 而要捲），
 #    後 3 筆是有意義的三種狀態：停利、停損、問不到成交價（要留白）。
@@ -45,13 +50,20 @@ REAL_TRADES = [
      "exit_time": "10:08:51", "exit": 47041.0, "reason": "manual", "points": -36.0},
     {"date": DAY, "dir": "long", "qty": 1, "entry_time": "10:15:09", "entry": 47060.0,
      "exit_time": "10:22:37", "exit": 47083.0, "reason": "closed_elsewhere", "points": 23.0},
-    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "09:05:11", "entry": 47144.0,
-     "exit_time": "09:12:40", "exit": 47244.0, "reason": "tp", "points": 100.0},
+    # 進場價也換掉（2026-09-03）：舊值跟 real_trades/2026-09-01.jsonl 那筆一樣。
+    # ⚠️ 連「舊值是多少」都不要寫進註解 —— 那還是他真實的成交價，這個 repo 是公開的。
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "09:05:11", "entry": 47131.0,
+     "exit_time": "09:12:40", "exit": 47231.0, "reason": "tp", "points": 100.0},
     {"date": DAY, "dir": "short", "qty": 1, "entry_time": "10:31:02", "entry": 47010.0,
      "exit_time": "10:44:19", "exit": 47110.0, "reason": "sl", "points": -100.0},
-    # 問不到成交價：出場價與點數都要留白，絕對不可以拿現價冒充
-    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "13:39:21", "entry": 47144.0,
-     "exit_time": "13:41:17", "exit": None, "reason": "manual", "points": None},
+    # 問不到成交價：出場價與點數都要留白，絕對不可以拿現價冒充。
+    # ⛔ 這一筆的數字**全部是編的**（2026-09-03 換掉）。舊版的進出場時間與進場價
+    #    跟 real_trades/2026-09-01.jsonl 那一筆**逐位元組相同** —— 那是他真實的交易，
+    #    而這個 repo 是公開的（CLAUDE.md：真實交易絕不上傳）。
+    #    ⚠️ 換數字時要**保留測試意圖**：`exit` 與 `points` 必須維持 None，
+    #       這一筆存在的目的就是「問不到成交價 → 出場價與點數都要留白」。
+    {"date": DAY, "dir": "long", "qty": 1, "entry_time": "11:02:35", "entry": 47062.0,
+     "exit_time": "11:06:48", "exit": None, "reason": "manual", "points": None},
 ]
 
 # ── 過去幾天的真實交易（2026-09-03 加）。
@@ -59,16 +71,26 @@ REAL_TRADES = [
 #       日期標頭與「一天之內新的在上面」這兩件事都驗不出來。
 #    ⚠️ 其中一筆刻意**已經有心得**、另一筆刻意**沒有**：過去那一段要能事後補寫，
 #       兩種狀態的 noteline 樣式不一樣。
-#    ⛔ 數字一律自己編，**不可以照抄他真實的成交價與心得** —— 這個 repo 是公開的，
-#       真實交易不上傳是他的決定，抄進治具等於繞過那條規則把它推上去。
+#    ⛔⛔ **「照抄」不是只有價格。** 這個 repo 是公開的，真實交易不上傳是他的決定 ——
+#       而一筆交易的**每一個欄位單獨拿出來都是他的真實紀錄**：
+#         · 進場價／出場價   · **進出場時間**（哪一分鐘進場）
+#         · **賺賠點數**（那天輸贏多少）   · **心得原文**
+#       這條註解原本只寫「不可以照抄成交價」，結果寫的人（我）**只換了價格、
+#       把時間和點數原封留著**，等於把「他幾點進場、賺賠幾點」照樣推上公開網路。
+#       2026-09-03 一天之內同一個錯犯了四次（PM 兩次、dev 一次），全都是同一個誤解。
+#       **整筆自己編，不是挑幾欄編。** 守衛：`py tools/probe/leak-scan.py`。
+#    ⛔ 進出場**時間**與**點數**也是真實資料，不是只有價格（2026-09-03 換掉）：
+#       舊版這三筆的 entry_time／exit_time／points 跟 real_trades/2026-09-02.jsonl
+#       那三筆**完全一樣**，只有價格被改過 —— 等於把他哪一分鐘進場、賺賠幾點
+#       原封不動推上公開 repo。**整組都要自己編，不是只改價格。**
 PAST_TRADES = [
-    {"date": "2026-08-29", "dir": "long", "qty": 1, "entry_time": "09:02:03", "entry": 47200.0,
-     "exit_time": "09:08:51", "exit": 47096.0, "reason": "sl", "points": -104.0,
+    {"date": "2026-08-29", "dir": "long", "qty": 1, "entry_time": "09:04:12", "entry": 47200.0,
+     "exit_time": "09:12:30", "exit": 47104.0, "reason": "sl", "points": -96.0,
      "note": "假心得（治具用）"},
-    {"date": "2026-08-29", "dir": "long", "qty": 1, "entry_time": "09:20:04", "entry": 47090.0,
-     "exit_time": "09:30:16", "exit": 46989.0, "reason": "sl", "points": -101.0},
-    {"date": "2026-08-29", "dir": "short", "qty": 1, "entry_time": "09:50:17", "entry": 46980.0,
-     "exit_time": "10:09:42", "exit": 46880.0, "reason": "tp", "points": 100.0},
+    {"date": "2026-08-29", "dir": "long", "qty": 1, "entry_time": "09:26:41", "entry": 47090.0,
+     "exit_time": "09:35:08", "exit": 46987.0, "reason": "sl", "points": -103.0},
+    {"date": "2026-08-29", "dir": "short", "qty": 1, "entry_time": "10:01:55", "entry": 46980.0,
+     "exit_time": "10:14:27", "exit": 46880.0, "reason": "tp", "points": 100.0},
     {"date": "2026-08-28", "dir": "short", "qty": 1, "entry_time": "09:11:40", "entry": 47310.0,
      "exit_time": "09:19:05", "exit": 47210.0, "reason": "tp", "points": 100.0},
 ]
@@ -76,6 +98,27 @@ PAST_TRADES = [
 # broker.trades_history() 的形狀：今天那段反過來（新的在前），再接上更早的日子。
 # 治具照抄那個順序 —— 前端不可以依賴它，但也不該只在「剛好排好」的資料上測過。
 REAL_ALL = list(reversed(REAL_TRADES)) + PAST_TRADES
+
+# ── 每一種平倉理由各一張卡（/vol/reasons）。
+#    【為什麼要有】卡片的理由標籤有 **4 字硬上限**（`.tr-px` 只有 157.6px，6 字會折行、
+#    那張卡從 65px 變成 80px）。上面那兩份資料**不見得每種理由都有**（例如認不得的
+#    代號 → 「其他」就完全沒有），只驗現有的幾種＝那條上限有一半沒人在守。
+#    這一份刻意**照 RWHY 的每一個鍵各造一張，再加一張認不得的**，
+#    讓 ⑧b6 可以「掃全部逐一驗」而不是列白名單。
+#    ⛔ 價格與心得一律自己編（repo 是公開的，真實交易不上傳）。
+REASON_TRADES = [
+    {"date": "2026-08-27", "dir": "long", "qty": 1, "entry_time": "09:01:00", "entry": 47001.0,
+     "exit_time": "09:09:00", "exit": 47101.0, "reason": "tp", "points": 100.0},
+    {"date": "2026-08-27", "dir": "short", "qty": 1, "entry_time": "09:11:00", "entry": 47102.0,
+     "exit_time": "09:19:00", "exit": 47202.0, "reason": "sl", "points": -100.0},
+    {"date": "2026-08-27", "dir": "long", "qty": 1, "entry_time": "09:21:00", "entry": 47203.0,
+     "exit_time": "09:29:00", "exit": 47233.0, "reason": "manual", "points": 30.0},
+    {"date": "2026-08-27", "dir": "short", "qty": 1, "entry_time": "09:31:00", "entry": 47234.0,
+     "exit_time": "09:39:00", "exit": 47204.0, "reason": "closed_elsewhere", "points": 30.0},
+    # 認不得的內部代號 → 前端一律印「其他」，代號本身絕不可以外露
+    {"date": "2026-08-27", "dir": "long", "qty": 1, "entry_time": "09:41:00", "entry": 47205.0,
+     "exit_time": "09:49:00", "exit": 47175.0, "reason": "sl_test", "points": -30.0},
+]
 
 # ── 今天的練習交易：欄位跟 close_position() 寫出來的一模一樣
 def _sim(t, xt, d, ep, xp, why):
@@ -167,7 +210,12 @@ def state():
                  "trades": json.loads(json.dumps(REAL_TRADES)),
                  # 勝率是拿「所有留下來的」算的，不是只算今天；
                  # 「過去的真實交易」那一段也是從這份切出來的
-                 "trades_all": json.loads(json.dumps(REAL_ALL)),
+                 # few     只留 5 筆 ⇒ 近7/近10/近30/全部 全部對到同一批，去重後只剩
+                 #         一個窗口，前端就不該畫那排按鈕（按了畫面不動比沒有更糟）
+                 # reasons 每一種平倉理由各一張卡（含認不得的代號）⇒ 驗 4 字上限
+                 "trades_all": json.loads(json.dumps(
+                     REASON_TRADES if VOL["v"] == "reasons"
+                     else REAL_ALL[:5] if VOL["v"] == "few" else REAL_ALL)),
                  # 前端靠這個切「今天／過去」。⚠️ 治具的假交易日是 DAY，不是真的今天 ——
                  # 漏掉這個欄位前端會退回 new Date()，今天那 8 筆會在過去那段重複出現
                  "today": DAY}
@@ -264,6 +312,9 @@ class Ctl(H):
         if p.startswith("/mode/"):
             MODE["v"] = p.split("/")[-1]
             return self._send(200, "{}")
+        if p.startswith("/vol/"):
+            VOL["v"] = p.split("/")[-1]
+            return self._send(200, "{}")
         if p.startswith("/slow"):
             SLOW["v"] = float(p.split("/")[-1]) if p.count("/") > 1 else 1.2
             return self._send(200, "{}")
@@ -273,6 +324,6 @@ class Ctl(H):
 ctl = ThreadingHTTPServer(("127.0.0.1", 8772), Ctl)
 threading.Thread(target=ctl.serve_forever, daemon=True).start()
 print("控制埠 8772：/mode/flat /mode/holding /mode/with_target /mode/short /mode/stale /mode/closed"
-      " /posts /reset /slow", flush=True)
+      " /vol/full /vol/few /vol/reasons /posts /reset /slow", flush=True)
 while True:
     time.sleep(60)

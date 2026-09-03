@@ -444,7 +444,7 @@ def reconcile():
                     # ——那是好事，但如果不在這裡記一筆，這趟來回就完全不會出現在成績單上
                     # （面板永遠不送停利單，close() 也就不會被呼叫）。
                     # 也可能是他自己用別的工具平掉的，所以成交價一律去問那張停利單，
-                    # 問不到就留白、理由寫「不是面板平的」，不猜。
+                    # 問不到就留白、理由記 closed_elsewhere（畫面上寫「別處平的」），不猜。
                     px = _fill_price(gone.get("target_trade"))
                     record_trade(gone, px, "tp" if px is not None else "closed_elsewhere")
                     _log("position_gone", {"ok": True, "exit": px,

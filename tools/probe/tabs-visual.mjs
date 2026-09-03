@@ -1,5 +1,5 @@
 /*
-  右欄「練習／真實」兩個分頁的版面探針。
+  右欄「練習／真實」兩個分頁的版面探針（62 項）。
 
   hold-to-fire.mjs 守的是「長按送單那顆按鈕的行為」；這一支守的是**版面與狀態**：
     - 五種狀態 × 兩個分頁全部渲染過（休市另外在第 ⑤ 節單獨測），console 一個錯都不准有
@@ -218,17 +218,32 @@ console.log("\n=== ⑧ 每一筆真實交易都要能寫心得（跟練習一樣
 await ctl("/mode/flat");
 await goTab("real");
 await sleep(1000);
+// ⚠️ A 版（2026-09-03）之後真實區有**兩份**清單，各自帶心得入口：
+//    今天那份 .n-row（分區 R）＋ 成績區底下的 .trade 卡片（分區 S）。
+//    這裡要**分開數**，不可以拿整區的 [data-nedit] 去對 .n-row 的筆數 ——
+//    那樣一定對不上（20 vs 8），而且把兩件事混成一條斷言之後，哪一邊壞了都分不出來。
 const nt = await evalJS(`(()=>{
-  const rows=[...document.querySelectorAll('.n-zone.z-real .n-row')];
-  const eds=[...document.querySelectorAll('.n-zone.z-real [data-nedit]')];
+  const q=s=>[...document.querySelectorAll(s)];
+  const rows=q('.n-zone.z-real .t-today .n-row');
+  const eds=q('.n-zone.z-real .t-today [data-nedit]');
+  const cards=q('.n-zone.z-real .list .trade');
+  const ceds=q('.n-zone.z-real .list [data-nedit]');
+  const ns=a=>[...new Set(a.map(e=>e.getAttribute('data-nedit')[0]))];
   return {rows:rows.length, edits:eds.length,
-          kinds:[...new Set(eds.map(e=>e.getAttribute('data-nkind')))],
-          keys:eds.slice(0,2).map(e=>e.getAttribute('data-nedit')),
-          written:eds.filter(e=>(e.getAttribute('data-note')||'').length>0).length};})()`);
-chk("  每一筆底下都有心得入口", nt.edits, nt.rows);
-chk("  標成 real（存進 real_trades，不走練習那條同步鏈）", nt.kinds, ["real"]);
-chk("  分區字母是大寫 R（小寫 r 是回顧，撞了會兩個輸入框打架）",
-  nt.keys.every(k => String(k).startsWith("R|")), true);
+          cards:cards.length, cedits:ceds.length,
+          kinds:[...new Set(eds.concat(ceds).map(e=>e.getAttribute('data-nkind')))],
+          rowNs:ns(eds), cardNs:ns(ceds),
+          written:eds.concat(ceds)
+            .filter(e=>(e.getAttribute('data-note')||'').length>0).length};})()`);
+chk("  今天那份：每一筆底下都有心得入口", nt.edits, nt.rows);
+chk("  成績區的卡片：每一張也都有", nt.cedits, nt.cards);
+chk("  （尺的自證）兩份清單都真的有東西", [nt.rows > 0, nt.cards > 0], [true, true]);
+chk("  兩邊都標成 real（存進 real_trades，不走練習那條同步鏈）", nt.kinds, ["real"]);
+// ⛔ 分區字母：小寫 r 是回顧、小寫 s 是練習成績，撞了 nEditing() 就分不出是誰在編輯。
+//    而兩份清單彼此也不可以同字母 —— 同一筆今天的交易在兩邊都有，同 key 會展開
+//    兩個 id 都叫 tnote 的 textarea，第二個打的字存不進去。
+chk("  今天那份的分區字母是大寫 R", nt.rowNs, ["R"]);
+chk("  卡片那份是大寫 S（兩份不可以同字母）", nt.cardNs, ["S"]);
 chk("  已經寫過的心得會顯示出來", nt.written >= 1, true);
 // 「跟練習那邊一模一樣」是他明確要求的（2026-09-02）。純功能測試看不出樣式差別，
 // 所以直接量兩邊的 computed style —— 這是「醜有時候不是品味問題」那條的同一招。
@@ -252,7 +267,7 @@ for (const k of ["font", "color", "border", "pad", "ff", "txt"]) {
 // 點開來要真的出現輸入框，而且 0.5 秒的重繪不可以把它洗掉（中文輸入法會掉字）
 // ⚠️ 要挑「已經寫過心得」的那一列 —— 清單是新的在上面，有心得的那筆在最下面，
 //    抓第一個 [data-nedit] 會拿到還沒寫過的，然後誤判成「舊心得沒帶進來」。
-await evalJS(`(()=>{const e=[...document.querySelectorAll('.n-zone.z-real [data-nedit]')]
+await evalJS(`(()=>{const e=[...document.querySelectorAll('.n-zone.z-real .t-today [data-nedit]')]
   .find(x=>(x.getAttribute('data-note')||'').length>0);
   if(e) e.click();})()`);
 await sleep(1600);
@@ -260,14 +275,37 @@ const ed = await evalJS(`(()=>{const t=document.getElementById('tnote');
   return {open:!!t, val:t?t.value:null};})()`);
 chk("  點一下會展開輸入框", ed.open, true);
 chk("  舊的心得帶進輸入框裡（不是空的）", (ed.val || "").length > 0, true);
-await evalJS(`(()=>{const t=document.getElementById('tnote');
-  if(t){ t.value='探針打的字'; t.dispatchEvent(new Event('input',{bubbles:true})); }})()`);
-await sleep(1800);                       // 撐過 3 次 tick
-const kept = await evalJS(`(()=>{const t=document.getElementById('tnote');
-  return t?t.value:null;})()`);
-chk("  ⛔ 打到一半不可以被重繪洗掉", kept, "探針打的字");
-await evalJS(`(()=>{const b=document.querySelector('[data-ncancel]'); if(b) b.click();})()`);
-await sleep(900);
+
+// ⛔⛔ 【這一條以前是假綠，QA 2026-09-03 用突變測試抓到】
+//    舊版只讀 `textarea.value` —— 但 `NOTE.text` 在 input 事件時就更新了，
+//    重繪之後渲染回來是同一個字串 ⇒ **那條斷言表面上在守「不可以被洗掉」，
+//    實際上守的是「NOTE.text 有沒有被更新」**。把整道重繪守衛改成 `if(true)`
+//    （R、S 的保護都不存在）兩支探針照樣全綠，而真鍵盤打字會掉字。
+//    正解：**動作前先抓住那一顆節點**，之後比 `===`（跟長按那節抓 window.__held 同一招）。
+//    而且 R（今天那份 .n-row）與 S（成績區的卡片）**兩個分區各測一次** ——
+//    舊版挑「第一個有心得的 [data-nedit]」，DOM 順序上必定落在 R，S 從頭到尾沒被碰到。
+async function noteHold(name, sel) {
+  await evalJS(`(()=>{const e=[...document.querySelectorAll('${sel} [data-nedit]')][0];
+    if(e) e.click();})()`);
+  await sleep(1000);
+  const got = await evalJS(`(()=>{const t=document.getElementById('tnote');
+    window.__ta=t; return {has:!!t, ns:t?null:null};})()`);
+  chk(`  （尺的自證）${name}：真的抓到那一顆 textarea`, got.has, true);
+  await evalJS(`(()=>{const t=window.__ta;
+    t.value='探針打的字'; t.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await sleep(1800);                     // 撐過 3 次 tick
+  const r = await evalJS(`(()=>({
+    sameNode:document.getElementById('tnote')===window.__ta,
+    alive:!!(window.__ta&&document.body.contains(window.__ta)),
+    val:window.__ta?window.__ta.value:null}))()`);
+  // 節點被換掉＝使用者正在打的那個框被銷毀，真鍵盤下會掉字（value 相同不代表沒事）
+  chk(`  ⛔ ${name}：打到一半那一顆 textarea 沒有被換掉`, [r.sameNode, r.alive], [true, true]);
+  chk(`  ⛔ ${name}：字還在`, r.val, "探針打的字");
+  await evalJS(`(()=>{const b=document.querySelector('[data-ncancel]'); if(b) b.click();})()`);
+  await sleep(900);
+}
+await noteHold("分區 R（今天那份 .n-row）", ".n-zone.z-real .t-today");
+await noteHold("分區 S（成績區的卡片）", ".n-zone.z-real .list");
 
 console.log("\n=== ⑨ 真實交易要標在 K 線圖上（本來只有練習有）===");
 const mk = await evalJS(`(()=>{const sv=document.getElementById('csvg');
