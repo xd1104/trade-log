@@ -19,7 +19,9 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HERE = pathlib.Path(r"C:\Users\USER\Desktop\Claude Work\trade-log\tools\shioaji")
+# ⚠️ 相對於這個檔自己算，不可以寫死絕對路徑 —— 這是整個 repo 唯一一處寫死過的地方，
+#    換一台電腦（或換使用者名稱）就整支起不來，而所有探針都要靠這支治具。
+HERE = pathlib.Path(__file__).resolve().parent.parent / "shioaji"
 sys.path.insert(0, str(HERE))
 import live_panel as LP
 

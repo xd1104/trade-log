@@ -1,0 +1,38 @@
+# 早盤儀表板／交易日誌的 Python 相依套件
+#
+# 這份是從 2026-09-03 那台機器的 .venv 直接凍出來的完整清單（含轉遞相依），
+# 所以在新電腦上裝出來的環境跟原來那台一模一樣 —— 換電腦時不用猜版本。
+#
+# 怎麼用（Windows，Python 3.12）：
+#     py -3.12 -m venv .venv
+#     .venv\Scripts\python.exe -m pip install -r requirements.txt
+#
+# ⚠️ Python 版本要 3.12。shioaji 對版本挑，換大版本要重新確認。
+# ⚠️ pywebview + pythonnet 是桌面 App 視窗用的，只有 Windows 需要；
+#    視窗底層是 Windows 11 內建的 WebView2（Win10 要另外裝 WebView2 執行階段）。
+#
+# 直接相依的是這幾支，其餘是它們帶進來的：
+#     shioaji      永豐 API（報價、下單、歷史 K 棒）
+#     pandas       歷史資料處理
+#     pywebview    桌面 App 的視窗（＋ pythonnet / clr_loader / cffi / pycparser）
+#     scikit-learn 研究用（走查驗證那幾支腳本，面板本身用不到）
+
+bottle==0.13.4
+cffi==2.1.1
+clr_loader==0.3.1
+joblib==1.5.3
+narwhals==2.24.0
+numpy==2.5.2
+pandas==3.0.5
+proxy_tools==0.1.0
+pycparser==3.0
+python-dateutil==2.9.0.post0
+pythonnet==3.1.0
+pywebview==6.2.1
+scikit-learn==1.9.0
+scipy==1.18.0
+shioaji==1.7.2
+six==1.17.0
+threadpoolctl==3.6.0
+typing_extensions==4.16.0
+tzdata==2026.3
