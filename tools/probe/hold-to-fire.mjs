@@ -231,12 +231,14 @@ if (!/程式 \S+ \S+.啟動 \S+ \S+/.test(flatTxt)) console.log("    卡片實�
 console.log("\n=== ⑧ 今天的真實交易成績單（固定欄 ＋ 會捲不會壓扁）===");
 // ⚠️ 新版是固定五欄的表格，順序改成「新的在上面」，所以不能再用陣列位序認人 ——
 //    用那一筆自己的時間去找，斷言的意思跟舊版一樣。
+// ⚠️ 一定要指名 .t-today：真實區現在有兩份清單（今天／過去），
+//    用 `.n-zone.z-real .n-row` 會把過去那幾天一起數進來（09-03 這裡紅過一次）。
 const led = await evalJS(`(()=>{
-  const rows=[...document.querySelectorAll('.n-zone.z-real .n-row')];
+  const rows=[...document.querySelectorAll('.n-zone.z-real .t-today .n-row')];
   const find=re=>rows.find(r=>new RegExp(re).test(r.innerText));
   const cls=r=>{const p=r&&r.querySelector('.pt'); return p?p.className:'';};
   const net=document.querySelector('.n-zone.z-real .n-trh .net');
-  const rl=document.querySelector('.n-zone.z-real .n-trl');
+  const rl=document.querySelector('.n-zone.z-real .t-today');
   const hs=rows.map(r=>Math.round(r.getBoundingClientRect().height));
   const ih=rows.map(r=>r.clientHeight);
   return {n:rows.length, net:net&&net.innerText,
@@ -261,6 +263,43 @@ chk("  筆數超過容器高度時是捲動", led.scrolls, true);
 chk("  每一列沒有被壓扁（>= 28px）", led.minH >= 28, true);
 chk("  而且每一列一樣高（沒有誰被擠掉）", led.minIn === led.maxIn, true);
 console.log(`    實測列高 ${led.minH}~${led.maxH}px（含框）／${led.minIn}~${led.maxIn}px（內容）`);
+
+console.log("\n=== ⑧b 過去的真實交易（他 09-03 問「昨天的紀錄都不見了」）===");
+// 舊版真實區只列今天，過了午夜昨天的就從畫面上消失、只剩併進勝率的數字 ——
+// 檔案好好的在 real_trades/，但**留得住不等於看得到**。
+const past = await evalJS(`(()=>{
+  const l=document.querySelector('.n-zone.z-real .t-past');
+  if(!l) return {missing:true};
+  const rows=[...l.querySelectorAll('.n-row')];
+  const days=[...l.querySelectorAll('.n-dayh')];
+  const today=[...document.querySelectorAll('.n-zone.z-real .t-today .n-row')]
+                .map(r=>r.innerText);
+  const ih=rows.map(r=>r.clientHeight);
+  return {n:rows.length, days:days.map(d=>d.querySelector('.dt').innerText),
+          dayNets:days.map(d=>{const n=d.querySelector('.net'); return n?n.innerText:null}),
+          // 一天之內新的在上面：08-29 那三筆的進場時間應該是 09:50 → 09:20 → 09:02
+          order:rows.slice(0,3).map(r=>r.innerText.split('\\n')[1].slice(0,5)),
+          // 過去那幾筆要能事後補寫心得，而且已經寫過的要顯示出來
+          editable:l.querySelectorAll('.noteline[data-nedit][data-nkind="real"]').length,
+          written:[...l.querySelectorAll('.noteline')].filter(x=>/「/.test(x.innerText)).length,
+          dup:rows.filter(r=>today.includes(r.innerText)).length,
+          scrolls:l.scrollHeight>l.clientHeight+2,
+          minIn:Math.min(...ih), maxIn:Math.max(...ih)};})()`);
+chk("  過去的清單真的在畫面上", !past.missing, true);
+chk("  四筆都列出來", past.n, 4);
+chk("  分成兩天，新的日子在上面", past.days, ["08-29", "08-28"]);
+chk("  每一天各自有小計", past.dayNets, ["-105 點", "+100 點"]);
+chk("  一天之內也是新的在上面", past.order, ["09:50", "09:20", "09:02"]);
+// ⛔ 今天那幾筆不可以在這裡再出現一次 —— 切「今天／過去」要用伺服器給的 R.today，
+//    瀏覽器自己算 new Date() 在跨午夜那一刻會跟後端讀的檔案不同一天。
+chk("  ⛔ 今天那幾筆沒有重複出現在過去", past.dup, 0);
+chk("  過去的每一筆都能事後補寫心得", past.editable, 4);
+chk("  已經寫過的心得看得到", past.written, 1);
+// 跟今天那份同一條鐵律：有 max-height 的 flex 直欄，沒有 flex:none 就是壓扁不是捲動
+chk("  超過容器高度時是捲動", past.scrolls, true);
+chk("  每一列一樣高（沒有誰被壓扁）",
+    past.minIn === past.maxIn && past.minIn >= 28, true);
+console.log(`    實測列高 ${past.minIn}~${past.maxIn}px（內容）`);
 
 console.log("\n=== ⑨ 站在練習分頁：畫面上一顆真實下單鈕都沒有（結構防呆）===");
 await ctl("/mode/flat");

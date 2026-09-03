@@ -2195,6 +2195,16 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .n-trl::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
 .n-item{padding:2px 0 6px; border-top:1px solid var(--line-soft)}
 .n-item:first-child{border-top:0}
+/* 過去那一段的日期標頭。日期放這裡不放進 .n-row —— .n-row 是固定五欄的格線，
+   多塞一欄就跟「今天」那份對不齊，同一筆交易過了午夜會長得不一樣。 */
+.n-dayh{display:flex; align-items:baseline; gap:8px; padding:10px 0 4px;
+  font-size:11px; color:var(--dim); font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; border-top:1px solid var(--line-soft)}
+.n-dayh:first-child{border-top:0}
+.n-dayh+.n-item{border-top:0}
+.n-dayh .dt{color:var(--text); font-weight:700; letter-spacing:.5px}
+.n-dayh .c{color:var(--faint)}
+.n-dayh .net{margin-left:auto; font-weight:700; font-size:12px}
 .n-row{display:grid; grid-template-columns:18px 92px 1fr 68px 58px; align-items:center;
   gap:9px; padding:8px 0; font-size:12px; font-family:var(--font-mono);
   font-variant-numeric:tabular-nums; border-top:1px solid var(--line-soft)}
@@ -2975,7 +2985,9 @@ function realStats(R){
       h+='<div class="n-why">另有 '+(all.length-done.length)+
          ' 筆問不到成交價，沒有算進勝率</div>';
   }
-  return h+realTrades((R&&R.trades)||[])+'</div>';
+  // 今天的在上面、過去的在下面。過去那一段不受「真實下單」開關管，
+  // 理由跟勝率同一條：看自己過去的成績跟送不送單無關（realZone 那段註解）。
+  return h+realTrades((R&&R.trades)||[])+realPast(R)+'</div>';
 }
 
 function realTrades(list){
@@ -2990,32 +3002,11 @@ function realTrades(list){
   let h='<div class="n-trh">今天的真實交易　<span class="c">'+list.length+' 筆'+
     (miss?'（'+done.length+' 筆算得出點數）':'')+'</span>'+
     (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+
-    '</div><div class="n-trl">';
-  for(let i=list.length-1;i>=0;i--){            // 新的在上面
-    const t=list[i];
-    // 認不得的理由一律寫「其他」——內部代號（sl_test 之類）不該印到他眼前
-    const why={sl:'停損', tp:'停利', manual:'手動平倉',
-               closed_elsewhere:'不是面板平的'}[t.reason]||'其他';
-    // 【結構要跟練習一樣】練習那邊每一筆是 `.n-item` 包住「一列 ＋ 底下的心得」，
-    // 心得的樣式掛在 `.n-item .noteline` 上。真實這邊本來只丟一個裸的 .n-row，
-    // 吃不到那組樣式 ⇒ 心得長得跟練習不一樣（他 2026-09-02 要求對齊）。
-    h+='<div class="n-item"><div class="n-row">'+
-      '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
-      '<span class="tm">'+esc(String(t.entry_time||'—').slice(0,5))+'&rarr;'+
-        esc(String(t.exit_time||'—').slice(0,5))+'</span>'+
-      '<span class="px">'+f(t.entry)+'&rarr;'+(t.exit==null?'—':f(t.exit))+'</span>'+
-      '<span class="wy">'+why+'</span>'+
-      '<span class="pt '+(t.points==null?'na':sgn(t.points))+'">'+
-      (t.points==null?'—':pm(t.points))+'</span></div>';
-    // 心得：跟練習同一套（點一下展開輸入框、事後補寫）。
-    // 分區字母用大寫 R —— 小寫 r 已經被回顧分頁佔走，同一個字母會讓
-    // nEditing() 分不出是誰在編輯，兩邊的輸入框會互相打架。
-    // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（跟成績單一樣）。
-    const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry};
-    // 提示字與 placeholder 也用練習那邊同一組 —— 他要的是「一模一樣」
-    h+=noteBox(nkey('R',nt), t.note, nattr(nt)+' data-nkind="real"',
-               '＋ 寫下今天的心得', '今天的盤感、進出場理由、紀律有沒有守…')+'</div>';
-  }
+    // t-today / t-past 純粹是「這是哪一份清單」的標記（沒有樣式）——
+    // 真實區現在有兩個 .n-trl，探針與日後的程式不可以再靠「第幾個」認人。
+    '</div><div class="n-trl t-today">';
+  for(let i=list.length-1;i>=0;i--)              // 新的在上面
+    h+=realRow(list[i], '＋ 寫下今天的心得', '今天的盤感、進出場理由、紀律有沒有守…');
   h+='</div>';
   // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
   if(miss)
@@ -3023,6 +3014,72 @@ function realTrades(list){
       '那幾筆的損益請到大戶投看。'+
       (done.length?'合計的 '+pm(net)+' 點只含算得出來的 '+done.length+' 筆。':'')+'</div>';
   return h;
+}
+/* 一筆真實交易那一列（今天與過去共用一份 —— 兩邊長得不一樣的話，
+   同一筆交易過了午夜就換個樣子，看起來像不是同一筆東西）。
+   【結構要跟練習一樣】每一筆是 `.n-item` 包住「一列 ＋ 底下的心得」，
+   心得的樣式掛在 `.n-item .noteline` 上；裸的 .n-row 吃不到那組樣式
+   （他 2026-09-02 要求對齊）。 */
+function realRow(t, hint, ph){
+  // 認不得的理由一律寫「其他」——內部代號（sl_test 之類）不該印到他眼前
+  const why={sl:'停損', tp:'停利', manual:'手動平倉',
+             closed_elsewhere:'不是面板平的'}[t.reason]||'其他';
+  let h='<div class="n-item"><div class="n-row">'+
+    '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
+    '<span class="tm">'+esc(String(t.entry_time||'—').slice(0,5))+'&rarr;'+
+      esc(String(t.exit_time||'—').slice(0,5))+'</span>'+
+    '<span class="px">'+f(t.entry)+'&rarr;'+(t.exit==null?'—':f(t.exit))+'</span>'+
+    '<span class="wy">'+why+'</span>'+
+    '<span class="pt '+(t.points==null?'na':sgn(t.points))+'">'+
+    (t.points==null?'—':pm(t.points))+'</span></div>';
+  // 心得：跟練習同一套（點一下展開輸入框、事後補寫）。
+  // 分區字母用大寫 R —— 小寫 r 已經被回顧分頁佔走，同一個字母會讓
+  // nEditing() 分不出是誰在編輯，兩邊的輸入框會互相打架。
+  // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（跟成績單一樣）。
+  const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry};
+  return h+noteBox(nkey('R',nt), t.note, nattr(nt)+' data-nkind="real"', hint, ph)+'</div>';
+}
+
+/* 過去的真實交易。
+   【為什麼一定要有】舊版整個真實區只列「今天」的那幾筆，過了午夜就從畫面上消失，
+   只剩併進上面勝率裡的數字 ⇒ 他 2026-09-03 早上問「昨天的交易紀錄都不見了」，
+   檔案其實好好的在 real_trades/2026-09-02.jsonl。**留得住不等於看得到。**
+   ⚠️ 「今天」用伺服器給的 R.today，不是瀏覽器的 new Date() —— 見 broker.snapshot()。
+      治具沒給這個欄位時才退回本機日期（欄位缺就整份當過去，今天那幾筆會重複出現）。 */
+function realPast(R){
+  const all=(R&&R.trades_all)||[];
+  const today=(R&&R.today)||new Date().toLocaleDateString('sv-SE');   // sv-SE ＝ YYYY-MM-DD
+  const past=all.filter(t=>t.date&&t.date!==today);
+  if(!past.length)
+    return '<div class="n-trh">過去的真實交易</div>'+
+      '<div class="n-empty">還沒有更早的真實交易。以後每天收盤後，'+
+      '前幾天的紀錄都會留在這裡。</div>';
+  // 分日。用 date 當鍵查既有的那一組，不是只比對上一筆 ——
+  // 只比上一筆的話，同一天的紀錄一旦不連續就會冒出兩個一樣的日期標頭。
+  const byDay={}, days=[];
+  past.forEach(t=>{
+    if(!byDay[t.date]){ byDay[t.date]={date:t.date, rows:[]}; days.push(byDay[t.date]); }
+    byDay[t.date].rows.push(t);
+  });
+  days.sort((a,b)=>b.date.localeCompare(a.date));       // 新的日子在上面
+  let h='<div class="n-trh">過去的真實交易　<span class="c">'+days.length+' 天・'+
+    past.length+' 筆</span></div><div class="n-trl t-past">';
+  days.forEach(d=>{
+    const done=d.rows.filter(t=>t.points!=null);
+    const net=Math.round(done.reduce((a,t)=>a+t.points,0)*10)/10;
+    // 日期在標頭不在每一列 —— 塞進 .n-row 會多一欄，跟今天那份對不齊
+    h+='<div class="n-dayh"><span class="dt">'+esc(d.date.slice(5))+'</span>'+
+       '<span class="c">'+d.rows.length+' 筆</span>'+
+       (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+'</div>';
+    // 一天之內也是新的在上面（跟今天那份同一個方向）。
+    // ⚠️ 明著照進場時間排，不要靠 trades_all 的既有順序 —— 那份是「今天那段反過來、
+    //    再一個檔案一個檔案接上去」，它現在剛好是新到舊，但那是實作細節不是保證。
+    d.rows.slice()
+      .sort((a,b)=>String(b.entry_time||'').localeCompare(String(a.entry_time||'')))
+      .forEach(t=>{ h+=realRow(t, '＋ 補寫心得',
+                 '現在回頭看，這一筆做對了什麼、做錯了什麼？'); });
+  });
+  return h+'</div>';
 }
 function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
 

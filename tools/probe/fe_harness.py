@@ -54,6 +54,29 @@ REAL_TRADES = [
      "exit_time": "13:41:17", "exit": None, "reason": "manual", "points": None},
 ]
 
+# ── 過去幾天的真實交易（2026-09-03 加）。
+#    ⚠️ 一定要有**兩天以上**，而且其中一天要**多筆** —— 只放一天一筆的話，
+#       日期標頭與「一天之內新的在上面」這兩件事都驗不出來。
+#    ⚠️ 其中一筆刻意**已經有心得**、另一筆刻意**沒有**：過去那一段要能事後補寫，
+#       兩種狀態的 noteline 樣式不一樣。
+#    ⛔ 數字一律自己編，**不可以照抄他真實的成交價與心得** —— 這個 repo 是公開的，
+#       真實交易不上傳是他的決定，抄進治具等於繞過那條規則把它推上去。
+PAST_TRADES = [
+    {"date": "2026-08-29", "dir": "long", "qty": 1, "entry_time": "09:02:03", "entry": 47200.0,
+     "exit_time": "09:08:51", "exit": 47096.0, "reason": "sl", "points": -104.0,
+     "note": "假心得（治具用）"},
+    {"date": "2026-08-29", "dir": "long", "qty": 1, "entry_time": "09:20:04", "entry": 47090.0,
+     "exit_time": "09:30:16", "exit": 46989.0, "reason": "sl", "points": -101.0},
+    {"date": "2026-08-29", "dir": "short", "qty": 1, "entry_time": "09:50:17", "entry": 46980.0,
+     "exit_time": "10:09:42", "exit": 46880.0, "reason": "tp", "points": 100.0},
+    {"date": "2026-08-28", "dir": "short", "qty": 1, "entry_time": "09:11:40", "entry": 47310.0,
+     "exit_time": "09:19:05", "exit": 47210.0, "reason": "tp", "points": 100.0},
+]
+
+# broker.trades_history() 的形狀：今天那段反過來（新的在前），再接上更早的日子。
+# 治具照抄那個順序 —— 前端不可以依賴它，但也不該只在「剛好排好」的資料上測過。
+REAL_ALL = list(reversed(REAL_TRADES)) + PAST_TRADES
+
 # ── 今天的練習交易：欄位跟 close_position() 寫出來的一模一樣
 def _sim(t, xt, d, ep, xp, why):
     pts = (xp - ep) if d == "long" else (ep - xp)
@@ -142,8 +165,12 @@ def state():
                  "code": {"broker": "09-01 12:45", "panel": "09-01 12:45",
                           "started": "09-01 12:50", "stale": False},
                  "trades": json.loads(json.dumps(REAL_TRADES)),
-                 # 勝率是拿「所有留下來的」算的，不是只算今天
-                 "trades_all": json.loads(json.dumps(REAL_TRADES))}
+                 # 勝率是拿「所有留下來的」算的，不是只算今天；
+                 # 「過去的真實交易」那一段也是從這份切出來的
+                 "trades_all": json.loads(json.dumps(REAL_ALL)),
+                 # 前端靠這個切「今天／過去」。⚠️ 治具的假交易日是 DAY，不是真的今天 ——
+                 # 漏掉這個欄位前端會退回 new Date()，今天那 8 筆會在過去那段重複出現
+                 "today": DAY}
     m = MODE["v"]
     if m == "closed":
         # 休市：沒有即時報價。兩區的下單鈕都必須真的 disabled（紀錄正確性，不是 UX 取捨）

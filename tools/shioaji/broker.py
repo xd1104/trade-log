@@ -750,6 +750,10 @@ def snapshot():
     return {"live": is_live(), "position": pos, "trades": trades_today(),
             # 勝率要看得夠多筆才有意義，所以另外給「所有留下來的」
             "trades_all": trades_history(),
+            # 前端要靠這個把 trades_all 切成「今天」與「過去」兩段。
+            # ⚠️ 一定要由**伺服器**給：瀏覽器自己算 new Date() 在跨午夜那一刻會跟
+            #    trades_today() 讀的檔案不同一天 ⇒ 同一筆交易在兩個清單裡各出現一次。
+            "today": str(date.today()),
             "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"],
             "entries_today": entries_today(), "max_entries": MAX_ENTRIES,
             "account": str(getattr(_state["account"], "account_id", "")) or None,

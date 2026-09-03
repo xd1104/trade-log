@@ -651,6 +651,52 @@ chk("  理由標成停利", tr[0]["reason"], "tp")
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 broker._state["position"] = None
 
+# ── 過去幾天的成績單 ＋ 事後補寫心得（2026-09-03 加）
+# 【為什麼要有這一節】面板的真實區以前只列「今天」，過了午夜他就看不到昨天的紀錄
+# （他 09-03 早上問「昨天的交易紀錄都不見了」）。現在畫面會列出過去的日子，
+# 這兩支就從「沒人看的函式」變成他每天會用到的東西，而 set_trade_note 是
+# **整個檔案重寫**——寫壞就是弄丟那一天的成績單。
+print("\n=== 過去的成績單：跨日要讀得回來，補心得不可以弄丟同一天的其他筆 ===")
+broker.TRADE_DIR.mkdir(exist_ok=True)
+# 刻意用很舊的日期，不會跟 today 撞；價格與心得也**全部自己編** ——
+# 這個 repo 是公開的，照抄他真實的成交價等於把不上傳的東西推上去。
+DAY_A, DAY_B = "2020-01-02", "2020-01-03"
+for day, rows in ((DAY_A, [("09:02:03", 47200.0, "sl", -104.0, "假心得（測試用）"),
+                           ("09:20:04", 47090.0, "sl", -101.0, None),
+                           ("09:50:17", 46980.0, "tp", 100.0, None)]),
+                  (DAY_B, [("09:11:40", 47310.0, "tp", 100.0, None)])):
+    with (broker.TRADE_DIR / f"{day}.jsonl").open("w", encoding="utf-8") as fh:
+        for t, e, why, pts, note in rows:
+            fh.write(json.dumps({"date": day, "dir": "long", "qty": 1, "entry_time": t,
+                                 "entry": e, "exit_time": t, "exit": e + pts,
+                                 "reason": why, "points": pts, "note": note},
+                                ensure_ascii=False) + "\n")
+broker._HIST["at"] = 0.0
+hist = broker.trades_history()
+old = [t for t in hist if t["date"] in (DAY_A, DAY_B)]
+chk("  過去兩天的 4 筆都讀得回來", len(old), 4)
+chk("  舊的日子排在今天後面，而且新的那天在前",
+    [t["date"] for t in hist[-4:]], [DAY_B] + [DAY_A] * 3)
+chk("  同一天之內是新到舊", [t["entry_time"] for t in hist[-3:]],
+    ["09:50:17", "09:20:04", "09:02:03"])
+
+# 補心得：認人靠（日期＋進場時間到分＋進場價），不是陣列位序
+ok, msg = broker.set_trade_note(DAY_A, "09:20", 47090, "事後回頭看，這筆是可以接受的輸")
+chk("  補得進過去那一天", (ok, msg), (True, None))
+rows = [json.loads(l) for l in
+        (broker.TRADE_DIR / f"{DAY_A}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  那一天還是 3 筆（沒有被整檔覆蓋掉）", len(rows), 3)
+chk("  心得寫進對的那一筆", rows[1]["note"], "事後回頭看，這筆是可以接受的輸")
+chk("  同一天的其他筆原封不動", (rows[0]["note"], rows[2]["note"]), ("假心得（測試用）", None))
+chk("  心得有記時間戳", isinstance(rows[1].get("note_at"), str), True)
+chk("  ⛔ 沒有動到別天", (broker.TRADE_DIR / f"{DAY_B}.jsonl").read_text(
+    encoding="utf-8").count("\n"), 1)
+# 認不得的一律拒絕，不可以「猜一筆最像的」寫進去
+blocked("  進場價對不上就不寫", broker.set_trade_note(DAY_A, "09:20", 99999, "x"), "對不到")
+blocked("  沒有那一天就不寫", broker.set_trade_note("1999-12-31", "09:20", 47090, "x"),
+        "找不到")
+broker._HIST["at"] = 0.0
+
 print("\n=== 收尾：這支測試不可以碰到真正的紀錄 ===")
 # 這一節守的是「測試本身有沒有污染他的資料」，不是產品行為。
 # 09-01 就是漏了 TRADE_DIR，假交易寫進他的成績單，跑了兩輪都沒人發現。
