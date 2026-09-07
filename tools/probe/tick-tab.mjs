@@ -146,8 +146,9 @@ await sleep(2200);
 
 /* ═══ ① 進得去、畫得出來、console 零錯誤 ═══════════════════════════════ */
 console.log("=== ① 分頁與第一畫面 ===");
-chk("頂列三顆分頁", await ev(`[...document.querySelectorAll('.tabs button')].map(b=>b.textContent)`),
-  ["即時", "細節", "回顧"]);
+// 2026-09-07 加【程式下單】之後從三顆變四顆。⛔【細節】仍然必須在第 2 顆（下一條在守）。
+chk("頂列四顆分頁", await ev(`[...document.querySelectorAll('.tabs button')].map(b=>b.textContent)`),
+  ["即時", "細節", "回顧", "程式下單"]);
 chk("分頁順序：細節在中間",
   await ev(`[...document.querySelectorAll('.tabs button')][1].getAttribute('data-tab')`), "tick");
 say(await goTick(), "切進【細節】並載入完成");

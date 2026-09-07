@@ -38,3 +38,6 @@ tools/shioaji/real_trades/
 
 # 逐筆報價紀錄（很大，而且是市場資料，不進版控）
 tools/shioaji/tick_logs/
+
+# 【程式下單】分頁的模擬紀錄（含進場價與時間，repo 是公開的）
+tools/shioaji/autotest/
