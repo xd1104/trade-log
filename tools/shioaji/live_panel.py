@@ -49,6 +49,7 @@ import numpy as np
 import pandas as pd
 
 import broker            # 真實下單。預設 dry run，見那個檔開頭的說明
+import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -84,6 +85,14 @@ NIGHT_CLOSE = pd.Timestamp("05:00").time()
 # 否則每天都會少掉收盤前那一兩分鐘。
 NIGHT_TAIL = pd.Timestamp("05:01").time()
 
+# 逐筆報價落地：08:45~09:30（他的下單時段）的每一筆成交與買賣價寫進
+# tick_logs/YYYY-MM-DD.jsonl。以前這些資料收完就丟，只留下 ticks 的計數，
+# 一分鐘內發生什麼事永遠補不回來。
+# ⛔ on_tick 只把資料 append 進記憶體佇列，寫檔在 tick_writer 自己的執行緒 ——
+#    那條執行緒卡住最多是「這段沒錄到」，絕對不可以變成「停損慢了 200 秒」。
+# 時段的單一來源在這裡（SESSION_OPEN / WATCH_END），tick_writer 自己的預設值只是備援。
+TICKS = tick_writer.TickWriter(HERE / "tick_logs",
+                               win_start=SESSION_OPEN, win_end=WATCH_END)
 
 
 def market_session(now=None):
@@ -5810,23 +5819,32 @@ def main():
     # 可整天掛著：晚上開著 → 隔天 08:45 自動進入即時模式 → 09:30 收工存檔 → 繼續等下一天
     session = {"api": None, "contract": None, "date": None, "state": None, "saved": False}
 
+    # ⛔⛔ 這兩個回呼跑在永豐 SDK 的執行緒上，而 st.feed() 更新的 self.price
+    #     就是停損判斷看的那個價（永豐沒有停損單，停損活在面板的 Python 迴圈裡）。
+    #     **裡面絕對不可以做同步磁碟 I/O。** 一筆卡 5ms，早上四萬筆就是 200 秒，
+    #     塞住的時候塞住的是他的停損。TICKS.tick()／TICKS.bidask() 只 append 進
+    #     記憶體佇列（實測單筆 < 0.15ms，400 筆合計 0.7ms），寫檔在另一條執行緒。
     def on_tick(exchange: Exchange, tick: TickFOPv1):
         ts = tick.datetime
+        price, vol = float(tick.close), int(tick.volume)
         st = session["state"]
-        if st is None:
-            return
-        # 價格任何時候都收（面板要一直顯示）；日盤才累積開高低與量
-        st.feed(float(tick.close), int(tick.volume), ts,
-                in_session=SESSION_OPEN <= ts.time() < DAY_END)
+        if st is not None:
+            # 價格任何時候都收（面板要一直顯示）；日盤才累積開高低與量。
+            # 這一句排在落地之前 —— 停損看的價要先更新，其他事都排在後面。
+            st.feed(price, vol, ts, in_session=SESSION_OPEN <= ts.time() < DAY_END)
+        TICKS.tick(ts, price, vol)      # 只 append，不碰磁碟
 
     def on_bidask(exchange: Exchange, ba: BidAskFOPv1):
-        st = session["state"]
-        if st is None:
-            return
         try:
-            st.feed_quote(float(ba.bid_price[0]), float(ba.ask_price[0]), ba.datetime)
+            # 原本就有的防線：五檔偶爾是空的／型別對不上，吞掉不要把 SDK 的執行緒打死
+            bid, ask = float(ba.bid_price[0]), float(ba.ask_price[0])
+            st = session["state"]
+            if st is not None:
+                st.feed_quote(bid, ask, ba.datetime)
         except Exception:
-            pass
+            return
+        # 價差是事後絕對補不回來的東西，而這裡現在就拿得到 —— 跟成交記在同一個檔
+        TICKS.bidask(ba.datetime, bid, ask)
 
     def pick_live_contract(api):
         """
@@ -5958,6 +5976,10 @@ def main():
         session.update({"date": today, "state": st, "saved": False})
         print(f"[{today}] 當日狀態已建立，上一交易日日盤收盤 {prev_close}")
 
+    # 逐筆落地的寫檔執行緒要在 connect() 之前起來 —— start_day() 裡面就會訂閱報價了。
+    # （就算晚起也不會掉資料，佇列會先接著；但沒必要讓它先積一段。）
+    TICKS.start()
+
     # 啟動時一定要建立狀態，不能等到 08:30 ——
     # 否則半夜啟動的話 session["state"] 是 None，收到的報價全部被丟掉。
     start_day(date.today())
@@ -6048,6 +6070,13 @@ def main():
                     session["saved"] = True
                     ok, msg = sync_to_cloud()
                     print(f"[{today}] 09:30 下單時段結束。雲端同步：{msg}")
+                    # 逐筆落地的成績單。dropped 不是 0 就代表那個早上有一段是缺的
+                    # （檔案裡也有痕跡列），下次要把 max_queue 或 flush_every 調一調。
+                    ts_stat = TICKS.stats()
+                    print(f"[{today}] 逐筆落地：寫出 {ts_stat['written']} 列"
+                          f"，佇列滿丟棄 {ts_stat['dropped']} 列"
+                          f"，寫檔失敗丟失 {ts_stat['lost_io']} 列"
+                          f"（tick_logs/{today}.jsonl）")
                 update_state(hist, st, vol_ref, t, phase="live")
             else:
                 # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）

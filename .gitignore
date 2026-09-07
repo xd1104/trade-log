@@ -35,3 +35,6 @@ tools/shioaji/REAL_ORDERS_ON
 *.pfx
 *.p12
 tools/shioaji/real_trades/
+
+# 逐筆報價紀錄（很大，而且是市場資料，不進版控）
+tools/shioaji/tick_logs/
