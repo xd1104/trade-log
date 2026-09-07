@@ -96,6 +96,19 @@ for n in polled_like:
             console.strip().splitlines()[:1])
 if not polled_like:
     print("  （這台機器上目前沒有符合逐筆檔名的檔，這一節改由 ② 的合成負控組覆蓋）")
+# 磁碟上**真的**有取樣檔的話，它要看得到、而且標成取樣（2026-09-07 的整條需求）。
+# ⛔ 這裡只斷言種類與有沒有列進去，**一個他的數字都不印**（筆數／時段／價格都是他的紀錄）。
+real_polled = [n for n in names if LP._TICK_POLLED_NAME.match(n)]
+if real_polled:
+    rp = {x["d"]: x for x in real_days["days"]}
+    for n in real_polled:
+        d = LP._TICK_POLLED_NAME.match(n).group(1)
+        has_tick = (REAL_TICKS / f"{d}.jsonl").exists()
+        say(d in rp, f"{n} 出現在 days 裡（以前完全看不到）")
+        chk(f"{n} 的種類標記", (rp.get(d) or {}).get("kind"),
+            "tick" if has_tick else "polled")
+else:
+    print("  （這台機器上目前沒有 -polled 檔，取樣那半由 ②b 的合成資料覆蓋）")
 
 # ══ ② 嗅探的負控組：合法的逐筆檔必須進得去 ════════════════════════════
 print("\n=== ② 嗅探：負控組 ===")
@@ -119,12 +132,454 @@ say(DTS["tiny"] in got, "只有 3 列的合法逐筆檔出現在 days 裡（證�
 say(DTS["decoy"] not in got, "輪詢 schema 的檔不在 days 裡")
 say(DTS["decoy"] in dd["skipped"], "輪詢 schema 的檔出現在 skipped 裡")
 say(f"{DTS['tiny']}-polled" not in got and DTS["tiny"] + "-polled" not in dd["skipped"],
-    "帶 -polled 後綴的檔連嗅探都不走（檔名就擋掉）")
+    "-polled 不會被當成日期的一部分（它掛在同一天底下，不是新的一天）")
+# 同一天兩種檔都有 ⇒ **逐筆優先**、另一份標成 alt（tick_days() 的取捨，見那裡的說明）
+KINDS = {x["d"]: (x["kind"], x["alt"]) for x in dd["days"]}
+chk("兩種檔都有的那天：kind=tick、alt=True", KINDS.get(DTS["tiny"]), ("tick", True))
+chk("只有逐筆檔的那天：kind=tick、alt=False", KINDS.get(DTS["blank"]), ("tick", False))
 chk("只有檔頭的那天 empty=True",
     [x["empty"] for x in dd["days"] if x["d"] == DTS["blank"]], [True])
 chk("since ＝最早那一天", dd["since"], min(got))
 chk("today 由後端給（前端不准用 new Date()）", dd["today"], str(today))
 say("跳過" in buf.getvalue(), "跳過的檔有印到 console（⛔ 不可以靜靜跳過）")
+
+# ══ ②b 取樣檔（YYYY-MM-DD-polled.jsonl）也要看得到 ════════════════════
+#
+# 2026-09-07：他早上的行情只有取樣檔（面板 12:16 才重啟、逐筆落地那時才生效），
+# 而【細節】分頁**完全讀不到它** —— 因為檔名不符 YYYY-MM-DD.jsonl。
+# 「不要讓取樣冒充逐筆」的正解是**標示清楚**，不是整個不給看。
+#
+# ⛔⛔ 這一節是「多接受一種**檔名**」，**不是放寬 schema 檢查**。
+#      上面 ① / ② 那條「逐筆檔名 ＋ 取樣內容 ⇒ skipped」必須原封不動 ——
+#      這一節底下就有一條負控組再驗一次它沒有被弄鬆。
+print("\n=== ②b 取樣檔：讀得到，而且標得出來 ===")
+PL = TMP / "polled"
+PL.mkdir()
+PDAY = DTS["polled"]
+prows = tick_synth.synth_polled_day(PL / f"{PDAY}-polled.jsonl", PDAY,
+                                    first=32700, last=34199, seed=8811, nopx=3)
+# ⛔ 對照組：同一個資料夾裡放一個「逐筆檔名 ＋ 取樣內容」的檔，它**必須繼續被擋掉**
+tick_synth.synth_polled(PL / f"{DTS['decoy']}.jsonl", 60)
+LP.TICK_DIR = PL
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+buf = io.StringIO()
+with redirect_stdout(buf):
+    pdd = LP.tick_days()
+pgot = {x["d"]: x for x in pdd["days"]}
+say(PDAY in pgot, "取樣檔出現在 days 裡（以前完全看不到）", f"days={sorted(pgot)}")
+chk("而且帶正確的種類標記", (pgot.get(PDAY) or {}).get("kind"), "polled")
+chk("取樣檔那天不是 empty", (pgot.get(PDAY) or {}).get("empty"), False)
+# ⛔ 原始目的：假逐筆檔（逐筆檔名 ＋ 取樣內容）仍然要被擋掉並列進 skipped
+say(DTS["decoy"] not in pgot, "⛔ 假逐筆檔（逐筆檔名＋取樣內容）仍然不在 days 裡")
+say(DTS["decoy"] in pdd["skipped"], "⛔ 假逐筆檔仍然出現在 skipped 裡")
+say("跳過" in buf.getvalue(), "⛔ 假逐筆檔被跳過的原因仍然印到 console")
+
+pd_ = LP.tick_day(PDAY)
+chk("/api/tick/day 回的 kind", pd_["kind"], "polled")
+say(len(pd_["s"]) > 100, "轉成跟逐筆同一種 1 秒桶 columnar（前端不必寫兩套）",
+    f"{len(pd_['s'])} 個桶")
+chk("s 嚴格遞增", all(pd_["s"][i] > pd_["s"][i - 1] for i in range(1, len(pd_["s"]))), True)
+say(all(pd_["h"][i] >= pd_["l"][i] for i in range(len(pd_["s"]))), "每個桶的高 ≥ 低")
+say(all(pd_["h"][i] >= max(pd_["o"][i], pd_["c"][i]) for i in range(len(pd_["s"]))),
+    "每個桶的高 ≥ max(開,收)")
+chk("讀得懂完整 ISO 的 t（逐筆那邊是 HH:MM:SS.mmm）", len(pd_["first"] or ""), 12)
+chk("壞列 0", pd_["bad"], 0)
+chk("沒有報價的那幾列另外計數（⛔ 不可以安靜地少）", pd_["nopx"], 3)
+chk("成交筆數＝取樣列數（扣掉沒有報價的）", pd_["n"], prows - 3)
+say(pd_["ms_med"] and 200 < pd_["ms_med"] < 900, "中位取樣間隔算得出來",
+    f"ms_med={pd_['ms_med']}")
+
+# ── ⛔ 成交量：取樣檔沒有，一律 0 ＋ has_vol=False ───────────────────────
+chk("has_vol=False（前端靠它把量柱做成 disabled）", pd_["has_vol"], False)
+chk("每一個桶的量都是 0（⛔ 不准拿 vol_ratio 之類的東西湊假量柱）", sum(pd_["vq"]), 0)
+# 負控組：如果哪天有人把量塞進來，這條要紅
+_src_pol = inspect.getsource(LP._tick_load_polled)
+VNEEDLE = "            B[sec] = [px, px, px, px, 0]"
+say(VNEEDLE in _src_pol, "量柱負控組的目標字串還在原始碼裡（尺的自證）")
+if VNEEDLE in _src_pol:
+    ns = {}
+    exec(compile(_src_pol.replace(VNEEDLE, "            B[sec] = [px, px, px, px, 1]"),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_pol = LP._tick_load_polled
+    LP._tick_load_polled = ns["_tick_load_polled"]
+    LP.TICK_CACHE.clear()
+    pv = LP.tick_day(PDAY)
+    say(sum(pv["vq"]) > 0, "負控組：有人偷塞量進來的話，這條會紅",
+        f"總量 {sum(pv['vq'])}")
+    LP._tick_load_polled = _orig_pol
+    LP.TICK_CACHE.clear()
+    chk("裝回去之後量又是 0", sum(LP.tick_day(PDAY)["vq"]), 0)
+
+# ── 買賣價帶：取樣檔**有** bid/ask ⇒「折線＋價帶」那個圖種照樣能用 ────────
+pband = sum(1 for i in range(len(pd_["s"]))
+            if pd_["bl"][i] is not None and pd_["ah"][i] is not None)
+say(pband >= len(pd_["s"]) * 0.9, "取樣日的價帶有資料（bid/ask 真的被讀進去）",
+    f"{pband}/{len(pd_['s'])} 個桶")
+say(all(pd_["ah"][i] >= pd_["bl"][i] for i in range(len(pd_["s"]))
+        if pd_["bl"][i] is not None and pd_["ah"][i] is not None),
+    "每個桶的最高賣價 ≥ 最低買價")
+PBNEEDLE = '        bid, ask = _tick_num(o.get("bid")), _tick_num(o.get("ask"))\n'
+say(PBNEEDLE in _src_pol, "價帶負控組的目標字串還在原始碼裡（尺的自證）")
+if PBNEEDLE in _src_pol:
+    ns = {}
+    exec(compile(_src_pol.replace(PBNEEDLE, '        bid, ask = None, None\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_pol = LP._tick_load_polled
+    LP._tick_load_polled = ns["_tick_load_polled"]
+    LP.TICK_CACHE.clear()
+    pn = LP.tick_day(PDAY)
+    say(sum(1 for i in range(len(pn["s"]))
+            if pn["bl"][i] is not None or pn["ah"][i] is not None) == 0,
+        "負控組：不讀 bid/ask 的話價帶整個不見")
+    LP._tick_load_polled = _orig_pol
+    LP.TICK_CACHE.clear()
+
+# ── 種類判斷反過來必須紅（逐筆日不可以被標成取樣）────────────────────────
+_src_days = inspect.getsource(LP.tick_days)
+KNEEDLE2 = '            kind = "tick"\n'
+say(KNEEDLE2 in _src_days, "種類負控組的目標字串還在原始碼裡（尺的自證）")
+if KNEEDLE2 in _src_days:
+    ns = {}
+    exec(compile(_src_days.replace(KNEEDLE2, '            kind = "polled"\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_days = LP.tick_days
+    LP.tick_days = ns["tick_days"]
+    LP.TICK_DIR = SB          # 這個資料夾裡是**逐筆**檔
+    LP._TICK_SNIFFED.clear()
+    LP._TICK_SAID.clear()
+    with redirect_stdout(io.StringIO()):
+        nd = LP.tick_days()
+    say(all(x["kind"] == "tick" for x in nd["days"]) is False,
+        "負控組：把種類判斷反過來之後，逐筆日被標成取樣（這條會紅）",
+        f"kinds={sorted({x['kind'] for x in nd['days']})}")
+    LP.tick_days = _orig_days
+    LP._TICK_SNIFFED.clear()
+    LP._TICK_SAID.clear()
+    with redirect_stdout(io.StringIO()):
+        nd2 = LP.tick_days()
+    say(all(x["kind"] == "tick" for x in nd2["days"]),
+        "裝回去之後逐筆日又標回逐筆（⛔ 逐筆日不可以被標成取樣）")
+
+# ── 取樣檔的半列：跟逐筆走同一個 _tick_chunk()，所以同一道守衛蓋兩邊 ────────
+LP.TICK_DIR = PL
+LP.TICK_CACHE.clear()
+pb = LP.tick_day(PDAY)
+tick_synth.append_half_line(PL / f"{PDAY}-polled.jsonl")
+ph = LP.tick_day(PDAY)
+chk("取樣檔讀到半列時不算壞列（位移退回上一個換行處）", ph["bad"], pb["bad"])
+chk("取樣檔讀到半列時不會生出新的桶", len(ph["s"]), len(pb["s"]))
+
+# ══ ②b-2 取樣檔的壞列：看不懂的時間戳、字串價格（lab-qa 打不紅的 BM5 ＋ 退件）════
+#
+# BM5：把「時間看不懂 ⇒ 算 bad」改成「靜靜當成 08:45:00」，144/144 全綠 ——
+#      那是**「安靜地少」的原型**，上一輪才在逐筆側（⑥b）補起來，
+#      新長出來的取樣側原封不動又長了一次。
+# 另一面：**一列 `price` 是字串 ⇒ 整天 500、1,091 列好資料全部看不到**（lab-qa 實測）。
+#      「安靜地少」的反面是「大聲地全沒了」，同樣不該發生 —— 一列壞資料只准弄掉那一列。
+print("\n=== ②b-2 取樣檔的壞列：時間戳看不懂／價格是字串 ===")
+PB = TMP / "polbad"
+PB.mkdir()
+PBD = "2019-05-11"
+BADTS_N, STRPX_N = 7, 5
+pbrows = tick_synth.synth_polled_day(PB / f"{PBD}-polled.jsonl", PBD,
+                                     first=32700, last=33200, every_ms=460, seed=5,
+                                     badts=BADTS_N, strpx=STRPX_N)
+LP.TICK_DIR = PB
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+pbad = LP.tick_day(PBD)
+chk("看不懂的時間戳 ＋ 字串價格整整都算進 bad", pbad["bad"], BADTS_N + STRPX_N)
+chk("那幾列不算成交筆數", pbad["n"], pbrows - BADTS_N - STRPX_N)
+say(0 not in pbad["s"],
+    "⛔ 沒有任何桶落在第 0 秒（＝沒有人把看不懂的時間戳頂替成 08:45:00）",
+    f"最小的桶 s={min(pbad['s'])}")
+say(pbad["n"] > 100 and len(pbad["s"]) > 100,
+    "⛔ 而且那一天**其餘的好資料照樣看得到**（不是整天不見）",
+    f"{pbad['n']} 筆 / {len(pbad['s'])} 個桶")
+# ⛔ 每一列都要有去處：好的進 n，其餘一定落在 bad / nopx / outwin 三個數字裡的一個。
+chk("每一列都有去處（n + bad + nopx + outwin ＝ 總列數）",
+    pbad["n"] + pbad["bad"] + pbad["nopx"] + pbad["outwin"], pbrows)
+
+_src_pol2 = inspect.getsource(LP._tick_load_polled)
+TSNEEDLE = '        ts = _tick_iso_hms(o.get("t"))\n        if ts is None:\n'
+say(TSNEEDLE in _src_pol2, "BM5 負控組的目標字串還在原始碼裡（尺的自證）")
+if TSNEEDLE in _src_pol2:
+    ns = {}
+    exec(compile(_src_pol2.replace(
+        TSNEEDLE,
+        '        ts = _tick_iso_hms(o.get("t")) or "08:45:00.000"\n        if ts is None:\n'),
+        "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_pol = LP._tick_load_polled
+    LP._tick_load_polled = ns["_tick_load_polled"]
+    LP.TICK_CACHE.clear()
+    pn = LP.tick_day(PBD)
+    say(pn["bad"] < pbad["bad"] and 0 in pn["s"],
+        "BM5 負控組：頂替成 08:45:00 之後 bad 少算、而且多出一個第 0 秒的假桶",
+        f"bad {pbad['bad']} → {pn['bad']}、s 有沒有 0：{0 in pn['s']}")
+    LP._tick_load_polled = _orig_pol
+    LP.TICK_CACHE.clear()
+    chk("裝回去之後 bad 又數得出來", LP.tick_day(PBD)["bad"], BADTS_N + STRPX_N)
+
+# 「大聲地全沒了」的負控組：拿掉價格型別檢查 ⇒ 一列字串就讓整天炸掉
+PXNEEDLE = ('        px = _tick_num(px)\n'
+            '        if px is None:\n')
+say(PXNEEDLE in _src_pol2, "字串價格負控組的目標字串還在原始碼裡（尺的自證）")
+if PXNEEDLE in _src_pol2:
+    ns = {}
+    exec(compile(_src_pol2.replace(PXNEEDLE, '        if False:\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_pol = LP._tick_load_polled
+    LP._tick_load_polled = ns["_tick_load_polled"]
+    LP.TICK_CACHE.clear()
+    try:
+        LP.tick_day(PBD)
+        blew = ""
+    except Exception as e:
+        blew = type(e).__name__
+    say(bool(blew),
+        "負控組：拿掉價格型別檢查之後，一列字串 price 就讓**整天**炸掉（＝舊行為）",
+        f"例外 {blew or '（沒炸，尺壞了）'}")
+    LP._tick_load_polled = _orig_pol
+    LP.TICK_CACHE.clear()
+    say(LP.tick_day(PBD)["n"] > 100, "裝回去之後整天又讀得出來")
+
+# ══ ②b-3 ms_med 是量出來的，不是寫死的（lab-qa 打不紅的 BM7）══════════════
+# 「約 0.46 秒一筆」是**畫在他螢幕上的數字**（副標、金籤、auto 桶寬下限都靠它），
+# 寫死 460 之後 144/144 全綠 ⇒ 那個數字等於沒有人在守。
+print("\n=== ②b-3 ms_med 是量出來的 ===")
+MB = TMP / "msmed"
+MB.mkdir()
+MS_CASES = [("2019-05-21", 250), ("2019-05-22", 900)]
+for md, ev_ms in MS_CASES:
+    tick_synth.synth_polled_day(MB / f"{md}-polled.jsonl", md, first=32700, last=33300,
+                                every_ms=ev_ms, seed=31 + ev_ms)
+LP.TICK_DIR = MB
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+msgot = {}
+for md, ev_ms in MS_CASES:
+    msgot[md] = LP.tick_day(md)["ms_med"]
+    say(abs(msgot[md] - ev_ms) <= ev_ms * 0.25,
+        f"間隔 {ev_ms}ms 的取樣檔量出來的 ms_med 要接近 {ev_ms}",
+        f"ms_med={msgot[md]}")
+say(msgot[MS_CASES[0][0]] != msgot[MS_CASES[1][0]],
+    "兩份密度不同的取樣檔，ms_med 必須不一樣（⛔ 不是寫死的常數）",
+    f"{msgot}")
+_src_day = inspect.getsource(LP.tick_day)
+MNEEDLE = '               "ms_med": (msl[len(msl) // 2] if msl else None),\n'
+say(MNEEDLE in _src_day, "BM7 負控組的目標字串還在原始碼裡（尺的自證）")
+if MNEEDLE in _src_day:
+    ns = {}
+    exec(compile(_src_day.replace(MNEEDLE, '               "ms_med": 460,\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_day = LP.tick_day
+    LP.tick_day = ns["tick_day"]
+    LP.TICK_CACHE.clear()
+    mn = {md: LP.tick_day(md)["ms_med"] for md, _ in MS_CASES}
+    say(len(set(mn.values())) == 1,
+        "BM7 負控組：寫死之後兩份不同密度的檔量出同一個數字（這條會紅）", f"{mn}")
+    LP.tick_day = _orig_day
+    LP.TICK_CACHE.clear()
+
+# ══ ②b-4 09:30 之後的取樣檔要切窗口，而且**要講出來**（lab-qa M5）═══════════
+#
+# `tick_recorder.py --until 13:45` 是它自己說明裡就有的用法 ⇒ 取樣檔可能一路錄到下午。
+# 照收會打破「一天最多 2,700 個桶」那條不變式（前端固定時間軸與效能都靠它），
+# 關掉「時間軸固定」之後整個早上被壓成一小段。
+# ⛔ 切掉的部分**一定要有一個數字**（outwin）—— 安靜地少是這個專案明令禁止的。
+print("\n=== ②b-4 09:30 之後的資料：切窗口 ＋ 講出來 ===")
+WB = TMP / "until1345"
+WB.mkdir()
+WD = "2019-05-31"
+wrows = tick_synth.synth_polled_day(WB / f"{WD}-polled.jsonl", WD,
+                                    first=32700, last=49500,      # 09:05 ~ 13:45
+                                    every_ms=2000, seed=99)
+LP.TICK_DIR = WB
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+wd_ = LP.tick_day(WD)
+say(wrows > 5000, "治具真的錄到 13:45（尺的自證）", f"{wrows:,} 列")
+le_ok = len(wd_["s"]) <= 2700
+say(le_ok, "⛔ 不變式：一天最多 2,700 個桶", f"{len(wd_['s'])} 個桶")
+say(max(wd_["s"]) < 2700 and min(wd_["s"]) >= 0,
+    "每一個桶都落在 08:45~09:30 裡面", f"s 範圍 {min(wd_['s'])}~{max(wd_['s'])}")
+say(wd_["outwin"] > 5000, "⛔ 被切掉的列有一個數字（outwin），不是安靜地少",
+    f"outwin={wd_['outwin']:,}")
+chk("每一列都有去處（n + bad + nopx + outwin ＝ 總列數）",
+    wd_["n"] + wd_["bad"] + wd_["nopx"] + wd_["outwin"], wrows)
+WNEEDLE = ('        sec = _tick_sec(ts)\n'
+           '        if not _tick_inwin(sec):\n')
+say(WNEEDLE in _src_pol2, "M5 負控組的目標字串還在原始碼裡（尺的自證）")
+if WNEEDLE in _src_pol2:
+    ns = {}
+    exec(compile(_src_pol2.replace(WNEEDLE,
+                                   '        sec = _tick_sec(ts)\n'
+                                   '        if False:\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_pol = LP._tick_load_polled
+    LP._tick_load_polled = ns["_tick_load_polled"]
+    LP.TICK_CACHE.clear()
+    wn = LP.tick_day(WD)
+    say(len(wn["s"]) > 2700 and wn["outwin"] == 0,
+        "M5 負控組：不切窗口的話桶數爆掉、而且 outwin 是 0（看不出少了什麼）",
+        f"{len(wn['s'])} 個桶、outwin={wn['outwin']}")
+    LP._tick_load_polled = _orig_pol
+    LP.TICK_CACHE.clear()
+    say(len(LP.tick_day(WD)["s"]) <= 2700, "裝回去之後又守得住 2,700")
+# 逐筆那條路也要切（不變式是**整頁**的性質，不是某一種檔的）
+TW = TMP / "tickwin"
+TW.mkdir()
+TWD = "2019-06-01"
+twlines = tick_synth.synth_lines(ticks=800, bidask=400, first=31502, last=49500, seed=12)
+(TW / f"{TWD}.jsonl").write_bytes(("\r\n".join(twlines) + "\r\n").encode("utf-8"))
+LP.TICK_DIR = TW
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+tw = LP.tick_day(TWD)
+say(max(tw["s"]) < 2700 and tw["outwin"] > 0,
+    "逐筆檔一路寫到 13:45 時同樣切窗口 ＋ 有數字（⛔ 不要只守取樣那一半）",
+    f"最大的桶 s={max(tw['s'])}、outwin={tw['outwin']:,}")
+
+# ══ ②c ⛔ tick_day() 按「驗證過的種類」挑，不是按檔案存不存在挑（退件 M1）══════
+#
+# lab-qa 實測：一個「逐筆檔名 ＋ 取樣內容」的檔被 tick_days() 的嗅探擋掉之後，
+# tick_day() **照樣端得出來**（它只看 TICK_DIR/{d}.jsonl 在不在），而且把同一天真正的
+# 取樣檔整份蓋掉 ⇒ 清單寫「取樣」、點進去圖上寫「逐筆」、成交量那顆變回可以按、
+# 空狀態寫「這天只有檔頭，一筆成交都沒有錄到」——**一句假話**（那天 1,091 列）。
+# ⛔ 真正的不變式：**兩把尺必須是同一把** —— tick_day(d).kind ＝ tick_days() 上那天的 kind。
+print("\n=== ②c tick_day() 按驗證過的種類挑（兩把尺必須是同一把）===")
+KB2 = TMP / "kindpick"
+KB2.mkdir()
+KD_TICK, KD_POLL, KD_BOTH, KD_FAKE = ("2019-07-01", "2019-07-02", "2019-07-03", "2019-07-04")
+tick_synth.synth_day(KB2 / f"{KD_TICK}.jsonl", ticks=200, bidask=100,
+                     first=31502, last=31900, seed=21)
+tick_synth.synth_polled_day(KB2 / f"{KD_POLL}-polled.jsonl", KD_POLL,
+                            first=32700, last=33400, seed=22)
+tick_synth.synth_day(KB2 / f"{KD_BOTH}.jsonl", ticks=200, bidask=100,
+                     first=31502, last=31900, seed=23)
+tick_synth.synth_polled_day(KB2 / f"{KD_BOTH}-polled.jsonl", KD_BOTH,
+                            first=32700, last=33400, seed=24)
+# ⛔ M1 的形狀：假逐筆（逐筆檔名 ＋ 取樣內容）＋ 同一天真正的取樣檔
+tick_synth.synth_polled(KB2 / f"{KD_FAKE}.jsonl", 400)
+FAKE_ROWS = tick_synth.synth_polled_day(KB2 / f"{KD_FAKE}-polled.jsonl", KD_FAKE,
+                                        first=32700, last=33400, seed=25)
+LP.TICK_DIR = KB2
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+with redirect_stdout(io.StringIO()):
+    kdd = LP.tick_days()
+klist = {x["d"]: x["kind"] for x in kdd["days"]}
+chk("清單上的種類", klist, {KD_TICK: "tick", KD_POLL: "polled",
+                            KD_BOTH: "tick", KD_FAKE: "polled"})
+say(KD_FAKE in kdd["skipped"], "假逐筆檔照樣列進 skipped", f"skipped={kdd['skipped']}")
+for kd in (KD_TICK, KD_POLL, KD_BOTH, KD_FAKE):
+    LP.TICK_CACHE.clear()
+    chk(f"{kd}：tick_day() 的 kind 要等於清單上的 kind",
+        LP.tick_day(kd)["kind"], klist[kd])
+LP.TICK_CACHE.clear()
+kf = LP.tick_day(KD_FAKE)
+chk("⛔ 假逐筆那天端出來的是**真取樣檔的每一列**（不是 0 筆的假話）", kf["n"], FAKE_ROWS)
+chk("而且 has_vol=False（量柱要 disabled）", kf["has_vol"], False)
+say(len(kf["s"]) > 100, "而且真的畫得出來", f"{len(kf['s'])} 個桶")
+
+# 負控組 A（就是 lab-qa 那個突變）：把 tick_day() 的兩行對調 ⇒ 取樣優先
+_src_day2 = inspect.getsource(LP.tick_day)
+ORDER = ('        ent = _tick_load(d)\n'
+         '        if ent is None:\n'
+         '            ent = _tick_load_polled(d)\n')
+SWAPPED = ('        ent = _tick_load_polled(d)\n'
+           '        if ent is None:\n'
+           '            ent = _tick_load(d)\n')
+say(ORDER in _src_day2, "M1 負控組 A 的目標字串還在原始碼裡（尺的自證）")
+if ORDER in _src_day2:
+    ns = {}
+    exec(compile(_src_day2.replace(ORDER, SWAPPED), "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_day = LP.tick_day
+    LP.tick_day = ns["tick_day"]
+    LP.TICK_CACHE.clear()
+    say(LP.tick_day(KD_BOTH)["kind"] != klist[KD_BOTH],
+        "M1 負控組 A：兩行對調（取樣優先）之後，兩種檔都有的那天跟清單對不起來",
+        f"清單說 {klist[KD_BOTH]}、端點給 {LP.tick_day(KD_BOTH)['kind']}")
+    LP.tick_day = _orig_day
+    LP.TICK_CACHE.clear()
+    chk("裝回去之後又對得上", LP.tick_day(KD_BOTH)["kind"], klist[KD_BOTH])
+
+# 負控組 B：把 _tick_load() 的嗅探拿掉 ⇒ 回到「按檔案存不存在挑」（＝ 939dce2 的洞）
+_src_load_a = inspect.getsource(LP._tick_load)
+SNIFFPICK = '    if not path.exists() or not _tick_sniff(path, "tick")["ok"]:\n'
+say(SNIFFPICK in _src_load_a, "M1 負控組 B 的目標字串還在原始碼裡（尺的自證）")
+if SNIFFPICK in _src_load_a:
+    ns = {}
+    exec(compile(_src_load_a.replace(SNIFFPICK, '    if not path.exists():\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_load = LP._tick_load
+    LP._tick_load = ns["_tick_load"]
+    LP.TICK_CACHE.clear()
+    kfn = LP.tick_day(KD_FAKE)
+    say(kfn["kind"] != klist[KD_FAKE] and kfn["n"] == 0,
+        "M1 負控組 B：按檔案存不存在挑的話，假逐筆檔被端出來、真取樣的 1,000+ 列整份不見",
+        f"kind={kfn['kind']}（清單說 {klist[KD_FAKE]}）、n={kfn['n']}（真取樣有 {FAKE_ROWS}）")
+    LP._tick_load = _orig_load
+    LP.TICK_CACHE.clear()
+    chk("裝回去之後真取樣的每一列又回來了", LP.tick_day(KD_FAKE)["n"], FAKE_ROWS)
+
+# ══ ②d 取樣檔的嗅探：種類要跟檔名一致（lab-qa 打不紅的 BM4）════════════════
+# 「嗅探跟檔名一致」實作有寫、測試沒守：拿掉「不帶 k」＋「讀得懂的 t」兩個條件之後
+# 144/144 全綠。這一節補上兩個要被擋掉的檔。
+print("\n=== ②d 取樣檔的嗅探：不帶 k ＋ 讀得懂的 t ===")
+SB2 = TMP / "sniff2"
+SB2.mkdir()
+SD_OK, SD_K, SD_T = "2019-08-01", "2019-08-02", "2019-08-03"
+tick_synth.synth_polled_day(SB2 / f"{SD_OK}-polled.jsonl", SD_OK,
+                            first=32700, last=33000, seed=41)
+tick_synth.synth_polled_day(SB2 / f"{SD_K}-polled.jsonl", SD_K,
+                            first=32700, last=33000, seed=42, with_k=True)
+tick_synth.synth_polled_day(SB2 / f"{SD_T}-polled.jsonl", SD_T,
+                            first=32700, last=33000, seed=43, all_bad_t=True)
+LP.TICK_DIR = SB2
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+buf = io.StringIO()
+with redirect_stdout(buf):
+    sdd = LP.tick_days()
+sgot = [x["d"] for x in sdd["days"]]
+say(SD_OK in sgot, "合格的取樣檔進得去（尺的自證：不是什麼都擋）")
+say(SD_K not in sgot and SD_K in sdd["skipped"],
+    "⛔ 取樣檔名 ＋ 每列都帶 k（逐筆內容）⇒ 擋掉並列進 skipped", f"days={sgot}")
+say(SD_T not in sgot and SD_T in sdd["skipped"],
+    "⛔ 取樣檔名 ＋ t 讀不懂 ⇒ 擋掉並列進 skipped")
+say(buf.getvalue().count("跳過") >= 2, "兩個都印出了跳過的原因（⛔ 不可以靜靜跳過）")
+_src_sniff = inspect.getsource(LP._tick_sniff)
+BNEEDLE = ('            if "k" in o or o.get("price") is None '
+           'or _tick_iso_hms(o.get("t")) is None:\n')
+say(BNEEDLE in _src_sniff, "BM4 負控組的目標字串還在原始碼裡（尺的自證）")
+if BNEEDLE in _src_sniff:
+    ns = {}
+    exec(compile(_src_sniff.replace(BNEEDLE,
+                                    '            if o.get("price") is None:\n'),
+                 "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_sniff = LP._tick_sniff
+    LP._tick_sniff = ns["_tick_sniff"]
+    LP._TICK_SNIFFED.clear()
+    LP._TICK_SAID.clear()
+    with redirect_stdout(io.StringIO()):
+        sn = [x["d"] for x in LP.tick_days()["days"]]
+    say(SD_K in sn and SD_T in sn,
+        "BM4 負控組：拿掉「不帶 k」＋「讀得懂的 t」之後，兩個假取樣檔都混進來了",
+        f"days={sn}")
+    LP._tick_sniff = _orig_sniff
+    LP._TICK_SNIFFED.clear()
+    LP._TICK_SAID.clear()
+    with redirect_stdout(io.StringIO()):
+        sn2 = [x["d"] for x in LP.tick_days()["days"]]
+    say(SD_K not in sn2 and SD_T not in sn2, "裝回去之後又擋得住", f"days={sn2}")
 
 # ══ ③ 解析：一整天（真實量級）══════════════════════════════════════
 print("\n=== ③ 解析一整天（真實量級）===")
@@ -260,22 +715,24 @@ done = LP.tick_day(IDAY)
 say(done["n"] == base["n"] + 1, "補完之後那一列被完整讀進來",
     f"{base['n']} → {done['n']}")
 chk("補完之後仍然沒有壞列", done["bad"], base["bad"])
-# 負控組：把「退回上一個換行處」那一段拿掉，半列必須變成壞列
-src = inspect.getsource(LP._tick_load)
-NEEDLE = ' cut = chunk.rfind(b"\\n")\n    chunk = b"" if cut < 0 else chunk[:cut + 1]'
+# 負控組：把「退回上一個換行處」那一段拿掉，半列必須變成壞列。
+# ⚠️ 這道守衛住在 `_tick_chunk()`（2026-09-07 抽出來的共用續讀）——
+#    **逐筆與取樣兩條路都走它**，所以這一個負控組同時蓋住兩邊。
+src = inspect.getsource(LP._tick_chunk)
+NEEDLE = '    cut = chunk.rfind(b"\\n")\n    chunk = b"" if cut < 0 else chunk[:cut + 1]\n'
 say(NEEDLE in src, "負控組的目標字串還在原始碼裡（尺的自證）")
 if NEEDLE in src:
     ns = {}
-    exec(compile(src.replace(NEEDLE, " pass"), "<mutated>", "exec"), LP.__dict__, ns)
-    orig = LP._tick_load
-    LP._tick_load = ns["_tick_load"]
+    exec(compile(src.replace(NEEDLE, ""), "<mutated>", "exec"), LP.__dict__, ns)
+    orig = LP._tick_chunk
+    LP._tick_chunk = ns["_tick_chunk"]
     LP.TICK_CACHE.clear()
     b2 = LP.tick_day(IDAY)
     tick_synth.append_half_line(IB / f"{IDAY}.jsonl")
     h2 = LP.tick_day(IDAY)
     say(h2["bad"] > b2["bad"], "負控組：拿掉半列處理之後，半列會被算成壞列",
         f"bad {b2['bad']} → {h2['bad']}")
-    LP._tick_load = orig
+    LP._tick_chunk = orig
     LP.TICK_CACHE.clear()
     tick_synth.append_lines(IB / f"{IDAY}.jsonl", ['0:01.000","p":12345.0,"v":1}'])
     h3 = LP.tick_day(IDAY)
@@ -339,14 +796,16 @@ say(cpath.stat().st_mtime == cst.st_mtime and cpath.stat().st_size != cst.st_siz
 c2 = LP.tick_day(CD)
 say(c2["n"] > c1["n"], "同一個 mtime、size 變了 ⇒ 快取失效、續讀新資料",
     f"{c1['n']} → {c2['n']} 筆")
+# ⚠️ 快取有效性也住在共用的 `_tick_chunk()` ⇒ 這個負控組同樣同時蓋住逐筆與取樣兩條路。
+_src_chunk = inspect.getsource(LP._tick_chunk)
 SNEEDLE = 'ent["mtime"] == st.st_mtime and ent["size"] == st.st_size'
-say(SNEEDLE in _src_load, "M5 負控組的目標字串還在原始碼裡（尺的自證）")
-if SNEEDLE in _src_load:
+say(SNEEDLE in _src_chunk, "M5 負控組的目標字串還在原始碼裡（尺的自證）")
+if SNEEDLE in _src_chunk:
     ns = {}
-    exec(compile(_src_load.replace(SNEEDLE, 'ent["mtime"] == st.st_mtime'),
+    exec(compile(_src_chunk.replace(SNEEDLE, 'ent["mtime"] == st.st_mtime'),
                  "<mutated>", "exec"), LP.__dict__, ns)
-    _orig_load = LP._tick_load
-    LP._tick_load = ns["_tick_load"]
+    _orig_load = LP._tick_chunk
+    LP._tick_chunk = ns["_tick_chunk"]
     LP.TICK_CACHE.clear()
     c3 = LP.tick_day(CD)
     st3 = cpath.stat()
@@ -357,10 +816,50 @@ if SNEEDLE in _src_load:
     c4 = LP.tick_day(CD)
     say(c4["n"] == c3["n"], "M5 負控組：只比 mtime 的話，檔案長大了畫面還是舊的",
         f"{c3['n']} → {c4['n']} 筆（應該要變多才對）")
-    LP._tick_load = _orig_load
+    LP._tick_chunk = _orig_load
     LP.TICK_CACHE.clear()
     c5 = LP.tick_day(CD)
     say(c5["n"] > c4["n"], "裝回去之後又讀得到新增那段", f"{c4['n']} → {c5['n']} 筆")
+
+# CM3：**檔案變小 ⇒ 位移歸零重讀整檔**（lab-qa 打不紅的第三個突變，舊有缺口）。
+# 不該發生，但看門狗 ＋ 磁碟異常時會發生；硬接的話 `f.seek(off)` 直接落在檔尾之外、
+# 讀回 b""，於是**畫面停在那個檔已經不存在的舊內容上**，而且 n 還是舊的數字。
+SHB = TMP / "shrink"
+SHB.mkdir()
+SHD = "2019-02-11"
+spath = SHB / f"{SHD}.jsonl"
+tick_synth.synth_day(spath, ticks=400, bidask=200, first=31502, last=31900, seed=88)
+LP.TICK_DIR = SHB
+LP.TICK_CACHE.clear()
+LP._TICK_SNIFFED.clear()
+s1 = LP.tick_day(SHD)
+big_off = LP.TICK_CACHE[SHD]["off"]
+tick_synth.synth_day(spath, ticks=40, bidask=20, first=31502, last=31600, seed=88)
+say(spath.stat().st_size < big_off, "造出「檔案比上次讀到的位移還小」的情況（尺的自證）",
+    f"上次位移 {big_off} → 現在 {spath.stat().st_size} bytes")
+s2 = LP.tick_day(SHD)
+say(s2["n"] < s1["n"] and s2["n"] > 0,
+    "檔案變小 ⇒ 位移歸零重讀整檔（拿到的是**現在**檔案裡的東西）",
+    f"{s1['n']} → {s2['n']} 筆")
+SHNEEDLE = '    if ent is not None and st.st_size < ent["off"]:\n        ent = None\n'
+_src_chunk2 = inspect.getsource(LP._tick_chunk)
+say(SHNEEDLE in _src_chunk2, "CM3 負控組的目標字串還在原始碼裡（尺的自證）")
+if SHNEEDLE in _src_chunk2:
+    ns = {}
+    exec(compile(_src_chunk2.replace(SHNEEDLE, ""), "<mutated>", "exec"), LP.__dict__, ns)
+    _orig_chunk = LP._tick_chunk
+    LP._tick_chunk = ns["_tick_chunk"]
+    LP.TICK_CACHE.clear()
+    tick_synth.synth_day(spath, ticks=400, bidask=200, first=31502, last=31900, seed=88)
+    s3 = LP.tick_day(SHD)
+    tick_synth.synth_day(spath, ticks=40, bidask=20, first=31502, last=31600, seed=88)
+    s4 = LP.tick_day(SHD)
+    say(s4["n"] == s3["n"],
+        "CM3 負控組：不處理「檔案變小」的話，畫面停在那個檔已經不存在的舊內容上",
+        f"{s3['n']} → {s4['n']} 筆（應該要變少才對）")
+    LP._tick_chunk = _orig_chunk
+    LP.TICK_CACHE.clear()
+    say(LP.tick_day(SHD)["n"] == s2["n"], "裝回去之後又拿到現在檔案裡的東西")
 
 # ══ ⑥ 痕跡列與壞列不可以吞掉 ══════════════════════════════════════
 print("\n=== ⑥ 缺口與壞列 ===")
@@ -427,9 +926,12 @@ if TNEEDLE in _src_load:
     LP._tick_load = ns["_tick_load"]
     LP.TICK_CACHE.clear()
     xn = LP.tick_day(XD)
-    say(xn["bad"] == 0 and min(xn["s"]) < 0,
-        "M8 負控組：改成 sec=0 頂替之後，bad 歸零、資料落到時段之外（安靜地少）",
-        f"bad={xn['bad']} 最小的桶 s={min(xn['s'])}")
+    # ⚠️ 2026-09-07 起窗口切分（_tick_inwin）會把 sec=0 那幾列攔進 outwin，
+    #    所以現在的傷害形狀是「bad 歸零、那 5 列被改講成『時段外』」而不是落到負秒數。
+    #    兩條都收：只要那 5 列不再被講成「讀不出來」，這個負控組就成立。
+    say(xn["bad"] == 0 and (min(xn["s"]) < 0 or xn["outwin"] > xd["outwin"]),
+        "M8 負控組：改成 sec=0 頂替之後，bad 歸零、那幾列被改講成別的東西（安靜地少）",
+        f"bad={xn['bad']} 最小的桶 s={min(xn['s'])} outwin {xd['outwin']}→{xn['outwin']}")
     LP._tick_load = _orig_load
     LP.TICK_CACHE.clear()
     xb = LP.tick_day(XD)
@@ -459,8 +961,8 @@ def uses(name, needle):
     return needle in ast.dump(fn)
 
 
-for f in ("tick_days", "tick_day", "_tick_load", "_tick_sniff", "tick_trades",
-          "_tick_complete"):
+for f in ("tick_days", "tick_day", "_tick_load", "_tick_load_polled", "_tick_chunk",
+          "_tick_sniff", "_tick_iso_hms", "tick_trades", "_tick_complete"):
     say(uses(f, "state_lock") is False, f"{f}() 沒有碰 state_lock")
 # 負控組：尺本身要抓得到「真的有用 state_lock 的函式」
 say(uses("update_state", "state_lock") is True,
@@ -546,6 +1048,39 @@ say(body.get("date") == EDAY and len(body.get("s") or []) > 0,
     "拿得到那一天的桶", f"{len(body.get('s') or [])} 個桶")
 code, body = hit("/api/tick/day?date=2019-04-09")
 chk("合法格式但沒有那個檔 ⇒ 404（跟 400 分得出來）", code, 404)
+
+# ── ⑨-2b 只有取樣檔的日子，端點也要載得出來（這一輪的整條需求）────────────
+EPDAY = "2019-04-02"
+tick_synth.synth_polled_day(EP / f"{EPDAY}-polled.jsonl", EPDAY,
+                            first=31510, last=31900, seed=61)
+LP._TICK_SNIFFED.clear()
+LP._TICK_SAID.clear()
+code, body = hit("/api/tick/days")
+kmap = {d["d"]: d["kind"] for d in body.get("days", [])}
+chk("取樣檔那天也列在 /api/tick/days 裡", kmap.get(EPDAY), "polled")
+chk("逐筆檔那天仍然標成 tick（⛔ 逐筆日不可以被標成取樣）", kmap.get(EDAY), "tick")
+code, body = hit(f"/api/tick/day?date={EPDAY}")
+chk(f"/api/tick/day?date={EPDAY}（取樣）的狀態碼", code, 200)
+chk("端點回的 kind", body.get("kind"), "polled")
+chk("端點回的 has_vol", body.get("has_vol"), False)
+say(len(body.get("s") or []) > 0 and sum(body.get("vq") or []) == 0,
+    "取樣日拿得到桶、而且量全部是 0", f"{len(body.get('s') or [])} 個桶")
+say(sum(1 for x in (body.get("bl") or []) if x is not None) > 0,
+    "取樣日的價帶有資料（bid/ask 真的被讀進去）")
+
+# ── ⑨-2c 一列壞資料不可以讓整天回 500（lab-qa 實測：1,091 好列 ＋ 1 壞列 ⇒ ValueError
+#    冒到 handler）。「安靜地少」的反面是「大聲地全沒了」，同樣不該發生。
+EPBAD = "2019-04-03"
+epbad_rows = tick_synth.synth_polled_day(EP / f"{EPBAD}-polled.jsonl", EPBAD,
+                                         first=31510, last=31900, seed=62,
+                                         strpx=1, badts=1)
+LP._TICK_SNIFFED.clear()
+LP.TICK_CACHE.clear()
+code, body = hit(f"/api/tick/day?date={EPBAD}")
+chk("一列 price 是字串 ＋ 一列時間戳壞掉 ⇒ 端點照樣 200（⛔ 不是整天 500）", code, 200)
+chk("那兩列算進 bad", body.get("bad"), 2)
+say(len(body.get("s") or []) > 50 and body.get("n") == epbad_rows - 2,
+    "其餘每一列照樣看得到", f"{body.get('n')} 筆 / {len(body.get('s') or [])} 個桶")
 
 # ── ⑨-3 路徑穿越必須被端點擋掉（R2）────────────────────────────────────
 BEFORE_EP = tree_list(TMP)

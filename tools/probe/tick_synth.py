@@ -136,6 +136,89 @@ def synth_polled(path, n=300):
     return len(rows)
 
 
+def synth_polled_day(path, day, first=32700, last=34199, every_ms=460,
+                     seed=8811, nopx=0, drop=(), badts=0, strpx=0,
+                     with_k=False, all_bad_t=False):
+    """
+    **合格的取樣檔**（`tick_recorder.py` 寫的 `YYYY-MM-DD-polled.jsonl`）。
+
+    跟上面的 `synth_polled()` 差別是「這一份是要**被收下**的」：
+    欄位照 tick_recorder.py 的 CHIP_KEYS 產完整一份，`t` 是**完整 ISO 到毫秒**
+    （逐筆那邊只有 HH:MM:SS.mmm），間隔約 `every_ms`（真實那份實測中位 457ms）。
+
+    ⛔ 一列都不准有 `k` 欄位 —— 那是逐筆才有的東西。
+    ⛔ 也**不准有任何成交量欄位**：取樣檔真的沒有單筆量，
+       治具若偷塞一個 v，「量柱要 disabled」那條守衛就變成假的。
+    nopx  ＝ 故意讓幾列的 price 是 null（面板當下沒有報價）。
+    drop  ＝ [(起, 迄)] 這幾段秒數完全不產（模擬中途沒錄到）。
+
+    下面這幾個是**要被擋掉／要被算進 bad** 的壞資料（負控組用，2026-09-07 加）：
+    badts ＝ 幾列的 `t` 讀不懂（"??"）。⛔ 解析器必須算進 bad，
+            **不准靜靜當成 08:45:00**（那是「安靜地少」，這個專案明令禁止）。
+    strpx ＝ 幾列的 `price` 寫成**字串**。⛔ 舊版會讓 `round(float(px))` 或
+            `px > row[1]` 冒出例外 ⇒ **整天回 500、好資料一列都看不到**。
+            正確行為是只弄掉那一列（計入 bad）。
+    with_k     ＝ 每一列多塞一個 `k` 欄位 ⇒ 這個檔是「取樣檔名 ＋ 逐筆內容」，
+                 **嗅探必須擋掉它**（種類要跟檔名一致）。
+    all_bad_t  ＝ 每一列的 `t` 都讀不懂 ⇒ 嗅探同樣必須擋掉（`t` 讀得懂是收下的條件）。
+    ⚠️ 壞列一律從**第 3 列以後**才開始塞：前兩列要保持乾淨，
+       否則 8KB 嗅探看不到任何一列合格的資料，整個檔會被擋掉、測不到解析那一半。
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    r = _Rnd(seed)
+    px = BASE
+    rows = []
+    t_ms = first * 1000
+    prev = None
+    i = 0
+    used = 0            # 已經產了幾列「沒有報價」的（nopx 是**列數**，不是比例）
+    while t_ms < last * 1000:
+        sec = t_ms // 1000
+        if not any(a <= sec <= b for a, b in drop):
+            px += (r.next() - 0.5) * (6.0 if r.next() > 0.98 else 1.6)
+            px = round(px, 1)
+            sp = 1.0 + r.pick(3)
+            has_px = True
+            if used < nopx and i and i % 300 == 0:
+                has_px = False
+                used += 1
+            rows.append({
+                "t": "%sT%02d:%02d:%02d.%03d" % (day, sec // 3600, sec // 60 % 60,
+                                                 sec % 60, t_ms % 1000),
+                "ms": None if prev is None else int(t_ms - prev),
+                "clock": "%02d:%02d:%02d" % (sec // 3600, sec // 60 % 60, sec % 60),
+                "age": 0, "quote": "live",
+                "price": (px if has_px else None),
+                "bid": (px - sp if has_px else None),
+                "ask": (px + sp if has_px else None),
+                "is_mid": False, "chg": round(px - BASE, 1), "gap": 12.0,
+                "rng": 40.0, "pos": round(r.next(), 3), "vol_ratio": round(r.next() * 3, 2),
+                "mom5": round((r.next() - 0.5) * 20, 1),
+                "mom15": round((r.next() - 0.5) * 30, 1),
+                "idx": round(px * 0.99, 2), "idx_age": 1.0, "idx_chg": 5.0,
+                "idx_pct": 0.04, "basis": round(px * 0.01, 1)})
+            # ── 壞資料（負控組用）：一律從第 3 列以後才開始，前兩列保持乾淨 ──
+            if all_bad_t:
+                rows[-1]["t"] = "??"
+            elif badts and 2 <= i < 2 + badts:
+                rows[-1]["t"] = "??"
+            elif strpx and 2 + badts <= i < 2 + badts + strpx:
+                # ⚠️ 故意用**不能 float() 的字串**：數字字串只會炸在
+                #    `px > row[1]`（TypeError），非數字字串連 `round(float(px))`
+                #    都會炸（ValueError，就是 lab-qa 實測那一個）。取比較狠的那個。
+                rows[-1]["price"] = "—"
+            if with_k:
+                rows[-1]["k"] = "t"
+            prev = t_ms
+            i += 1
+        # 間隔抖動：±35%（真實那份的 p95 是中位的 1.6 倍左右）
+        t_ms += max(60, int(every_ms * (0.65 + 0.7 * r.next())))
+    p.write_bytes(("\r\n".join(json.dumps(x, ensure_ascii=False) for x in rows)
+                   + "\r\n").encode("utf-8"))
+    return len(rows)
+
+
 def append_lines(path, lines):
     """往既有的逐筆檔續寫（模擬「今天還在長」）。⛔ 一定是 append，跟正式檔一樣。"""
     p = Path(path)
@@ -156,7 +239,7 @@ def append_half_line(path):
 # ⚠️ 日期**相對於「今天」**產生 —— 因為「今天還在長／增量／跟隨右緣」那一整條路
 #    只有在檔名等於今天的時候才走得到。固定日期的話那一半永遠沒被測。
 #    代價是探針不可以斷言固定日期字串，只能斷言「清單的第幾個」與相對關係。
-KINDS = ("full", "gappy", "tiny", "blank", "decoy")
+KINDS = ("full", "gappy", "tiny", "blank", "decoy", "polled")
 
 
 EXTRA = 5          # 再多幾天小檔案 —— 「連按 ◀ 5 次」那條測項需要翻得動 5 次
@@ -172,6 +255,8 @@ def fixture_dates(today):
          "decoy": str(today - timedelta(days=4))}
     for i in range(EXTRA):
         d["extra%d" % i] = str(today - timedelta(days=5 + i))
+    # 只有取樣檔、沒有逐筆檔的一天（放最舊，才不會擋到「連按 ◀ 5 次」那條）
+    d["polled"] = str(today - timedelta(days=5 + EXTRA))
     return d
 
 
@@ -182,9 +267,12 @@ def write_gappy(out_dir, day, clean=False, big=True):
     證明它們不是恆真的裝飾字。
 
     ⚠️ 開頭故意少 **18 分鐘**（first 落在 09:03）。原本是 17 分鐘、first 落在 09:02，
-       而 **09:02 剛好撞到他一筆真實交易的分鐘**（lab-qa 2026-09-07 抓到）。
-       `leak-scan.py` 對「截斷成 HH:MM」是死角（它自承清單第 ① 條），所以撞號要靠人改；
-       這個專案的慣例是**命中一律改掉、不加豁免名單** —— 看的人分不出巧合與外洩。
+       而 09:02 撞到他一筆真實交易的分鐘，那一輪就改掉了。
+       ⚠️ **2026-09-07 之後這條規則已經被 PM 明確界定範圍**（見 CLAUDE.md
+       「洩漏規則的適用範圍」）：**只到分鐘的 `HH:MM` 不在「命中一律改掉」的範圍內**
+       —— 他 45 分鐘的下單窗口裡佔了十幾個分鐘，撞到幾乎必然，而單獨一個分鐘
+       沒有價格／點數／方向任何旁證時資訊量近乎零；`leak-scan.py` 也刻意不掃它。
+       所以 09:03 不必再改，**但同一行/相鄰行一旦還有價格或點數當旁證，就回到「一律改掉」**。
     """
     p = Path(out_dir) / f"{day}.jsonl"
     if clean:
@@ -204,7 +292,9 @@ def build(out_dir, today=None, big=True):
     gappy 昨天：開頭少 18 分鐘 ＋ 中間一段完全沒錄 ＋ 一列 queue_full 128 筆 ＋ 2 列壞掉
     tiny  只有 3 列的合法逐筆檔（負控組：它**必須**出現在 days 裡）
     blank 只有檔頭（empty:true，UI 灰掉不可選）
-    decoy **輪詢 schema** 但檔名長得像逐筆（必須被 skipped，不可以進 days）
+    decoy **輪詢 schema** 但檔名長得像逐筆（⛔ 必須被 skipped，不可以進 days）
+    polled 只有取樣檔的一天（kind="polled"：圖畫得出來、但沒有量、要標示清楚）
+    另外在 full 那天**同時**放一個 -polled 檔 ⇒ 驗「兩種都有時逐筆優先、alt=True」
     """
     from datetime import date as _date
     today = today or _date.today()
@@ -228,8 +318,13 @@ def build(out_dir, today=None, big=True):
         k = D["extra%d" % i]
         made[k] = synth_day(out / f"{k}.jsonl", ticks=600, bidask=300,
                             first=31510, last=34100, seed=900 + i)
-    # 有後綴的檔一律不收（連嗅探都不該走到）
-    synth_polled(out / f"{D['full']}-polled.jsonl", 20)
+    # 只有取樣檔的一天：開頭少一段（09:05 才開始錄，跟他真實那份的形狀一樣）
+    made[D["polled"]] = synth_polled_day(out / f"{D['polled']}-polled.jsonl",
+                                         D["polled"], first=32700, last=34199,
+                                         seed=8811, nopx=2)
+    # full 那天**兩種檔都有** ⇒ 逐筆優先、alt=True（現在不會發生，但 tick_recorder 還在）
+    synth_polled_day(out / f"{D['full']}-polled.jsonl", D["full"],
+                     first=33000, last=33300, seed=1234)
     return made
 
 

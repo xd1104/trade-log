@@ -1344,12 +1344,27 @@ def day_index(n=70):
 # ⛔ 解析（一天約 0.3 秒）跑在 ThreadingHTTPServer 的請求執行緒上，
 #    只准拿 TICK_LOCK；拿到 state_lock 就是卡住整個面板的報價。
 
-# 逐筆檔的檔名一定是 YYYY-MM-DD.jsonl。⛔ **不可以**用「列 *.jsonl 再排除 -polled」——
-# tick_logs/ 裡真的有一個 2026-09-07.jsonl 是 tick_recorder.py 加 -polled 後綴**之前**
-# 留下來的**輪詢**檔（2,972 列、一個 k 欄位都沒有），光看檔名會把它當成逐筆檔，
-# 畫出一張空圖或直接爆掉。所以檔名對了還要嗅探內容（_tick_sniff）。
+# 這一頁吃**兩種**檔，而且畫面上一定要分得出來（2026-09-07 加）：
+#   ① 逐筆    tick_logs/YYYY-MM-DD.jsonl          面板自己的 tick_writer.py 寫的
+#   ② 取樣    tick_logs/YYYY-MM-DD-polled.jsonl   tick_recorder.py 每 0.1 秒讀 /api/state
+# ⛔ 「不要讓取樣冒充逐筆」的正解是**標示清楚**，不是整個不給看。
+#    （原本只收 ①，於是 09-07 早上那份唯一的行情紀錄在畫面上完全不存在。）
+#
+# ⛔⛔ 但是**檔名放寬 ≠ schema 檢查放寬**。一個叫 `YYYY-MM-DD.jsonl`（逐筆檔名）
+#      內容卻是取樣 schema 的檔，**必須繼續被擋掉並列進 skipped** —— 那是這整條
+#      規則的原始目的（`tick_recorder.py` 加 -polled 後綴**之前**留下來的檔就長這樣：
+#      幾千列、一個 k 欄位都沒有，光看檔名會把它當成逐筆，畫出一張空圖或直接爆掉）。
+#      所以兩種檔名各有各的嗅探，`_tick_sniff(path, kind)` 的 kind 一定要跟檔名一致。
 _TICK_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})\.jsonl$")
+_TICK_POLLED_NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-polled\.jsonl$")
 TICK_SEC0 = 8 * 3600 + 45 * 60      # 08:45:00 的當日秒數（前端算 x 的原點）
+# ⛔ 這一頁的時間軸是**固定的 08:45:00~09:30:00**，所以「一天最多 2,700 個桶」是
+#    前端效能與版面的**不變式**，不是巧合（見 TICK-TAB-SPEC.md §6.2）。
+#    逐筆檔靠 tick_writer 的窗口自然落在裡面，但**取樣檔不是** ——
+#    `tick_recorder.py --until 13:45` 是它自己說明裡就有的用法，那種檔一路錄到下午，
+#    照收就會給出 8,000+ 個桶、打破不變式（關掉「時間軸固定」之後整個早上被壓成一小段）。
+#    所以解析時一律切窗口，**而且被切掉幾列要講出來**（outwin）——「安靜地少」是禁止的。
+TICK_SPAN = 45 * 60                 # 2,700 秒；桶的秒數必須落在 [SEC0, SEC0+SPAN)
 TICK_SNIFF = 8192                   # 嗅探只讀開頭這麼多位元組
 TICK_KEEP = 8                       # 解析結果最多留幾天（一天最多 2,700 個桶）
 
@@ -1377,11 +1392,55 @@ def _tick_sec(t):
     return h * 3600 + m * 60 + s
 
 
-def _tick_sniff(path):
+def _tick_num(x):
     """
-    這個檔是不是逐筆格式？**只讀開頭 8KB，不解析整個檔。**
+    數值欄位一律過這道。回 float 或 None（看不懂就 None，**不猜**）。
 
-    判定：至少要有一列 `json` 物件帶 `k` 欄位。嗅不到就不是逐筆（舊版輪詢檔沒有 k）。
+    ⛔ 為什麼要有這個：jsonl 裡只要**一列**的 price／p／v 是字串（或 null 之外的東西），
+       舊寫法會在 `px > row[1]`（str vs float）或 `round(float(px), 1)` 當場炸掉，
+       例外一路冒到 handler ⇒ **那一天整份回 500、1,091 列好資料一列都看不到**
+       （lab-qa 2026-09-07 實測）。
+       這個專案禁止「安靜地少」，**「大聲地全沒了」同樣不可接受** ——
+       一列壞資料只准弄掉那一列（計入 bad），不准弄掉一整天。
+    bool 要另外擋：`isinstance(True, int)` 是 True，會被當成價格 1.0。
+    """
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    x = float(x)
+    # NaN（x != x）與 inf 都會讓後面的 min/max 與 round 產生沒有意義的結果
+    return x if x == x and -1e12 < x < 1e12 else None
+
+
+def _tick_inwin(sec):
+    """這個秒數落在 08:45:00~09:30:00 裡面嗎（見 TICK_SPAN 那條註解）。"""
+    return sec is not None and TICK_SEC0 <= sec < TICK_SEC0 + TICK_SPAN
+
+
+def _tick_iso_hms(t):
+    """
+    取樣檔的 `t` 是**完整 ISO 到毫秒**（"2026-09-07T09:04:51.706"），
+    逐筆檔那邊是 "HH:MM:SS.mmm"。把兩者都收斂成 "HH:MM:SS.mmm"，看不懂就回 None。
+
+    ⚠️ 日期一律看**檔名**，不看這一欄 —— 跟逐筆檔同一條規則（檔名是唯一的日期來源），
+       這樣「今天還在長」的增量與快取才有同一把尺。
+    """
+    if not isinstance(t, str):
+        return None
+    if len(t) >= 11 and t[10] == "T":
+        t = t[11:]
+    return t if _tick_sec(t) is not None else None
+
+
+def _tick_sniff(path, kind="tick"):
+    """
+    這個檔是不是它檔名宣稱的那種格式？**只讀開頭 8KB，不解析整個檔。**
+
+    kind="tick"    ：至少要有一列 json 物件帶 `k` 欄位。
+                     ⛔ 這道不准放寬 —— 取樣檔一個 k 都沒有，靠它才擋得住
+                        「逐筆檔名 ＋ 取樣內容」那種檔（見上面的註解）。
+    kind="polled"  ：至少要有一列 json 物件帶 `price` ＋ 讀得懂的 `t`，
+                     而且**不准帶 `k`**（帶了就是逐筆檔被改錯名，一樣不收）。
+
     回 {"ok","v","saw_t","whole","reason"}；同一版的檔（name+size+mtime）不重讀。
     """
     try:
@@ -1389,7 +1448,7 @@ def _tick_sniff(path):
     except OSError:
         return {"ok": False, "v": None, "saw_t": False, "whole": True,
                 "reason": "讀不到這個檔"}
-    key = (path.name, st.st_size, st.st_mtime)
+    key = (path.name, st.st_size, st.st_mtime, kind)
     hit = _TICK_SNIFFED.get(key)
     if hit is not None:
         return hit
@@ -1412,7 +1471,15 @@ def _tick_sniff(path):
             o = json.loads(ln)
         except Exception:
             continue            # 壞列跳過（真正的計數在 _tick_load，這裡只是嗅探）
-        if not isinstance(o, dict) or "k" not in o:
+        if not isinstance(o, dict):
+            continue
+        if kind == "polled":
+            # ⛔ 帶 k ＝ 那是逐筆列，不是取樣列（檔名跟內容對不起來，一樣不收）
+            if "k" in o or o.get("price") is None or _tick_iso_hms(o.get("t")) is None:
+                continue
+            ok = saw_t = True
+            continue
+        if "k" not in o:
             continue
         ok = True
         if o.get("k") == "h" and isinstance(o.get("v"), int):
@@ -1420,7 +1487,10 @@ def _tick_sniff(path):
         elif o.get("k") == "t":
             saw_t = True
     out = {"ok": ok, "v": ver, "saw_t": saw_t, "whole": whole,
-           "reason": "" if ok else "沒有任何一列帶 k 欄位（可能是舊版的輪詢取樣檔）"}
+           "reason": ("" if ok else
+                      ("沒有任何一列長得像取樣快照：要有 price ＋ 讀得懂的 t、而且不帶 k"
+                       if kind == "polled" else
+                       "沒有任何一列帶 k 欄位；可能是輪詢取樣檔被取成逐筆的檔名"))}
     if len(_TICK_SNIFFED) > 500:
         _TICK_SNIFFED.clear()
     _TICK_SNIFFED[key] = out
@@ -1429,46 +1499,206 @@ def _tick_sniff(path):
 
 def tick_days():
     """
-    有哪幾天有逐筆紀錄。**只准列目錄 ＋ 8KB 嗅探 ＋ stat。**
+    有哪幾天有紀錄。**只准列目錄 ＋ 8KB 嗅探 ＋ stat。**
 
     ⛔ 不可以在這裡解析整個檔：一年後這裡有 240 個檔、每個 5MB，每次列目錄就是一分多鐘，
        而且發生在「他切到【細節】分頁」的當下。筆數／涵蓋時段／缺口一律等他真的切到
        那一天，由 /api/tick/day 給 —— 所以清單裡沒載入過的日子**不顯示估算筆數**
        （這個專案不放沒把握的數字）。
+
+    每一天帶一個 `kind`：
+      "tick"    逐筆（tick_writer.py）
+      "polled"  取樣（tick_recorder.py，約 0.5 秒一筆、**沒有單筆成交量**）
+    ⛔ 這個欄位不是裝飾：前端靠它在圖上、清單上、副標上明講「這天是取樣不是逐筆」。
+
+    【同一天兩種檔都有的時候】**逐筆優先**，另一種標成 `alt: True`（清單會寫「另有取樣檔」）。
+    理由：逐筆是取樣的上位集合（它有每一筆與成交量，取樣兩者都沒有），
+    而且逐筆是面板自己寫的、不會因為外掛工具中途被關掉而少一段。
+    現在不會同時發生，但 `tick_recorder.py` 還在，哪天他盤中又拿它錄一次就會。
     """
-    days, skipped = [], []
+    found, skipped = {}, []
     if TICK_DIR.exists():
         for p in sorted(TICK_DIR.iterdir()):
+            if not p.is_file():
+                continue
             m = _TICK_NAME.match(p.name)
-            if not m or not p.is_file():
+            kind = "tick"
+            if not m:
+                m = _TICK_POLLED_NAME.match(p.name)
+                kind = "polled"
+            if not m:
                 continue
             d = m.group(1)
-            s = _tick_sniff(p)
+            s = _tick_sniff(p, kind)
             if not s["ok"]:
                 # ⛔ 不要靜靜跳過（會變成「我明明有錄怎麼看不到」的無解客訴），
                 #    也 ⛔ 不准自作主張改名或刪除 —— 那是 Benson 的資料。
                 skipped.append(d)
                 if p.name not in _TICK_SAID:
                     _TICK_SAID.add(p.name)
-                    print(f"⚠️ [tick] 跳過 {p.name}：不是逐筆格式（{s['reason']}）",
-                          flush=True)
+                    print(f"⚠️ [tick] 跳過 {p.name}："
+                          f"內容不是{'取樣' if kind == 'polled' else '逐筆'}格式"
+                          f"（{s['reason']}）", flush=True)
                 continue
             try:
                 dt = datetime.strptime(d, "%Y-%m-%d").date()
             except ValueError:
                 continue
-            days.append({
-                "d": d, "w": "一二三四五六日"[dt.weekday()],
-                # empty＝整個檔都在 8KB 之內、而且一列成交都沒有（只有檔頭）。
+            row = {
+                "d": d, "w": "一二三四五六日"[dt.weekday()], "kind": kind, "alt": False,
+                # empty＝整個檔都在 8KB 之內、而且一列資料都沒有（只有檔頭）。
                 # 檔案比 8KB 大時嗅探看不到全貌，一律當成有資料 —— 切進去就知道了。
-                "empty": bool(s["whole"] and not s["saw_t"])})
-    days.sort(key=lambda x: x["d"], reverse=True)
+                "empty": bool(s["whole"] and not s["saw_t"])}
+            old = found.get(d)
+            if old is None:
+                found[d] = row
+            else:
+                # 兩種都有 ⇒ 留逐筆那份，另一份只留一個「還有別的檔」的痕跡
+                keep = old if old["kind"] == "tick" else row
+                keep["alt"] = True
+                found[d] = keep
+    days = sorted(found.values(), key=lambda x: x["d"], reverse=True)
     return {"days": days,
             "since": days[-1]["d"] if days else None,
-            "skipped": sorted(skipped, reverse=True),
+            "skipped": sorted(set(skipped), reverse=True),
             # 前端切「今天／過去」一律用這個，⛔ 不可以用瀏覽器的 new Date()
             # —— 跨午夜那一刻兩邊會不同一天（面板已經為這件事踩過一次）。
             "today": str(date.today())}
+
+
+def _tick_blank(kind):
+    """一份空的快取條目。逐筆與取樣共用同一個形狀，前端才不必寫兩套。"""
+    return {"off": 0, "b": {}, "bl": {}, "ah": {}, "gaps": [], "n": 0, "bad": 0,
+            "heads": 0, "v": None, "vmix": False, "first": None, "last": None,
+            "mtime": 0, "size": 0, "kind": kind,
+            # outwin＝落在 08:45~09:30 之外、被切掉的列數（⛔ 少了東西一定要有一個數字）
+            "outwin": 0,
+            # 取樣專用：ms＝相鄰兩列的間隔（算中位數用）、nopx＝那一列根本沒有報價
+            "ms": [], "nopx": 0}
+
+
+def _tick_chunk(path, ent, kind):
+    """
+    共用的「續讀」：回 `(ent, chunk, st)`，`chunk is None` 代表快取還有效、不必重解析。
+    **逐筆與取樣兩條路都走這裡**，所以下面這三道守衛只要壞一次，兩邊會一起紅。
+
+    - 快取有效性要**同時**比 mtime 與 size。只比 mtime 的話，「內容變了、mtime 沒變」
+      （看門狗同一秒內續寫、或檔案系統 mtime 只到秒）會讓**畫面停在舊資料**，
+      而且畫面上完全看不出來。
+    - 檔案變小（不該發生，但看門狗＋磁碟異常時可能）⇒ 位移歸零重讀整檔，不要硬接。
+    - ⛔ 最後一列若不是以 `\\n` 結尾就丟掉、位移退回上一個換行處 ——
+      append 寫入不是原子的，一定會讀到半列。
+    """
+    st = path.stat()
+    if ent is not None and ent["mtime"] == st.st_mtime and ent["size"] == st.st_size:
+        return ent, None, st
+    if ent is not None and st.st_size < ent["off"]:
+        ent = None
+    if ent is None:
+        ent = _tick_blank(kind)
+    with path.open("rb") as f:
+        f.seek(ent["off"])
+        chunk = f.read()
+    cut = chunk.rfind(b"\n")
+    chunk = b"" if cut < 0 else chunk[:cut + 1]
+    ent["off"] += len(chunk)
+    return ent, chunk, st
+
+
+def _tick_load_polled(d):
+    """
+    解析（或增量續讀）某一天的**取樣**檔（`tick_recorder.py` 的
+    `YYYY-MM-DD-polled.jsonl`），轉成**跟逐筆完全同一種**的桶結構。
+    **呼叫端必須持有 TICK_LOCK。**
+
+    取樣列長這樣（欄位跟逐筆完全不同，**沒有 k**）：
+        {"t":"2026-09-07T09:04:51.706","ms":464,"clock":"09:04:51","quote":"live",
+         "price":47245.0,"bid":47242.0,"ask":47245.0,...}
+
+    - `t` 是完整 ISO 到毫秒 ⇒ 用 `_tick_iso_hms()` 收斂成 "HH:MM:SS.mmm"。
+    - `price` 當成那一秒的開/高/低/收（一列就是一個取樣點）。
+    - `bid`/`ask` 進 bl/ah ⇒ **「折線＋價帶」那個圖種對取樣日照樣能用**。
+    - ⛔⛔ **成交量一律 0**。取樣檔沒有單筆成交量，`vol_ratio` 是「累積量 ÷ 歷史中位」，
+      **不是量**；拿它湊一個看起來像的量柱＝編資料。前端靠 `has_vol=False`
+      把那顆疊圖做成 disabled ＋ 寫出原因。
+    - `price` 是 null 的列（面板當下沒有報價）不算壞列，另外計 `nopx` ——
+      「安靜地少」是這個專案明令禁止的失敗模式，看不到的東西要有一個數字。
+    - `price`／`bid`／`ask` 一律過 `_tick_num()`：**一列是字串就讓整天回 500** 是
+      「大聲地全沒了」，跟安靜地少一樣不可接受（lab-qa 2026-09-07 實測）。
+    - ⛔ **08:45~09:30 之外的列切掉並計入 `outwin`**（`tick_recorder.py --until 13:45`
+      是它自己說明裡的用法）—— 見 TICK_SPAN 那條註解。
+
+    ⛔ **回 None 的條件是「沒有這個檔 **或** 嗅探不過」**，不是只有「檔案不存在」。
+       嗅不過就等於沒有這種檔，呼叫端才不會拿到一份跟清單講的種類對不起來的東西。
+    """
+    path = TICK_DIR / f"{d}-polled.jsonl"
+    if not path.exists() or not _tick_sniff(path, "polled")["ok"]:
+        return None
+    key = d + "-polled"
+    ent, chunk, st = _tick_chunk(path, TICK_CACHE.get(key), "polled")
+    if chunk is None:
+        return ent
+    B, BL, AH = ent["b"], ent["bl"], ent["ah"]
+    for ln in chunk.split(b"\n"):
+        if not ln.strip():
+            continue
+        try:
+            o = json.loads(ln)
+        except Exception:
+            ent["bad"] += 1
+            continue
+        if not isinstance(o, dict) or "k" in o:
+            # ⛔ 帶 k ＝ 逐筆列跑進取樣檔裡。不猜、不吃，算進 bad。
+            ent["bad"] += 1
+            continue
+        ts = _tick_iso_hms(o.get("t"))
+        if ts is None:
+            ent["bad"] += 1          # 時間看不懂就算壞列，⛔ 不准用 sec=0 頂替
+            continue
+        sec = _tick_sec(ts)
+        if not _tick_inwin(sec):
+            # 09:30 之後（`--until 13:45`）或 08:45 之前的列：不畫，但**要有數字**
+            ent["outwin"] += 1
+            continue
+        ms = _tick_num(o.get("ms"))
+        if ms is not None and ms >= 0:
+            ent["ms"].append(int(ms))
+        px = o.get("price")
+        if px is None:
+            ent["nopx"] += 1
+            continue
+        px = _tick_num(px)
+        if px is None:
+            ent["bad"] += 1          # 價格不是數字（字串／NaN）＝這一列讀不出來
+            continue
+        if ent["first"] is None or ts < ent["first"]:
+            ent["first"] = ts
+        if ent["last"] is None or ts > ent["last"]:
+            ent["last"] = ts
+        row = B.get(sec)
+        if row is None:
+            B[sec] = [px, px, px, px, 0]        # ⛔ 第五格（量）永遠是 0
+        else:
+            if px > row[1]:
+                row[1] = px
+            if px < row[2]:
+                row[2] = px
+            row[3] = px
+        ent["n"] += 1
+        # ⚠️ 讀不懂的 bid/ask 當成「這一列沒有買賣價」＝那個桶的價帶留白（前端本來就處理
+        #    得了），**不計 bad** —— 價本身讀到了，把整列說成「讀不出來」反而是假話。
+        bid, ask = _tick_num(o.get("bid")), _tick_num(o.get("ask"))
+        if bid is not None and (BL.get(sec) is None or bid < BL[sec]):
+            BL[sec] = bid
+        if ask is not None and (AH.get(sec) is None or ask > AH[sec]):
+            AH[sec] = ask
+    ent["mtime"], ent["size"] = st.st_mtime, st.st_size
+    TICK_CACHE[key] = ent
+    if len(TICK_CACHE) > TICK_KEEP:
+        for old in sorted(TICK_CACHE)[:len(TICK_CACHE) - TICK_KEEP]:
+            if old != key:
+                TICK_CACHE.pop(old, None)
+    return ent
 
 
 def _tick_load(d):
@@ -1477,35 +1707,30 @@ def _tick_load(d):
 
     - 過去的日子：mtime/size 沒變就直接用快取，永久有效（檔案不會再長）。
     - 今天：走增量。記住上次讀到的 byte 位移，seek 過去只讀新增那段。
-      ⛔ 最後一列若不是以 `\\n` 結尾就丟掉、位移退回上一個換行處 ——
-         append 寫入不是原子的，一定會讀到半列。
-    - 檔案變小（不該發生，但看門狗＋磁碟異常時可能）⇒ 位移歸零重讀整檔，不要硬接。
+      快取有效性／檔案變小／讀到半列這三道在 `_tick_chunk()`（跟取樣那條路共用）。
     - 多列檔頭是正常的（看門狗重啟就多一列），數出來放進 heads。
     - 解析失敗的列**計數不丟棄地回報**（bad）。「安靜地少」是這個專案明令禁止的失敗模式。
+    - 價量一律過 `_tick_num()`（理由見那個函式）；08:45~09:30 之外的列切掉並計入
+      `outwin` —— 那個不變式（一天最多 2,700 個桶）是**整頁**的性質，不是某一種檔的，
+      只在取樣那條路切等於在逐筆這條路埋同一顆地雷（有人動 `WATCH_END` 就會踩到）。
+
+    ⛔ **回 None 的條件是「沒有這個檔 **或** 嗅探不過」**（2026-09-07 lab-qa 退件 M1）。
+       舊寫法只看檔案存不存在 ⇒ 一個「逐筆檔名 ＋ 取樣內容」的檔被 `tick_days()` 的嗅探
+       擋掉之後，`tick_day()` 照樣端得出來，而且會把同一天真正的取樣檔整份蓋掉：
+       清單寫「取樣」、點進去圖上寫「逐筆」、沒有金籤、成交量那顆變回可以按、
+       空狀態寫「這天只有檔頭，一筆成交都沒有錄到」（**一句假話**，那天有 1,091 列）。
+       這個洞在 939dce2 就存在，只是那時取樣檔不進清單、那一天點不到而已。
 
     ⚠️ 檔案**不保證時間單調遞增**（檔頭的 order 欄位明講）。所以一個秒桶的「開」是
        **檔案裡第一次出現的那一列**，不是「那一秒最早的成交」。同一秒之內誰先誰後
        這張圖在任何縮放倍率下都畫不出來（一個像素 ≥ 0.06 秒），所以不去修它。
     """
     path = TICK_DIR / f"{d}.jsonl"
-    if not path.exists():
+    if not path.exists() or not _tick_sniff(path, "tick")["ok"]:
         return None
-    ent = TICK_CACHE.get(d)
-    st = path.stat()
-    if ent is not None and ent["mtime"] == st.st_mtime and ent["size"] == st.st_size:
+    ent, chunk, st = _tick_chunk(path, TICK_CACHE.get(d), "tick")
+    if chunk is None:
         return ent
-    if ent is not None and st.st_size < ent["off"]:
-        ent = None
-    if ent is None:
-        ent = {"off": 0, "b": {}, "bl": {}, "ah": {}, "gaps": [], "n": 0, "bad": 0,
-               "heads": 0, "v": None, "vmix": False, "first": None, "last": None,
-               "mtime": 0, "size": 0}
-    with path.open("rb") as f:
-        f.seek(ent["off"])
-        chunk = f.read()
-    cut = chunk.rfind(b"\n")
-    chunk = b"" if cut < 0 else chunk[:cut + 1]
-    ent["off"] += len(chunk)
     B, BL, AH = ent["b"], ent["bl"], ent["ah"]
     for ln in chunk.split(b"\n"):
         if not ln.strip():
@@ -1525,17 +1750,21 @@ def _tick_load(d):
             if sec is None:
                 ent["bad"] += 1
                 continue
+            if not _tick_inwin(sec):
+                ent["outwin"] += 1      # 時段外：不畫，但要有數字
+                continue
             ts = o["t"]
             if ent["first"] is None or ts < ent["first"]:
                 ent["first"] = ts
             if ent["last"] is None or ts > ent["last"]:
                 ent["last"] = ts
         if k == "t":
-            p = o.get("p")
+            p = _tick_num(o.get("p"))
             if p is None:
-                ent["bad"] += 1
+                ent["bad"] += 1         # 沒有價、或價不是數字（字串／NaN）＝讀不出來
                 continue
-            v = o.get("v") or 0
+            # ⚠️ 量維持 int：_tick_num 回 float，直接用會讓 payload 變成 "1.0" 這種寫法
+            v = int(_tick_num(o.get("v")) or 0)
             row = B.get(sec)
             if row is None:
                 B[sec] = [p, p, p, p, v]
@@ -1548,7 +1777,8 @@ def _tick_load(d):
                 row[4] += v
             ent["n"] += 1
         elif k == "b":
-            bid, ask = o.get("b"), o.get("a")
+            # 讀不懂的買賣價當成「這一列沒有買賣價」（同 _tick_load_polled 那條註解）
+            bid, ask = _tick_num(o.get("b")), _tick_num(o.get("a"))
             if bid is not None and (BL.get(sec) is None or bid < BL[sec]):
                 BL[sec] = bid
             if ask is not None and (AH.get(sec) is None or ask > AH[sec]):
@@ -1558,9 +1788,11 @@ def _tick_load(d):
             # after＝同一批裡前一列的交易所時間＝缺口起點的下界。
             after = o.get("after")
             asec = _tick_sec(after) if after else None
+            # ⚠️ n 也要過 _tick_num：`int("abc")` 會 ValueError ⇒ 整天回 500
+            gn = _tick_num(o.get("n"))
             ent["gaps"].append({"sec": None if asec is None else asec - TICK_SEC0,
-                                "n": int(o.get("n") or 0),
-                                "why": o.get("why") or "?",
+                                "n": int(gn or 0),
+                                "why": str(o.get("why") or "?")[:40],
                                 "after": after, "wt": o.get("wt")})
         elif k == "h":
             ent["heads"] += 1
@@ -1646,9 +1878,29 @@ def tick_day(d, frm=None):
     frm（`from=<秒>`，相對 sec0）：只回 s >= frm 的桶，**含 frm 本身**
     （那個桶上次拿到時可能還沒收完）。⛔ 前端合併規則是「同 s 覆蓋、其餘 append」，
     無腦 concat 會出現兩根同一秒的 K 棒 —— 圖上完全看不出來，只有量會變兩倍。
+
+    【逐筆 vs 取樣】同一天兩種檔都在的話**逐筆優先**（理由見 tick_days()）。
+
+    ⛔⛔ **「有沒有那種檔」問的是嗅探，不是 `path.exists()`**（2026-09-07 lab-qa 退件 M1）。
+         `_tick_load()` / `_tick_load_polled()` 自己會先嗅探、嗅不過就回 None，所以
+         下面這兩行是「先要逐筆，沒有**合格的**逐筆才退到取樣」。
+         舊寫法按檔案存不存在挑 ⇒ 一個「逐筆檔名 ＋ 取樣內容」的檔（`tick_days()` 已經
+         把它列進 skipped 了）照樣會被端出來，還把同一天真正的取樣檔整份蓋掉：
+         **清單說取樣、點進去說逐筆、1,091 列真資料變成「一筆成交都沒有錄到」**。
+         守衛：`tick-backend.py` ②c（每一天的 `tick_day().kind` 必須等於
+         `tick_days()` 清單上那天的 kind），負控組就是「把這兩行對調」。
+    回傳一定帶：
+      kind    "tick" / "polled"   ⛔ 前端靠它在圖上明講「這天是取樣」
+      has_vol 取樣日是 False      ⛔ 成交量疊圖要 disabled ＋ 寫出原因，
+                                     絕不可以拿 vol_ratio 之類的東西湊一個假的量柱
+      ms_med  取樣的中位間隔（毫秒），逐筆日是 None
+      nopx    取樣時面板剛好沒有報價的列數
+      outwin  08:45~09:30 之外、被切掉沒有畫的列數（⛔ 少了東西一定要有一個數字）
     """
     with TICK_LOCK:
         ent = _tick_load(d)
+        if ent is None:
+            ent = _tick_load_polled(d)
         if ent is None:
             return None
         secs = sorted(ent["b"])
@@ -1656,8 +1908,16 @@ def tick_day(d, frm=None):
             secs = [s for s in secs if s - TICK_SEC0 >= frm]
         B, BL, AH = ent["b"], ent["bl"], ent["ah"]
         r1 = lambda x: None if x is None else round(float(x), 1)
+        kind = ent.get("kind", "tick")
+        msl = sorted(ent.get("ms") or [])
         out = {"date": d, "v": ent["v"], "vmix": ent["vmix"], "heads": ent["heads"],
                "sec0": TICK_SEC0,
+               "kind": kind,
+               # ⛔ 取樣檔沒有單筆成交量。這個 False 是量柱唯一的開關，不要另外找路。
+               "has_vol": kind == "tick",
+               "ms_med": (msl[len(msl) // 2] if msl else None),
+               "nopx": ent.get("nopx", 0),
+               "outwin": ent.get("outwin", 0),
                "s": [s - TICK_SEC0 for s in secs],
                "o": [r1(B[s][0]) for s in secs], "h": [r1(B[s][1]) for s in secs],
                "l": [r1(B[s][2]) for s in secs], "c": [r1(B[s][3]) for s in secs],
@@ -2990,7 +3250,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    而且**筆數少的時候完全看不出來**（面板鐵律，2026-08-25 實測 107px 被壓成 21.6px）。 */
 .tk-list{border:1px solid var(--line); border-radius:14px; padding:8px;
   background:var(--surface-2); box-shadow:var(--shadow-2); width:max-content;
-  max-width:min(420px,80vw); max-height:320px; overflow:auto;
+  max-width:min(520px,86vw); max-height:320px; overflow:auto;
   display:flex; flex-direction:column}
 .tk-list .row{display:flex; align-items:center; gap:12px; width:100%; text-align:left;
   border:0; background:transparent; color:var(--text); cursor:pointer; padding:7px 9px;
@@ -3001,8 +3261,18 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .tk-list .row:disabled{color:var(--ghost); cursor:default}
 .tk-list .row .dd{min-width:64px; font-weight:650}
 .tk-list .row .wd{font-family:var(--font-sans); color:var(--dim); min-width:1.2em}
-.tk-list .row .meta{margin-left:auto; color:var(--faint); font-size:11px}
+/* ⚠️ nowrap：meta 換行的話那一列會比別列高一截（.row 是 flex，撐高看得很清楚）。
+   清單本身是 width:max-content ＋ max-width，太長就整塊橫向捲，不會再影響列高。 */
+.tk-list .row .meta{margin-left:auto; color:var(--faint); font-size:11px; white-space:nowrap}
 .tk-list .row .meta .warn{color:var(--gold)}
+/* 種類標記：⛔ 逐筆與取樣**兩種都標**（只標一種的話，沒有標記等於「不知道」）。
+   ⛔ 一個新顏色都不准加 —— 逐筆走中性線框、取樣走既有的 gold token（＝要注意）。 */
+.tk-list .row .kind{flex:none; min-width:34px; text-align:center; font-size:10px;
+  font-family:var(--font-sans); line-height:1.5; padding:1px 6px 2px; border-radius:999px;
+  border:1px solid var(--line); color:var(--dim); background:var(--surface-2)}
+.tk-list .row .kind.polled{border-color:var(--gold-line); color:var(--gold);
+  background:var(--gold-soft)}
+.tk-list .row .meta .alt{color:var(--ghost); margin-left:6px}
 .tk-list .foot{border-top:1px solid var(--line-soft); margin-top:6px; padding:8px 9px 3px;
   font-size:11px; color:var(--faint); line-height:1.5; flex:none}
 @media(max-width:1024px){
@@ -5744,6 +6014,36 @@ function tkHMS(s){
 }
 const tkNum=n=>n==null?'—':Number(n).toLocaleString();
 
+/* ---------------- 逐筆 vs 取樣 ----------------
+   這一頁吃兩種檔：逐筆（tick_writer.py 的 YYYY-MM-DD.jsonl）與**取樣**
+   （tick_recorder.py 的 YYYY-MM-DD-polled.jsonl，每 0.1 秒讀一次 /api/state、
+   只在價格或買賣價有變時記一列）。
+   ⛔ 取樣日**一定要在畫面上講出來**（圖上的籤、日期清單的標記、副標三處都要），
+      不是只放在資料裡 —— 兩者的密度差 40 倍，看不出差別就會把取樣當成逐筆讀。
+   ⛔ 取樣檔**沒有單筆成交量**（vol_ratio 是「累積量 ÷ 歷史中位」，不是量）⇒
+      量柱那顆疊圖一律 disabled ＋ 寫出原因，跟「加權」那顆同一套處理。 */
+function tkKindOf(d){ const x=tkDayInfo(d); return (x&&x.kind)||'tick'; }
+function tkKind(){ const D=TK.data;
+ return (D&&D.date===TK.date&&D.kind)?D.kind:tkKindOf(TK.date); }
+const tkIsPolled=()=>tkKind()==='polled';
+/* 量柱唯一的開關。⛔ 沒有 has_vol 的舊回應（或還沒載入）一律看種類，不猜。 */
+function tkHasVol(){ const D=TK.data;
+ return (D&&D.date===TK.date&&D.has_vol!==undefined)?!!D.has_vol:(tkKind()==='tick'); }
+/* 取樣密度講的是實測的中位間隔，不是寫死的「0.5 秒」。
+   ⚠️ 去尾零要一路去到底：舊版 `.replace(/0$/,'')` 只去掉**一個** 0 ⇒ ms_med=1000
+      會印成「約 1.0 秒一筆」（lab-qa 2026-09-07 抓到）。整數毫秒（例如 5ms）會被
+      去成空字串，所以留一條「小於 10 毫秒就直接講毫秒」的退路。 */
+function tkRate(){ const D=TK.data, m=(D&&D.date===TK.date)?D.ms_med:null;
+ if(!(typeof m==='number'&&m>0)) return '約 0.5 秒一筆';
+ const s=(m/1000).toFixed(2).replace(/\.?0+$/,'');
+ return s?('約 '+s+' 秒一筆'):('約 '+Math.round(m)+' 毫秒一筆'); }
+/* ⛔ 圖上那張金籤要把「高低不可信」也講出來（2026-09-07 加）：取樣列只有**一個**
+   `price`，開高低收四個值全部來自同一個取樣點 —— 那四個數字沒有無中生有（它們真的是
+   那一秒**取樣到的**極值），但秒 K 之所以被選成預設，理由正是「K 棒多給的是這一段
+   摸到多高多低」，而取樣日**恰好就是那個東西不成立**：他那份真檔實測 1 秒桶有
+   **26.7% 高＝低**（401/1504）。他早上盯的是圖不是副標，所以這句話要在圖上。 */
+const TKPOLLBADGE=()=>'取樣 · '+tkRate()+' · 不是逐筆 · 高低＝取樣點的極值';
+
 /* ---------------- 取資料 ---------------- */
 function tkFetchDays(){
  return fetch('/api/tick/days').then(r=>r.json()).then(x=>{
@@ -5766,7 +6066,9 @@ function tkPack(x){
           bl:new Float32Array(cap), ah:new Float32Array(cap),
           gaps:x.gaps||[], bad:x.bad||0, n:x.n||0, heads:x.heads||0, v:x.v,
           vmix:!!x.vmix, first:x.first, last:x.last, complete:!!x.complete,
-          trades:x.trades||[], sec0:x.sec0};
+          trades:x.trades||[], sec0:x.sec0,
+          kind:x.kind||'tick', has_vol:(x.has_vol!==undefined?!!x.has_vol:true),
+          ms_med:(x.ms_med==null?null:x.ms_med), nopx:x.nopx||0, outwin:x.outwin||0};
  tkMerge(D,x);
  return D;
 }
@@ -5788,7 +6090,8 @@ function tkMerge(D,x){
  }
  if(dirty) tkResort(D);
  // meta 每次都換成最新的（筆數、缺口、first/last 都會長）
- for(const k of ['gaps','bad','n','heads','first','last','complete','trades','v','vmix'])
+ for(const k of ['gaps','bad','n','heads','first','last','complete','trades','v','vmix',
+                 'kind','has_vol','ms_med','nopx','outwin'])
    if(x[k]!==undefined) D[k]=x[k];
  TKBARC.key='';
  return D;
@@ -5865,8 +6168,18 @@ function tkFull(){
  return {t0:0,t1:TKSPAN};
 }
 function tkView(){ if(!TK.view) TK.view=tkFull(); return TK.view; }
+/* 自動桶寬：視窗裡大約 150 根。
+   ⚠️ **取樣日的下限是 2 秒不是 1 秒**。用他 2026-09-07 那份真取樣檔（2,972 列）實測：
+      1 秒桶 1,504 個、平均 **1.98 個點**，其中 **26.7% 高＝低**（401 個，秒 K 退化成
+      一根橫線，看起來像「這一秒沒動」）；2 秒桶 755 個、平均 3.94 個點，
+      高＝低掉到 **0.9%**（7 個）。「這一段摸到多高多低」到 2 秒桶才畫得出來
+      —— 那正是 ±100 觸價唯一在意的東西。
+      （舊版這裡寫「一半只有 1 個點」，那個數字沒有量過：只有 1 個點的是 **13.3%**
+        ＝ 200/1504。真正撐住這個決定的是高＝低那 26.7%。）
+      ⛔ 只動 `auto`：他手動按「1 秒」還是要給他 1 秒（那是他自己選的，不是我們冒充的）。 */
 function tkAutoSec(){ const v=tkView(), want=(v.t1-v.t0)/150;
- return TKBARSEC.find(s=>s>=want)||60; }
+ const floor=tkIsPolled()?2:1;
+ return TKBARSEC.find(s=>s>=want&&s>=floor)||60; }
 function tkBarSec(){ return TK.bar==='auto'?tkAutoSec():TK.bar; }
 
 /* 秒K 聚合。桶邊界一律 floor(秒/桶寬)*桶寬（對齊整秒的絕對格線）——
@@ -5897,7 +6210,13 @@ function tkRange(){
  if(!D||!D.len) return [0,-1];
  return [Math.max(0,tkBisect(D,v.t0)-1), Math.min(D.len-1,tkBisect(D,v.t1)+1)];
 }
-/* 「這一段完全沒有成交」＝沒錄到。08:45~09:30 的微台不可能連 30 秒一筆都沒有。 */
+/* 「這一段完全沒有成交」＝沒錄到。08:45~09:30 的微台不可能連 30 秒一筆都沒有。
+   ⚠️ **取樣日照樣用 30 秒這個門檻**（2026-09-07 量過他那份真的取樣檔：相鄰兩列
+      中位 457ms、最大 1,628ms，**秒與秒之間最大只跳 2 秒**）⇒ 30 秒離取樣本身的
+      抖動還有一個數量級，不會誤報。
+   ⛔ 但**那句話要換掉**：取樣工具「只在價格或買賣價有變時才記一列」，所以取樣檔裡
+      一段空白有兩種可能 —— 沒錄到，**或**那段時間報價真的一動也沒動。
+      逐筆檔可以斬釘截鐵說「不是沒行情」，取樣檔不行，寫成一樣的就是講了一句不確定的話。 */
 function tkHoles(){
  const D=TK.data, out=[]; if(!D||!D.len) return out;
  for(let i=1;i<D.len;i++) if(D.s[i]-D.s[i-1]>TKHOLE) out.push([D.s[i-1]+1,D.s[i]]);
@@ -6047,7 +6366,9 @@ function tkDraw(){
  const xOf=s=>(s-v.t0)/(v.t1-v.t0)*PW;
  const A=tkAxis();
  const PH=H-TKTOP-TKBOT;
- const VH=(TK.ov.vol&&D&&D.len)?PH*TKVOLH:0;
+ // ⛔ 取樣日沒有量（tkHasVol()===false）⇒ 量區高度一定是 0。
+ //    ⛔⛔ 絕不可以拿 vol_ratio 之類的東西湊一根「看起來像」的量柱。
+ const VH=(TK.ov.vol&&tkHasVol()&&D&&D.len)?PH*TKVOLH:0;
  const priceH=PH-VH;
  const yOf=p=>TKTOP+(A.hi-p)/(A.hi-A.lo)*priceH;
  ctx.clearRect(0,0,W,H);
@@ -6080,7 +6401,10 @@ function tkDraw(){
      ctx.textAlign='left'; ctx.restore();
    }
  };
- const MISS='這段沒有錄到（不是沒行情）', SOON='還沒到';
+ /* ⚠️ 取樣日不可以說「不是沒行情」—— 取樣工具只在有變動時才記一列，
+       空白的那一段有兩種可能，講死就是講了一句我們證不了的話。 */
+ const MISS=tkIsPolled()?'這段沒有取樣到（沒錄到，或報價一直沒變）'
+                       :'這段沒有錄到（不是沒行情）', SOON='還沒到';
  if(D&&D.len){
    hatch(xOf(v.t0),xOf(D.s[0]),MISS);
    // 今天而且還沒錄完 ⇒ 尾巴是「還沒到」；過去的日子沒有「還沒到」這件事
@@ -6201,6 +6525,13 @@ function tkDraw(){
  if(TK.ov.trade&&D) tkDrawTrades(ctx,xOf,yOf,v,PW,H,A,priceH);
  // 游標十字線
  if(TK.hover!=null&&D&&D.len) tkDrawHover(ctx,xOf,yOf,PW,H,priceH);
+
+ /* ⛔⛔ 取樣日的標籤**畫在圖上**，不是只放在資料裡。
+    這張圖跟另外兩張的差別就是「多細」，取樣把密度打掉 40 倍 ——
+    看不出差別的話他會把取樣當逐筆讀，而畫面上一模一樣。
+    位置在繪圖區**左下角**：左上角是「我那一單在左/右邊」的邊緣籤、
+    右側是「±100 在畫面外」與「09:30 收手」，三張擠在一起會互相壓掉字。 */
+ if(tkIsPolled()) tkChip(ctx,6,TKTOP+priceH-22,TKPOLLBADGE(),'#E3A951');
 
  const ms=performance.now()-t0;
  TK.ms=ms; TK.drawn=drawn;
@@ -6328,7 +6659,8 @@ function tkPagerHTML(){
  if(!cur) r2='<span>沒有逐筆紀錄</span>';
  else if(loading) r2='<span>載入中…</span>';
  else if(TK.err) r2='<span class="warn">讀不出來</span>';
- else r2='<span>逐筆 '+tkNum(D?D.n:null)+' 筆</span><span class="sep">·</span>'+
+ else r2='<span>'+(tkIsPolled()?'取樣':'逐筆')+' '+tkNum(D?D.n:null)+
+   ' 筆</span><span class="sep">·</span>'+
    '<span>'+((D&&D.first)?(D.first.slice(0,8)+'~'+(D.last||'').slice(0,8)):'—')+'</span>'+
    ((D&&D.bad)?'<span class="sep">·</span><span class="warn">'+D.bad+' 列讀不出來</span>':'')+
    '<span class="sep k">·</span><span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
@@ -6351,7 +6683,7 @@ function tkPagerHTML(){
   ((cur&&cur===TK.today)
     ?'<span class="livelamp" title="今天"><i></i>今天</span>'
     :'<button class="jump2" data-tkday="'+TK.today+'"'+(tkTodayOk()?'':' disabled')+
-     ' title="'+(tkTodayOk()?'回到今天（Home）':'今天還沒有逐筆紀錄')+'">今天</button>')+
+     ' title="'+(tkTodayOk()?'回到今天（Home）':'今天還沒有紀錄')+'">今天</button>')+
   '</div><div class="r2">'+r2+'</div></div>';
 }
 function tkListHTML(){
@@ -6361,17 +6693,38 @@ function tkListHTML(){
    const D=TK.cache[x.d];
    // ⚠️ 沒載入過的日子**不顯示估算筆數** —— 這個專案不放沒把握的數字。
    //    筆數／涵蓋時段要真的切到那一天才由 /api/tick/day 給。
-   const meta=x.empty?'只有檔頭，沒有錄到成交'
+   const meta=x.empty?'只有檔頭，沒有錄到資料'
      :(D?(tkNum(D.n)+' 筆　'+((D.first||'').slice(0,8)+'~'+(D.last||'').slice(0,8))+
           (((D.gaps||[]).length||D.bad)?'　<span class="warn">⚠ 有缺口</span>':''))
         :'還沒載入');
+   /* ⛔ 每一列都標種類（**兩種都標**，不是只標取樣那種）——
+      他翻清單的時候要一眼分得出哪幾天是逐筆、哪幾天是取樣。
+      只標其中一種的話，沒有標記等於「不知道」而不是「另一種」。 */
+   const pol=(x.kind==='polled');
+   const tag='<span class="kind'+(pol?' polled':'')+'" title="'+
+     (pol?'tick_recorder.py 的取樣檔（約 0.5 秒一筆、沒有成交量）'
+         :'面板逐筆落地的檔（每一筆成交與買賣價）')+'">'+(pol?'取樣':'逐筆')+'</span>';
+   /* 同一天兩種檔都在：逐筆優先，另一份講出來（免得他以為那個檔不見了）。
+      ⚠️ 字要短：舊版「＋另有取樣檔（未採用）」會把 .meta 擠到換行、
+         那一列比別列高一截（.row 是 flex，換行就撐高）。長版說明放 title。 */
+   const alt=x.alt?'<span class="alt" title="這天兩種檔都有，畫的是'+(pol?'取樣':'逐筆')+
+     '檔；另一份'+(pol?'逐筆':'取樣')+'檔沒有採用">＋'+(pol?'逐筆':'取樣')+'檔</span>':'';
    return '<button class="row'+(x.d===TK.date?' on':'')+'" data-tkday="'+x.d+'"'+
      (x.empty?' disabled':'')+'><span class="dd">'+x.d.slice(5)+'</span>'+
-     '<span class="wd">'+x.w+'</span><span class="meta">'+meta+'</span></button>';
+     '<span class="wd">'+x.w+'</span>'+tag+
+     '<span class="meta">'+meta+alt+'</span></button>';
  }).join('');
  if(!rows) rows='<div class="foot">還沒有任何逐筆紀錄。</div>';
- const foot=TK.since?('<div class="foot">更早以前沒有逐筆紀錄（'+TK.since+' 才開始錄）</div>'):'';
- return '<div class="tk-list">'+rows+foot+'</div>';
+ const foot=TK.since?('<div class="foot">更早以前沒有紀錄（'+TK.since+' 才開始錄）</div>'):'';
+ /* ⛔ 被跳過的檔（檔名對、內容跟檔名對不起來）**在有資料的時候也要講**。
+    舊版只把它寫在「一個紀錄都沒有」的空狀態裡 ⇒ 只要有任何一天有資料，
+    「我明明有錄怎麼看不到」就完全無解（2026-09-07 lab-qa 退件 M1 的一部分）。 */
+ const skip=(TK.skipped||[]).length
+   ?('<div class="foot">⚠ 有 '+TK.skipped.length+' 個檔被跳過（'+
+     TK.skipped.slice(0,3).join('、')+((TK.skipped.length>3)?' …':'')+
+     '）：檔名對、但內容跟檔名不是同一種格式。原因印在面板的主控台，'+
+     '檔案還在 tick_logs/，我們不改也不刪。</div>'):'';
+ return '<div class="tk-list">'+rows+skip+foot+'</div>';
 }
 function tkToolsHTML(){
  const seg=(name,cur,items)=>'<div class="seg">'+items.map(it=>
@@ -6389,10 +6742,16 @@ function tkToolsHTML(){
         trades.length?'':'這天沒有下單')+
    chip('stop',TK.ov.stop,'±100',!trades.length,
         trades.length?'畫的是那一單的停利停損位置':'這天沒有下單')+
-   chip('vol',TK.ov.vol,'成交量')+
-   // 逐筆紀錄裡沒有加權指數（tick_logs 只有成交與買賣價），所以這顆一定是停用的。
-   // ⛔ 不可以拿別的來源硬湊一條「看起來像」的線。
-   chip('idx',false,'加權',true,'逐筆紀錄裡沒有加權指數，這一頁畫不出來')+
+   /* ⛔ 取樣檔沒有單筆成交量 ⇒ 停用 ＋ **寫出原因**（跟「加權」那顆同一套處理）。
+      ⛔⛔ 絕不可以拿 vol_ratio（累積量 ÷ 歷史中位）之類的東西湊一根假的量柱。 */
+   chip('vol',TK.ov.vol&&tkHasVol(),'成交量',!tkHasVol(),
+        tkHasVol()?'':'取樣檔只記價格與買賣價，沒有單筆成交量，這一頁畫不出量柱')+
+   // 加權指數這顆一律停用。⛔ 不可以拿別的來源硬湊一條「看起來像」的線。
+   // ⚠️ 兩種檔的原因不一樣，寫成同一句就會有一句是假的：逐筆檔真的沒有這一欄，
+   //    取樣檔有（tick_recorder 有記 idx）—— 但這一頁沒有做這條線。
+   chip('idx',false,'加權',true,
+        tkIsPolled()?'取樣檔裡有加權指數，但這一頁沒有做這條線'
+                    :'逐筆紀錄裡沒有加權指數，這一頁畫不出來')+
    chip('fixed',TK.ov.fixed,'時間軸固定',false,
         '固定 08:45~09:30 的框；關掉就只畫有資料的那段');
 }
@@ -6415,21 +6774,31 @@ function tkReadHTML(){
    '<span class="lt">高</span><b>'+h.toFixed(0)+'</b>'+
    '<span class="lt">低</span><b>'+l.toFixed(0)+'</b>'+
    '<span class="lt">收</span><b class="'+(up?'up':'down')+'">'+c.toFixed(0)+'</b>'+
-   '<span class="sep">·</span><span class="lt">量</span><b>'+vv+'</b>'+
+   // ⛔ 取樣檔沒有量：寫「—」並講原因，不可以印 0 假裝那一秒沒成交
+   '<span class="sep">·</span><span class="lt">量</span>'+
+   (tkHasVol()?('<b>'+vv+'</b>'):'<b>—</b><span class="lt">取樣檔沒有量</span>')+
    ((isFinite(b)&&isFinite(a))
      ? '<span class="sep">·</span><span class="lt">買/賣</span><b>'+b.toFixed(0)+' / '+
        a.toFixed(0)+'</b><span class="lt">差 '+(a-b).toFixed(0)+'</span>'
      : '<span class="sep">·</span><span class="lt">買/賣</span><b>—</b>');
 }
+/* 副標的密度那三個字。⛔ 取樣日不可以寫「逐秒」——
+   取樣中位 0.46 秒一筆、而且是「有變才記」，寫逐秒就是把取樣講成逐筆。 */
+function tkDens(){ return tkIsPolled()?('取樣 '+tkRate()):'逐秒'; }
 function tkSubHTML(){
- if(!TK.date) return '<span>08:45~09:30 · 逐秒</span>';
- if(tkLoading()) return '<span>'+TK.date+' · 08:45~09:30 · 逐秒</span>'+
+ if(!TK.date) return '<span>08:45~09:30 · '+tkDens()+'</span>';
+ if(tkLoading()) return '<span>'+TK.date+' · 08:45~09:30 · '+tkDens()+'</span>'+
    '<span class="sep">·</span><span>載入中…</span>';
  const D=TK.data;
  if(TK.err) return '<span>'+TK.date+'</span><span class="sep">·</span>'+
    '<span class="warn">這天的紀錄讀不出來（'+TK.err+'）</span>';
  const growing=(!D.complete&&D.date===TK.today);
- let out='<span>'+D.date+' · 08:45~09:30 · 逐秒</span><span class="sep">·</span>'+
+ let out='<span>'+D.date+' · 08:45~09:30 · '+tkDens()+'</span>'+
+   (tkIsPolled()?'<span class="sep">·</span><span class="warn">取樣資料，不是逐筆</span>'+
+     /* ⛔ 取樣列只有一個 price，開高低收四個值都是它 ⇒ 那個「高低」是**取樣點**的極值，
+        不是那一秒真正摸到的高低（實測 26.7% 的 1 秒桶高＝低）。金籤上也有同一句。 */
+     '<span class="sep">·</span><span>高低＝取樣點的極值，不是那一秒真正的高低</span>':'')+
+   '<span class="sep">·</span>'+
    (growing?'<span class="warn">錄製中 · 最後一筆 '+((D.last||'').slice(0,8)||'—')+'</span>'
            :'<span>已完成 · '+((D.first||'—').slice(0,8))+'~'+((D.last||'—').slice(0,8))+'</span>');
  // 只錄到一部分：⛔ 一定要說出「不是沒行情」
@@ -6440,18 +6809,31 @@ function tkSubHTML(){
      (holes.length?(tkHMS(holes[0][0]).slice(0,5)+'~'+tkHMS(holes[0][1]).slice(0,5)):
       (((D.last||'').slice(0,5))+'~09:30'));
    out+='<span class="sep">·</span><span class="warn">⚠ '+seg+
-        ' 沒有錄到（不是沒行情）</span>';
+        (tkIsPolled()?' 沒有取樣到（沒錄到，或報價一直沒變）':' 沒有錄到（不是沒行情）')+
+        '</span>';
  }
  const lost=(D.gaps||[]).reduce((a,g)=>a+(g.n||0),0);
  if(lost) out+='<span class="sep">·</span><span class="warn">佇列滿丟掉 '+lost+' 筆</span>';
  if(D.bad) out+='<span class="sep">·</span><span class="warn">有 '+D.bad+' 列讀不出來</span>';
+ // 取樣當下面板沒有報價的那幾列（沒有價可畫）。⛔ 少了東西一定要有一個數字。
+ if(D.nopx) out+='<span class="sep">·</span><span class="warn">有 '+D.nopx+
+   ' 列取樣時沒有報價</span>';
+ /* 08:45~09:30 之外被切掉的列（`tick_recorder.py --until 13:45` 錄到下午的那種檔）。
+    ⛔ 這一頁只畫那 45 分鐘（一天最多 2,700 個桶是版面與效能的不變式），
+       但**被切掉的部分一定要講出來** —— 安靜地少是這個專案明令禁止的。 */
+ if(D.outwin) out+='<span class="sep">·</span><span class="warn">另有 '+
+   D.outwin.toLocaleString()+' 列在 08:45~09:30 之外（這一頁不畫）</span>';
  if(D.heads>1) out+='<span class="sep">·</span><span>面板當天重啟 '+(D.heads-1)+' 次</span>';
  return out;
 }
 function tkFootHTML(){
  const D=(!tkLoading()&&TK.data)?TK.data:null;
  const growing=D&&!D.complete&&D.date===TK.today;
- return '<span>逐筆紀錄 · tick_logs/'+(TK.date||'YYYY-MM-DD')+'.jsonl</span>'+
+ const pol=tkIsPolled();
+ return '<span>'+(pol?'取樣紀錄':'逐筆紀錄')+' · tick_logs/'+(TK.date||'YYYY-MM-DD')+
+   (pol?'-polled':'')+'.jsonl</span>'+
+   (pol?'<span class="sep">·</span><span>每 0.1 秒讀一次面板狀態、有變動才記一列'+
+        '（tick_recorder.py）</span>':'')+
    (D?'<span class="sep">·</span><span>'+D.len.toLocaleString()+' 個 1 秒桶</span>':'')+
    // ⛔ 這句一定要寫出來：為了少這 1 秒去碰 on_tick／佇列＝去碰他的停損，
    //    所以這是刻意的取捨，不是缺陷。
@@ -6471,13 +6853,14 @@ function tkOverHTML(){
    if((TK.days||[]).length===0)
      // ⚠️ 這段文案**不寫死任何日期**：它只在「一個逐筆檔都沒有」時出現，
      //    寫「明天 08:45」或某個特定日期，過幾天就變成假的（而且看不出來）。
-     return '<div class="tk-empty"><div class="t">還沒有逐筆紀錄</div>'+
+     return '<div class="tk-empty"><div class="t">還沒有任何紀錄</div>'+
        '<div class="d">逐筆落地要面板重啟之後才開始；'+
        '之後每個交易日 08:45 一開盤就會自動錄，09:30 收手。</div>'+
-       '<div class="d">檔案會落在 tools/shioaji/tick_logs/YYYY-MM-DD.jsonl（不會上傳）。</div>'+
+       '<div class="d">檔案會落在 tools/shioaji/tick_logs/：'+
+       'YYYY-MM-DD.jsonl 是逐筆，YYYY-MM-DD-polled.jsonl 是取樣（都不會上傳）。</div>'+
        ((TK.skipped||[]).length?'<div class="d">（有 '+TK.skipped.length+
-         ' 個檔名像逐筆、但內容不是逐筆格式的檔被跳過了）</div>':'')+'</div>';
-   return '<div class="tk-empty"><div class="t">這天沒有逐筆紀錄</div>'+
+         ' 個檔名對、但內容跟檔名對不起來的檔被跳過了）</div>':'')+'</div>';
+   return '<div class="tk-empty"><div class="t">這天沒有紀錄</div>'+
      '<div class="d">用上面的 ◀ ▶ 或日期清單換到有錄到的日子。</div></div>';
  }
  if(TK.err)
@@ -6488,7 +6871,8 @@ function tkOverHTML(){
  if(D&&!D.len){
    const growing=(!D.complete&&D.date===TK.today);
    return '<div class="tk-empty"><div class="t">'+
-     (growing?'今天還沒開始錄（08:45 開始）':'這天只有檔頭，一筆成交都沒有錄到')+'</div>'+
+     (growing?'今天還沒開始錄（08:45 開始）'
+             :(tkIsPolled()?'這個取樣檔裡一列都沒有':'這天只有檔頭，一筆成交都沒有錄到'))+'</div>'+
      '<div class="d">'+(growing?'開盤之後就會一秒一秒長出來。':'換到別的日子看看。')+'</div>'+
      (tkStep(-1)?'<button class="tk-chip go" data-tkday="'+tkStep(-1)+
        '">看上一個有錄的日子 →</button>':'')+'</div>';
@@ -6786,7 +7170,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._json(500, {"error": str(e)[:200], "date": want})
             if out is None:
-                return self._json(404, {"error": "這天沒有逐筆紀錄", "date": want})
+                return self._json(404, {"error": "這天沒有紀錄（逐筆與取樣都找不到）",
+                                        "date": want})
             return self._json(200, out)
         if self.path.startswith("/api/bars"):
             q = self.path.split("?", 1)[1] if "?" in self.path else ""

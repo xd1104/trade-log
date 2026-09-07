@@ -95,6 +95,22 @@ async function mutate(fn, from, to) {
 const unmutate = fn => ev(`(()=>{ if(window.__orig&&window.__orig[${JSON.stringify(fn)}])
   window[${JSON.stringify(fn)}]=window.__orig[${JSON.stringify(fn)}]; return 1; })()`);
 
+/* ── canvas 上**真的畫出去的字**（lab-qa 2026-09-07 退件 M2）─────────────
+   這一頁最要命的兩條紅線都畫在 canvas 上，DOM 一個字都讀不到：
+   ①「這段沒有錄到（**不是沒行情**）」那句 —— 取樣日不可以講（我們證不了）；
+   ② 圖上左下角那張取樣金籤。
+   舊版探針只掃副標（`#tksub`）⇒ 把 canvas 那句改回「不是沒行情」照樣 159/159 全綠，
+   **而他早上盯的是圖不是副標**。
+   量法：把那個 2d context 的 fillText 暫時包一層，跑一次 tkDraw 收集這一次繪製
+   真的送進 canvas 的字串 —— 不是讀原始碼，是量畫面。 */
+const canvasText = async () => await ev(`(()=>{
+  const cv=document.getElementById('tkcv'), ctx=cv.getContext('2d');
+  const orig=ctx.fillText, out=[];
+  ctx.fillText=function(t){ out.push(String(t)); return orig.apply(this,arguments); };
+  try{ tkDraw(); } finally { ctx.fillText=orig; }
+  return out;})()`);
+const canvasSays = async () => (await canvasText()).join(" ⏐ ");
+
 const box = async sel => await ev(`(()=>{const e=document.querySelector(${JSON.stringify(sel)});
   if(!e) return null; const r=e.getBoundingClientRect();
   return {x:r.x,y:r.y,w:r.width,h:r.height};})()`);
@@ -121,7 +137,7 @@ async function goDay(d) {
 const W = await ctl("/tick/where");
 const D = W.dates;
 console.log(`治具資料：${W.dir}`);
-console.log(`日期：今天=${D.full} 缺口日=${D.gappy} 三列=${D.tiny} 只有檔頭=${D.blank} 假逐筆=${D.decoy}\n`);
+console.log(`日期：今天=${D.full} 缺口日=${D.gappy} 三列=${D.tiny} 只有檔頭=${D.blank} 假逐筆=${D.decoy} 取樣日=${D.polled}\n`);
 await ctl("/tick/reset");
 await ctl("/tick/clock/");
 
@@ -275,12 +291,14 @@ await ev(`window.__axisScan=function(){
   return {changes:changes, steps:full-30, seq:seq.join(' ')};
 }`);
 const ax = await ev("window.__axisScan()");
+let axNiceOff = null;              // 負控組（拿掉 niceStep 貼齊）的改變次數，收尾要印
 ge("模擬的步數（尺的自證：真的逐秒餵了一整天）", ax.steps, 2000);
 le("整段期間價格軸上下緣改變次數（秒K 預設）", ax.changes, 3);
 /* 負控組 A：把 niceStep 的貼齊拿掉 —— 這是穩定價格軸的**主要**那一層，必須爆增。 */
 if (await mutate("tkAxis",
   "aHi=Math.ceil(aHi/step)*step; aLo=Math.floor(aLo/step)*step;", "")) {
   const axN = await ev("window.__axisScan()");
+  axNiceOff = axN.changes;
   /* 門檻取「≥ 3 倍且至少多 3 次」：不貼齊整數刻度時，軸的變動次數 ≈ 隨機漫步的
      running min/max 更新次數（O(log n)，實測 16 次），本來就不會像滑動視窗那樣爆到上百次。
      規格引用的「8 次 vs 1 次」是即時分頁**滑動視窗**的情境，這張圖的時間軸是固定的。 */
@@ -656,6 +674,325 @@ say(true, "（參考）補滿之後同一點的顏色 = " + hatch2);
 await ctl("/tick/gappy/dirty");
 await ev("TK.cache={};");
 
+/* ═══ ⑬ 取樣日（-polled 檔）：畫得出來，而且**畫面上**明講那是取樣 ═══════
+   2026-09-07：他早上的行情只有取樣檔（面板 12:16 才重啟，逐筆落地那時才生效），
+   而這一頁完全讀不到它 —— 因為檔名不符 YYYY-MM-DD.jsonl。
+   「不要讓取樣冒充逐筆」的正解是**標示清楚**，不是整個不給看。
+   ⛔ 標籤要**真的畫在畫面上**（圖上的籤、日期清單的標記、副標），不是只放在資料裡：
+      下面每一條都配一個負控組（拿掉標籤／把種類判斷反過來，必須紅）。
+   ⛔ 取樣檔沒有單筆成交量 ⇒ 量柱 disabled ＋ 寫出原因，
+      而且**開不開那顆疊圖畫出來要一模一樣**（＝真的一根量柱都沒有）。 */
+console.log("\n=== ⑬ 取樣日：讀得到，而且畫面上明講那是取樣 ===");
+await goDay(D.full);
+// ── 先在**逐筆日**量一組對照值 ─────────────────────────────────────────
+const tickSub = await ev("document.getElementById('tksub').textContent");
+const tickKind = await ev("TK.data.kind");
+const tickVolChip = await ev(`(()=>{const b=document.querySelector('[data-tkov="vol"]');
+  return {dis:!!b.disabled, on:b.className.indexOf('on')>=0};})()`);
+const tickBar60 = await ev(`(()=>{const v0=TK.view; TK.view={t0:0,t1:60};
+  const w=tkBarSec(); TK.view=v0; TKAXIS.key=null; return w;})()`);
+const GRAB = `(()=>{const cv=document.getElementById('tkcv'),ctx=cv.getContext('2d');
+  const d=ctx.getImageData(0,0,cv.width,cv.height).data; let s=0;
+  for(let i=0;i<d.length;i+=4) s+=d[i]+d[i+1]+d[i+2]; return s;})()`;
+const VOLTOGGLE = `(()=>{const v0=TK.ov.vol;
+  TK.ov.vol=false; TKAXIS.key=null; TKBARC.key=''; tkDraw();
+  const off=${GRAB};
+  TK.ov.vol=true;  TKAXIS.key=null; TKBARC.key=''; tkDraw();
+  const on=${GRAB};
+  TK.ov.vol=v0; TKAXIS.key=null; TKBARC.key=''; tkDraw();
+  return {off:off,on:on};})()`;
+const tickVolPix = await ev(VOLTOGGLE);
+chk("對照組（逐筆日）：kind", tickKind, "tick");
+chk("對照組（逐筆日）：成交量疊圖可用（不是 disabled）", tickVolChip.dis, false);
+say(tickVolPix.on !== tickVolPix.off,
+  "對照組（逐筆日）：開關成交量畫出來的東西不一樣（＝那一天真的有量柱）",
+  `${tickVolPix.off} vs ${tickVolPix.on}`);
+say(tickSub.indexOf("逐秒") >= 0 && tickSub.indexOf("取樣") < 0,
+  "對照組（逐筆日）：副標寫「逐秒」、沒有「取樣」", tickSub.slice(0, 46));
+/* 對照組（**有缺口的逐筆日**）：canvas 上那句話必須寫著「不是沒行情」 ——
+   這是尺的自證：證明 canvasText() 真的量得到圖上那句，取樣日沒有它才有意義。 */
+await goDay(D.gappy);
+const gapCanvas = await canvasSays();
+say(gapCanvas.indexOf("不是沒行情") >= 0,
+  "對照組（有缺口的逐筆日）：圖上那句話寫著「不是沒行情」（尺的自證）",
+  gapCanvas.slice(0, 90));
+const tickIdxTip = await ev(`(()=>{const b=document.querySelector('[data-tkov="idx"]');
+  return {dis:!!b.disabled, title:b.getAttribute('title')||''};})()`);
+
+// ── 切到取樣日 ────────────────────────────────────────────────────────
+say(await goDay(D.polled), `切到取樣日 ${D.polled}`);
+chk("這一天的 kind", await ev("TK.data.kind"), "polled");
+chk("has_vol", await ev("TK.data.has_vol"), false);
+ge("桶數（1 秒桶，跟逐筆同一種格式）", await ev("TK.data.len"), 100);
+ge("繪出來的東西不是空的", await ev("(()=>{tkDraw();return TK.drawn;})()"), 20);
+chk("每一個桶的量都是 0（⛔ 不准拿 vol_ratio 之類的東西湊假量柱）",
+  await ev("(()=>{let s=0;for(let i=0;i<TK.data.len;i++)s+=TK.data.vq[i];return s;})()"), 0);
+
+// ① 副標：⛔「逐秒」那三個字對取樣日是假的
+const pSub = await ev("document.getElementById('tksub').textContent");
+say(pSub.indexOf("取樣") >= 0, "副標寫出「取樣」", pSub.slice(0, 60));
+say(pSub.indexOf("逐秒") < 0, "副標**不可以**再寫「逐秒」", pSub.slice(0, 60));
+say(pSub.indexOf("不是逐筆") >= 0, "副標明講「不是逐筆」");
+const pPager = await ev("document.getElementById('tkpager').textContent");
+say(pPager.indexOf("取樣") >= 0 && pPager.indexOf("逐筆 ") < 0,
+  "翻頁列寫「取樣 N 筆」不是「逐筆 N 筆」", pPager.replace(/\s+/g, " ").slice(0, 50));
+const pFoot = await ev("document.getElementById('tkfoot').textContent");
+say(pFoot.indexOf("-polled.jsonl") >= 0, "頁尾寫的是取樣檔的檔名（不是逐筆那個）");
+
+// ② 圖上的標籤：⛔ 要真的畫在畫面上 —— 負控組把那一行拿掉，那塊像素必須改變
+const BADGE = `(()=>{const cv=document.getElementById('tkcv'),ctx=cv.getContext('2d');
+  const dpr=TKC.DPR;                       // 取樣日 VH=0 ⇒ priceH 到 H-TKBOT
+  const x=0, y=Math.max(0,Math.round((TKC.H-TKBOT-26)*dpr));
+  const w=Math.min(cv.width,Math.round(250*dpr)), h=Math.round(24*dpr);
+  const d=ctx.getImageData(x,y,w,h).data; let s=0; const set=new Set();
+  for(let i=0;i<d.length;i+=4){ s+=d[i]+d[i+1]+d[i+2]; set.add(d[i]+','+d[i+1]+','+d[i+2]); }
+  return {sum:s, colors:set.size};})()`;
+await ev("tkDraw()");
+const bWith = await ev(BADGE);
+/* ⚠️ 舊版這裡是 `繪圖區左下顏色數 ≥3` —— **那條是裝飾性的**（lab-qa 2026-09-07 指出）：
+   那一塊本來就有缺口斜線底紋，把金籤整行拿掉照樣 ≥3，它從來沒有承重過。
+   （FM1 那次會紅的其實是 mutate() 自己的「目標字串已失效」自證，不是這條斷言。）
+   改成量**圖上真的畫了哪些字**，那才是「這張籤畫在畫面上」的直接證據。 */
+console.log(`  （參考）繪圖區左下的顏色數 = ${bWith.colors}（裝飾性資訊，不當斷言）`);
+const pCanvas = await canvasSays();
+say(pCanvas.indexOf("取樣") >= 0 && pCanvas.indexOf("不是逐筆") >= 0,
+  "圖上真的畫出了取樣金籤的字（不是只在資料裡）", pCanvas.slice(0, 90));
+/* ⛔ 取樣列只有**一個** price，開高低收四個值全部來自那一個取樣點 ⇒ 那個「高低」是
+   取樣點的極值，不是那一秒真正摸到的高低。而秒 K 被選成預設的理由正是
+   「K 棒多給的是這一段摸到多高多低」—— 他那份真檔實測 1 秒桶 **26.7% 高＝低**。
+   這句話要在**圖上**（他早上盯的是圖），副標也有一份。 */
+say(pCanvas.indexOf("高低") >= 0 && pCanvas.indexOf("取樣點") >= 0,
+  "而且圖上講出「高低＝取樣點的極值」（⛔ 秒 K 的高低對取樣日不是那一秒真的高低）",
+  pCanvas.slice(0, 90));
+/* ⚠️ 這張籤的字每加一句就長一截 —— 量一次寬度，別讓下一個人把它加到畫出繪圖區外面。
+   ⛔ 不准用「幾個字 × 字級」推算（手冊 D 段，這個專案為同一個病退件過兩次），
+      用 ctx.measureText 量產品程式**真的要畫的那一串**。 */
+const badgeW = await ev(`(()=>{const cv=document.getElementById('tkcv'),ctx=cv.getContext('2d');
+  ctx.save(); ctx.font='11px ui-monospace,"Microsoft JhengHei",monospace';
+  const w=ctx.measureText(TKPOLLBADGE()).width+14; ctx.restore();
+  return {w:+w.toFixed(1), pw:+(TKC.W-TKR).toFixed(1), txt:TKPOLLBADGE()};})()`);
+say(6 + badgeW.w <= badgeW.pw - 6, "金籤整串字畫得進繪圖區（左邊界 6px 起算）",
+  `籤寬 ${badgeW.w}px、繪圖區寬 ${badgeW.pw}px`);
+const BADGELINE = " if(tkIsPolled()) tkChip(ctx,6,TKTOP+priceH-22,TKPOLLBADGE(),'#E3A951');";
+if (await mutate("tkDraw", BADGELINE, "")) {
+  await ev("tkDraw()");
+  const bNo = await ev(BADGE);
+  say(bWith.sum !== bNo.sum,
+    "負控組：把圖上的取樣標籤拿掉之後，那塊像素真的變了（＝標籤畫在畫面上，不是只在資料裡）",
+    `${bWith.sum} → ${bNo.sum}`);
+  const cNo = await canvasSays();
+  say(cNo.indexOf("不是逐筆") < 0 && cNo.indexOf("取樣點") < 0,
+    "負控組：拿掉那一行之後，圖上那幾個字真的不見了（＝上面兩條不是恆真的）",
+    cNo.slice(0, 70));
+  await unmutate("tkDraw");
+  await ev("tkDraw()");
+  chk("裝回去之後標籤又回來了", (await ev(BADGE)).sum, bWith.sum);
+}
+
+// ③ 日期清單：⛔ 兩種都標（只標一種的話，沒有標記等於「不知道」而不是「另一種」）
+const LISTTAGS = `(()=>{ TK.pick=true; tkPaint();
+  const out=[...document.querySelectorAll('.tk-list .row')].map(r=>{
+    const k=r.querySelector('.kind');
+    return {d:r.getAttribute('data-tkday'), tag:k?k.textContent:'',
+            w:k?+k.getBoundingClientRect().width.toFixed(1):0}; });
+  TK.pick=false; tkPaint(); return out; })()`;
+const listTags = await ev(LISTTAGS);
+ge("日期清單真的有列（尺的自證）", listTags.length, 5);
+say(listTags.every(x => x.tag === "逐筆" || x.tag === "取樣"),
+  "清單每一列都標了種類（逐筆／取樣兩種都標）",
+  JSON.stringify(listTags.map(x => x.tag)));
+say(listTags.every(x => x.w > 0), "而且那個標記真的看得見（有寬度，不是 display:none）");
+chk("取樣那天標的是「取樣」", (listTags.find(x => x.d === D.polled) || {}).tag, "取樣");
+chk("逐筆那天標的是「逐筆」", (listTags.find(x => x.d === D.full) || {}).tag, "逐筆");
+if (await mutate("tkListHTML", "'</span>'+tag+", "'</span>'+")) {
+  const noTags = await ev(LISTTAGS);
+  say(noTags.every(x => x.tag === ""),
+    "負控組：把清單的種類標記拿掉之後，這條會紅（標記不是恆真的裝飾）");
+  await unmutate("tkListHTML");
+  say((await ev(LISTTAGS)).every(x => x.tag), "裝回去之後標記又回來了");
+}
+
+/* ③b 清單的版面：⚠️ **不准用字級推算，實際量 getBoundingClientRect().height**
+   （手冊 D 段，這個專案為同一個病退件過兩次）。
+   「＋另有取樣檔（未採用）」那串字會把 .meta 擠到換行 ⇒ 那一列比別列高一截。 */
+const listBox = await ev(`(()=>{ TK.pick=true; tkPaint();
+  const rows=[...document.querySelectorAll('.tk-list .row')].map(r=>({
+    d:r.getAttribute('data-tkday'),
+    h:+r.getBoundingClientRect().height.toFixed(1),
+    alt:!!r.querySelector('.alt')}));
+  const foot=[...document.querySelectorAll('.tk-list .foot')].map(f=>f.textContent).join(' ');
+  const sc=document.querySelector('.tk-list');
+  const over=sc?+(sc.scrollWidth-sc.clientWidth).toFixed(1):0;
+  TK.pick=false; tkPaint(); return {rows:rows, foot:foot, over:over};})()`);
+ge("清單真的有列（尺的自證）", listBox.rows.length, 5);
+say(listBox.rows.some(r => r.alt), "治具裡真的有「兩種檔都有」的那一列（尺的自證）",
+  JSON.stringify(listBox.rows.filter(r => r.alt).map(r => r.d)));
+chk("清單每一列的高度都一樣（⛔ 有 alt 標的那列不可以被撐高）",
+  new Set(listBox.rows.map(r => r.h)).size, 1);
+le("清單不會橫向溢出（px）", listBox.over, 0);
+console.log(`  （參考）每列高度 ${listBox.rows[0].h}px`);
+
+/* ③c 被跳過的檔**在有資料的時候也要講**（lab-qa 2026-09-07 退件 M1 的一部分）。
+   舊版只寫在「一個紀錄都沒有」的空狀態裡 ⇒ 只要有任何一天有資料，
+   「我明明有錄怎麼看不到」就完全無解。治具裡的 decoy（逐筆檔名 ＋ 取樣內容）就是那種檔。 */
+ge("治具真的有被跳過的檔（尺的自證）", (await ev("TK.skipped.length")), 1);
+say(listBox.foot.indexOf("被跳過") >= 0,
+  "清單上一直看得到「有 N 個檔被跳過」（不是只有空狀態才講）",
+  listBox.foot.replace(/\s+/g, " ").slice(0, 80));
+if (await mutate("tkListHTML", "const skip=(TK.skipped||[]).length",
+                 "const skip=''&&(TK.skipped||[]).length")) {
+  const noFoot = await ev(`(()=>{ TK.pick=true; tkPaint();
+    const t=[...document.querySelectorAll('.tk-list .foot')].map(f=>f.textContent).join(' ');
+    TK.pick=false; tkPaint(); return t;})()`);
+  say(noFoot.indexOf("被跳過") < 0,
+    "負控組：拿掉那一句之後，被跳過的檔又完全沒地方講了（這條會紅）");
+  await unmutate("tkListHTML");
+}
+
+// ④ 成交量：disabled ＋ 寫出原因，而且真的一根量柱都沒有
+const pVol = await ev(`(()=>{const b=document.querySelector('[data-tkov="vol"]');
+  return {dis:!!b.disabled, on:b.className.indexOf('on')>=0,
+          title:b.getAttribute('title')||''};})()`);
+chk("取樣日的成交量疊圖是 disabled", pVol.dis, true);
+chk("而且不是亮著的", pVol.on, false);
+say(pVol.title.indexOf("沒有單筆成交量") >= 0, "而且寫出了原因", pVol.title);
+const pVolPix = await ev(VOLTOGGLE);
+chk("取樣日：開關成交量畫出來一模一樣（＝真的一根量柱都沒有）",
+  pVolPix.on === pVolPix.off, true);
+const pRead = await ev(`(()=>{TK.hover=400;tkPaint();tkPaint();
+  const t=document.getElementById('tkread').textContent;
+  TK.hover=null;TK.hi=null;tkPaint(); return t;})()`);
+say(pRead.indexOf("取樣檔沒有量") >= 0,
+  "讀值列的「量」寫「—」＋原因（⛔ 不印 0 假裝那一秒沒成交）", pRead.slice(-40));
+
+// ⑤ 價帶：取樣檔**有** bid/ask ⇒「折線＋價帶」那個圖種對取樣日照樣能用
+const pBand = await ev(`(()=>{const D=TK.data; let n=0,ok=0;
+  for(let i=0;i<D.len;i++) if(isFinite(D.bl[i])&&isFinite(D.ah[i])){
+    n++; if(D.ah[i]>=D.bl[i]) ok++; }
+  return {len:D.len,n:n,ok:ok};})()`);
+ge("取樣日有買賣價帶的桶數佔比（%）", Math.round(pBand.n / pBand.len * 100), 90);
+chk("有價帶的桶都是 最高賣價 ≥ 最低買價", pBand.ok, pBand.n);
+const pBandPix = await ev(`(()=>{
+  const cv=document.getElementById('tkcv'), ctx=cv.getContext('2d');
+  const grab=()=>{const d=ctx.getImageData(0,0,cv.width,cv.height).data;
+    let s=0; for(let i=0;i<d.length;i+=4) s+=d[i]+d[i+1]+d[i+2]; return s;};
+  const v0=TK.v, view0=TK.view;
+  TK.v='A'; TK.view=null; TKAXIS.key=null; tkDraw(); const a=grab();
+  TK.v='B'; TKAXIS.key=null; tkDraw(); const b=grab();
+  TK.v=v0; TK.view=view0; TKAXIS.key=null; tkPaint();
+  return {a:a,b:b};})()`);
+say(pBandPix.a !== pBandPix.b,
+  "取樣日：折線+價帶 跟純折線畫出來不一樣（bid/ask 真的被讀進去也畫上去）",
+  `A=${pBandPix.a} B=${pBandPix.b}`);
+
+// ⑥ auto 桶寬：取樣約 0.46 秒一筆 ⇒ 1 秒桶一半只有 1 個點，auto 的下限拉到 2 秒
+const pBar60 = await ev(`(()=>{const v0=TK.view; TK.view={t0:0,t1:60};
+  const w=tkBarSec(); TK.view=v0; TKAXIS.key=null; return w;})()`);
+chk("逐筆日：視窗 60 秒時 auto 桶寬（對照組）", tickBar60, 1);
+chk("取樣日：視窗 60 秒時 auto 桶寬（下限 2 秒）", pBar60, 2);
+chk("手動按 1 秒還是給他 1 秒（⛔ 只動 auto，不動他自己選的）",
+  await ev("(()=>{const b0=TK.bar; TK.bar=1; const w=tkBarSec(); TK.bar=b0; return w;})()"), 1);
+
+// ⑦ 缺口的那句話：取樣日不可以說「不是沒行情」（有變才記，空白有兩種可能）
+const pGapTxt = await ev("document.getElementById('tksub').textContent");
+say(pGapTxt.indexOf("沒有取樣到") >= 0, "開頭沒錄到的那段：寫「沒有取樣到」",
+  pGapTxt.slice(0, 70));
+say(pGapTxt.indexOf("不是沒行情") < 0,
+  "⛔ 取樣日不可以寫「不是沒行情」（取樣工具只在有變動時才記一列，證不了這句）");
+/* ⛔⛔ **同一條紅線在 canvas 上也要守**（lab-qa 2026-09-07 退件 M2）：
+   圖上缺口中間那塊底色壓著同一句話，而**他早上盯的是圖不是副標**。
+   上面那兩條只掃 `#tksub` ⇒ QA 把 canvas 的 MISS 常數改回「不是沒行情」，159/159 全綠。 */
+const pGapCanvas = await canvasSays();
+say(pGapCanvas.indexOf("沒有取樣到") >= 0,
+  "圖上缺的那段也寫「沒有取樣到」（不是只有副標）", pGapCanvas.slice(0, 90));
+say(pGapCanvas.indexOf("不是沒行情") < 0,
+  "⛔⛔ 圖上**絕對不可以**出現「不是沒行情」（那是取樣日證不了的話）",
+  pGapCanvas.slice(0, 90));
+// 負控組（就是 lab-qa 那個突變）：把 MISS 併回逐筆那一句
+const MISSLINE = "tkIsPolled()?'這段沒有取樣到（沒錄到，或報價一直沒變）'";
+if (await mutate("tkDraw", MISSLINE, "false?'這段沒有取樣到（沒錄到，或報價一直沒變）'")) {
+  const mNo = await canvasSays();
+  say(mNo.indexOf("不是沒行情") >= 0 && mNo.indexOf("沒有取樣到") < 0,
+    "FM5 負控組：MISS 併回單一句之後，取樣日的圖上真的冒出「不是沒行情」（這條會紅）",
+    mNo.slice(0, 90));
+  await unmutate("tkDraw");
+  const mBack = await canvasSays();
+  say(mBack.indexOf("不是沒行情") < 0 && mBack.indexOf("沒有取樣到") >= 0,
+    "裝回去之後圖上又只寫「沒有取樣到」");
+}
+
+/* ⑦b 「加權」那顆的停用理由**必須分兩種寫**（lab-qa 2026-09-07 退件 M2）：
+   逐筆檔真的沒有 `idx` 這一欄，**取樣檔有**（tick_recorder.py 有記）——
+   寫同一句就一定有一句是假的。這條原本零守衛：QA 把它併回單一句，159/159 全綠。 */
+const pIdxTip = await ev(`(()=>{const b=document.querySelector('[data-tkov="idx"]');
+  return {dis:!!b.disabled, title:b.getAttribute('title')||''};})()`);
+chk("對照組（逐筆日）：加權那顆是 disabled", tickIdxTip.dis, true);
+chk("取樣日：加權那顆一樣是 disabled（這一輪仍然不畫那條線）", pIdxTip.dis, true);
+say(tickIdxTip.title.indexOf("逐筆紀錄裡沒有加權指數") >= 0,
+  "逐筆日的理由：「逐筆紀錄裡沒有加權指數」", tickIdxTip.title);
+say(pIdxTip.title.indexOf("取樣檔裡有加權指數") >= 0,
+  "取樣日的理由：「取樣檔裡有加權指數，但這一頁沒有做這條線」", pIdxTip.title);
+say(pIdxTip.title !== tickIdxTip.title,
+  "⛔ 兩種日子的理由必須不一樣（寫同一句就一定有一句是假的）");
+const IDXLINE = "tkIsPolled()?'取樣檔裡有加權指數，但這一頁沒有做這條線'";
+if (await mutate("tkToolsHTML", IDXLINE,
+                 "false?'取樣檔裡有加權指數，但這一頁沒有做這條線'")) {
+  const nTip = await ev(`(()=>{tkPaint();
+    const b=document.querySelector('[data-tkov="idx"]');
+    return b.getAttribute('title')||'';})()`);
+  say(nTip === tickIdxTip.title,
+    "FM6 負控組：併回單一句之後，取樣日被寫上逐筆那句假話（這條會紅）", nTip);
+  await unmutate("tkToolsHTML");
+  const bTip = await ev(`(()=>{tkPaint();
+    const b=document.querySelector('[data-tkov="idx"]');
+    return b.getAttribute('title')||'';})()`);
+  say(bTip !== tickIdxTip.title, "裝回去之後兩種日子的理由又分開了", bTip);
+}
+
+/* ⑦c 副標的取樣密度是**量出來的**，不是寫死的（後端 ms_med 那條的前端這一半）。
+   ⚠️ 順帶守住 tkRate() 的去尾零：舊版 `.replace(/0$/,'')` 只去掉一個 0 ⇒
+      ms_med=1000 印成「約 1.0 秒一筆」（lab-qa 抓到）。 */
+const rateCases = await ev(`(()=>{const m0=TK.data.ms_med, out={};
+  for(const m of [1000,500,460,250]){ TK.data.ms_med=m; out[m]=tkRate(); }
+  TK.data.ms_med=m0; tkPaint(); return out;})()`);
+chk("ms_med=1000 ⇒「約 1 秒一筆」（⛔ 不是「約 1.0 秒一筆」）", rateCases["1000"], "約 1 秒一筆");
+chk("ms_med=500 ⇒「約 0.5 秒一筆」", rateCases["500"], "約 0.5 秒一筆");
+chk("ms_med=460 ⇒「約 0.46 秒一筆」", rateCases["460"], "約 0.46 秒一筆");
+chk("ms_med=250 ⇒「約 0.25 秒一筆」", rateCases["250"], "約 0.25 秒一筆");
+
+/* ⑦d 09:30 之後被切掉的列要講出來（後端 outwin 那條的前端這一半）。
+   ⛔ 「安靜地少」是這個專案明令禁止的失敗模式 —— 少畫一段就要有一個數字。 */
+const owSub = await ev(`(()=>{const o0=TK.data.outwin; TK.data.outwin=7649; tkPaint();
+  const t=document.getElementById('tksub').textContent;
+  TK.data.outwin=o0; tkPaint(); return t;})()`);
+say(owSub.indexOf("7,649") >= 0 && owSub.indexOf("08:45~09:30 之外") >= 0,
+  "取樣檔錄到 09:30 之後時，副標寫出被切掉幾列", owSub.slice(-60));
+if (await mutate("tkSubHTML", " if(D.outwin) out+=", " if(false) out+=")) {
+  const owNo = await ev(`(()=>{const o0=TK.data.outwin; TK.data.outwin=7649; tkPaint();
+    const t=document.getElementById('tksub').textContent;
+    TK.data.outwin=o0; tkPaint(); return t;})()`);
+  say(owNo.indexOf("7,649") < 0,
+    "負控組：拿掉那一句之後，被切掉的 7,649 列就安靜地不見了（這條會紅）");
+  await unmutate("tkSubHTML");
+}
+
+// ⑧ 紅線：取樣日的畫面同樣不得出現預測字眼
+chk("禁詞命中（取樣日）", await scanHits(), []);
+
+// ⑨ 負控組：把種類判斷反過來 ⇒ 逐筆日被標成取樣，必須紅
+await goDay(D.full);
+if (await mutate("tkKind", "?D.kind:tkKindOf(TK.date)", "?'polled':'polled'")) {
+  await ev("tkPaint()");
+  const s2 = await ev("document.getElementById('tksub').textContent");
+  say(s2.indexOf("取樣") >= 0 && s2.indexOf("逐秒") < 0,
+    "負控組：種類判斷反過來之後，逐筆日被標成取樣（這條會紅）", s2.slice(0, 46));
+  await unmutate("tkKind");
+  await ev("tkPaint()");
+  const s3 = await ev("document.getElementById('tksub').textContent");
+  say(s3.indexOf("逐秒") >= 0 && s3.indexOf("取樣") < 0,
+    "裝回去之後逐筆日又寫「逐秒」（⛔ 逐筆日不可以被標成取樣）", s3.slice(0, 46));
+}
+
 /* ═══ ⑩ 我的單／±100 不撐大價格軸、null 不會把軸拉到 0 ══════════════ */
 console.log("\n=== ⑩ 我的單與 ±100（含 exit=null 的陷阱）===");
 await goDay(D.full);
@@ -805,12 +1142,23 @@ chk("切回【即時】之後 K 線圖還在", await ev(`!!document.querySelecto
 chk("切回【即時】之後【細節】的 2 秒輪詢已經停掉", await ev("TK.timer===null"), true);
 
 console.log("\n──── 實測數字 ────");
+/* ⚠️ 這幾個標籤 2026-09-07 改過（lab-qa 指出舊標籤會誤導下一個人）：
+   ① 拖曳量到的是**事件處理**時間，真正拿來比 5 倍的是**每格畫面**（見 § ② 的註解）
+      —— 舊版只印 `負控組不分桶每步中位ms`，看的人會以為負控組只慢一點點。
+   ② 舊版的 `負控組價格軸改變次數` 印的是 `ax2`，而 ax2 是**拿掉遲滯**那一組
+      （它本來就該跟正常組一模一樣）。真正的負控組是**拿掉 niceStep 貼齊**那一組。 */
 console.log(JSON.stringify({
-  秒K拖曳每步中位ms: perf.barsDrag.median,
-  折線價帶拖曳每步中位ms: perf.lineDrag.median,
-  負控組不分桶每步中位ms: perf.rawDrag.median,
+  秒K拖曳每步事件處理中位ms: perf.barsDrag.median,
+  折線價帶拖曳每步事件處理中位ms: perf.lineDrag.median,
+  負控組不分桶每步事件處理中位ms: perf.rawDrag.median,
+  每格畫面ms_秒K: perf.barsFrame.median,
+  每格畫面ms_折線價帶: perf.lineFrame.median,
+  每格畫面ms_負控組不分桶: perf.rawFrame.median,
+  負控組慢幾倍_每格畫面: +(perf.rawFrame.median / perf.lineFrame.median).toFixed(1),
   單次繪製中位ms: single,
-  價格軸改變次數: ax.changes, 負控組價格軸改變次數: ax2.changes,
+  價格軸改變次數: ax.changes,
+  負控組價格軸改變次數_拿掉niceStep: axNiceOff,
+  拿掉遲滯的改變次數_應與正常組相同: ax2.changes,
   maxColDiff: cd.maxColDiff, 比對欄數: cd.cols, 比對點數: cd.pts,
   state中位ms前: before.median, state最大ms前: before.max,
   state中位ms後: after.median, state最大ms後: after.max,
