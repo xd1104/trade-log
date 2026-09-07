@@ -12,9 +12,11 @@ POST /api/real/* 只記錄「前端送了幾次」，一張單都不會出去。
   - 多一個 short 模式：做空部位，用來驗平倉鈕寫的是「買進 ×1（回補空單）」。
   - 多一個 stale 模式：有部位＋報價中斷，用來驗跨分頁警報。
 """
+import datetime as _dt
 import json
 import pathlib
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -143,6 +145,115 @@ SIM_TRADES = [
 ]
 
 
+# ══ 【細節】分頁：逐筆早盤圖的治具 ═══════════════════════════════════════
+#
+# ⛔ **不碰他真的 tick_logs／real_trades／practice_trades**：三個輸出/輸入路徑常數
+#    全部導到暫存區（面板鐵律：測試會寫檔時，每一個路徑常數都要導走，漏一個就污染真實
+#    資料 —— 2026-09-01 真的發生過，成績單多了 6 筆假交易）。
+# ⛔ 價格一律 12000 附近（他的真實行情在 46xxx~47xxx，那個區間會撞到他的紀錄）。
+# ⚠️ 走的是**面板真正的後端函式**（LP.tick_days / LP.tick_day），不是另外寫一份假的
+#    —— 假的後端只會證明「假的後端沒問題」。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import tick_synth                                  # noqa: E402
+
+TICKROOT = pathlib.Path(tempfile.gettempdir()) / "trade-log-tick-harness"
+TICKLOGS = TICKROOT / "tick_logs"
+TICKSIM = TICKROOT / "practice_trades"
+TICKREAL = TICKROOT / "real_trades"
+TICKDATES = tick_synth.fixture_dates(_dt.date.today())
+
+# 一個環境變數就能把最大那份縮小（跑得快），但 ⛔ **別拿它量效能**
+TICK_BIG = "--small" not in sys.argv
+
+
+def _tick_fixtures():
+    for p in (TICKLOGS, TICKSIM, TICKREAL):
+        p.mkdir(parents=True, exist_ok=True)
+    tick_synth.build(TICKLOGS, today=_dt.date.today(), big=TICK_BIG)
+    d0, d1 = TICKDATES["full"], TICKDATES["gappy"]
+    # 練習單（昨天）：欄位照 live_panel.close_position() 的形狀
+    (TICKSIM / f"{d1}.json").write_text(json.dumps([{
+        "date": d1, "dir": "long", "entry": 12006, "exit": 12106,
+        "time": "09:06", "note": "合成資料", "mode": "sim",
+        "_exit_time": "09:11:20", "_reason": "tp", "_points": 100.0, "_net": 95.0}],
+        ensure_ascii=False), encoding="utf-8")
+    # 真實單（昨天）：一筆正常
+    rows = [{"date": d1, "dir": "short", "qty": 1, "entry_time": "09:14:05",
+             "entry": 12040.0, "exit_time": "09:19:47", "exit": 11940.0,
+             "reason": "tp", "points": 100.0}]
+    (TICKREAL / f"{d1}.jsonl").write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    # 真實單（今天）：⛔ exit / points 刻意是 **null** ——
+    #    `Math.min(lo, entry, exit)` 會把 null 當 0、價格軸整個掉到 0（2026-09-02 踩過）。
+    #    這一筆存在的目的就是那個坑，換數字時**必須保留 None**。
+    # ⛔⛔ 進出場**時間**也是他的真實紀錄，跟成交價一樣不可以照抄
+    #    （第一版從 lab-ux 的 demo 抄了 09:0x:xx 那一組，leak-scan.py 當場擋下來）。
+    rows0 = [{"date": d0, "dir": "long", "qty": 1, "entry_time": "09:16:41",
+              "entry": 12012.0, "exit_time": "09:22:08", "exit": None,
+              "reason": "manual", "points": None}]
+    (TICKREAL / f"{d0}.jsonl").write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows0), encoding="utf-8")
+
+
+_tick_fixtures()
+LP.TICK_DIR = TICKLOGS
+LP.TRADE_DIR = TICKSIM
+LP.broker.TRADE_DIR = TICKREAL
+LP.TICK_CACHE.clear()
+LP.TODAY_TRADES[:] = [{
+    "date": TICKDATES["full"], "dir": "short", "entry": 12030, "exit": 11930,
+    "time": "09:21", "note": "", "mode": "sim", "_exit_time": "09:26:40",
+    "_reason": "tp", "_points": 100.0, "_net": 95.0}]
+
+# 注入時鐘：`_tick_complete()` 決定「今天還在長 vs 已完成」，而探針可能在任何時間跑。
+# ⚠️ 測試的綠紅只能反映程式的狀態，不能反映**牆上時鐘**的狀態 —— 所以把時間注進去，
+#    但**保留真正的判斷邏輯**（不是把 complete 直接寫死）。
+_REAL_COMPLETE = LP._tick_complete
+FAKE_NOW = {"v": None}
+
+
+def _tick_complete(d, now=None):
+    return _REAL_COMPLETE(d, now or FAKE_NOW["v"])
+
+
+LP._tick_complete = _tick_complete
+
+
+def tick_clock(hhmm):
+    """把後端看到的『現在』固定住。空字串＝還原成真的時鐘。"""
+    if not hhmm:
+        FAKE_NOW["v"] = None
+        return None
+    h, m = hhmm.split(":")
+    FAKE_NOW["v"] = _dt.datetime.combine(_dt.date.today(),
+                                         _dt.time(int(h), int(m)))
+    return str(FAKE_NOW["v"])
+
+
+GROWAT = {"v": 34200}      # 下一批要接在哪一秒（/tick/short 會把它拉回 09:12）
+
+
+def tick_grow(n=400):
+    """讓「今天」那個檔再長 n 列（模擬盤中還在錄）。⛔ 一定是 append。"""
+    f = TICKLOGS / f"{TICKDATES['full']}.jsonl"
+    D = LP.TICK_CACHE.get(TICKDATES["full"])
+    # 從目前檔案的尾端秒數往後接，讓新桶真的是新的
+    base = GROWAT["v"]
+    if D and D["b"]:
+        base = max(base, max(D["b"]) + 1)
+    lines = []
+    px = 12000
+    for i in range(int(n)):
+        sec = base + i // 8
+        px += (i % 7) - 3
+        lines.append(json.dumps({"k": "t", "t": tick_synth._hms(sec, (i * 37) % 1000),
+                                 "p": float(px), "v": 1 + (i % 4)},
+                                ensure_ascii=False, separators=(",", ":")))
+    tick_synth.append_lines(f, lines)
+    GROWAT["v"] = base + int(n) // 8 + 1
+    return len(lines)
+
+
 # ── 假的 5 分 K：讓 paintChart() 真的畫得出來 ──────────────────────────────
 #    沒有這一段的話 /api/bars 回 {}，前端會退到 paintFallback，
 #    K 線圖那一整段（含新加的「真實部位三條線」）等於完全沒被測到。
@@ -263,6 +374,25 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_GET(self):
+        # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")
+        if self.path.startswith("/api/tick/days"):
+            return self._send(200, json.dumps(LP.tick_days(), ensure_ascii=False))
+        if self.path.startswith("/api/tick/day"):
+            q = self.path.split("?", 1)[1] if "?" in self.path else ""
+            want, frm = None, None
+            for kv in q.split("&"):
+                if kv.startswith("date="):
+                    want = kv[5:]
+                elif kv.startswith("from="):
+                    try:
+                        frm = int(kv[5:])
+                    except ValueError:
+                        frm = None
+            out = LP.tick_day(want, frm) if want else None
+            if out is None:
+                return self._send(404, json.dumps({"error": "這天沒有逐筆紀錄"},
+                                                  ensure_ascii=False))
+            return self._send(200, json.dumps(out, ensure_ascii=False))
         if self.path.startswith("/api/state"):
             return self._send(200, json.dumps(state(), ensure_ascii=False))
         if self.path.startswith("/api/bars"):
@@ -320,6 +450,46 @@ class Ctl(H):
         if p.startswith("/slow"):
             SLOW["v"] = float(p.split("/")[-1]) if p.count("/") > 1 else 1.2
             return self._send(200, "{}")
+        # ── 【細節】分頁的治具控制 ──────────────────────────────────
+        if p.startswith("/tick/clock"):
+            v = p.split("/tick/clock", 1)[1].lstrip("/")
+            return self._send(200, json.dumps({"now": tick_clock(v)}, ensure_ascii=False))
+        if p.startswith("/tick/grow"):
+            n = p.rsplit("/", 1)[-1]
+            return self._send(200, json.dumps({"added": tick_grow(int(n) if n.isdigit() else 400)}))
+        if p.startswith("/tick/half"):
+            # 故意留一個沒有換行結尾的半列（append 不是原子的，一定會讀到）
+            tick_synth.append_half_line(TICKLOGS / f"{TICKDATES['full']}.jsonl")
+            return self._send(200, "{}")
+        if p.startswith("/tick/short"):
+            # 把「今天」那份改成只錄到 09:12 —— 之後 /tick/grow 才有地方往後長
+            # ⚠️ 09:12 不是隨便挑的：原本是 09:10，而 **09:10 撞到他一筆真實交易的分鐘**
+            #    （lab-qa 2026-09-07 抓到；leak-scan 對截斷成 HH:MM 的時間是死角）。
+            #    這個專案的慣例是命中一律改掉、不加豁免名單。改這裡要**連著
+            #    tick-tab.mjs 的 /tick/clock/09:12 一起改**，兩邊必須是同一個時刻。
+            tick_synth.synth_day(TICKLOGS / f"{TICKDATES['full']}.jsonl",
+                                 ticks=30000 if TICK_BIG else 3000,
+                                 bidask=15000 if TICK_BIG else 1500,
+                                 first=31502, last=33120, seed=20260908)
+            LP.TICK_CACHE.pop(TICKDATES["full"], None)
+            GROWAT["v"] = 33121
+            return self._send(200, "{}")
+        if p.startswith("/tick/gappy/"):
+            # clean ＝負控組：補滿缺的時段、拿掉痕跡列 ⇒ 那三句話必須全部消失
+            tick_synth.write_gappy(TICKLOGS, TICKDATES["gappy"],
+                                   clean=p.endswith("clean"), big=TICK_BIG)
+            LP.TICK_CACHE.pop(TICKDATES["gappy"], None)
+            return self._send(200, "{}")
+        if p.startswith("/tick/reset"):
+            LP.TICK_CACHE.clear()
+            LP._TICK_SNIFFED.clear()
+            LP._TICK_SAID.clear()
+            _tick_fixtures()
+            GROWAT["v"] = 34200
+            return self._send(200, json.dumps({"dates": TICKDATES}, ensure_ascii=False))
+        if p.startswith("/tick/where"):
+            return self._send(200, json.dumps(
+                {"dates": TICKDATES, "dir": str(TICKLOGS)}, ensure_ascii=False))
         return self._send(200, "{}")
 
 
@@ -327,5 +497,9 @@ ctl = ThreadingHTTPServer(("127.0.0.1", 8772), Ctl)
 threading.Thread(target=ctl.serve_forever, daemon=True).start()
 print("控制埠 8772：/mode/flat /mode/holding /mode/with_target /mode/short /mode/stale /mode/closed"
       " /vol/full /vol/few /vol/reasons /posts /reset /slow", flush=True)
+print("　　　　　　 /tick/where /tick/reset /tick/clock/HH:MM /tick/grow/N /tick/half",
+      flush=True)
+print(f"逐筆治具：{TICKLOGS}（合成資料，價格 12000 附近；他的 tick_logs 一個位元組都沒碰）",
+      flush=True)
 while True:
     time.sleep(60)

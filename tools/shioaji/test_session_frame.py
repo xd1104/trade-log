@@ -84,6 +84,40 @@ def install(back_days, incomplete):
     LP._TODAY_RAW.clear()
 
 
+class _FakeDate(dt.date):
+    """`session_frame()` 看到的 `date.today()`。"""
+
+    @classmethod
+    def today(cls):
+        return D
+
+
+class _FakeDateTime(dt.datetime):
+    """`session_frame()` 看到的 `datetime.now()`（時鐘固定在 09:30，已經開盤）。"""
+
+    @classmethod
+    def now(cls, tz=None):
+        return dt.datetime.combine(D, dt.time(9, 30))
+
+
+def fake_today(on):
+    """
+    把 live_panel 眼中的「今天」固定成 D。
+
+    ⛔ **只改測試、不改 `session_frame()`**（2026-09-07 lab-qa 開的欠單）。
+    【為什麼要有這個】第 ⑤ 節守的是 CLAUDE.md 標 ⛔⛔ 的那條規則
+    （「今天的 K 棒拿不到時，圖整片是昨晚卻掛著今天的日期」——他 2026-09-02 親自回報的
+    故障），而 `partial='today'` 的條件是 `d == date.today()` ⇒ 這一節寫死 `D=2026-09-02`
+    的話，**只有 2026-09-02 當天會綠、其餘每一天都紅**。
+    QA 用 `git worktree` 拉 HEAD 重跑確認 HEAD 也一樣紅 —— 不是哪一輪改壞的，
+    是它從第一天就寫成這樣。**一條永遠紅的守衛跟永遠綠的一樣沒用**（大家會學會忽略它）。
+    ⚠️ 假造「今天」會讓 `own` 走 `_today_raw()` 那條路（產品自己的分支），
+       所以只在需要的那一節開，用完馬上關掉，別讓它影響其他節。
+    """
+    LP.date = _FakeDate if on else dt.date
+    LP.datetime = _FakeDateTime if on else dt.datetime
+
+
 def night_dates(g):
     """圖上出現了哪幾天的夜盤（日期小於 D 的那些）。"""
     if g is None or g.empty:
@@ -130,13 +164,29 @@ print("\n=== ⑤ 今天的 K 棒完全拿不到：圖整片是昨晚，一定要
 # 2026-09-02 他回報「加載完了但 K 圖還是不是最新的」。實測面板：109 根、最後一根
 # 停在 23:45、**全部都是前一晚** —— 圖上卻掛著今天的日期，什麼都沒說。
 # 跟夜盤那次同一個道理：少一段看得出來，掛錯日期看不出來。
+# ⚠️ 這一節（也只有這一節）要假造「今天」＝ D ＋ 時鐘 09:30。
+#    `partial='today'` 的條件是 `d == date.today()` 且已經過了 08:45 ——
+#    不假造的話這三條只有 2026-09-02 那一天會綠。**只改測試，不改 session_frame()。**
 NIGHT_FULL = ["%02d:%02d" % (15 + (m // 60), m % 60) for m in range(0, 9 * 60, 5)]
-install({PREV: bars(PREV, NIGHT_FULL, 46800.0)}, incomplete=False)
-g, base, partial = LP.session_frame(D)
-chk("  要回報是「今天的拿不到」，不是夜盤沒到", partial, "today")
-chk("  昨晚的還是要畫（那是手上唯一真的資料）", night_dates(g), [str(PREV)])
-chk("  但圖上一根今天的 K 棒都沒有",
-    [str(x) for x in g["ts"].dt.date if x == D], [])
+fake_today(True)
+try:
+    install({PREV: bars(PREV, NIGHT_FULL, 46800.0)}, incomplete=False)
+    chk("  尺的自證：live_panel 眼中的今天真的是 D", str(LP.date.today()), str(D))
+    g, base, partial = LP.session_frame(D)
+    chk("  要回報是「今天的拿不到」，不是夜盤沒到", partial, "today")
+    chk("  昨晚的還是要畫（那是手上唯一真的資料）", night_dates(g), [str(PREV)])
+    chk("  但圖上一根今天的 K 棒都沒有",
+        [str(x) for x in g["ts"].dt.date if x == D], [])
+    # 對照組：同一個假時鐘、但把今天的日盤補回去 ⇒ 就不可以再喊 'today'
+    # （證明這三條不是被假時鐘設成恆真的）
+    install({PREV: bars(PREV, NIGHT_FULL, 46800.0), D: bars(D, DAY, 46500.0)},
+            incomplete=False)
+    chk("  對照組：今天的 K 棒拿得到時就不准喊 today", LP.session_frame(D)[2], "")
+finally:
+    fake_today(False)
+    LP._TODAY_RAW.clear()
+chk("  收尾：時鐘已經還原（不可以污染後面的測項）",
+    LP.date.today() == dt.date.today(), True)
 
 print("\n=== ⑥ 兩種不完整要分得開（畫面上的文案完全不同）===")
 install({OLDER: bars(OLDER, NIGHT, 45800.0), D: bars(D, DAY, 46500.0)}, incomplete=True)
