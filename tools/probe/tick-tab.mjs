@@ -774,6 +774,18 @@ const badgeW = await ev(`(()=>{const cv=document.getElementById('tkcv'),ctx=cv.g
   return {w:+w.toFixed(1), pw:+(TKC.W-TKR).toFixed(1), txt:TKPOLLBADGE()};})()`);
 say(6 + badgeW.w <= badgeW.pw - 6, "金籤整串字畫得進繪圖區（左邊界 6px 起算）",
   `籤寬 ${badgeW.w}px、繪圖區寬 ${badgeW.pw}px`);
+/* ⚠️ 2026-09-08 圖高 −19% 之後補的**垂直**那一半（原本只量寬度）：
+   這張籤掛在價格區底緣（`TKTOP+priceH-22`、tkChip 高 17）⇒ 圖一縮它就跟著上移，
+   餘裕本來就不變；但「不變」要有人量過才算數。取樣日 VH=0 ⇒ priceH 直接到底。 */
+const badgeY = await ev(`(()=>{
+  const PH=TKC.H-TKTOP-TKBOT;
+  const VH=(TK.ov.vol&&tkHasVol()&&TK.data&&TK.data.len)?PH*TKVOLH:0;
+  const priceH=PH-VH, top=TKTOP+priceH-22;
+  return {top:+top.toFixed(1), bottom:+(top+17).toFixed(1),
+          floor:+(TKTOP+priceH).toFixed(1), ceil:TKTOP};})()`);
+say(badgeY.top >= badgeY.ceil && badgeY.bottom <= badgeY.floor,
+  "金籤整張也畫得進繪圖區的**上下**（圖縮矮之後最容易掉出去的那一邊）",
+  `籤 ${badgeY.top}~${badgeY.bottom}px、價格區 ${badgeY.ceil}~${badgeY.floor}px`);
 const BADGELINE = " if(tkIsPolled()) tkChip(ctx,6,TKTOP+priceH-22,TKPOLLBADGE(),'#E3A951');";
 if (await mutate("tkDraw", BADGELINE, "")) {
   await ev("tkDraw()");
@@ -1059,10 +1071,136 @@ for (const w of [1024, 1280, 1440]) {
   })()`);
   le(`視窗 ${w}px：.tk-tools 溢出`, r.overflow, 0);
   le(`視窗 ${w}px：整頁橫向溢出`, r.bodyOverflow, 0);
-  le(`視窗 ${w}px：canvas 長寬比偏差`, +Math.abs(r.ratio - 1040 / 470).toFixed(3), 0.02);
+  // ⚠️ 2026-09-08 圖高 −19%：1040/470 → 1040/380。這個常數**改對不放寬**。
+  le(`視窗 ${w}px：canvas 長寬比偏差`, +Math.abs(r.ratio - 1040 / 380).toFixed(3), 0.02);
 }
 await c.send("Emulation.clearDeviceMetricsOverride");
 await sleep(200);
+
+/* ═══ ⑪b 圖高 −19%（1040/470 → 1040/380）之後的幾何 ══════════════════
+   2026-09-08 Benson：「早盤細節的 K 圖區也可以幫我縮小嗎？現在感覺有點大」
+   ⇒ 跟【程式下單】那張同一個比例。**這一組是把縮完的新值斷言死，不是放寬舊值。**
+   ⛔ 量的對象一律是**畫面**（攔 canvas 的 fillRect／fillText），不是讀 CSS 推算 ——
+      「凡是高度／位移的宣稱，交件前必須附自己跑出來的實測值；字級不是高度」
+      （團隊手冊 D 段，這個專案為同一個病退件過兩次）。
+   ⚠️ 這一節跑在 clearDeviceMetricsOverride 之後 ＝ 探針啟動的 1500x1100 視窗，
+      `.tk-wrap` 寬 1396px。**寬度是所有死值的分母**，所以第一條先自證它 ——
+      寬度變了的話下面那排死值全部沒有意義（尺壞了，不是程式壞了）。 */
+console.log("\n=== ⑪b 圖高 −19%（1040/380）的幾何 ===");
+say(await goDay(D.full), "回到逐筆日（要有量柱才量得到量柱區）");
+await ev("TK.v='C'; TK.bar='auto'; TK.ov.vol=true; TK.ov.fixed=true; " +
+         "TK.view=null; TKAXIS.key=null; tkPaint();");
+await sleep(250);
+/* 量柱靠 **fillStyle 的 alpha .55** 認出來 —— K 棒實體是不透明色（#EE5A54／#34B37E），
+   量柱是 rgba(...,.55)。⛔ 不可以改成「y 在下面那一段就算量柱」：那等於拿被測物
+   自己的座標當尺，量柱區被壓扁的時候那把尺會跟著縮。 */
+const geo = async () => await ev(`(()=>{
+  const cv=document.getElementById('tkcv'), ctx=cv.getContext('2d');
+  const wr=document.getElementById('tkwrap'), r=wr.getBoundingClientRect();
+  const H=TKC.H, PH=H-TKTOP-TKBOT;
+  const VH=(TK.ov.vol&&tkHasVol()&&TK.data&&TK.data.len)?PH*TKVOLH:0;
+  const priceH=PH-VH;
+  const of=ctx.fillRect, bars=[];
+  ctx.fillRect=function(x,y,w,h){
+    if(String(this.fillStyle).indexOf('0.55)')>=0) bars.push({y:y,h:h,w:w});
+    return of.apply(this,arguments); };
+  try{ tkDraw(); } finally { ctx.fillRect=of; }
+  const tall=bars.length?Math.max.apply(null,bars.map(b=>b.h)):0;
+  const foot=bars.length?Math.max.apply(null,bars.map(b=>b.y+b.h)):0;
+  return {w:+r.width.toFixed(1), h:+r.height.toFixed(1),
+          ar:getComputedStyle(wr).aspectRatio.replace(/ /g,''),
+          H:H, PH:+PH.toFixed(1), price:+priceH.toFixed(1), VH:+VH.toFixed(1),
+          pct:+(VH/PH).toFixed(3), bars:bars.length,
+          tall:+tall.toFixed(1), foot:+foot.toFixed(1)};})()`);
+const G0 = await geo();
+chk("尺的自證：這個視窗下 .tk-wrap 的寬度（死值的分母）", G0.w, 1396);
+chk("⛔ .tk-wrap 的 aspect-ratio 就是 1040/380（改對不放寬）", G0.ar, "1040/380");
+le("canvas 高度（死值 510px）", +Math.abs(G0.H - 510).toFixed(1), 1);
+le("繪圖區高 PH（死值 472px）", +Math.abs(G0.PH - 472).toFixed(1), 1);
+le("價格區高（死值 368.2px）", +Math.abs(G0.price - 368.2).toFixed(1), 1);
+le("量柱區高（死值 103.8px）", +Math.abs(G0.VH - 103.8).toFixed(1), 1);
+le("量柱佔繪圖區的比例＝TKVOLH 0.22（⛔ 不准拿它換高度）",
+  +Math.abs(G0.pct - 0.22).toFixed(3), 0.005);
+/* 兩條**可讀性下限**（跟上面的死值是兩種東西：死值防「被改掉」，下限防「被改小」）。
+   門檻的定法：**再縮一次同樣的 19% 就要紅** ⇒ 368.2×0.81 = 298、103.8×0.81 = 84。
+   ⛔ 不是「感覺夠大」，是這一輪縮到底的界線。 */
+ge("價格區 ≥ 300px（±100 的振幅要畫得開；再縮一次 19% 就會紅）", G0.price, 300);
+ge("量柱最高一根的像素高度 ≥ 82px（畫面上量的，不是算的）", G0.tall, 82);
+ge("量柱真的有畫出來（尺的自證）", G0.bars, 20);
+le("量柱底緣貼齊繪圖區下緣（沒有被切掉一截）",
+  +Math.abs(G0.foot - (12 + G0.PH)).toFixed(1), 1);
+
+/* 時間軸標籤不重疊（⛔ 秒級一律 HH:MM:SS，比 1 分 K 的標籤長 3 個字元）。
+   量法：攔 fillText，只收畫在 y = H-8 的那一批（那一行只有時間軸的標籤），
+   用 measureText 取每一張的實際寬度，算**相鄰兩張的邊緣間距**。
+   ⚠️ 標籤是 textAlign='center' 畫的 ⇒ 命中區是 [x-w/2, x+w/2]，不是 [x, x+w]。 */
+const labs = async (t0, t1) => await ev(`(()=>{
+  const cv=document.getElementById('tkcv'), ctx=cv.getContext('2d');
+  const v0=TK.view;
+  TK.view=${t0 === null ? "null" : `{t0:${t0},t1:${t1}}`}; TKAXIS.key=null;
+  const Y=TKC.H-8, of=ctx.fillText, out=[];
+  ctx.fillText=function(t,x,y){
+    if(Math.abs(y-Y)<0.01) out.push({s:String(t),x:x,w:this.measureText(String(t)).width});
+    return of.apply(this,arguments); };
+  try{ tkDraw(); } finally { ctx.fillText=of; }
+  TK.view=v0; TKAXIS.key=null; tkDraw();
+  out.sort((p,q)=>p.x-q.x);
+  let g=Infinity;
+  for(let i=1;i<out.length;i++) g=Math.min(g,(out[i].x-out[i].w/2)-(out[i-1].x+out[i-1].w/2));
+  return {n:out.length, gap:isFinite(g)?+g.toFixed(1):null,
+          hms:out.every(o=>/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/.test(o.s)),
+          w:out.length?+out[0].w.toFixed(1):0, all:out.map(o=>o.s)};})()`);
+const ZOOMS = [["全景 45 分鐘", null, null], ["放大到 5 分鐘", 1200, 1500],
+               ["放大到 60 秒", 1200, 1260], ["放大到 12 秒", 1200, 1212]];
+const LAB = {};
+for (const [nm, a, b] of ZOOMS) {
+  const L = await labs(a, b); LAB[nm] = L;
+  ge(`時間軸（${nm}）：標籤數`, L.n, 3);
+  say(L.hms, `時間軸（${nm}）：每一張都是完整 HH:MM:SS`, L.all.slice(0, 3).join(" "));
+  ge(`時間軸（${nm}）：相鄰標籤的邊緣間距（px）`, L.gap, 8);
+}
+console.log(`  （實測）標籤寬 ${LAB["全景 45 分鐘"].w}px；` +
+  ZOOMS.map(z => `${z[0]} ${LAB[z[0]].n} 張/間距 ${LAB[z[0]].gap}px`).join("、"));
+console.log("  負控組：");
+/* 負控組 A（原始碼突變）：把標籤密度的分母 110 → 20 ⇒ 標籤必須真的疊在一起。
+   ⚠️ 這才是「標籤不重疊」那條的負控組 —— 見下面 B 為什麼不是。 */
+if (await mutate("tkDraw", "maxLab=Math.max(3,Math.floor(PW/110))",
+                           "maxLab=Math.max(3,Math.floor(PW/20))")) {
+  const bad = await labs(null, null);
+  say(bad.gap !== null && bad.gap < 0, "  A：把標籤密度的分母 110→20 之後，標籤真的疊在一起",
+    `間距 ${bad.gap}px（${bad.n} 張）`);
+  await unmutate("tkDraw");
+  const ok = await labs(null, null);
+  chk("  A：裝回去之後間距回到正常值", ok.gap, LAB["全景 45 分鐘"].gap);
+}
+/* 負控組 A2：把 aspect-ratio **改回舊值 1040/470**（＝下一個人把這一輪的改動退掉）。
+   ⛔ 這一組的語意是「新值」，不是「不要太大也不要太小」—— 退回去必須紅。 */
+await ev("document.getElementById('tkwrap').style.aspectRatio='1040/470'; tkPaint();");
+await sleep(250);
+const GB = await geo();
+say(GB.ar !== "1040/380" && Math.abs(GB.H - 510) > 1 && Math.abs(GB.price - 368.2) > 1,
+  "  A2：改回舊的 1040/470 ⇒ 這一組真的會紅（不是「多大都算過」）",
+  `aspect ${GB.ar}、canvas ${GB.H}px、價格區 ${GB.price}px、量柱區 ${GB.VH}px`);
+/* 負控組 B（把圖高再縮一半：1040/380 → 1040/190）。
+   ⚠️⚠️ **它打得紅的是幾何那組，打不紅時間軸那組** —— 這是事實不是漏洞：
+   標籤密度 `maxLab=floor(PW/110)` 只跟**寬度**有關，`TKBOT=26` 又是固定像素
+   ⇒ 縮高度不會動到任何一張標籤（縮前縮後間距逐字相同，下面那條在斷言）。
+   把這件事寫成斷言而不是寫成註解，是為了擋「下一個人看到 B 沒讓時間軸變紅
+   就以為那條守衛是假的」。時間軸的負控組是 A。 */
+await ev("document.getElementById('tkwrap').style.aspectRatio='1040/190'; tkPaint();");
+await sleep(250);
+const GH = await geo();
+say(GH.price < 300 && GH.tall < 82 && GH.ar !== "1040/380",
+  "  B：圖高再縮一半（1040/190）⇒ 幾何這組真的會紅",
+  `aspect ${GH.ar}、canvas ${GH.H}px、價格區 ${GH.price}px、量柱區 ${GH.VH}px、最高一根 ${GH.tall}px`);
+const LH = await labs(null, null);
+chk("  B：而時間軸標籤**不受影響**（間距只跟寬度有關，逐字相同）",
+  [LH.n, LH.gap, LH.hms], [LAB["全景 45 分鐘"].n, LAB["全景 45 分鐘"].gap, true]);
+await ev("document.getElementById('tkwrap').style.aspectRatio=''; tkPaint();");
+await sleep(250);
+const G1 = await geo();
+chk("  裝回去之後幾何回到縮完的值",
+  [G1.ar, G1.H, +Math.abs(G1.price - 368.2).toFixed(1) <= 1], ["1040/380", 510, true]);
 
 /* ═══ ⑫ 增量輪詢期間 `/api/state` 的回應時間 ＋ 今天的增量合併 ═══════════
    ⚠️ **這一節的名字原本叫「不影響即時」，那是誇大的**（lab-qa 2026-09-07 指出）：

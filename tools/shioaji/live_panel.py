@@ -4310,8 +4310,20 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .tk-read .sep{color:var(--ghost)}
 .tk-read .up{color:var(--up)} .tk-read .down{color:var(--down)}
 .tk-read .warn{color:var(--gold)}
-/* aspect-ratio 撐高度 ⇒ 骨架與真圖的高度**結構上就一樣**，不必靠量測對齊 */
-.tk-wrap{position:relative; aspect-ratio:1040/470; border-radius:10px; overflow:hidden;
+/* aspect-ratio 撐高度 ⇒ 骨架與真圖的高度**結構上就一樣**，不必靠量測對齊
+   ⚠️ 2026-09-08 Benson：「早盤細節的 K 圖區也可以幫我縮小嗎？現在感覺有點大」
+      ⇒ 1040/470 → **1040/380**（高度 −19%，跟【程式下單】那張同一個比例，
+        他看過那張說剛好）。1500px 視窗實測 canvas 631 → **510px**。
+   ⛔ 這張圖的下緣有兩樣東西，縮之前量過（探針 ⑪b 把新值斷言死了）：
+      ① 成交量疊圖佔繪圖區 **22%**（TKVOLH）—— 是**比例**不是固定像素，
+         所以它跟著等比縮：130.5 → **103.8px**（即時分頁那張同視窗下是 115px，同一個量級）。
+      ② 時間軸 TKBOT=26px 是**固定像素**，不吃這一刀；而標籤密度 `maxLab=floor(PW/110)`
+         只跟**寬度**有關 ⇒ 縮高度**不會**讓 HH:MM:SS 擠在一起（實測相鄰標籤邊緣間距
+         縮前縮後都是 60.7px，一模一樣）。⛔ 別再拿「怕標籤重疊」當不敢縮的理由。
+      ③ 取樣金籤掛在**價格區底緣**（TKTOP+priceH-22、tkChip 高 17）⇒ 跟著上移，
+         餘裕不變（籤 462~479、價格區 12~484 ⇒ 底下還有 5px）。
+   ⛔ 不可以改成縮量柱佔比（22%）或縮 TKBOT 來換高度 —— 要縮就縮價格區。 */
+.tk-wrap{position:relative; aspect-ratio:1040/380; border-radius:10px; overflow:hidden;
   background:var(--bg)}
 .tk-wrap canvas{position:absolute; inset:0; width:100%; height:100%; display:block;
   cursor:crosshair; touch-action:none; user-select:none}
