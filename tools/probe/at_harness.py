@@ -42,7 +42,11 @@ ST = {"bars": {}, "clock": "10:30:00", "today_mode": "have", "days": 20,
       # ⚠️ slow 是「每一個都慢」（那樣回應順序仍然大致照送出順序，負控組打不紅）；
       #    slow_first 是「**只有接下來那 k 個**慢」⇒ 先送的一定最後回來，
       #    才真的重現「舊那天的資料蓋回新的」那個故障。
-      "slow": 0.0, "slow_first": 0, "slow_first_ms": 0.0}
+      "slow": 0.0, "slow_first": 0, "slow_first_ms": 0.0,
+      # 今天那一列要不要附 settle。⛔ 「今天已經記了訊號、但還沒摸到 ±100、日盤也還沒收」
+      #    ＝ **持倉中**，那是他早上開面板時真正會看到的狀態
+      #    （2026-09-08 那個 bug 就是把這個狀態寫成一個假的「09:05 收盤平」）。
+      "settle_today": True}
 
 
 def _rebuild():
@@ -57,6 +61,9 @@ def _rebuild():
     if ST["today_mode"] == "none":
         # 今天整天沒有記錄（面板 09:03:30 時沒開）—— 空狀態是主流程，不是邊角
         rows = [r for r in rows if r["date"] != TODAY]
+    if not ST["settle_today"]:
+        # ⛔ 今天有訊號、但還沒結算 ⇒ 畫面上必須是「持倉中」，⛔ 不可以是一個假的點數
+        rows = [r for r in rows if not (r["date"] == TODAY and r["rec"] == "settle")]
     SY.write(TMP, rows)
     if ST["backfill"]:
         # ⛔ 回填的那批**永遠不可以**跟實跑相加（分鐘資料切不出 09:03:30）
@@ -86,9 +93,29 @@ def _one_min_bars(d):
     return ST["bars"].get(str(d), [])
 
 
+_REAL_DAY_OVER = LP._auto_day_over
+
+
+def _day_over(d, now=None):
+    """
+    ⛔ 治具的時鐘是**假的**（ST["clock"]，探針會把它撥到 09:01／10:30），
+       所以「那天的日盤收了沒」也一定要跟著同一把尺 —— 用真實時鐘的話，
+       同一份治具在 13:47 之前跑跟之後跑會畫出**不一樣的畫面**（持倉中／結算中），
+       探針就變成看時間才會綠的。過去的日子照樣走產品那支。
+    """
+    if d != TODAY:
+        return _REAL_DAY_OVER(d, now)
+    try:
+        hh, mm, ss = (int(x) for x in ST["clock"].split(":"))
+    except ValueError:
+        return False
+    return hh * 3600 + mm * 60 + ss >= LP.AUTO_SETTLE_AFTER
+
+
 LP.AUTO_DIR = TMP
 LP.AUTO_REAL_DIR = TMP / "real"
 LP.one_min_bars = _one_min_bars
+LP._auto_day_over = _day_over
 LP.AUTO["started"] = False        # ⛔ 治具絕對不可以寫出真的一天
 _rebuild()
 
@@ -213,6 +240,10 @@ class C(BaseHTTPRequestHandler):
             ST["today_mode"] = p.rsplit("/", 1)[1]
             _rebuild()
             return self._j({"today_mode": ST["today_mode"]})
+        if p.startswith("/at/settletoday"):
+            ST["settle_today"] = p.rsplit("/", 1)[1] not in ("0", "off", "no")
+            _rebuild()
+            return self._j({"settle_today": ST["settle_today"]})
         if p.startswith("/at/slowfirst"):
             # /at/slowfirst/<k>/<ms>：接下來 k 個 /api/auto/day 慢 ms 毫秒，之後恢復
             bits = p.split("/")
@@ -225,7 +256,7 @@ class C(BaseHTTPRequestHandler):
         if p.startswith("/at/reset"):
             ST.update({"clock": "10:30:00", "today_mode": "have", "days": 20,
                        "backfill": 0, "bad": 0, "mine": True, "slow": 0.0,
-                       "slow_first": 0, "slow_first_ms": 0.0})
+                       "slow_first": 0, "slow_first_ms": 0.0, "settle_today": True})
             _rebuild()
             return self._j({"ok": True})
         if p.startswith("/at/where"):

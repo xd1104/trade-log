@@ -356,6 +356,266 @@ chk("  AUTO_SETTLE_FROM 常數本身還是 09:04", LP.AUTO_SETTLE_FROM, "09:04")
 LP.one_min_bars = _OLD_1MIN
 LP.AUTO_CACHE.clear()
 
+# ══ ⑤c ⛔⛔ 結算不准跑太早（2026-09-08 他早上真的踩到）════════════════════
+#   實況：09:05 打開分頁 ⇒ auto_days() 順手排了一次結算 ⇒ _auto_settle 手上只有
+#   兩根 K 棒（09:04／09:05）⇒ _auto_run 沒摸到 ±100 ⇒ 回 eod ⇒ **拿 09:05 的
+#   收盤價當「收盤價」寫死**，四條泳道全部變成「09:05 收盤平 ±67 點」＝假成績，
+#   而且舊版 `or r.get("runs")` 讓它只算一次 ⇒ **錯的結果被鎖死**。
+#   正確語意：摸到 ±100 ⇒ 立刻結算（不會再變）／沒摸到而日盤還沒收 ⇒ **一列都不寫**
+#   ／沒摸到而收盤了 ⇒ 才可以寫 eod。每一條下面都有自己的負控組。
+print("\n=== ⑤c ⛔ 沒摸到 ±100 就不准用「收盤價」結算 ===")
+D5C = TMP / "d5c"
+D5C.mkdir(parents=True, exist_ok=True)
+LP.AUTO_DIR = D5C
+_TODAY = str(date.today())
+_PAST = "2026-08-27"                       # ⛔ 一定要是過去的日子（真實時鐘也判得出來）
+_ENT = 12000.0                             # ⛔ 價格一律 12000 附近
+
+
+def _bar(t, h, l, c):
+    return {"t": t, "o": _ENT, "h": h, "l": l, "c": c}
+
+
+# 他今天那一列的形狀：只有兩根，而且都沒摸到 ±100
+BARS_SHORT = [_bar("09:04", 12030.0, 11970.0, 11990.0),
+              _bar("09:05", 12010.0, 11933.0, 11933.0)]
+# 同樣只有兩根，但第二根摸到了 −100（＝A/B/C 做空停利、D 做多停損）
+BARS_HIT = [_bar("09:04", 12030.0, 11970.0, 11990.0),
+            _bar("09:05", 12010.0, 11890.0, 11905.0)]
+# 完整的一天：一路到標籤 13:44，都沒摸到 ±100
+BARS_FULL = BARS_SHORT + [_bar("%02d:%02d" % ((545 + i) // 60, (545 + i) % 60),
+                               12030.0, 11970.0, 11985.0) for i in range(300)
+                          if "%02d:%02d" % ((545 + i) // 60, (545 + i) % 60) <= "13:44"]
+
+
+def _seed(d, bars, extra=None):
+    """寫一列 sig（＋選配的 settle）進暫存月檔，並把 one_min_bars 換成 bars。"""
+    for p in D5C.glob("*.jsonl"):
+        p.unlink()
+    rows = [{"rec": "sig", "date": d, "src": "live", "at": "09:03:30.120",
+             "at_lag_ms": 120, "px": _ENT, "bid": _ENT - 1, "ask": _ENT,
+             "ref": {"open0845": _ENT + 90.0, "p0900": _ENT + 168.0},
+             "sig": {"A": -168.0, "B": -90.0},
+             "dirs": {"A": -1, "B": -1, "C": -1, "D": 1}, "thresh": 30.0}]
+    if extra:
+        rows.append(extra)
+    with (D5C / (d[:7] + ".jsonl")).open("w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    LP.one_min_bars = lambda _d, _b=bars: [dict(b) for b in _b]
+    LP.AUTO_CACHE.clear()
+
+
+def _lines(d):
+    return len((D5C / (d[:7] + ".jsonl")).read_text(encoding="utf-8").splitlines())
+
+
+def _settled(d):
+    """檔案裡最後一列 settle（給斷言看真的寫了什麼）。沒有就回 None。"""
+    out = None
+    for line in (D5C / (d[:7] + ".jsonl")).read_text(encoding="utf-8").splitlines():
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(o, dict) and o.get("rec") == "settle" and o.get("date") == d:
+            out = o
+    return out
+
+
+_REAL_OVER = LP._auto_day_over
+
+# ── ⑤c-1 _auto_day_over 本身：⛔ 用「那一天」的角度，不是「現在幾點」
+_mid = datetime(2026, 9, 8, 9, 5, 0)        # 盤中
+_aft = datetime(2026, 9, 8, 13, 47, 0)      # 13:47（AUTO_SETTLE_AFTER）
+chk("過去的日子一律已經結束（照樣立刻結算）", _REAL_OVER("2026-09-07", _mid), True)
+chk("⛔ 今天、盤中 ⇒ 還沒結束", _REAL_OVER("2026-09-08", _mid), False)
+chk("今天、13:47 ⇒ 結束了", _REAL_OVER("2026-09-08", _aft), True)
+chk("  13:46:59 還不算（門檻就是 AUTO_SETTLE_AFTER）",
+    _REAL_OVER("2026-09-08", datetime(2026, 9, 8, 13, 46, 59)), False)
+chk("未來的日期一律當成沒結束（⛔ 寧可不結算也不要編）",
+    _REAL_OVER("2026-09-09", _aft), False)
+say(_REAL_OVER("2026-09-08", _mid) != _REAL_OVER("2026-09-08", _aft),
+    "  自證：同一天只差時鐘就給不同答案（＝它真的在看時鐘，不是恆真）")
+
+# ── ⑤c-2 盤中、沒摸到 ±100 ⇒ ⛔ 一列 settle 都不准寫
+print("  ── 盤中、沒摸到 ±100（拿他今天那一列的形狀，價格是編的）")
+_seed(_TODAY, BARS_FULL)                    # ⛔ K 棒給到 13:44，把「資料不夠」那道排除掉
+LP._auto_day_over = lambda d, now=None: False       # ＝日盤還沒收
+_n0 = _lines(_TODAY)
+LP._auto_settle(_TODAY)
+chk("⛔ 盤中沒摸到 ±100 ⇒ 一列 settle 都沒寫", _lines(_TODAY), _n0)
+chk("  畫面上是「還沒結算」而不是一個假的點數", (LP.auto_day(_TODAY) or {}).get("runs"), None)
+chk("  而且標成**持倉中**（不是「結算中」，也 ⛔ 不給浮動損益）",
+    (LP.auto_day(_TODAY) or {}).get("holding"), True)
+print("    負控組：拿掉時間判斷（_auto_day_over 永遠回 True）")
+LP._auto_day_over = lambda d, now=None: True
+LP.AUTO_CACHE.clear()
+LP._auto_settle(_TODAY)
+_neg = _settled(_TODAY)
+say(_lines(_TODAY) == _n0 + 1 and _neg and _neg["runs"]["A"]["why"] == "eod",
+    "    拿掉之後真的會寫出 eod（＝那道判斷在承重，不是裝飾）",
+    f"寫了 {_lines(_TODAY) - _n0} 列")
+LP._auto_day_over = _REAL_OVER
+
+# ── ⑤c-3 收盤了、但手上這批 K 棒沒走到收盤 ⇒ 照樣不准寫（他今天就是這個形狀）
+print("  ── 日盤收了，但手上只有兩根 K 棒（bars=2，＝他今天那一列的成因）")
+_seed(_PAST, BARS_SHORT)                    # 過去的日子 ⇒ _auto_day_over 真的回 True
+say(_REAL_OVER(_PAST) is True, "    自證：這天用真實時鐘判定就是「已經結束」")
+_n0 = _lines(_PAST)
+LP._auto_settle(_PAST)
+chk("⛔ K 棒只到 09:05 ⇒ 不准拿它當「收盤價」", _lines(_PAST), _n0)
+print("    負控組：把 AUTO_EOD_LAST 放寬到 00:00")
+_old_last = LP.AUTO_EOD_LAST
+LP.AUTO_EOD_LAST = "00:00"
+LP.AUTO_CACHE.clear()
+LP._auto_settle(_PAST)
+_neg = _settled(_PAST)
+say(_lines(_PAST) == _n0 + 1 and _neg and _neg["runs"]["A"]["exit_at"] == "09:05",
+    "    放寬之後真的寫出「09:05 收盤平」（＝這道也在承重）")
+LP.AUTO_EOD_LAST = _old_last
+
+# ── ⑤c-4 盤中、**摸到了** ⇒ 立刻寫，而且 final: true
+print("  ── 盤中、摸到 ±100")
+_seed(_TODAY, BARS_HIT)
+LP._auto_day_over = lambda d, now=None: False       # ＝日盤還沒收
+_n0 = _lines(_TODAY)
+LP._auto_settle(_TODAY)
+_row = _settled(_TODAY)
+chk("⛔ 摸到 ±100 ⇒ 不管幾點都立刻結算", _lines(_TODAY), _n0 + 1)
+chk("  做空那三條是停利 +100", [_row["runs"][k]["why"] for k in "ABC"], ["tp"] * 3)
+chk("  做多那條是停損 −100", (_row["runs"]["D"]["why"], _row["runs"]["D"]["pts"]),
+    ("sl", -100.0))
+chk("  ⛔ 標成 final（之後不再重算）", _row.get("final"), True)
+chk("  畫面上不再是持倉中", (LP.auto_day(_TODAY) or {}).get("holding"), False)
+_n1 = _lines(_TODAY)
+LP.AUTO_CACHE.clear()
+LP._auto_settle(_TODAY)
+chk("  再算一次 ⇒ 不會多寫（final 擋住了）", _lines(_TODAY), _n1)
+say(BARS_HIT[-1]["t"] == BARS_SHORT[-1]["t"],
+    "  自證：跟上面『不准寫』那組**同一個時鐘、同一個窗口**，只差有沒有摸到")
+LP._auto_day_over = _REAL_OVER
+
+# ── ⑤c-5 收盤後、沒摸到 ⇒ 才可以寫 eod ＋ final
+print("  ── 收盤後、沒摸到 ±100")
+_seed(_TODAY, BARS_FULL)
+LP._auto_day_over = lambda d, now=None: True
+LP._auto_settle(_TODAY)
+_row = _settled(_TODAY)
+say(_row is not None and _row["runs"]["A"]["why"] == "eod",
+    "收盤後沒摸到 ⇒ 寫 eod（這時候 eod 的語意才成立）")
+chk("  也是 final", _row.get("final"), True)
+chk("  ⛔ 拿的是最後一根（標籤 13:44），不是 09:05", _row["runs"]["A"]["exit_at"], "13:44")
+LP._auto_day_over = _REAL_OVER
+
+# ── ⑤c-6 過去的日子不受影響（照樣立刻結算，⛔ 不准被新的判斷擋住）
+print("  ── 過去的日子（全程用真實時鐘，⛔ 不 patch）")
+_seed(_PAST, BARS_FULL)
+LP._auto_settle(_PAST)
+_row = _settled(_PAST)
+say(_row is not None, "過去的日子照樣立刻結算")
+chk("  也是 final", (_row or {}).get("final"), True)
+_seed(_PAST, BARS_HIT)
+LP._auto_settle(_PAST)
+chk("  過去的日子摸到 ±100 也照算", (_settled(_PAST) or {})["runs"]["A"]["why"], "tp")
+
+# ── ⑤c-7 ⛔⛔ 舊格式的早結列（**沒有 final 欄位**）要被認出來並重算蓋掉
+#    輸入用他 2026-09-08 那一列的**形狀**（rec/欄位/都是 eod/exit_at 同一根/bars 2），
+#    ⛔ 價格全部換成編的（12000 附近）。
+print("  ── 舊格式的早結列（沒有 final）")
+_legacy = {"rec": "settle", "date": _PAST, "src": "live",
+           "runs": {k: {"dir": (-1 if k in "ABC" else 1), "exit_at": "09:05",
+                        "exit_px": 11933.0,
+                        "pts": (67.0 if k in "ABC" else -67.0),
+                        "why": "eod", "both": False} for k in "ABCD"},
+           "settle_src": "1min", "settle_from": "09:04", "bars": 2,
+           "wrote_at": f"{_PAST}T09:05:29"}
+say("final" not in _legacy, "  自證：這一列真的沒有 final 欄位（＝舊格式）")
+_seed(_PAST, BARS_FULL, extra=_legacy)
+_n0 = _lines(_PAST)
+_day = LP.auto_day(_PAST) or {}
+chk("⛔ 舊格式的早結成績一個字都不准上畫面", _day.get("runs"), None)
+chk("  日期清單上那天也不算「已結算」",
+    [x["done"] for x in LP.auto_days()["days"] if x["d"] == _PAST], [False])
+_S = LP.auto_stats(0, "live")
+chk("  ⛔ 也不准進成績表／累計圖", _S["rows"]["A"]["n"], 0)
+_led = _S["ledger"]
+chk("  帳還是要對：sig+settle+miss+dup+bad ＝ 總列數",
+    sum(_led[k] for k in ("sig", "settle", "miss", "dup", "bad")), _led["lines"])
+
+
+# ⚠️⚠️ **接線那一側**（tick_writer 與【細節】連兩輪的教訓：守衛蓋的都是自己剛寫的模組，
+#   「有沒有人真的去叫它重算」那半沒人守）。⛔ 沒有這一條的話，`_auto_settle` 修得再對，
+#   舊的那一列還是會**永遠**停在畫面上 —— 因為根本沒有人排那件事。
+def _queued_settle():
+    """清空佇列 → 呼叫 auto_days() → 收「它排了哪幾天的結算」。"""
+    LP._AUTO_TRIED.clear()
+    LP.AUTO["queued"].clear()
+    while not LP._AUTO_Q.empty():
+        LP._AUTO_Q.get()
+    LP.AUTO_CACHE.clear()
+    LP.auto_days()
+    got = []
+    while not LP._AUTO_Q.empty():
+        got.append(LP._AUTO_Q.get())
+    LP.AUTO["queued"].clear()
+    LP._AUTO_TRIED.clear()
+    return [a for k, a in got if k == "settle"]
+
+
+chk("⛔ auto_days() 會**主動排一件重算**（不然舊那列永遠停在畫面上）",
+    _queued_settle(), [_PAST])
+LP._auto_settle(_PAST)
+chk("  被重算蓋掉：多 append 一列（⛔ 舊的那列不刪，後寫的蓋前面的）",
+    _lines(_PAST), _n0 + 1)
+_row = _settled(_PAST)
+chk("  新的那列是 final", _row.get("final"), True)
+say(_row["runs"]["A"]["exit_at"] != "09:05",
+    "  而且不再是那個假的「09:05 收盤平」", f"exit_at={_row['runs']['A']['exit_at']}")
+chk("  重算之後 auto_day 端出來的是新的那份",
+    (LP.auto_day(_PAST) or {})["runs"]["A"]["exit_at"], _row["runs"]["A"]["exit_at"])
+_led = LP.auto_stats(0, "live")["ledger"]
+chk("  多寫一列 settle 之後帳照樣對",
+    sum(_led[k] for k in ("sig", "settle", "miss", "dup", "bad")), _led["lines"])
+print("    負控組：同一列補上 final: true")
+_seed(_PAST, BARS_FULL, extra=dict(_legacy, final=True))
+_n0 = _lines(_PAST)
+say((LP.auto_day(_PAST) or {}).get("runs") is not None
+    and LP.auto_day(_PAST)["runs"]["A"]["exit_at"] == "09:05",
+    "    補上 final 之後那份成績就端得出來了（＝認出舊格式靠的就是這個欄位）")
+LP._auto_settle(_PAST)
+chk("    而且不再重算", _lines(_PAST), _n0)
+chk("    auto_days() 也不再排（負控組：證明上面那條不是恆真）", _queued_settle(), [])
+
+# ── ⑤c-8 冷卻要分「日盤收了沒」兩段，否則 13:47 那一次會被盤中排過的冷卻擋掉
+print("  ── 結算冷卻（_auto_put）")
+LP._AUTO_TRIED.clear()
+
+
+def _try_put(d, over):
+    LP.AUTO["queued"].clear()
+    while not LP._AUTO_Q.empty():
+        LP._AUTO_Q.get()
+    LP._auto_day_over = lambda _d, now=None, _o=over: _o
+    LP._auto_put("settle", d)
+    n = LP._AUTO_Q.qsize()
+    LP.AUTO["queued"].clear()
+    while not LP._AUTO_Q.empty():
+        LP._AUTO_Q.get()
+    return n
+
+
+chk("盤中排一次 ⇒ 進得去", _try_put(_TODAY, False), 1)
+chk("  馬上再排一次 ⇒ 被冷卻擋掉（自證：冷卻是活的）", _try_put(_TODAY, False), 0)
+chk("⛔ 收盤之後那一次一定排得進去（13:47 才不會又等 5 分鐘）",
+    _try_put(_TODAY, True), 1)
+chk("  收盤後再排一次 ⇒ 照樣被冷卻擋掉", _try_put(_TODAY, True), 0)
+LP._auto_day_over = _REAL_OVER
+LP._AUTO_TRIED.clear()
+LP.AUTO["queued"].clear()
+LP.one_min_bars = _OLD_1MIN
+LP.AUTO_CACHE.clear()
+
 # ══ ⑥ 讀檔：每一列都要有去處（§15-10）═══════════════════════════════════
 print("\n=== ⑥ 每一列都要有去處，一列壞資料不准弄掉一整個月 ===")
 D1 = TMP / "d1"
@@ -913,6 +1173,9 @@ chk("⛔ ±100 用的是他真的在用的那組常數（不另開一份）",
 say(LP.AUTO_SETTLE_AFTER > LP.DAY_END_SEC,
     "13:45 收盤之後才結算（等最後一根 K 棒收完）",
     f"{LP.AUTO_SETTLE_AFTER} > {LP.DAY_END_SEC}")
+say(LP.AUTO_SETTLE_FROM < LP.AUTO_EOD_LAST <= LP.DAY_END.strftime("%H:%M"),
+    "⛔ 「看完整個日盤」的門檻落在結算窗口起點與 13:45 之間",
+    f"{LP.AUTO_SETTLE_FROM} < {LP.AUTO_EOD_LAST} <= {LP.DAY_END:%H:%M}")
 say(0 < LP.AUTO_LATE_MS <= 60000, "晚到門檻是個合理的數", f"{LP.AUTO_LATE_MS} ms")
 say(0 < LP.AUTO_GAP_S <= 60, "斷線判定門檻是個合理的數", f"{LP.AUTO_GAP_S} 秒")
 say(LP.C_THRESH > 0, "C 的門檻是正數（名字自己帶著它）", LP.C_THRESH)

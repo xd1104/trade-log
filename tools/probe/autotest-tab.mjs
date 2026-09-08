@@ -244,66 +244,79 @@ const seen = await ev(`(()=>{let n=0; const root=document.getElementById('tab-au
   for(const e of root.querySelectorAll('*')){ if(e.children.length) continue;
     const r=e.getBoundingClientRect(); if(r.height>0&&r.top<innerHeight) n++; } return n;})()`);
 say(seen > 30, "  自證：掃描器在第一屏真的看得到節點", `${seen} 個`);
-chk("〈這一頁在算什麼〉預設關著", await ev(`document.getElementById('atabout').open`), false);
 chk("〈換一個門檻看看〉預設關著", await ev(`document.getElementById('atadv').open`), false);
 chk("配對對照收進摺疊區、預設關著", await ev(`document.getElementById('atpair').open`), false);
-chk("⛔〈這一頁在算什麼〉條目數是 10（收摺過的最容易被整段刪掉）",
-  await ev(`document.querySelectorAll('#atabout .at-list li').length`), 10);
 console.log("  負控組：");
-/* 把〈這一頁在算什麼〉那十條**平鋪回第一屏**（＝v1 被退件時的樣子）。
-   ⚠️ 只是把 details 打開不算數：它在頁面下半部，本來就不在第一屏 ——
-      第一版探針就是這樣寫的，量到 0 → 0、看起來像「負控組沒作用」。 */
+/* 把一牆解釋文字**平鋪回第一屏**（＝v1 被退件時的樣子）。
+   ⚠️ 2026-09-08〈這一頁在算什麼〉整個刪掉之後，餌不能再從 #atabout 取 ——
+      改成把當初那十條寫死在探針裡當餌。⛔ 這段字**只活在探針**，產品端零命中
+      （㉔ 在守）。只是把 details 打開不算數：它在頁面下半部，本來就不在第一屏。 */
+const WALL = "它只回答一件事：判斷方向有沒有加分。永遠只是模擬，一張單都不會送出去。" +
+  "不是建議，也不預告。沒有四個裡有三個做多這種綜合。不到 30 筆不給勝率百分比。" +
+  "歷史回填的成績與上線後實跑的成績不可以加在一起算。為什麼是 505 筆／約兩年。";
 await ev(`(()=>{
-  const t=[...document.querySelectorAll('#atabout .at-list li')].map(e=>e.textContent).join('');
-  const d=document.createElement('div'); d.id='__wall'; d.textContent=t;
+  const d=document.createElement('div'); d.id='__wall';
+  d.textContent=${JSON.stringify(WALL)}; d.style.maxWidth='420px';
   const r=document.getElementById('tab-auto'); r.insertBefore(d,r.firstChild); return 1;})()`);
 const prose2 = await ev(PROSE);
 say(prose2.filter(p => p.lines >= 3).length > 0,
-  "  把那十條平鋪回第一屏 ⇒ 這一條會紅",
+  "  把一牆解釋文字平鋪回第一屏 ⇒ 這一條會紅",
   `第一屏多出 ${prose2.length - prose.length} 個長文字塊，最長 ${Math.max(...prose2.map(p => p.lines))} 行`);
 await ev(`document.getElementById('__wall').remove()`);
-await ev(`window.__li=document.querySelector('#atabout .at-list li')`);
-await ev(`window.__li.remove()`);
-say(await ev(`document.querySelectorAll('#atabout .at-list li').length`) === 9,
-  "  刪掉一條之後「條目數 === 10」會紅");
-await ev(`(()=>{const d=document.getElementById('atabout');
-  const ol=d.querySelector('.at-list'); ol.insertBefore(window.__li,ol.firstChild);
-  d.open=false; return 1;})()`);
-chk("  還原：條目數回到 10", await ev(`document.querySelectorAll('#atabout .at-list li').length`), 10);
+chk("  還原：第一屏又沒有 ≥3 行的散文", (await ev(PROSE)).filter(p => p.lines >= 3), []);
 
-/* ═══ ⑤ 進度尺（§15-1d）═════════════════════════════════════════════ */
-console.log("\n=== ⑤ 進度尺 ===");
-const track = () => ev(`document.getElementById('attrack').textContent`);
-const trackW = () => ev(`(()=>{const b=document.querySelector('#attrack .bar'),
-  i=document.querySelector('#attrack .bar i');
-  return i.getBoundingClientRect().width/b.getBoundingClientRect().width;})()`);
-say((await track()).includes("20 / 505"), "20 天 ⇒ 「20 / 505 筆」", await track());
-const w20 = await trackW();
-/* ⚠️ 進度尺量的是**累積到今天總共幾天**，不是目前窗口幾天 ——
-   按「近10」時進度尺不可以縮回去（那看起來像資料不見了）。 */
-await ev(`AT.swin=10; atFetchStats()`); await sleep(700);
-say((await track()).includes("20 / 505"), "  按「近10」之後進度尺不變（它問的是累積，不是窗口）",
-  `窗口 n=${await ev("AT.stats.n")}、進度尺 ${(await track()).match(/\d+ \/ \d+ 筆/)}`);
-await ev(`AT.swin=20; atFetchStats()`); await sleep(700);
-await ctl("/at/days/120");
-await reload();
-say((await track()).includes("120 / 505"), "120 天 ⇒ 「120 / 505 筆」", await track());
-const w120 = await trackW();
-const ratio = w120 / w20, want = 120 / 20;
-say(Math.abs(ratio / want - 1) < 0.1, "填色寬度的比值對得上筆數的比值",
-  `${(w20 * 100).toFixed(2)}% → ${(w120 * 100).toFixed(2)}%（比值 ${ratio.toFixed(2)}，期待 ${want}）`);
-chk("⛔ 進度尺不准出現統計術語",
-  (await track()).match(/檢定力|功效|MDE|顯著|信賴區間|p 值/g), null);
-console.log("  負控組：把分母 505 換成累積筆數（進度永遠 100%）");
-if (await mutate("atTrackHTML", "n/N*100", "n/n*100")) {
-  await ev("atPaintStats()");
-  const bad = await trackW();
-  say(bad > 0.99, "  進度變成 100% ⇒ 這一條會紅", `${(bad * 100).toFixed(1)}%`);
-  await unmutate("atTrackHTML");
-  await ev("atPaintStats()");
-}
-await ctl("/at/days/20");
-await reload();
+/* ═══ ⑤ ⛔ 進度尺**已經拿掉**，而且不准回來（2026-09-08）══════════════════
+   Benson 的原話：「程式下單那邊這個欄位不需要」——他紅框圈的就是那條
+   「這個測試跑到哪裡了　1 / 505 筆 ／ 現在 1 天 ／ 要到這裡才算數 約 2.1 年」。
+   ⚠️ 拿掉東西也要有守衛，不然下一個人會把它加回來 ⇒ 這一節量的是**零命中**，
+      DOM ＋ 兩張 canvas 兩邊都掃（他早上盯的是圖，只掃 DOM 會漏）。 */
+console.log("\n=== ⑤ ⛔ 進度尺已經拿掉（不准回來）===");
+const GONE_TRACK = ["這個測試跑到哪裡了", "要到這裡才算數", "/ 505 筆", "505 筆 ≈"];
+/* 掃「畫面上真的看得到的字」：葉節點 textContent ＋ title/aria-label ＋ 兩張 canvas。 */
+const SEEN = `(()=>{
+  const root=document.getElementById('tab-auto'), out=[];
+  for(const e of root.querySelectorAll('*')){
+    if(!e.children.length){ const t=(e.textContent||'').trim(); if(t) out.push(t); }
+    if(e.hasAttribute('title')) out.push(e.getAttribute('title'));
+    if(e.hasAttribute('aria-label')) out.push(e.getAttribute('aria-label'));
+  }
+  return out;})()`;
+const seenAllTxt = async () => {
+  const dom = await ev(SEEN);
+  const c1 = await canvasText("atday", "atDrawDay");
+  const c2 = await canvasText("atcum", "atDrawCum");
+  return { dom, cv: [...c1, ...c2] };
+};
+const hits = (bag, words) => [...bag.dom, ...bag.cv]
+  .filter(s => words.some(w => String(s).includes(w))).map(s => String(s).slice(0, 46));
+let G = await seenAllTxt();
+chk("⛔ #attrack 這個元素不存在了", await ev(`document.getElementById('attrack')!==null`), false);
+chk("⛔ .at-track 一個都沒有", await ev(`document.querySelectorAll('#tab-auto .at-track').length`), 0);
+chk("⛔ 進度尺那幾句話在 DOM ＋ 兩張 canvas 上零命中", hits(G, GONE_TRACK), []);
+say(G.dom.length > 30 && G.cv.length > 20,
+  `  自證：這把尺真的看得到東西（DOM ${G.dom.length} 段 ＋ canvas ${G.cv.length} 段）`);
+console.log("  負控組（把進度尺原封不動加回去 ⇒ 上面那一條要紅）：");
+await ev(`(()=>{
+  const S=AT.stats||{}, N=S.track_n||505, n=(S.total_n!=null?S.total_n:S.n)||0;
+  const d=document.createElement('div'); d.className='at-track'; d.id='attrack';
+  d.innerHTML='<div class="hd"><span class="t">這個測試跑到哪裡了</span>'+
+    '<span class="n">'+n+' / '+N+' 筆</span></div>'+
+    '<div class="ft"><span>現在<b>'+n+' 天</b></span>'+
+    '<span>要到這裡才算數<b>約 2.1 年</b></span></div>';
+  const r=document.getElementById('tab-auto'); r.insertBefore(d,r.firstChild); return 1;})()`);
+const Gbad = await seenAllTxt();
+say(hits(Gbad, GONE_TRACK).length > 0, "  加回來之後真的抓得到 ⇒ 這一條會紅",
+  JSON.stringify(hits(Gbad, GONE_TRACK).slice(0, 3)));
+say(await ev(`document.getElementById('attrack')!==null`), "  「元素不存在」那一條也會紅");
+await ev(`document.getElementById('attrack').remove()`);
+chk("  還原之後又零命中", hits(await seenAllTxt(), GONE_TRACK), []);
+/* ⚠️ 後端那兩個欄位**照端不要拿掉**（天花板的 title 還在用 track_n 算數字）——
+   ⛔ 這一條不是「進度尺還在」，是「拿掉畫面不等於拿掉資料」。 */
+const TRK = await ev(`fetch('/api/auto/stats?win=20&src=live').then(r=>r.json())
+  .then(x=>({track:x.track_n,total:x.total_n,n:x.n}))`);
+chk("後端照樣端出 track_n（天花板的 title 靠它算）", TRK.track, 505);
+say(TRK.total === 20, "  total_n（累積幾天）也還在，跟窗口 n 是兩個數字",
+  `total_n=${TRK.total}　n=${TRK.n}`);
 
 /* ═══ ⑥ 少樣本不給百分比（§15-2）════════════════════════════════════ */
 console.log("\n=== ⑥ ⛔ 少樣本不給百分比 ===");
@@ -354,8 +367,8 @@ console.log("\n=== ⑧ ⛔ 紅線：不准出現預測／建議／訊號強度 =
 const BAN = ["預測", "預估", "預期", "勝率預估", "期望值", "建議", "訊號強度", "看漲", "看跌",
   "準確率", "目標價", "支撐", "壓力", "買點", "賣點", "該進場", "可以進", "追多", "追空",
   "突破訊號", "共識", "多數決", "最佳"];
-// 摺疊區的字也要掃（v2 把解釋收進去了，不掃等於放生）
-await ev(`['atabout','atadv','atpair'].forEach(i=>document.getElementById(i).open=true)`);
+// 摺疊區的字也要掃（收摺不等於不在畫面上）
+await ev(`['atadv','atpair'].forEach(i=>document.getElementById(i).open=true)`);
 await ev("atPaintStats()");
 /* ⚠️ **一段一段收，不可以把整頁 textContent 併成一大串**：
    上下文判準是「命中前後 24 字要有否定詞」，併成一串的話隔壁元素的「不」會滲進來，
@@ -411,7 +424,7 @@ if (await mutate("atDrawLanes", "'這天算不出訊號'", "'今天建議做多'
   await unmutate("atDrawLanes");
   await ev("atPaint()");
 }
-await ev(`['atabout','atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
+await ev(`['atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
 
 /* ═══ ⑨ 紅線：方向不用紅綠（§15-5）══════════════════════════════════ */
 console.log("\n=== ⑨ ⛔ 顏色只給損益 ===");
@@ -426,9 +439,17 @@ chk("⛔ 訊號值也不是紅綠", sgCols.filter(x => x === UP || x === DOWN), 
 chk("⛔ 天花板那一行不是紅綠",
   await ev(`[...document.querySelectorAll('#atceil,#atceil *')].map(e=>getComputedStyle(e).color)
     .filter(x=>x===${JSON.stringify(UP)}||x===${JSON.stringify(DOWN)})`), []);
-chk("⛔ 進度尺不是紅綠",
-  await ev(`[...document.querySelectorAll('#attrack,#attrack *')].map(e=>getComputedStyle(e).color)
-    .filter(x=>x===${JSON.stringify(UP)}||x===${JSON.stringify(DOWN)})`), []);
+/* ⚠️ 2026-09-08 進度尺拿掉了 ⇒ 這一條改成掃**整個第一屏的非表格文字**：
+   顏色規矩（紅綠只給損益）沒有跟著那條尺一起消失，範圍反而變大了。
+   ⛔ 不可以因為那條尺不見了就把這一條刪掉。 */
+chk("⛔ 整頁只有掛 .up/.down（＝損益）的元素可以是紅綠，其餘一顆都沒有",
+  await ev(`[...document.querySelectorAll('#tab-auto *')]
+    .filter(e=>!e.children.length&&!e.classList.contains('up')&&!e.classList.contains('down'))
+    .map(e=>[e.className||e.tagName,getComputedStyle(e).color])
+    .filter(x=>x[1]===${JSON.stringify(UP)}||x[1]===${JSON.stringify(DOWN)})`), []);
+say(await ev(`[...document.querySelectorAll('#tab-auto .up,#tab-auto .down')].some(e=>{
+  const c=getComputedStyle(e).color; return c===${JSON.stringify(UP)}||c===${JSON.stringify(DOWN)};})`),
+  "  尺是活的：掛 .up/.down 的那些**真的**是紅綠（不是整頁都沒顏色）");
 say(await ev(`[...document.querySelectorAll('#attbl .pts')].some(e=>{
   const c=getComputedStyle(e).color; return c===${JSON.stringify(UP)}||c===${JSON.stringify(DOWN)};})`),
   "  尺是活的：累計點數（＝損益）**有**用紅綠");
@@ -495,6 +516,76 @@ await ctl("/at/clock/10:30:00");
 await reload();
 const late = await ev(`document.getElementById('attoday').textContent`);
 say(late.includes("做多") || late.includes("做空"), "  時刻過了就顯示（尺是活的）");
+
+/* ═══ ⑪b ⛔⛔ 還沒摸到 ±100 ⇒ 畫面上是「持倉中」，不是一個假的點數 ════════
+   2026-09-08 他早上 09:05 打開分頁，四條泳道全部寫著「09:05 收盤平 ±67 點」——
+   那是後端拿盤中最後一根 K 棒的收盤價硬算出來的 **假成績**。修法在後端
+   （沒摸到就不寫 settle 列），這一節守的是「畫面上到底寫了什麼」。
+   ⛔ 規格 §16-3 拍板不顯示浮動損益 ⇒ 持倉中只寫狀態，⛔ 不准算現在賺賠多少。
+   ⚠️ 這一頁的字有一半畫在 canvas 上（泳道），只掃 DOM 會漏掉（【細節】M2 的教訓）。 */
+console.log("\n=== ⑪b ⛔ 持倉中 ≠ 一個假的點數 ===");
+await ctl("/at/settletoday/0");          // 今天有訊號、但還沒結算
+await ctl("/at/clock/10:30:00");         // 盤中：日盤還沒收
+await reload();
+await ev(`atGoDay(AT.today)`); await settle();
+chk("後端說今天是持倉中", await ev("!!(AT.data&&AT.data.holding)"), true);
+const HOLD = await ev(`(()=>{const D=AT.data,out={};
+  [...document.querySelectorAll('#attoday .c')].forEach((e,i)=>{
+    out[AT_ORDER[i]]=e.querySelector('.rs').textContent.trim();});
+  return {dirs:D.dirs||{}, rs:out};})()`);
+const traded = Object.keys(HOLD.rs).filter(k => HOLD.dirs[k] === 1 || HOLD.dirs[k] === -1);
+say(traded.length >= 2, `  今天有 ${traded.length} 條真的下單（其餘沒過門檻／算不出訊號）`,
+  JSON.stringify(HOLD.dirs));
+chk("⛔ 有下單的那幾條寫「持倉中」", traded.map(k => HOLD.rs[k]), traded.map(() => "持倉中"));
+chk("  ⛔ 一個出場結果字樣都不准出現（收盤平／停利／停損）",
+  Object.values(HOLD.rs).filter(t => /收盤平|停利|停損/.test(t)), []);
+chk("  ⛔ 也不准出現任何點數（不做浮動損益，規格 §16-3）",
+  Object.values(HOLD.rs).filter(t => /[-+−]?\d+(\.\d+)?\s*點/.test(t)), []);
+chk("  沒過門檻那幾條照實寫「這天不下單」（⛔ 它沒有部位，寫持倉中是假話）",
+  Object.entries(HOLD.rs).filter(([k]) => HOLD.dirs[k] === 0)
+    .map(([, t]) => /不下單/.test(t)),
+  Object.keys(HOLD.dirs).filter(k => HOLD.dirs[k] === 0).map(() => true));
+const holdCv = await canvasText("atday", "atDrawDay");
+chk("⛔ canvas 的泳道上也是「持倉中」", holdCv.filter(t => t === "持倉中").length, traded.length);
+chk("  ⛔ canvas 上一個「收盤平」都沒有", holdCv.filter(t => /收盤平/.test(t)), []);
+const holdPager = await ev(`document.querySelector('#tab-auto .pager .r2').textContent`);
+say(holdPager.includes("持倉中") && !holdPager.includes("已結算"),
+  "翻頁列那一行也寫持倉中（⛔ 而且只寫進場價，不寫賺賠）", holdPager.trim().slice(0, 40));
+await ev(`AT.pick=true; atPaint()`);
+say((await ev(`(document.querySelector('#atpick [data-atday="'+AT.today+'"]')||{})
+  .textContent||''`)).includes("持倉中"), "日期清單那一列也寫持倉中");
+await ev(`AT.pick=false; atPaint()`);
+
+console.log("  負控組（三個）：");
+// ① 把 holding 關掉 ⇒ 應該退回「結算中」（證明畫面真的在讀那個旗標，不是寫死的）
+await ev(`AT.data.holding=false; atPaint()`);
+say((await ev(`document.getElementById('attoday').textContent`)).includes("結算中"),
+  "  ① holding=false ⇒ 變成「結算中」（不是寫死「持倉中」）");
+chk("  ① 而且此時沒有「持倉中」",
+  (await ev(`document.getElementById('attoday').textContent`)).includes("持倉中"), false);
+await ev(`AT.data.holding=true; atPaint()`);
+// ② 把 runs 灌成 2026-09-08 那個 bug 的形狀（四條 eod）⇒ 上面那幾條一定要紅
+await ev(`(()=>{const r={};for(const k of ATKEYS)
+  r[k]={dir:(k==='D'?1:-1),exit_at:'09:05',exit_px:11933,
+        pts:(k==='D'?-67:67),why:'eod',both:false};
+  AT.data.runs=r; atPaint(); return 1;})()`);
+const bugDom = await ev(`document.getElementById('attoday').textContent`);
+const bugCv = await canvasText("atday", "atDrawDay");
+say(/收盤平/.test(bugDom) && bugCv.some(t => /收盤平/.test(t)),
+  "  ② 灌進那個假成績之後，DOM 與 canvas 兩邊都會出現「收盤平」⇒ 這把尺量得到",
+  bugDom.replace(/\s+/g, " ").slice(0, 60));
+await ev(`delete AT.data.runs; atPaint()`);
+// ③ 收盤後還沒結算 ⇒ 那是「結算中」不是「持倉中」（兩個狀態不准寫同一句）
+await ctl("/at/clock/14:00:00");
+await reload();
+await ev(`atGoDay(AT.today)`); await settle();
+chk("  ③ 收盤後 ⇒ 後端不再說持倉中", await ev("!!(AT.data&&AT.data.holding)"), false);
+say((await ev(`document.getElementById('attoday').textContent`)).includes("結算中"),
+  "  ③ 畫面改寫「結算中」（⛔ 兩個不同的狀態不准寫同一句）");
+await ctl("/at/settletoday/1");
+await ctl("/at/clock/10:30:00");
+await reload();
+say(await ev("!(AT.data&&AT.data.holding)"), "  收尾：治具還原成已結算");
 
 /* ═══ ⑫ 回測與實跑不相加（§15-9）════════════════════════════════════ */
 console.log("\n=== ⑫ ⛔ 回測與實跑不相加 ===");
@@ -706,8 +797,27 @@ for (const w of [1024, 1280, 1440]) {
             cvW: Math.round(document.getElementById('atday').getBoundingClientRect().width),
             cvH: Math.round(document.getElementById('atday').getBoundingClientRect().height)};})()`);
   say(o.overflow <= 1, `寬 ${w}px：沒有橫向溢出`, `溢出 ${o.overflow}px　canvas ${o.cvW}×${o.cvH}`);
-  say(Math.abs(o.cvW / o.cvH - 1040 / 470) < 0.02, `  canvas 沒有變形`,
-    `${(o.cvW / o.cvH).toFixed(3)} vs ${(1040 / 470).toFixed(3)}`);
+  /* ⚠️ 2026-09-08 依 Benson「有一點點大」把日圖從 1040/470 縮成 **1040/380**。
+     ⛔ 這個數字要跟 .at-wrap 的 aspect-ratio 對得上（改一邊要兩邊一起改）。 */
+  say(Math.abs(o.cvW / o.cvH - 1040 / 380) < 0.02, `  canvas 沒有變形（1040/380）`,
+    `${(o.cvW / o.cvH).toFixed(3)} vs ${(1040 / 380).toFixed(3)}`);
+  /* ⛔⛔ 縮圖不准把泳道與名字欄壓扁（面板鐵律／規格 §9.3）：
+     四條列高一律 22px、名字欄寬仍然是 measureText 量出來的、四個名字完整畫得出來。 */
+  const LNw = await ev(`(()=>{atDrawDay(); const ctx=document.getElementById('atday').getContext('2d');
+    ctx.save(); ctx.font=ATFONTN; let nw=0;
+    for(const k of AT_ORDER) nw=Math.max(nw,ctx.measureText(atName(k)).width);
+    ctx.restore();
+    const H=ATC.H, laneTop=H-ATBOT-AT_ORDER.length*ATLN.laneH;
+    return {laneH:ATLN.laneH,L:ATLN.L,nw:nw,stacked:ATLN.stacked,
+            pH:Math.max(60,laneTop-ATTOP-ATLANEG),H:H};})()`);
+  chk(`  寬 ${w}px：泳道列高還是 22（⛔ 不准為了縮圖去壓泳道）`, LNw.laneH, 22);
+  say(LNw.L >= Math.ceil(LNw.nw) + 18, `  名字欄寬還是量出來的（⛔ 不准縮字）`,
+    `L=${LNw.L}　最寬名字 ${LNw.nw.toFixed(1)}px　價格區 ${LNw.pH}px（canvas 高 ${LNw.H}）`);
+  say(LNw.pH > 120, `  縮完之後價格區還有足夠高度（不是把 K 棒壓成一條線）`, `${LNw.pH}px`);
+  const nmDraw = await canvasDraws("atday", "atDrawDay");
+  const NMw = await ev(`AT_ORDER.map(k=>atName(k))`);
+  chk(`  四個名字完整畫得出來（⛔ 不縮寫、不截字）`,
+    NMw.filter(n => !nmDraw.some(d => d.t === n)), []);
 }
 await c.send("Emulation.setDeviceMetricsOverride",
   { width: 390, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -727,9 +837,12 @@ await sleep(300); await ev("atPaint()");
 console.log("\n=== ⑱ 空狀態 ===");
 await ctl("/at/days/0");
 await reload();
-chk("0 筆 ⇒ 進度尺寫 0 / 505", (await track()).includes("0 / 505"), true);
 say((await ev(`document.getElementById('atceil').textContent`)).includes("什麼都測不出來"),
   "  天花板那一行寫「0 筆 ⇒ 什麼都測不出來」");
+/* ⚠️ 進度尺拿掉之後，空狀態也不准偷偷把它變回來（0/505 那個形狀最容易被當成「補一下」）。 */
+chk("  ⛔ 0 筆的空狀態也沒有進度尺", await ev(`document.getElementById('attrack')!==null`), false);
+chk("  ⛔ 0 筆時也零命中「/ 505 筆」",
+  (await ev(`document.getElementById('tab-auto').textContent`)).includes("/ 505 筆"), false);
 say(await ev(`document.getElementById('atpager')!==null &&
   document.querySelectorAll('#atpager .pager').length===1`),
   "⛔ 一天資料都沒有時，翻頁列照樣在（那是唯一的自救路徑）");
@@ -777,7 +890,7 @@ const VIS = `(()=>{
   }
   return out;})()`;
 // 摺疊區（〈這一頁在算什麼〉／配對卡／門檻掃描）也要掃 —— 收摺不等於不在畫面上
-const openFolds = `['atabout','atadv','atpair'].forEach(i=>document.getElementById(i).open=true);
+const openFolds = `['atadv','atpair'].forEach(i=>document.getElementById(i).open=true);
   atPaintStats(); 1`;
 await ev(openFolds);
 /* 孤立代號：前後不是英數字的單一 A/B/C/D。⛔ 這條尺不可以放寬成「整串等於 A」——
@@ -855,9 +968,10 @@ chk("泳道由上到下照 AT_ORDER", laneOrder, NM);
    第一版就是四個名字疊成一團、而且蓋在刻度上（【細節】M2 的同一類病）。 */
 const cumD = await canvasDraws("atcum", "atDrawCum");
 const cumDim = await ev(`({W:ATCC.W,H:ATCC.H,PW:ATCC.W-ATR})`);
-const cumTags = cumD.filter(d => NM.includes(d.t) || d.t === "你自己");
-say(cumTags.length >= 4, `累計圖畫了 ${cumTags.length} 個線尾名字`,
-  JSON.stringify(cumTags.map(d => d.t)));
+/* ⚠️ 2026-09-08「你自己」那條金線跟著成績表那兩列一起拿掉 ⇒ 線尾名字剩四個。 */
+const cumTags = cumD.filter(d => NM.includes(d.t));
+chk(`累計圖的線尾名字**恰好**四個（⛔ 「你自己」那條已經拿掉）`, cumTags.length, 4);
+say(true, `  ${JSON.stringify(cumTags.map(d => d.t))}`);
 chk("⛔ 線尾標籤沒有壓到右邊的價格刻度（右界 ≤ PW−4）",
   cumTags.filter(d => d.x + d.w > cumDim.PW - 3).map(d => [d.t, Math.round(d.x + d.w)]), []);
 const ys = cumTags.map(d => d.y).sort((a, b) => a - b);
@@ -867,7 +981,7 @@ console.log("  負控組：");
 if (await mutate("atDrawCum", "if(tags[i].y-tags[i-1].y<15) tags[i].y=tags[i-1].y+15;",
   "if(false) tags[i].y=tags[i-1].y+15;")) {
   const badY = (await canvasDraws("atcum", "atDrawCum"))
-    .filter(d => NM.includes(d.t) || d.t === "你自己").map(d => d.y).sort((a, b) => a - b);
+    .filter(d => NM.includes(d.t)).map(d => d.y).sort((a, b) => a - b);
   say(badY.slice(1).filter((y, i) => y - badY[i] < 14).length > 0,
     "  拿掉錯開之後真的會疊在一起 ⇒ 這一條會紅",
     JSON.stringify(badY.map(y => Math.round(y))));
@@ -893,7 +1007,7 @@ say(narrowLane.H > 300, "  圖跟著變高了（泳道多吃 32px 不是從 K �
   `canvas ${narrowLane.W}×${narrowLane.H}`);
 await c.send("Emulation.clearDeviceMetricsOverride");
 await sleep(350); await ev("atPaint()");
-await ev(`['atabout','atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
+await ev(`['atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
 
 /* ═══ ㉒ ⛔ 主迴圈那道 try 攔到的錯，畫面上要看得見（R5）═════════════════
    後端一直有在數（AUTO["tick_err"]）也有 console 警告，但 console 只印前 3 次、
@@ -951,51 +1065,159 @@ for (const [k, arr] of Object.entries(TXT)) {
   chk(`  ${k}：兩個不同的原因不准寫同一句`, vals.length - new Set(vals).size, 0);
 }
 say(TXT.why.length >= 5, `  沒錄到的原因有 ${TXT.why.length} 種，每一種都有自己的說法`);
-// ③〈這一頁在算什麼〉那十條：⛔ 不是只數數量，內容也要真的在
-const about = await ev(`[...document.querySelectorAll('#atabout .at-list li')]
-  .map(e=>e.textContent.trim())`);
-chk("〈這一頁在算什麼〉十條都不是空的", about.filter(t => t.length < 12), []);
-chk("  十條互不重複", about.length - new Set(about).size, 0);
-console.log("  負控組：");
-await ev(`document.querySelectorAll('#atabout .at-list li').forEach(e=>{
-  e.dataset.k=e.textContent; e.textContent='';}); 1`);
-say((await ev(`[...document.querySelectorAll('#atabout .at-list li')]
-  .map(e=>e.textContent.trim())`)).filter(t => t.length < 12).length === 10,
-  "  十條被掏空之後這一條會紅（⛔ 只數條目數是擋不住的）");
-await ev(`document.querySelectorAll('#atabout .at-list li').forEach(e=>{
-  e.textContent=e.dataset.k;}); 1`);
-chk("  還原之後又滿了", (await ev(`[...document.querySelectorAll('#atabout .at-list li')]
-  .map(e=>e.textContent.trim())`)).filter(t => t.length < 12), []);
-// ④ 兩個 hover 說明裡的數字：⛔ 不准寫死在 HTML 裡（常數改了就變假話，而且沒人會發現）
-const TT = await ev(`[document.getElementById('attrack').title,
-  document.getElementById('atceil').title, String(atCeiling(AT.stats.track_n))]`);
-say(TT[0].includes(String(K.beTrack)) && TT[1].includes(String(K.beTrack)),
-  "進度尺／天花板那兩個 title 裡的天數 ＝ 後端的 track_n", `${TT[0].slice(0, 26)}…`);
-say(TT[1].includes(TT[2]), "  天花板那個 title 的點數是算出來的", `= ${TT[2]} 點`);
+/* ③ ⚠️ 原本這裡驗〈這一頁在算什麼〉那十條的內容（⛔ 不是只數數量）。
+   2026-09-08 那個摺疊區整個拿掉了 ⇒ 這一條**不是刪掉，是改對**：
+   它守的是「文案被掏空／被整段刪掉沒人發現」，落點改成**還在畫面上的**那幾組文案，
+   而摺疊區本身改成「不准回來」的零命中（見 ㉔）。 */
+const FOLDTXT = await ev(`[document.querySelector('#atadv summary').textContent,
+  document.querySelector('#atpair summary').textContent,
+  document.getElementById('atadvbody').textContent,
+  document.getElementById('atceil').textContent]`);
+chk("剩下的摺疊區抬頭與內文都不是空的", FOLDTXT.filter(t => t.trim().length < 5), []);
+chk("  兩個摺疊區的抬頭不准寫同一句", FOLDTXT[0].trim() === FOLDTXT[1].trim(), false);
+// ④ hover 說明裡的數字：⛔ 不准寫死在 HTML 裡（常數改了就變假話，而且沒人會發現）
+/* ⚠️ 進度尺拿掉之後只剩天花板這一個 title ——⛔ 不可以因為只剩一個就不驗。 */
+const TT = await ev(`[document.getElementById('atceil').title,
+  String(atCeiling(AT.stats.track_n))]`);
+say(TT[0].includes(String(K.beTrack)), "天花板那個 title 裡的天數 ＝ 後端的 track_n",
+  `${TT[0].slice(0, 30)}…`);
+say(TT[0].includes(TT[1]), "  title 的點數是算出來的", `= ${TT[1]} 點`);
 console.log("  負控組：");
 await ev(`(()=>{AT.stats.track_n=333; atPaintStats(); return 1;})()`);
-const tAfter = await ev(`document.getElementById('attrack').title`);
+const tAfter = await ev(`document.getElementById('atceil').title`);
 say(tAfter.includes("333") && tAfter !== TT[0],
-  "  把 track_n 改成 333 ⇒ title 跟著變（證明不是寫死的）", tAfter.slice(0, 26) + "…");
+  "  把 track_n 改成 333 ⇒ title 跟著變（證明不是寫死的）", tAfter.slice(0, 30) + "…");
 await ev(`(()=>{AT.stats.track_n=${K.beTrack}; atPaintStats(); return 1;})()`);
 // ⑤ ⛔ 畫面上寫死的「時分秒」：09:03:30 已經從 04:30 改過一次，散在各處的字串會變成假話
 await ev(openFolds);
 const V2 = await visNow();
 const times = [...new Set([...V2.dom, ...V2.cv].join(" ⏐ ").match(/\d\d:\d\d:\d\d/g) || [])];
 say(times.includes(K.beSig), "後端現在的 signal_at 真的畫在畫面上", K.beSig);
-/* ⛔ signal_at 以外的時分秒**只准出現在〈這一頁在算什麼〉的歷史對照裡**
-   （那一條講的是「09:03:30 沒有被證明比 09:04:30 好」，是對過去那批資料的陳述）。
-   ⚠️ 這條在守的是：09:03:30 已經從 04:30 改過一次，散在畫面各處的時刻字串
-   會在下一次改動時**整批變成假話**，而且是 hover／摺疊區這種沒人會發現的地方。 */
-const aboutTxt = about.join(" ⏐ ");
-chk("⛔ signal_at 以外的時分秒只准出現在〈這一頁在算什麼〉的歷史對照裡",
-  times.filter(t => t !== K.beSig && !aboutTxt.includes(t)), []);
+/* ⛔⛔ 這條 2026-09-08 **收緊了**：舊版有一個豁免（「09:03:30 沒有被證明比 09:04:30 好」
+   那一條寫在〈這一頁在算什麼〉裡）。那個摺疊區整個刪掉之後豁免沒有存在的理由 ⇒
+   現在是「**除了後端的 signal_at，畫面上一個時分秒都不准有**」。
+   ⛔ 不准為了塞回一句解釋再把豁免加回來。 */
+chk("⛔ 畫面上除了後端的 signal_at，一個時分秒都不准有（豁免已取消）",
+  times.filter(t => t !== K.beSig), []);
 say(true, `  掃到 ${times.length} 種時分秒：${JSON.stringify(times)}`);
-await ev(`['atabout','atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
+console.log("  負控組：");
+await ev(`(()=>{const d=document.createElement('div'); d.id='__t';
+  d.textContent='09:04:30 比較好'; document.getElementById('tab-auto').appendChild(d); return 1;})()`);
+const V3 = await visNow();
+const t3 = [...new Set([...V3.dom, ...V3.cv].join(" ⏐ ").match(/\d\d:\d\d:\d\d/g) || [])];
+say(t3.filter(t => t !== K.beSig).length > 0, "  塞一個別的時分秒進去 ⇒ 這一條會紅",
+  JSON.stringify(t3.filter(t => t !== K.beSig)));
+await ev(`document.getElementById('__t').remove()`);
+await ev(`['atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
 // ⑥ 鎖印那句話：⛔ 不准被掏空
 chk("「模擬 · 不送單」的 title 不是空的",
   (await ev(`document.querySelector('#tab-auto .simlock').getAttribute('title')`) || "")
     .length > 8, true);
+
+/* ═══ ㉔ ⛔⛔ 2026-09-08 拿掉的東西**不准回來**（負控組：把它加回去要紅）══════
+   Benson 看實機之後點名四樣：
+     ①「程式下單那邊這個欄位不需要」＝ 最上面那條進度尺（見 ⑤）
+     ②「我自己的這邊都拿掉」＝ 成績表的「你自己」兩列 ＋ 上面那條分隔 ＋ 累計圖那條金線
+     ③「下面這個我根本看不懂是在幹嘛的」＝ 成績表底下那一行帳本
+     ④「這一頁在算甚麼也拿掉，我不需要看這個我也不會看」＝ 那個摺疊區（十條）
+   ⚠️ **拿掉東西也要有守衛**，不然下一個人會照著舊註解／舊規格把它加回來。
+   ⚠️ 但拿掉的是**畫面**不是資料：後端照算，②的唯讀守衛（autotest-backend.py ⑧c）
+      與③的不變式（sig+settle+miss+dup+bad ＝ 總列數）**一條都沒有放寬**。 */
+console.log("\n=== ㉔ ⛔⛔ 拿掉的四樣東西不准回來 ===");
+await goAuto();
+await ev(openFolds);
+const gone = async () => {
+  const dom = await ev(SEEN);
+  const c1 = await canvasText("atday", "atDrawDay");
+  const c2 = await canvasText("atcum", "atDrawCum");
+  return { dom, cv: [...c1, ...c2] };
+};
+const GONE_MINE = ["你自己", "口徑不同", "同口徑"];
+const GONE_LEDGER = ["列＝訊號", "＋沒錄到", "＋重複", "＋讀不出來", "13:45 收盤平"];
+const GONE_ABOUT = ["這一頁在算什麼", "三次擲銅板", "目前是冠軍", "約兩年"];
+let Z = await gone();
+console.log("  ② 你自己那兩列：");
+chk("  ⛔ 成績表只剩四列（⛔ 沒有第五、第六列）",
+  await ev(`document.querySelectorAll('#attbl tr').length - 1`), 4);
+chk("  ⛔ tr.mine / tr.sep 一列都沒有",
+  await ev(`document.querySelectorAll('#attbl tr.mine,#attbl tr.sep').length`), 0);
+chk("  ⛔ DOM ＋ 兩張 canvas 上零命中", hits(Z, GONE_MINE), []);
+chk("  ⛔ 累計圖只畫四條線的名字（那條金線也拿掉了）",
+  await ev(`ATLINES.map(x=>x[0])`), ["D", "A", "B", "C"]);
+say(await ev(`!!(AT.stats&&AT.stats.mine)`),
+  "  ⚠️ 但後端 mine **照算照端**（他之後可能會想加回來）",
+  JSON.stringify(await ev(`AT.stats.mine&&{all:AT.stats.mine.all.n,strict:AT.stats.mine.strict.n}`)));
+console.log("  ③ 帳本那一行：");
+chk("  ⛔ DOM ＋ 兩張 canvas 上零命中", hits(Z, GONE_LEDGER), []);
+say(await ev(`!!(AT.stats&&AT.stats.ledger&&AT.stats.ledger.lines>0)`),
+  "  ⚠️ 但後端 ledger **照算照端**（不變式與它的守衛都還在）",
+  JSON.stringify(await ev(`AT.stats.ledger`)));
+console.log("  ④〈這一頁在算什麼〉：");
+chk("  ⛔ #atabout 不存在", await ev(`document.getElementById('atabout')!==null`), false);
+chk("  ⛔ .at-about / .at-list 一個都沒有",
+  await ev(`document.querySelectorAll('#tab-auto .at-about,#tab-auto .at-list').length`), 0);
+chk("  ⛔ 摺疊區只剩兩個（配對卡／門檻掃描）",
+  await ev(`[...document.querySelectorAll('#tab-auto details')].map(d=>d.id)`),
+  ["atpair", "atadv"]);
+chk("  ⛔ DOM ＋ 兩張 canvas 上零命中", hits(Z, GONE_ABOUT), []);
+console.log("  負控組（三個，都是把東西加回去 ⇒ 上面那幾條要紅）：");
+// ② 把「你自己」兩列加回成績表 ＋ 把那條金線加回累計圖
+await ev(`(()=>{const t=document.getElementById('attbl');
+  t.insertAdjacentHTML('beforeend',
+    '<tr class="sep"><td colspan="7">▼ 你自己真的做的（口徑不同）</td></tr>'+
+    '<tr class="mine"><td class="nm">你自己<i>全部</i></td><td>3</td><td>2–1</td>'+
+    '<td>—</td><td class="pts">+30</td><td class="avg">+10.0</td><td>—</td></tr>');
+  return 1;})()`);
+const Z2 = await gone();
+say(hits(Z2, GONE_MINE).length > 0, "  ② 加回兩列 ⇒ 零命中那一條會紅",
+  JSON.stringify(hits(Z2, GONE_MINE).slice(0, 2)));
+say(await ev(`document.querySelectorAll('#attbl tr').length-1`) === 6,
+  "  ② 「只剩四列」那一條也會紅");
+/* ⚠️ setEl() 有 `e.__html` 快取（同一串就不重寫）⇒ 直接叫 atPaintStats() **沖不掉**
+   探針注入的節點（innerHTML 變了、但它要寫的那一串沒變）。要先把快取戳破。 */
+await ev(`(()=>{document.getElementById('attbl').__html=null; atPaintStats(); return 1;})()`);
+chk("  ② 還原之後又零命中", hits(await gone(), GONE_MINE), []);
+// ③ 把帳本那一行加回去
+await ev(`(()=>{const L=(AT.stats||{}).ledger||{};
+  document.getElementById('atnotes').insertAdjacentHTML('beforeend',
+   '<span>沒摸到 ±100、13:45 收盤平 4 筆</span><span>檔案 '+(L.lines||0)+
+   ' 列＝訊號 '+(L.sig||0)+'＋結算 '+(L.settle||0)+'＋沒錄到 '+(L.miss||0)+
+   '＋重複 '+(L.dup||0)+'＋讀不出來 '+(L.bad||0)+'</span>'); return 1;})()`);
+const Z3 = await gone();
+say(hits(Z3, GONE_LEDGER).length > 0, "  ③ 加回帳本那一行 ⇒ 零命中那一條會紅",
+  JSON.stringify(hits(Z3, GONE_LEDGER).slice(0, 2)));
+await ev(`(()=>{document.getElementById('atnotes').__html=null; atPaintStats(); return 1;})()`);
+chk("  ③ 還原之後又零命中", hits(await gone(), GONE_LEDGER), []);
+// ④ 把那個摺疊區加回去
+await ev(`(()=>{const d=document.createElement('details');
+  d.id='atabout'; d.className='at-fold at-about'; d.open=true;
+  d.innerHTML='<summary>這一頁在算什麼</summary><ol class="at-list">'+
+    '<li>不到 30 筆不給勝率百分比。3 筆 2 勝的「67%」是三次擲銅板，不是測量結果。</li></ol>';
+  document.getElementById('tab-auto').appendChild(d); return 1;})()`);
+const Z4 = await gone();
+say(hits(Z4, GONE_ABOUT).length > 0, "  ④ 加回摺疊區 ⇒ 零命中那一條會紅",
+  JSON.stringify(hits(Z4, GONE_ABOUT).slice(0, 2)));
+say(await ev(`document.getElementById('atabout')!==null`), "  ④ 「#atabout 不存在」那一條也會紅");
+await ev(`document.getElementById('atabout').remove()`);
+chk("  ④ 還原之後又零命中", hits(await gone(), GONE_ABOUT), []);
+
+/* ㉔b ⛔ 「拿掉帳本」≠「安靜地少」：異常還是要自己冒出來。
+   ⛔ 這一條不可以被下一輪當成「帳本的殘骸」清掉 —— 它守的是本專案的紅線
+      （CLAUDE.md：同一根同時摸到 ±100 ⇒ 保守算停損，那個筆數要顯示在畫面上）。 */
+console.log("  ㉔b 常態不寫、異常照講：");
+const notesNow = await ev(`document.getElementById('atnotes').textContent.trim()`);
+say(!GONE_LEDGER.some(w => notesNow.includes(w)),
+  "  沒有異常的時候那一行是乾淨的", JSON.stringify(notesNow.slice(0, 50)));
+await ev(`(()=>{window.__both=AT.stats.rows.A.both; AT.stats.rows.A.both=2;
+  atPaintStats(); return 1;})()`);
+const notesBoth = await ev(`document.getElementById('atnotes').textContent`);
+say(notesBoth.includes("同一根同時摸到 ±100") && notesBoth.includes("保守算停損"),
+  "  ⛔ 真的有「同一根同時摸到 ±100」時**照樣寫在畫面上**（保守算停損是對他不利的假設）",
+  (notesBoth.match(/[^·]*同一根[^·]*/) || [""])[0].trim());
+await ev(`(()=>{AT.stats.rows.A.both=window.__both; atPaintStats(); return 1;})()`);
+say(!(await ev(`document.getElementById('atnotes').textContent`)).includes("同一根同時摸到"),
+  "  改回 0 之後又不寫了（⛔ 不製造每天都在的雜訊）");
+await ev(`['atadv','atpair'].forEach(i=>document.getElementById(i).open=false)`);
 
 /* ═══ ⑳ console 零錯誤（放在最後才驗）════════════════════════════════ */
 console.log("\n=== ⑳ 收尾 ===");

@@ -169,6 +169,16 @@ TICK_BIG = "--small" not in sys.argv
 def _tick_fixtures():
     for p in (TICKLOGS, TICKSIM, TICKREAL):
         p.mkdir(parents=True, exist_ok=True)
+    # ⛔⛔ **這個資料夾的路徑是固定的（不是 mkdtemp），所以一定要先清乾淨**
+    #   （2026-09-08 lab-dev 踩到）：治具的日期是**相對今天**算的，昨天跑過一次之後
+    #   `2026-08-29.jsonl`（昨天的「逐筆日」）留在磁碟上，今天那一天剛好被排成
+    #   「取樣日」⇒ 同一天同時有逐筆與取樣兩種檔 ⇒ 產品照規矩**逐筆優先** ⇒
+    #   ⑬ 那整節（取樣日）**27 項全紅**，看起來像產品壞了，其實是治具沒收拾。
+    #   ⛔ 只刪這個治具自己造的合成檔（他的 tick_logs 在別的地方，一個位元組都不碰）。
+    for p in (TICKLOGS, TICKSIM, TICKREAL):
+        for f in p.iterdir():
+            if f.is_file():
+                f.unlink()
     tick_synth.build(TICKLOGS, today=_dt.date.today(), big=TICK_BIG)
     d0, d1 = TICKDATES["full"], TICKDATES["gappy"]
     # 練習單（昨天）：欄位照 live_panel.close_position() 的形狀

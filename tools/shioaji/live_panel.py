@@ -1997,6 +1997,15 @@ DAY_END_SEC = DAY_END.hour * 3600 + DAY_END.minute * 60
 AUTO_LATE_MS = 3000                     # 晚超過這麼久就**不記**（⛔ 不可以拿晚到的價冒充）
 AUTO_GAP_S = 5.0                        # 多久沒收到報價算「這一秒是斷的」
 AUTO_SETTLE_AFTER = DAY_END_SEC + 120   # 13:47 之後才結算（等最後一根 K 棒收完）
+# ⛔⛔ 「都沒摸到 ±100 ⇒ 用收盤價結算」的前提是**真的看完了整個日盤**。
+#   2026-09-08 出事就是這樣：他 09:05 打開分頁 ⇒ 端點順手排了一次結算 ⇒ 手上只有
+#   兩根 K 棒（09:04／09:05）⇒ _auto_run 沒摸到 ±100 ⇒ 回 eod ⇒ **拿 09:05 的收盤價
+#   當「收盤價」寫死進檔案**，四條泳道全部變成「09:05 收盤平 ±67 點」——**假成績**。
+#   所以 eod 這條路要同時滿足兩件事：① 那一天的日盤結束了（_auto_day_over）；
+#   ② 手上這批 1 分 K 真的走到收盤附近（最後一根的標籤 >= 這裡）。
+#   ⚠️ 13:43 不是筆誤：one_min_bars() 的最後一根就是標籤 13:43（涵蓋 13:43~13:44），
+#      13:44~13:45 那一分鐘是**既有**的缺口（見 CLAUDE.md「1 分 K 用結束時間標記」）。
+AUTO_EOD_LAST = "13:43"
 
 _AUTO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AUTO_MONTH = re.compile(r"^(\d{4}-\d{2})\.jsonl$")
@@ -2255,6 +2264,54 @@ def _auto_record(snap):
 
 # ---------------------------------------------------- 事後結算 ±100
 
+def _auto_day_over(d, now=None):
+    """
+    **那一天**的日盤結束了沒（＝可不可以用「收盤價」結算）。
+
+    ⛔⛔ 這道判斷是 2026-09-08 那個 bug 的正解：`_auto_run` 的 `eod` 分支語意是
+       「**到收盤都沒碰到 ±100**」，這個前提在盤中根本不成立 —— 盤中拿它結算，
+       等於把「還沒結束」寫成「收盤了」，而且畫面上看起來就是一筆正常的成績。
+    ⚠️ 判斷要站在**那一天**的角度，不是「現在幾點」：
+       過去的日子一律已經結束（照樣立刻結算）；只有 d ＝ 今天、而且時鐘還沒走到
+       AUTO_SETTLE_AFTER（13:47，等最後一根 1 分 K 收完）才算「還沒結束」。
+       未來的日期一律當成沒結束（那種列本來就不該存在，寧可不結算也不要編）。
+
+    ⚠️⚠️ **用哪一把尺當「現在」＝本機時鐘（datetime.now()）**，理由三條：
+      ① 這支跑在**寫檔執行緒**上。`STATE["clock"]` 要拿 `state_lock`，
+         而這一頁的鐵律二明令不准碰 `state_lock`（那條鎖跟他的停損共用一個 GIL 與一把鎖）。
+      ② 永豐的 tick 時間只活在 `on_tick` 那條回呼執行緒更新的 `Today` 物件裡 ——
+         去讀它就是把手伸進停損那條路，而且盤前／斷線時它根本是 None。
+      ③ 這一頁「今天是哪一天／時刻到了沒」**本來就全部用本機時鐘**
+         （`_auto_tick` 的 `secs`、`auto_days()` 的 `date.today()`、`AUTO_SETTLE_AFTER`）。
+         再引進第二把尺，就是這個檔案裡「兩把尺」那一類事故的溫床。
+      ⇒ 代價是本機時鐘歪掉時這道會跟著歪，但門檻取在收盤後 2 分鐘、而且錯的方向是
+        「晚一點才結算」（頂多多等一輪），不會回頭變成假成績。
+    """
+    now = now or datetime.now()
+    today = str(now.date())
+    if d < today:
+        return True
+    if d > today:
+        return False
+    return (now.hour * 3600 + now.minute * 60 + now.second) >= AUTO_SETTLE_AFTER
+
+
+def _auto_runs_settled(runs):
+    """
+    這批 runs 是不是**不會再變**的最終結果（＝可以立刻落地）。
+
+    ・摸到 ±100（`tp` / `sl`）⇒ 最終結果，不管幾點都不會再變。
+    ・`dir` 是 None（算不出訊號）或 0（沒超過門檻，這天不做）⇒ 跟價格無關，也是最終的。
+    ・`eod` ⇒ **不是**最終結果，它只有在日盤真的收了之後才成立。
+    """
+    for r in (runs or {}).values():
+        if r.get("dir") in (None, 0):
+            continue
+        if r.get("why") not in ("tp", "sl"):
+            return False
+    return True
+
+
 def _auto_run(bars, entry, d):
     """
     ±100 觸價的結果。bars 是 09:04 之後的 1 分 K。d：1 做多 / −1 做空。
@@ -2296,10 +2353,21 @@ def _auto_settle(d):
        ⛔ 這件事寫在這裡，不要用「反正很少見」帶過 —— settle_from 欄位有記，畫面上看得到。
     ⚠️ 強制平倉是**當天日盤 13:45 收盤**（PM 拍板，規格 §16-2）：±100 在 09:30 前
        常常摸不到，用 09:30 會製造一大批「不是 ±100 結果」的筆數污染統計。
+
+    ⛔⛔ **盤中不准用「收盤價」結算**（2026-09-08 修，他早上真的踩到）：
+       摸到 ±100 ⇒ 立刻寫、標 `final`；還沒摸到而日盤還沒收 ⇒ **一列都不寫**
+       （畫面維持「持倉中」）；還沒摸到而收盤了 ⇒ 才可以寫 `eod`。
+       舊格式（沒有 `final` 欄位）的 settle 一律當成不可信的早結，會被重算蓋掉。
     """
     rows, _led = _auto_read()
     r = rows.get(d)
-    if r is None or r.get("px") is None or r.get("runs"):
+    if r is None or r.get("px") is None:
+        return
+    # ⛔⛔ 只有 **final** 的結算才准擋住重算（2026-09-08 修）。舊版寫的是
+    #    `or r.get("runs")` ⇒ 盤中算出來的那一列**把錯的結果鎖死**，一輩子不會再算。
+    #    `_auto_read` 已經把「不是 final 的 runs」當成還沒結算（會是 None），
+    #    這裡再擋一次是刻意的雙保險：有人拿掉上面那道時，這裡還擋得住假成績。
+    if r.get("runs") and r.get("final"):
         return
     # ⛔ 一定是 >=：標籤是**起始時間**，09:04 那根涵蓋 09:04~09:05、整根都在進場之後。
     bars = [b for b in one_min_bars(d) if b["t"] >= AUTO_SETTLE_FROM]
@@ -2317,9 +2385,22 @@ def _auto_settle(d):
                        "thresh": r.get("thresh", C_THRESH)}
         else:
             runs[k] = _auto_run(bars, entry, dr)
+    # ⛔⛔ 這裡是 2026-09-08 那個 bug 的閘門（他早上真的踩到，四條全變成假的 ±67）。
+    #   摸到 ±100 ⇒ 結果不會再變，**立刻寫、標 final**（不必等收盤）。
+    #   還沒摸到 ⇒ 那只是「到目前為止」，`eod` 的語意（到收盤都沒碰到）還不成立 ⇒
+    #   **一列都不要寫**，讓它維持「持倉中」，下一輪再算（AUTO_RETRY 冷卻在管節奏）。
+    #   ⚠️ 兩道都要：日盤收了沒（_auto_day_over）＋ 手上這批 K 棒有沒有走到收盤附近
+    #      （少了第二道，一個只給到 10:00 的殘缺日照樣會寫出「10:00 收盤平」）。
+    if not _auto_runs_settled(runs):
+        if not _auto_day_over(d) or bars[-1]["t"] < AUTO_EOD_LAST:
+            return
     _auto_append({"rec": "settle", "date": d, "src": r.get("src", "live"),
                   "runs": runs, "settle_src": "1min", "settle_from": AUTO_SETTLE_FROM,
                   "bars": len(bars),
+                  # ⛔ 寫出去的一定是最終結果 ⇒ final 永遠是 True。
+                  #   這個欄位在守的是**舊格式**：2026-09-08 之前寫的 settle 沒有它，
+                  #   一律當成「不可信的早結」重算（見 _auto_read_month 結尾）。
+                  "final": True,
                   "wrote_at": datetime.now().isoformat(timespec="seconds")})
     print(f"[{d}] 程式下單：已結算 "
           + "／".join(f"{k} {runs[k].get('pts')}" for k in "ABCD"), flush=True)
@@ -2358,7 +2439,7 @@ def _auto_worker():
 
 
 AUTO_RETRY = 300.0          # 秒。同一天的結算最多多久重試一次
-_AUTO_TRIED = {}            # 日期 -> 上次排結算的時間
+_AUTO_TRIED = {}            # (日期, 日盤收了沒) -> 上次排結算的時間
 
 
 def _auto_put(kind, arg):
@@ -2370,10 +2451,15 @@ def _auto_put(kind, arg):
         # ⚠️ 結算是由 HTTP 端點順手排的（每次切進這一頁都會掃一遍還沒結算的日子）。
         #    沒有這道冷卻的話，**永遠結算不了的那一天**（例如那天的 1 分 K 根本拿不到）
         #    會讓每一個請求都去跟永豐要一次 K 棒 —— one_min_bars() 對「空結果」是不快取的。
+        # ⚠️⚠️ 冷卻要**分「日盤收了沒」兩段**（2026-09-08 加）：盤中排過一次之後
+        #    （盤中那次會因為「還沒摸到」而不寫），13:47 主迴圈那一次會被同一把冷卻
+        #    擋掉、要再等 5 分鐘才把早結那列蓋掉。把「收盤了沒」放進鍵裡 ⇒
+        #    **收盤後的第一次一定排得進去**，13:47:00 就會重算。
         now = time.time()
-        if now - _AUTO_TRIED.get(arg, 0.0) < AUTO_RETRY:
+        ck = (arg, _auto_day_over(arg))
+        if now - _AUTO_TRIED.get(ck, 0.0) < AUTO_RETRY:
             return
-        _AUTO_TRIED[arg] = now
+        _AUTO_TRIED[ck] = now
     try:
         AUTO["queued"].add(key)
         _AUTO_Q.put_nowait((kind, arg))
@@ -2486,7 +2572,7 @@ def _auto_norm_sig(o):
             "dirs": {k: _auto_dir(dirs.get(k)) for k in ("A", "B", "C", "D")},
             "thresh": _auto_num(o.get("thresh")) or C_THRESH,
             "quote_gaps": _auto_num(o.get("quote_gaps")),
-            "runs": None}
+            "runs": None, "final": False}
 
 
 def _auto_read_month(path):
@@ -2540,6 +2626,7 @@ def _auto_read_month(path):
             if cur is not None:          # 先讀到 settle 才讀到 sig（順序不保證）
                 row["runs"] = cur.get("runs")
                 row["settle_from"] = cur.get("settle_from")
+                row["final"] = bool(cur.get("final"))
             recs[d] = row
         elif k == "settle":
             runs = _auto_norm_runs(o.get("runs"))
@@ -2551,6 +2638,9 @@ def _auto_read_month(path):
                 cur = recs[d] = {"date": d, "px": None,
                                  "src": ("backfill" if o.get("src") == "backfill" else "live")}
             cur["runs"] = runs
+            # ⛔ 沒有 final 欄位 ＝ **2026-09-08 之前的舊格式**，一律當成不可信的早結。
+            #   後寫的蓋前面的（同一天多列 settle 時，最後一列說了算）。
+            cur["final"] = bool(o.get("final"))
             cur["settle_from"] = o.get("settle_from") if isinstance(
                 o.get("settle_from"), str) else None
         else:
@@ -2559,6 +2649,15 @@ def _auto_read_month(path):
                 recs[d] = {"date": d, "px": None, "miss": True, "runs": None,
                            "src": ("backfill" if o.get("src") == "backfill" else "live"),
                            "why": o.get("why") if isinstance(o.get("why"), str) else "unknown"}
+    # ⛔⛔ **不是 final 的 settle 一律當成「還沒結算」**（2026-09-08 修）。
+    #   盤中提早算出來的那一列（以及 2026-09-08 之前寫的舊格式）是假成績 ——
+    #   它一個字都不准流到成績表／累計圖／配對卡／日期清單／今天卡。
+    #   把它清成 None 之後，下游那一整排「沒有 runs ＝ 還沒結算」的既有邏輯就自動對了，
+    #   而且 _auto_settle 會把它當成沒結算過、重算一列蓋上去。
+    #   ⚠️ 帳本（led）**不動**：那一列還在檔案裡，sig+settle+miss+dup+bad 照樣等於總列數。
+    for _r in recs.values():
+        if _r.get("runs") and not _r.get("final"):
+            _r["runs"] = None
     ent = {"key": key, "recs": recs, "led": led}
     AUTO_CACHE[path.name] = ent
     if len(AUTO_CACHE) > 26:            # 兩年份，超過就丟最舊的月份
@@ -2623,14 +2722,22 @@ def _auto_tally(pts):
             "avg": round(sum(pts) / len(pts), 1) if pts else None}
 
 
-def _auto_row_stats(recs, k):
-    """一條算法的成績。cum 是「第幾筆 → 累計點數」。"""
+def _auto_row_stats(recs, k, open_days=()):
+    """一條算法的成績。cum 是「第幾筆 → 累計點數」。
+
+    ⚠️ `open_days` ＝「日盤還沒收的那幾天」。沒有結算的日子要分成兩堆：
+       **持倉中**（正常，還沒摸到 ±100、盤還沒收）與 **還沒結算**（該算了卻還沒算出來，
+       那是要示警的）。混成一個數字的話，每天早上都會看到一行紅字。
+    """
     pts, cum, run = [], [], 0.0
-    skip = pend = noref = both = eod = 0
+    skip = pend = noref = both = eod = hold = 0
     for r in recs:
         rr = (r.get("runs") or {}).get(k)
         if rr is None:
-            pend += 1
+            if r.get("date") in open_days:
+                hold += 1
+            else:
+                pend += 1
             continue
         if rr.get("dir") is None:
             noref += 1
@@ -2651,7 +2758,7 @@ def _auto_row_stats(recs, k):
             eod += 1
     out = _auto_tally(pts)
     ceil_v = auto_ceiling(out["n"])
-    out.update({"skip": skip, "pending": pend, "noref": noref,
+    out.update({"skip": skip, "pending": pend, "holding": hold, "noref": noref,
                 "both": both, "eod": eod, "cum": cum,
                 "ceiling": ceil_v,
                 # ⛔ 樣本少的時候不給百分比：3 筆 2 勝顯示「67%」是三次擲銅板，
@@ -2808,6 +2915,10 @@ def auto_days():
         runs = r.get("runs") or {}
         days.append({"d": d, "w": wd, "src": r.get("src", "live"),
                      "done": bool(runs),
+                     # ⛔ 「還沒摸到 ±100、日盤也還沒收」＝**持倉中**，不是「結算中」。
+                     #    這兩件事在畫面上必須分得出來：前者是正常的等待，
+                     #    後者是「該算了卻還沒算出來」。⛔ 不給浮動損益（規格 §16-3）。
+                     "holding": bool(not runs and not _auto_day_over(d)),
                      "dirs": r.get("dirs") or {},
                      "net": (round(sum(v.get("pts") or 0 for v in runs.values()), 1)
                              if runs else None)})
@@ -2845,10 +2956,13 @@ def auto_stats(win=20, src="live"):
     #    用 n 的話按「近10」進度尺就縮回去，看起來像資料不見了。
     total_n = len([r for r in rows if not r.get("miss")
                    and (src not in ("live", "backfill") or r.get("src") == src)])
+    # 「日盤還沒收」的那幾天（幾乎永遠只有今天）。⛔ 用 _auto_day_over 這**同一把尺**，
+    #    畫面上「持倉中」與後端「不准寫 eod」才會是同一句話。
+    open_days = {r["date"] for r in got if not _auto_day_over(r["date"])}
     out = {"n": len(got), "total_n": total_n, "win": win, "src": src,
            "since": got[0]["date"] if got else None,
            "until": got[-1]["date"] if got else None,
-           "rows": {k: _auto_row_stats(got, k) for k in ("A", "B", "C", "D")},
+           "rows": {k: _auto_row_stats(got, k, open_days) for k in ("A", "B", "C", "D")},
            "mine": _auto_mine_rows(got),
            "pairs": _auto_pairs(got),
            "bseries": _auto_bseries(got),
@@ -2869,7 +2983,10 @@ def auto_stats(win=20, src="live"):
                      "backfill": sum(1 for r in rows
                                      if not r.get("miss") and r.get("src") == "backfill"),
                      "days_total": total_days,
-                     "pending": sum(1 for r in got if not r.get("runs"))}}
+                     "pending": sum(1 for r in got if not r.get("runs")
+                                    and r["date"] not in open_days),
+                     "holding": sum(1 for r in got if not r.get("runs")
+                                    and r["date"] in open_days)}}
     return out
 
 
@@ -2897,6 +3014,11 @@ def auto_day(d):
             "why": r.get("why"), "px": r.get("px"), "at": r.get("at"),
             "ref": r.get("ref") or {}, "sig": r.get("sig") or {},
             "dirs": r.get("dirs") or {}, "runs": r.get("runs"),
+            # ⛔ 沒摸到 ±100、日盤也還沒收 ⇒ 畫面寫「持倉中」＋進場價，
+            #    ⛔ 不算「現在賺賠多少」（規格 §16-3 拍板：不顯示浮動損益）。
+            "holding": bool(r.get("px") is not None and not r.get("runs")
+                            and not _auto_day_over(d)),
+            "final": bool(r.get("final")),
             "thresh": r.get("thresh", C_THRESH),
             "settle_from": r.get("settle_from"),
             "tp": AUTO_TP, "sl": AUTO_SL, "signal_at": SIGNAL_AT,
@@ -4259,20 +4381,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    ⛔ **顏色只給損益**（比別頁嚴格）：方向、訊號值、筆數、門檻、天數、天花板一律中性色。
    ⚠️ 有 max-height 的 flex 直欄，子元素一律 flex:none（面板鐵律，2026-08-25 踩過）。 */
 
-/* 裝置零：進度尺。⚠️ 這是第一屏的第一個東西，字要少到一眼看完。 */
-.at-track{background:var(--surface); border:1px solid var(--line-soft);
-  border-radius:var(--r-md); padding:11px 14px 12px; margin-bottom:12px}
-.at-track .hd{display:flex; align-items:baseline; justify-content:space-between; gap:12px}
-.at-track .hd .t{font-size:11.5px; color:var(--dim); letter-spacing:.4px}
-.at-track .hd .n{font-family:var(--font-mono); font-variant-numeric:tabular-nums;
-  font-size:15px; font-weight:650; color:var(--text)}
-.at-track .bar{height:8px; border-radius:999px; background:var(--surface-2);
-  margin:8px 0 7px; overflow:hidden; border:1px solid var(--line-soft)}
-.at-track .bar i{display:block; height:100%; background:var(--gold); border-radius:999px}
-.at-track .ft{display:flex; justify-content:space-between; gap:12px; font-size:10.5px;
-  color:var(--faint)}
-.at-track .ft b{color:var(--dim); font-weight:650; font-family:var(--font-mono);
-  margin-left:5px}
+/* ⛔ 進度尺（.at-track）已於 2026-09-08 依 Benson 指示整條拿掉（原話：
+   「程式下單那邊這個欄位不需要」）—— ⛔ 不要再加回來。
+   守衛：autotest-tab.mjs ⑤ 斷言 #attrack 不存在、而且「這個測試跑到哪裡了」／
+   「/ 505 筆」／「要到這裡才算數」在 DOM ＋ 兩張 canvas 上零命中。
+   ⚠️ 後端 total_n／track_n 照端（天花板那一行還在用 track_n 算 title），只是不畫進度尺。 */
 
 .at-head{display:flex; align-items:flex-end; justify-content:space-between; gap:16px;
   margin-bottom:10px; flex-wrap:wrap}
@@ -4300,8 +4413,13 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .at-chip:hover:not(:disabled){color:var(--text); border-color:var(--gold-line)}
 .at-chip.on{background:var(--gold-soft); color:var(--gold); border-color:var(--gold-line)}
 .at-chip:focus-visible{outline:1px solid var(--gold); outline-offset:1px}
-/* aspect-ratio 撐高度 ⇒ 骨架與真圖的高度**結構上就一樣**，不必靠量測對齊 */
-.at-wrap{position:relative; aspect-ratio:1040/470; border-radius:10px; overflow:hidden;
+/* aspect-ratio 撐高度 ⇒ 骨架與真圖的高度**結構上就一樣**，不必靠量測對齊
+   ⚠️ 2026-09-08 Benson：「這個線的面板可以改的小一點點嗎，我覺得他現在有一點點大」
+      ⇒ 1040/470 → **1040/380**（高度 −19%）。
+   ⛔ 只有**價格區**變矮：四條泳道是從下緣往上排的固定像素（4×22 ＋ ATBOT 26），
+      H 變小不會壓到它們，名字欄寬 L 也是 measureText 量出來的 ——
+      ⛔ 不可以改成縮泳道列高或縮名字字級來換高度（規格 §9.3，被退件過）。 */
+.at-wrap{position:relative; aspect-ratio:1040/380; border-radius:10px; overflow:hidden;
   background:var(--bg)}
 .at-wrap canvas{position:absolute; inset:0; width:100%; height:100%; display:block}
 .at-skel{position:absolute; inset:0; display:flex; align-items:flex-end; gap:4px;
@@ -4368,10 +4486,10 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .at-tbl .tag.over{border-color:var(--gold-line); color:var(--gold);
   background:var(--gold-soft)}
 /* 他自己那兩列跟四條算法的口徑不同 ⇒ **一條虛線隔開**，不是同一批東西 */
-.at-tbl tr.mine td{border-top:1px dashed var(--line)}
-.at-tbl tr.mine ~ tr.mine td{border-top:0}
-.at-tbl tr.sep td{padding:9px 8px 3px; border-bottom:0; color:var(--faint);
-  font-size:11px; font-family:var(--font-sans); text-align:left}
+/* ⛔ 「你自己」那兩列（tr.mine）與上面那條分隔（tr.sep）已於 2026-09-08 依 Benson
+   指示從畫面上拿掉（原話：「然後我自己的這邊都拿掉」）—— ⛔ 不要再加回來。
+   ⚠️ 後端 _auto_mine_day／_auto_mine_rows **刻意留著**（他之後可能會想加回來），
+      連同「只讀不寫」的守衛（autotest-backend.py ⑧c）一起留 —— 只是前端不畫。 */
 .at-ceil{margin-top:11px; font-size:11.5px; color:var(--dim); line-height:1.6;
   display:flex; align-items:baseline; gap:7px; flex-wrap:wrap}
 .at-ceil .dot{color:var(--faint)}
@@ -4382,6 +4500,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   font-variant-numeric:tabular-nums}
 .at-notes .sep{color:var(--ghost)}
 .at-notes .warn{color:var(--gold)}
+/* ⚠️ 2026-09-08 起 .at-notes **只在有異常的時候才有東西**（帳本那一行拿掉了）⇒
+   沒異常時整條要真的不見，不然會留一條 7px 的空隙看起來像壞掉。 */
+.at-notes:empty{display:none}
 
 .at-cwrap{position:relative; aspect-ratio:1040/300; border-radius:10px;
   background:var(--bg); overflow:hidden}
@@ -4522,15 +4643,16 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 <!-- 【程式下單】：四種方向判斷的模擬對照。
      ⛔⛔ 這一頁**永遠只是模擬，一張單都不會送出去**，也不是自動下單的前置作業。
          裡面沒有任何 [data-act] / [data-rdir]（那兩個才是會送單的按鈕）。
-     ⭐ 第一屏只有三樣東西：**進度尺 ／ 圖＋四條泳道 ／ 成績表**（PM 2026-09-07 裁示）。
+     ⭐ 第一屏只有兩樣東西：**圖＋四條泳道 ／ 成績表**（PM 2026-09-07 裁示三樣，
+        2026-09-08 Benson 把進度尺拿掉之後剩兩樣）。
         v1 那一牆解釋文字被 Benson 退件（原話：「聽不懂，然後我覺得面板一大堆多餘的文字」）
-        ⇒ 全部收進最下面預設關著的〈這一頁在算什麼〉。
-        ⛔ 不准把 .at-about 裡任何一條搬回平鋪畫面，那正是退件的原因。 -->
+        ⇒ 2026-09-08 他連摺疊的〈這一頁在算什麼〉都不要了（原話：「然後這一頁在算甚麼
+        也拿掉，我不需要看這個我也不會看」）⇒ **整個摺疊區已刪掉**。
+        ⛔ 不准把那十條（或任何解釋牆）搬回這一頁 —— 那正是 v1 退件的原因。
+     ⛔ 這一頁已經拿掉四樣東西，⛔ **一樣都不准加回來**（守衛：autotest-tab.mjs ⑤／㉔）：
+        ① 進度尺（#attrack）② 成績表的「你自己」兩列 ③ 帳本那一行
+        ④〈這一頁在算什麼〉摺疊區。 -->
 <div id="tab-auto" hidden>
- <!-- 裝置零：進度尺。「這個測試要跑大概兩年才有答案」這句話**用畫的，不用寫的**。
-      ⛔ 畫面上不准出現「檢定力／功效／MDE／顯著／信賴區間／p 值」任何一個詞。 -->
- <!-- ⛔ title 的數字由 atPaintStats() 依後端常數算出來寫進去，⛔ 不要寫死在這裡。 -->
- <div class="at-track" id="attrack"></div>
 
  <div class="card chart l1">
   <div class="cheadwrap">
@@ -4579,23 +4701,15 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  <details class="at-fold at-adv" id="atadv"><summary>換一個門檻看看</summary>
   <div id="atadvbody"></div></details>
 
- <!-- ⛔ 預設關著（open=false），⛔ 條目數固定 10 —— 收摺過的東西最容易被下一個人
-      整段刪掉，探針會連條目數一起斷言。 -->
- <details class="at-fold at-about" id="atabout"><summary>這一頁在算什麼</summary>
-  <ol class="at-list">
-   <!-- ⛔ 這十條裡也不准出現 A／B／C／D（規格 §2.0）——「不准在畫面任何地方留
-        『A＝5 分 K』這種對照說明」。條目數固定 10，探針會連數量一起斷言。 -->
-   <li>它只回答一件事：「判斷方向」有沒有加分。「不判斷」（一律做多）是拿來比的那條線。</li>
-   <li>永遠只是模擬，一張單都不會送出去。這一頁碰不到任何下單路徑。</li>
-   <li>不是建議，也不預告：09:03:30 之前不會顯示等一下會判斷什麼方向。</li>
-   <li>沒有「四個裡有三個做多」這種綜合／多數決 —— 那就是訊號強度，這個面板不做。</li>
-   <li>不到 30 筆不給勝率百分比。3 筆 2 勝的「67%」是三次擲銅板，不是測量結果。</li>
-   <li>「不判斷」目前是冠軍：2026-08-11 用 506 天做的驗證裡，會判斷方向的模型全部輸給固定做多。</li>
-   <li>09:03:30 沒有被證明比 09:04:30 好（兩者差 4.1 點，而那批資料的天花板是 12.1 點）。</li>
-   <li>歷史回填的成績與上線後實跑的成績不可以加在一起算 —— 分鐘資料切不出 09:03:30。</li>
-   <li>為什麼是 505 筆／約兩年：那是「每筆差 12 點也分得出來」所需的天數。</li>
-   <li>資料來源：每天 09:03:30 由面板記一筆；「你自己」那兩列直接讀 real_trades/（唯讀）。</li>
-  </ol></details>
+ <!-- ⛔⛔ 〈這一頁在算什麼〉那個摺疊區（十條）已於 2026-09-08 依 Benson 指示**整個刪掉**
+      （原話：「然後這一頁在算甚麼也拿掉，我不需要看這個我也不會看」）。
+      ⛔ 不要再加回來，也不要改成別的名字重開一個解釋牆。
+      ⚠️ 那十條裡有兩條原本是別的守衛的落點，已經改掛在別處、**沒有跟著失效**：
+        ・「09:03:30 沒有被證明比 09:04:30 好」是畫面上唯一的第二個時分秒 ⇒
+          它走了之後，㉓⑤ 的規則從「只准出現在那一條裡」**收緊成**
+          「畫面上除了後端的 signal_at，一個時分秒都不准有」。
+        ・少樣本／不預告／不做多數決那幾條的**行為**本來就各自有守衛（⑥／⑪／⑧），
+          刪的只是說明文字，紅線一條都沒有放寬。 -->
 </div>
 
 <!-- 【回顧】：容器只建這一次，之後只換裡面的內容（重繪不打斷縮放／拖曳、也不閃） -->
@@ -8309,6 +8423,18 @@ function atThr(){
 function atName(k){ return k==='C'?('開盤起・要 '+atThr()+' 點'):(AT_NAME[k]||k); }
 function atSub(k){ return AT_SUB[k]||''; }
 const ATEXIT={tp:'停利',sl:'停損',eod:'收盤平'};
+/* ⛔⛔ 沒有結算的日子有**兩種**，畫面上一定要分得出來（2026-09-08 修）：
+   ・持倉中 ＝ 還沒摸到 ±100，而且那天的日盤還沒收 —— 正常的等待，不是異常。
+   ・結算中 ＝ 日盤收了（或那是過去的日子），該算了卻還沒算出來 —— 該注意。
+   以前只有「結算中」，而後端會拿**盤中最後一根 K 棒的收盤價**硬算出一個 eod ⇒
+   畫面上是一個看起來很正常的假成績（他 2026-09-08 早上真的看到四條「09:05 收盤平」）。
+   ⛔ 持倉中**只寫「持倉中」＋進場價，不算浮動損益**（規格 §16-3 拍板：
+      會跳的模擬損益是這一頁最容易讓他開始盯盤的東西，而且沒有任何用途）。 */
+function atSettleWord(o){
+ if(!o) return '結算中';
+ const done=o.runs?true:(o.done===true);
+ return done?'已結算':(o.holding?'持倉中':'結算中');
+}
 const ATWHY={no_quote:'09:03:30 收不到報價（斷線、休市或國定假日）',
   quote_stale:'09:03:30 那一刻的報價太舊，沒有拿它記（拿舊價記＝假成績）',
   mid_only:'那一刻只有買賣價、還沒有成交價，沒有拿中價頂替',
@@ -8440,7 +8566,11 @@ function atPagerHTML(){
  else if(AT.err) r2='<span class="warn">讀不出來</span>';
  else if(!D||D.px==null) r2='<span>這天沒有記錄</span>';
  else r2='<span>'+(D.at||'09:03:30')+' 進場 '+atN(D.px).toFixed(1)+'</span>'+
-   '<span class="sep">·</span><span>'+(D.runs?'已結算':'結算中')+'</span>'+
+   /* ⛔ 「持倉中」與「結算中」是兩件事，不可以寫同一句（2026-09-08）：
+      前者＝還沒摸到 ±100、日盤也還沒收，那是正常的等待；
+      後者＝該算了卻還沒算出來。⛔ 持倉中**不給浮動損益**（規格 §16-3）——
+      這一行只寫進場價，不寫「現在賺賠多少」。 */
+   '<span class="sep">·</span><span>'+atSettleWord(D)+'</span>'+
    '<span class="sep k">·</span><span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
  return '<div class="pager">'+
   '<div class="r1">'+
@@ -8473,7 +8603,7 @@ function atListHTML(){
         字長了是整塊橫向捲，不會把某一列撐高。 */
      const t=AT_ORDER.map(k=>atName(k)+' '+
        (dd[k]==null?'—':(dd[k]===0?'—':(dd[k]>0?'多':'空')))).join('　');
-     meta=t+'　'+(x.net==null?'結算中':('當天合計 '+pm(x.net,0)));
+     meta=t+'　'+(x.net==null?atSettleWord(x):('當天合計 '+pm(x.net,0)));
    }
    return '<button class="row'+(d===AT.date?' on':'')+'" data-atday="'+d+'">'+
      '<span class="dd">'+d.slice(5)+'</span>'+
@@ -8512,7 +8642,13 @@ function atSubHTML(){
     舊版比較用 `>`，實際上是從 09:05 那根才開始算，這句話是**假話**）。
     標籤是起始時間 ⇒ 09:04 那根涵蓋 09:04~09:05，「含」這個字不可以省。 */
  if(D.settle_from) bits.push('出場從 '+D.settle_from+' 那根 1 分 K（含）開始算');
- if((D.mine||[]).length) bits.push('你自己 '+D.mine.length+' 筆');
+ /* ⛔ 持倉中只講狀態，⛔ 不算「現在賺賠多少」（規格 §16-3）。 */
+ if(D.holding) bits.push('還沒摸到 ±100，日盤還沒收 ⇒ 持倉中');
+ /* ⚠️ 這句講的是**圖上那幾張「真 ▲ 多」籤**（他當天真的下的單畫在 K 線上），
+    跟被拿掉的成績表那兩列不是同一件事 ⇒ 保留。
+    ⛔ 但用字改成「真實單」跟圖上的籤一致 —— 「你自己」這四個字已經是
+    「成績表那兩列」的專屬字樣，畫面上留著會讓守衛（㉔ 零命中）分不出來。 */
+ if((D.mine||[]).length) bits.push('真實單 '+D.mine.length+' 筆');
  return bits.map(b=>'<span>'+b+'</span>').join('<span class="sep">·</span>');
 }
 
@@ -8552,7 +8688,12 @@ function atTodayHTML(){
    const sgt=(k==='D')?'不判斷方向'
      :(sg==null?'訊號 —':('訊號 '+pm(sg,1)+' 點'));
    let rs;
-   if(!run) rs='結算中';
+   /* ⛔ 還沒摸到 ±100、日盤也還沒收 ⇒ 「持倉中」，⛔ 不可以是一個假的點數
+      （2026-09-08：舊版拿盤中最後一根 K 棒的收盤價算出「09:05 收盤平 ±67」）。 */
+   /* ⚠️ 還沒結算的時候也要分得出「這天根本沒下單」：C 沒超過門檻的日子寫「持倉中」
+      是假話（它沒有部位）。方向那一欄已經有 dirs，不必等 settle 才知道。 */
+   if(!run) rs=(dr===0?'沒超過門檻，這天不下單'
+              :(dr==null?'—':(D.holding?'持倉中':'結算中')));
    else if(run.dir===0) rs='沒超過門檻，這天不下單';
    else if(run.dir==null) rs='—';
    else rs=(run.exit_at||'—')+' '+(ATEXIT[run.why]||'—')+
@@ -8623,17 +8764,13 @@ function atTblHTML(){
       ⚠️ 那行小字有守衛在盯（autotest-tab.mjs ㉑）—— lab-qa 把它清空過，134/134 全綠。 */
    html+=atRow(k,atName(k),atSub(k),r,extra);
  }
- /* ⛔ 他自己那兩列的口徑跟四條算法**對不上**（一天 0~3 筆、時刻不固定、有手動平倉），
-    所以中間一定要有一條虛線隔開 ＋ 一行提醒。直接把兩邊的勝率並排是誤導，
-    而 CLAUDE.md 說「他自己的判斷有沒有價值」是唯一還沒被否定的假設 ——
-    把它評價錯的代價比其他四條都高。 */
- const M=S.mine||{};
- html+='<tr class="sep"><td colspan="7" title="他一天 0~3 筆、進場時刻不固定、'+
-   '而且有手動平倉；四條算法是恰好 1 筆、固定 09:03:30、一律 ±100">'+
-   '▼ 你自己真的做的（口徑不同，⚠ 不要直接跟上面比）</td></tr>';
- html+=atRow('MA','你自己','全部'+(M.why?('　停利 '+M.why.tp+' / 停損 '+M.why.sl+
-   ' / 手動 '+M.why.manual):''),M.all||{},'','mine');
- html+=atRow('MS','你自己','同口徑：當天第一筆、而且 ±100 真的跑完',M.strict||{},'','mine');
+ /* ⛔⛔ 「你自己（全部）」與「你自己（同口徑）」那兩列、連同上面那條
+    「▼ 你自己真的做的（口徑不同…）」分隔，已於 2026-09-08 依 Benson 指示拿掉
+    （原話：「然後我自己的這邊都拿掉」）。⛔ 不要再加回來。
+    ⚠️ 後端 S.mine 照算、`_auto_mine_day`／`_auto_mine_rows` 與它們的
+       「只讀不寫」守衛（autotest-backend.py ⑧c）**一行都不准刪** —— 他之後可能會
+       想加回來，而那道守衛擋的是「這一頁會不會寫到他的真實紀錄」，跟畫不畫無關。
+    守衛：autotest-tab.mjs ㉔ —— 成績表只有四列、DOM ＋ 兩張 canvas 上「你自己」零命中。 */
  return html;
 }
 function atCeilHTML(){
@@ -8650,23 +8787,33 @@ function atCeilHTML(){
     :'目前沒有一條超過')+'</span>';
 }
 function atNotesHTML(){
- /* ⛔ 例外筆數不可以省略：「安靜地少」是這個專案明令禁止的失敗模式。 */
+ /* ⛔⛔ 2026-09-08 Benson：「下面這個我根本看不懂是在幹嘛的」⇒ **帳本那一行拿掉**
+    （`同一根同時摸到 ±100 … 檔案 N 列＝訊號＋結算＋沒錄到＋重複＋讀不出來`）。
+    ⚠️ 但**不可以整條刪掉**：這個專案明令禁止「安靜地少」，而
+       `sig+settle+miss+dup+bad ＝ 總列數` 那條不變式與它的守衛都還在後端照算。
+    ⇒ 拆成兩種：
+       ・**常態統計**（帳本五項總和／收盤平幾筆／持倉中幾筆）＝ 他看不懂也不需要
+         ⇒ ⛔ 不畫。日期清單、泳道、今天卡本來就一天一天寫得清清楚楚。
+       ・**異常**（讀不出來／重複／沒有記錄的天／歷史回填／保守算停損／還沒結算／出錯）
+         ⇒ **只在 > 0 的時候出現**。正常情況下這一整行是空的（.at-notes:empty 隱藏），
+         他看不到任何東西；真的少了什麼的時候它會自己冒出來。
+    ⛔ 不要把它改回「無論如何都印一行」，那就是被退件的那一行。 */
  const S=AT.stats; if(!S||!S.rows) return '';
  const both=ATKEYS.reduce((a,k)=>a+(S.rows[k].both||0),0);
- const eod=ATKEYS.reduce((a,k)=>a+(S.rows[k].eod||0),0);
  const pend=ATKEYS.reduce((a,k)=>a+(S.rows[k].pending||0),0);
  const N=S.notes||{}, bits=[];
- bits.push('同一根同時摸到 ±100（保守算停損）'+both+' 筆');
- bits.push('沒摸到 ±100、13:45 收盤平 '+eod+' 筆');
+ /* ⛔ 「同一根同時摸到 ±100」是**我們替他做了一個對他不利的假設**（保守算停損），
+    真的發生時一定要講出來（CLAUDE.md）；沒發生就不用佔他一行字。 */
+ if(both) bits.push('<span class="warn">同一根同時摸到 ±100（保守算停損）'+both+' 筆</span>');
  if(pend) bits.push('<span class="warn">還沒結算 '+pend+' 筆</span>');
- bits.push('沒有記錄 '+(N.missing||0)+' 天');
- if((S.mine||{}).nopoints) bits.push('<span class="warn">你自己有 '+S.mine.nopoints+
-   ' 筆算不出點數（已排除）</span>');
+ if(N.missing) bits.push('<span class="warn">沒有記錄 '+N.missing+' 天</span>');
  if(N.backfill) bits.push('<span class="warn">歷史回填 '+N.backfill+
    ' 筆（⛔ 不併入上面）</span>');
+ /* ⛔ 檔案裡讀不出來／重複的列數是「有沒有東西被安靜吃掉」唯一看得見的出口 ——
+    ⛔ 這兩個不可以跟著帳本一起拿掉，只是改成「有才寫」。 */
  const led=S.ledger||{};
- bits.push('檔案 '+(led.lines||0)+' 列＝訊號 '+(led.sig||0)+'＋結算 '+(led.settle||0)+
-   '＋沒錄到 '+(led.miss||0)+'＋重複 '+(led.dup||0)+'＋讀不出來 '+(led.bad||0));
+ if(led.bad) bits.push('<span class="warn">檔案有 '+led.bad+' 列讀不出來（已排除）</span>');
+ if(led.dup) bits.push('<span class="warn">檔案有 '+led.dup+' 列重複（已排除）</span>');
  /* ⛔⛔ 主迴圈那道 try 攔下來的錯**一定要在這裡看得見**（2026-09-07 lab-qa 退件 R5）：
     後端一直有在數（AUTO["tick_err"]）也有 console 警告，但 console 只印前 3 次、
     而他不會去看主控台 ⇒ 對「使用畫面的人」來說那還是安靜地吞掉了。
@@ -8680,8 +8827,8 @@ function atNotesHTML(){
 function atCumN(){
  const S=AT.stats; if(!S||!S.rows) return 0;
  let m=0;
+ /* ⚠️ 2026-09-08 起不再把他自己那條算進來（那條線已經不畫了）—— 只數四個做法。 */
  for(const k of ATKEYS) m=Math.max(m,(S.rows[k].cum||[]).length);
- m=Math.max(m,(((S.mine||{}).strict||{}).cum||[]).length);
  return m;
 }
 function atCumNHTML(){
@@ -8997,15 +9144,18 @@ function atDrawLanes(ctx,D,xOf,laneTop,PW,v,LN){
    ctx.font=ATFONT;
    const run=(D.runs||{})[k];
    const sg=(k==='A')?atN((D.sig||{}).A):(k==='D'?null:atN((D.sig||{}).B));
+   const dr0=run?run.dir:((D.dirs||{})[k]);   /* 還沒結算時方向要看 dirs（C 沒下單就別寫持倉中） */
    if(D.px==null||!run||run.dir===0||run.dir==null){
      /* ⛔ 沒做／算不出來／還沒結算的日子畫成空的虛線 ＋ 一句話，**不可以整條消失**
         （消失＝壞掉，跟「休市日要選不到」是同一類處置）。
         ⚠️ 虛線要**從文字後面才開始畫**（規格 §9.3）—— 整條穿過文字會把字糊掉。
         ⚠️ 「這天不做」⛔ 不要再重複寫「沒超過 30」：名字裡已經寫著「要 30 點」了。 */
+     /* ⛔ 這裡也要分「持倉中」與「結算中」（2026-09-08）：他早上盯的是**圖**，
+        canvas 上的字掃字串掃不到，之前就為了同一件事退件過（【細節】M2）。 */
      const txt=(D.px==null)?'這天沒有記錄'
-       :(!run?'結算中'
-       :(run.dir===0?('這天不做（訊號 '+(sg==null?'—':pm(sg,1))+' 點，不夠）')
-                    :'這天算不出訊號'));
+       :(dr0===0?('這天不做（訊號 '+(sg==null?'—':pm(sg,1))+' 點，不夠）')
+       :(dr0==null?'這天算不出訊號'
+       :(D.holding?'持倉中':'結算中')));
      const tx=Math.max(bx+8,ex+8);
      ctx.fillStyle=ATCOL.faint; ctx.fillText(txt,tx,mid+4);
      const ls=tx+ctx.measureText(txt).width+8;
@@ -9052,15 +9202,15 @@ function atFitCum(){
 /* ⛔ 顏色不編碼好壞（紅綠只給損益數字）。四條靠亮度與線型分，**線尾標名字**
    （⛔ 不是字母 —— 規格 §2.0 ④，代號不准上畫面）。
    ⛔「不判斷」不可以被畫成次要的：506 天的驗證裡它是目前的冠軍，所以它是最粗的那條。 */
+/* ⛔ 2026-09-08：他自己那條金線（key `你`）跟著成績表那兩列一起從畫面上拿掉
+   （「然後我自己的這邊都拿掉」）。⛔ 不要再加回來 —— 後端 S.mine 照算，只是不畫。 */
 const ATLINES=[['D',ATCOL.text,2.4,false],['A',ATCOL.text,1.1,false],
-               ['B',ATCOL.dim,1.4,false],['C',ATCOL.dim,1.4,true],
-               ['你',ATCOL.gold,2.2,false]];
-/* 累計圖的線尾標籤：四個做法用 atName()，他自己那條寫「你自己」（跟成績表同一個詞）。 */
-function atCumName(k){ return k==='你'?'你自己':atName(k); }
+               ['B',ATCOL.dim,1.4,false],['C',ATCOL.dim,1.4,true]];
+/* 累計圖的線尾標籤一律走 atName()（⛔ 代號不准上畫面，規格 §2.0 ④）。 */
+function atCumName(k){ return atName(k); }
 function atCumSeries(){
  const S=AT.stats; if(!S||!S.rows) return {};
- return {D:S.rows.D.cum||[],A:S.rows.A.cum||[],B:S.rows.B.cum||[],C:S.rows.C.cum||[],
-         '你':(((S.mine||{}).strict||{}).cum)||[]};
+ return {D:S.rows.D.cum||[],A:S.rows.A.cum||[],B:S.rows.B.cum||[],C:S.rows.C.cum||[]};
 }
 function atDrawCum(){
  const cv=atFitCum(); if(!cv) return 0;
@@ -9147,15 +9297,13 @@ function atPaintStats(){
  setEl('atcumn',atCumNHTML());
  setEl('atpairbody',atPairHTML());
  setEl('atadvbody',atAdvHTML());
- setEl('attrack',atTrackHTML());
- /* ⛔ 這兩個 hover 說明裡有數字（「505 筆 ≈ 兩年」「這條線是 12.0 點」），
+ /* ⛔ 這個 hover 說明裡有數字（「505 筆的時候這條線是 12.0 點」），
     ⛔ **不可以寫死在 HTML 裡** —— 常數改了 title 就變成假話，而且 hover 才看得到、
-    幾乎不可能被發現（守衛：autotest-tab.mjs ㉓）。 */
+    幾乎不可能被發現（守衛：autotest-tab.mjs ㉓④）。
+    ⚠️ 2026-09-08 進度尺拿掉之後，這是最後一個「數字要算出來」的 title 了 ——
+       ⛔ 不要因為只剩一個就把它改回寫死。 */
  const S0=AT.stats||{}, N0=atN(S0.track_n)||AT.trackN||505, C0=atCeiling(N0);
- const yr=(N0/245).toFixed(1).replace(/\.0$/,'');
- const eTrack=document.getElementById('attrack'), eCeil=document.getElementById('atceil');
- if(eTrack) eTrack.title=N0+' 筆 ≈ '+yr+' 年。那是「每筆差 '+C0+
-   ' 點也分得出來」所需的天數；在那之前，排名會一直換人。';
+ const eCeil=document.getElementById('atceil');
  if(eCeil) eCeil.title='比這條線小的差距，跟運氣分不開。'+N0+' 筆的時候這條線是 '+C0+' 點。';
  const min=(AT.stats&&AT.stats.cum_min_n)||10, few=atCumN()<min;
  setEl('atcumempty',few?atCumEmptyHTML():'');
@@ -9163,22 +9311,14 @@ function atPaintStats(){
  if(cv) cv.style.visibility=few?'hidden':'visible';
  if(!few) atDrawCum();
 }
-function atTrackHTML(){
- /* 裝置零：**這一頁唯一要傳達的那句話，用畫的。**
-    ⛔ 畫面上不准寫「檢定力／功效／MDE／顯著／信賴區間／p 值」任何一個詞，
-       也不准做成「還剩 485 天就會有答案」的倒數 —— 那是承諾，不是事實。 */
- /* ⚠️ 分子用 total_n（**累積到今天總共幾天**），不是 S.n（目前窗口幾天）——
-    用 S.n 的話按「近10」進度尺就縮回去，看起來像資料不見了。 */
- const S=AT.stats, N=(S&&S.track_n)||AT.trackN||505;
- const n=(S&&(S.total_n!=null?S.total_n:S.n))||0;
- const pct=Math.max(1.1,Math.min(100,n/N*100));
- const yrs=(N/245).toFixed(1).replace(/\.0$/,'');
- return '<div class="hd"><span class="t">這個測試跑到哪裡了</span>'+
-   '<span class="n">'+n+' / '+N+' 筆</span></div>'+
-   '<div class="bar"><i style="width:'+pct.toFixed(2)+'%"></i></div>'+
-   '<div class="ft"><span>現在<b>'+n+' 天</b></span>'+
-   '<span>要到這裡才算數<b>約 '+yrs+' 年</b></span></div>';
-}
+/* ⛔⛔ 進度尺（atTrackHTML）已於 2026-09-08 依 Benson 指示整條刪掉 —— 原話：
+   「程式下單那邊這個欄位不需要」（他紅框圈的就是那條尺）。
+   ⛔ 不要再加回來，也不要換個樣子重做一次（例如「還剩 485 天」的倒數 ——
+      那本來就是被禁止的形狀：那是承諾不是事實）。
+   ⚠️ 後端 `total_n`／`track_n` 兩個欄位**照端不要拿掉**：`track_n` 還在算天花板那個
+      title 的數字（atPaintStats），`total_n` 是「累積幾天 vs 窗口幾天」那組語意的正本。
+   守衛：autotest-tab.mjs ⑤（#attrack 不存在 ＋「這個測試跑到哪裡了」／「/ 505 筆」／
+   「要到這裡才算數」在 DOM ＋ 兩張 canvas 上零命中）。 */
 function atMsgHTML(){
  if(atLoading())
    return '<div class="at-skel"><i style="height:38%"></i><i style="height:52%"></i>'+

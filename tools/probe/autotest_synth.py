@@ -99,9 +99,14 @@ def settle_row(d, bars, sig, src="live"):
             runs[k] = {"dir": 0, "skip": "below_threshold", "thresh": LP.C_THRESH}
         else:
             runs[k] = LP._auto_run(after, sig["px"], dr)
+    # ⛔ `final` 一定要有（2026-09-08）：合成的是「13:47 收盤後才算」的那種列，
+    #    那才是**正常**的資料。沒有 final ＝ 舊格式的早結，產品會把它當成不可信、
+    #    重算蓋掉 —— 治具若少了這一欄，整批合成資料都會被當成還沒結算。
+    #    「舊格式會被重算蓋掉」那一條有自己的治具（autotest-backend.py ⑤c），
+    #    ⛔ 不要靠這裡漏寫欄位來測那件事。
     return {"rec": "settle", "date": str(d), "src": src, "runs": runs,
             "settle_src": "1min", "settle_from": LP.AUTO_SETTLE_FROM,
-            "bars": len(after), "wrote_at": f"{d}T13:47:00"}
+            "bars": len(after), "final": True, "wrote_at": f"{d}T13:47:00"}
 
 
 def weekdays_back(n, end=None):
