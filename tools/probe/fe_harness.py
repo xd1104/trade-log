@@ -30,6 +30,15 @@ import live_panel as LP
 SCRATCH = pathlib.Path(__file__).resolve().parent
 BASE = json.loads((SCRATCH / "state_template.json").read_text(encoding="utf-8"))
 POSTS = []
+# ⛔ 被產品的 `fire_post_guard()` 擋下來的 POST（前端漏帶標頭／token 時會落到這裡）。
+#    探針用 `/blocked` 讀 —— 「零筆」是「他自己的鈕全都還能按」的直接證據。
+BLOCKED = []
+# ⛔ 同上，但 `/reset` **不清**：探針最後要問「這一整場有沒有任何一下被擋」，
+#    中間每個小節都會 /reset，只留可清的那一份等於量不到。
+BLOCKED_ALL = []
+# ⛔ 通過守衛、真的走進治具的那些（同樣 /reset 不清）——
+#    「被擋 0 筆」單獨看是空話，要配「真的成功過 N 筆」才算證據。
+OK_ALL = []
 MODE = {"v": "flat"}
 SLOW = {"v": 0.0}
 # 成績區分段按鈕（近 7／近 10／近 30／全部）的資料量。
@@ -323,6 +332,9 @@ def tick_px(base):
 
 def state():
     s = json.loads(json.dumps(BASE))
+    # ⛔ 產品的 `/api/state` 帶 token（前端 `pfetch()` 靠它），治具少帶的話
+    #    每一顆鈕在探針裡都會 403 —— 這裡走**產品的**那一個字串，不自己生一份。
+    s["token"] = LP.FIRE_TOKEN
     s["today_trades"] = json.loads(json.dumps(SIM_TRADES))
     s["chips"]["price"] = tick_px(47134)
     s["real"] = {"live": False, "ca_ok": True, "ca_msg": None,
@@ -424,8 +436,22 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(n) or b"{}")
+        raw = self.rfile.read(n)
+        # ⭐⭐ 2026-09-09（lab-qa P0）：這裡**故意**走產品自己的 `LP.fire_post_guard()`。
+        #   ⛔ 治具自己放行的話，「前端某一顆鈕忘了帶標頭 ⇒ 後端 403 ⇒ 那顆鈕按不動」
+        #      在探針上會**全綠**，而他真的按下去才會發現 —— 那正是退件 M1 的形狀
+        #      （治具重寫 handler ⇒ 探針從頭到尾沒打到產品的防線）。
+        #   ⇒ 所以 hold-to-fire.mjs／tabs-visual.mjs 每一條「按了之後畫面真的變了」
+        #      現在同時就是「前端真的帶齊了標頭與 token」的證據。
+        ok, code, msg = LP.fire_post_guard(self.headers)
+        if not ok:
+            BLOCKED.append((self.path, code, time.time()))
+            BLOCKED_ALL.append((self.path, code))
+            return self._send(code, json.dumps({"ok": False, "msg": msg},
+                                               ensure_ascii=False))
+        body = json.loads(raw or b"{}")
         POSTS.append((self.path, body, time.time()))
+        OK_ALL.append(self.path)
         if SLOW["v"]:
             time.sleep(SLOW["v"])        # 模擬券商回報延遲，讓「送出中」那段看得到
         if self.path == "/api/real/enter":
@@ -456,9 +482,17 @@ class Ctl(H):
         p = self.path
         if p == "/posts":
             return self._send(200, json.dumps(
-                {"posts": [(a, b) for a, b, _ in POSTS]}, ensure_ascii=False))
+                {"posts": [(a, b) for a, b, _ in POSTS],
+                 # ⛔ 被產品守衛擋掉的那些。探針斷言這一欄是空的 ⇒
+                 #    「前端每一個呼叫點都補上標頭與 token 了，一個都沒漏」
+                 "blocked": [(a, c) for a, c, _ in BLOCKED],
+                 # ⛔ 這一份 /reset 不清 —— 探針收尾問的就是它
+                 "blocked_all": list(BLOCKED_ALL),
+                 "ok_all": list(OK_ALL)},
+                ensure_ascii=False))
         if p == "/reset":
             POSTS.clear()                 # ⚠️ 只清紀錄，**不可以順手改 MODE**
+            BLOCKED.clear()
             return self._send(200, "{}")
         if p.startswith("/mode/"):
             MODE["v"] = p.split("/")[-1]

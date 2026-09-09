@@ -14,7 +14,12 @@
 - 控制埠 8776：探針用來切開關／切真單／換資料集
 
 ⭐ `/api/fire/state` 走的是**產品自己的** `auto_fire.state()` ＋ `live_panel.fire_sim_pairs()`
+   ＋ `live_panel.fire_arm_confirm()` ＋ `live_panel.FIRE_TOKEN`
    —— 治具另寫一份 payload 的話，「治具對、產品錯」會全綠。
+⭐ `POST /api/fire/on`（打開）同理走**產品的** `fire_post_guard()` ＋ `fire_arm_on()`：
+   這樣「前端少帶一個標頭 ⇒ 後端會擋」在探針上才紅得起來。
+   ⚠️ 它建的是**暫存區**那個 `AUTO_ORDERS_ON`（`AF.ARM_FLAG` 已經導走），
+   ⛔ 真的 `tools/shioaji/AUTO_ORDERS_ON` 啟動時就斷言過不存在。
 
 跑法：  PYTHONIOENCODING=utf-8 PYTHONUTF8=1 .venv\\Scripts\\python.exe tools\\probe\\fire_harness.py
         改過 live_panel.py／auto_fire.py 一定要**重起治具**。
@@ -62,7 +67,25 @@ AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC, late_ms=LP.AUTO_L
              gap_s=LP.AUTO_GAP_S, tp_points=LP.TP_POINTS,
              sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT)
 
-ST = {"arm": "off", "live": False, "rows": "mixed", "clock": "10:30:00"}
+ST = {"arm": "off", "live": False, "rows": "mixed", "clock": "10:30:00",
+      # ⭐ R2 用：確認條那句話要講「今天 09:03:30」還是「下一個交易日 09:03:30」，
+      #    正本是 `LP.fire_fires_today(now)`。探針要驗**盤前／盤後兩種**，
+      #    所以這裡可以塞一個假的「現在」（ISO 字串；None ＝ 真的現在）。
+      #    ⛔ 治具不自己算那句話 —— 一律把這個 now 餵給產品的 `fire_arm_confirm()`。
+      "now": None}
+# ⛔ 被產品守衛擋掉的 POST（前端漏帶標頭時會落到這裡）
+BLOCKED = []
+
+
+def _fake_now():
+    """`ST["now"]` 解析成 datetime；⛔ 解不出來就回 None（＝用真的現在）。"""
+    v = ST.get("now")
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(v)
+    except Exception:
+        return None
 
 
 def _d(n):
@@ -237,8 +260,29 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(n)
-        # ⭐ 這一頁**唯一**一個會改變狀態的動作：關閉自動下單。
+        raw = self.rfile.read(n)
+        # ⭐⭐ 2026-09-09（lab-qa P0）：產品的 `do_POST` 是**在入口**過守衛的
+        #    （每一個 POST，不是只有 /api/fire/on），治具照抄同一個位置。
+        #    ⛔ 治具只在 /api/fire/on 過守衛的話，「關閉那顆忘了帶標頭」會全綠。
+        ok, code, msg = LP.fire_post_guard(self.headers)
+        if not ok:
+            BLOCKED.append((self.path, code))
+            return self._j(code, {"ok": False, "msg": msg})
+        # ⭐⭐ 打開自動下單（2026-09-09 加）。⛔ 這裡**故意**走產品自己的
+        #    `LP.fire_post_guard()` ＋ `LP.fire_arm_on()`：治具另寫一份的話，
+        #    「前端少帶一個標頭、後端會擋」這件事在探針上會**全綠**
+        #    （那正是 2026-09-09 退件 M1 的形狀：治具重寫 handler ⇒ 探針沒打到產品）。
+        #    ⚠️ 端點路由本身與六道防護的每一道，由 `test_fire_routes.py` 真的起服務打。
+        if self.path == "/api/fire/on":
+            try:
+                body = json.loads(raw or b"{}")
+            except Exception:
+                body = {}
+            code, out = LP.fire_arm_on(body.get("mode"), who="harness")
+            if out.get("ok"):
+                ST["arm"] = out.get("method") or ST["arm"]   # 治具狀態跟著同步
+            return self._j(code, out)
+        # ⭐ 關閉自動下單。
         #    ⛔ 走的是**產品自己的** `auto_fire.disarm()`（治具另寫一份的話，
         #       「治具對、產品錯」會全綠 —— 這就是 2026-09-09 退件 M1 的形狀）。
         #    ⚠️ 產品路由本身（`/api/fire/off` 這個字串）由 `test_fire_routes.py` 守，
@@ -254,14 +298,23 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path
+        # ⛔ 武裝那顆只收 POST（產品是 405；治具照抄同一個語意）
+        if p.split("?", 1)[0] == "/api/fire/on":
+            return self._j(405, {"ok": False, "msg": "這個端點只收 POST"})
         if p.startswith("/api/fire/state"):
             out = AF.state()
             out["sim"] = LP.fire_sim_pairs(out.get("days") or [])
+            # ⛔ 兩段式確認那句話與 token 都走**產品的**那一份（見上面 do_POST 的理由）
+            out["arm_confirm"] = LP.fire_arm_confirm(out.get("live"), _fake_now())
+            out["token"] = LP.FIRE_TOKEN
             out["now"] = ST["clock"]           # ⛔ 前端一律用後端時鐘
             return self._j(200, out)
         if p.startswith("/api/state"):
             s = dict(STATE)
             s["clock"] = ST["clock"]
+            # ⛔ 產品的 /api/state 帶 token（前端 `pfetch()` 靠它拿），治具照抄；
+            #    少了它這一頁每一顆鈕都會被守衛擋成 403。
+            s["token"] = LP.FIRE_TOKEN
             return self._j(200, s)
         if p.startswith("/api/"):
             return self._j(200, {})
@@ -312,14 +365,35 @@ class C(BaseHTTPRequestHandler):
         if p.startswith("/f/clock"):
             ST["clock"] = p.split("/f/clock", 1)[1].lstrip("/") or "10:30:00"
             return self._j({"clock": ST["clock"]})
+        if p.startswith("/f/now"):
+            # ⭐ R2：塞一個假的「現在」給 `fire_arm_confirm()`（⛔ 只影響那句話的
+            #    「今天／下一個交易日」，⛔ 不動任何送單邏輯）。空的 ＝ 用真的現在。
+            ST["now"] = p.split("/f/now", 1)[1].lstrip("/") or None
+            return self._j({"now": ST["now"],
+                            "fires_today": LP.fire_fires_today(_fake_now())})
+        if p.startswith("/f/blocked"):
+            return self._j({"blocked": list(BLOCKED)})
         if p.startswith("/f/reset"):
             ST.update({"arm": "off", "live": False, "rows": "mixed",
-                       "clock": "10:30:00"})
+                       "clock": "10:30:00", "now": None})
+            BLOCKED.clear()
             _rebuild()
             _apply_arm()
             return self._j({"ok": True})
         if p.startswith("/f/where"):
-            return self._j({"dir": str(TMP), "today": TODAY,
+            # 「打開」那一列紀錄（arm-YYYY-MM.jsonl）—— ⛔ 刻意跟 YYYY-MM.jsonl 分開，
+            # 那個檔有硬不變式 fire+result+skip+eod+bad ＝ 總列數。
+            _arm_rows = []
+            if AF.FIRE_DIR.exists():
+                for _p in sorted(AF.FIRE_DIR.glob("arm-*.jsonl")):
+                    for _ln in _p.read_text(encoding="utf-8").splitlines():
+                        if _ln.strip():
+                            try:
+                                _arm_rows.append(json.loads(_ln))
+                            except Exception:
+                                _arm_rows.append({"bad": _ln[:80]})
+            return self._j({"dir": str(TMP), "today": TODAY, "arm_rows": _arm_rows,
+                            "ledger": AF.read_all()[1],
                             "off_files": sorted(
                                 x.name for x in AF.ARM_FLAG.parent.glob(
                                     AF.ARM_FLAG.name + ".off-*")),

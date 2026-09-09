@@ -897,6 +897,38 @@ say(not any(isinstance(n, ast.Attribute) and n.attr == "exists"
 say("import shioaji" not in src and "import sj" not in src,
     "  ⛔ 連 shioaji 都沒有 import（結構上組不出委託單）")
 
+# ══ ⛔⛔ 行為面的量尺：**真的起一個服務打進去**（埠 0，⛔ 不是 8770）═════════
+#    ⚠️⚠️ 2026-09-09 lab-qa 退件 R1：這一支原本用「某個字串出現在 live_panel.py 裡」
+#       當「那個端點存在／回 405」的證據 —— 而 `do_GET` 的**中文註解本身**就含
+#       `/api/fire/on` 與 `405`（那段註解正是在解釋這件事）⇒ 把真正那兩行整個刪掉，
+#       斷言照樣綠（lab-qa 實測）。**這是 Ⓝ7 的同一個形狀，第二個。**
+#    ⛔ 通則：端點的行為一律**送一個請求進去看回什麼**，⛔ 不准比原始碼字串。
+#       （「哪一行程式在不在」那種只能比字串的，就要先把註解／docstring 剝掉，
+#         見 `_nodoc()`。）
+import threading as _th                                          # noqa: E402
+import urllib.error as _ue                                       # noqa: E402
+import urllib.request as _ur                                     # noqa: E402
+from http.server import ThreadingHTTPServer as _THS              # noqa: E402
+
+_SRV = _THS(("127.0.0.1", 0), LP.Handler)
+_SRV_PORT = _SRV.server_address[1]
+assert _SRV_PORT != 8770, "⛔ 不可以用 8770（他的面板正開著）"
+_th.Thread(target=_SRV.serve_forever, daemon=True).start()
+
+
+def hit(path, method="GET", body=None, headers=None):
+    """真的打一個請求進去，回 `(狀態碼, Content-Type, 內文)`。⛔ 打的是暫存區那一套。"""
+    rq = _ur.Request(f"http://127.0.0.1:{_SRV_PORT}{path}", data=body,
+                     method=method, headers=headers or {})
+    try:
+        with _ur.urlopen(rq, timeout=15) as r:
+            return r.status, r.headers.get("Content-Type", ""), \
+                r.read().decode("utf-8", "replace")
+    except _ue.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", ""), \
+            e.read().decode("utf-8", "replace")
+
+
 # ══ ⑩ 端點是唯讀的（⛔ 畫面上沒有開關）═════════════════════════════════
 print("\n=== ⑩ /api/fire/state 是唯讀的 ===")
 before_rows = len(rows())
@@ -918,7 +950,18 @@ chk("    live_flag 講得出是哪個檔", AF.state()["live_flag"], "REAL_ORDERS
 live_on()
 chk("  端出每一天送了沒", isinstance(st.get("days"), list), True)
 chk("  端出原因的正本（前後端不分岔）", st.get("why_texts"), dict(AF.WHY))
-say("/api/fire/state" in LPSRC, "  面板有這個 GET 端點")
+# ⛔ 2026-09-09 lab-qa R1 盤查：這一條原本是 `"/api/fire/state" in LPSRC` ——
+#    那個字串在檔案裡出現好幾次（註解、前端 fetch），⇒ 後端路由刪掉照樣綠。
+#    改成**真的送一個 GET 進去**，並附上「路由沒中的時候長什麼樣」當尺的自證。
+_c, _ct, _b = hit("/api/fire/state")
+_sj = json.loads(_b) if "json" in _ct.lower() else None
+say(isinstance(_sj, dict) and "armed" in _sj,
+    "  ⛔ 面板真的有這個 GET 端點（**真的打進去**，⛔ 不是比原始碼字串）",
+    f"{_c} {_ct[:28]} {_b[:40]}")
+_c2, _ct2, _b2 = hit("/api/fire/statXX")
+say("html" in _ct2.lower(),
+    "    尺的自證：路由沒中的時候回的是整張 HTML（⇒ 上面那條不是恆真）",
+    f"{_c2} {_ct2[:28]}")
 say('"/api/fire/state"' not in LPSRC.split("def do_POST")[1].split("def do_GET")[0],
     "  ⛔ do_POST 裡沒有這個端點（畫面上按不到開關）")
 page = LPSRC[LPSRC.index('PAGE = r"""'):]
@@ -1638,12 +1681,168 @@ say(not any(getattr(n, "attr", None) == "ARM_FLAG" or getattr(n, "id", None) == 
             for n in ast.walk(_dopost)),
     "  ⛔ do_POST 裡不准直接碰 ARM_FLAG（一律走 disarm()）")
 _dp = LPSRC.split("def do_POST")[1].split("def do_GET")[0]
-say('"/api/fire/off"' in _dp, "  唯一的 POST 是「關閉」")
+say('"/api/fire/off"' in _dp, "  「關閉」那一顆的 POST 在")
 say('"/api/fire/state"' not in _dp, "  ⛔ 唯讀那支仍然沒有 POST")
 say("auto_fire.disarm()" in _dp and "auto_fire.arm(" in _dp,
-    "  而且那條路只呼叫 disarm()（⛔ 沒有任何「開啟」的函式可以呼叫）")
-say(not any(s in LPSRC for s in ('"/api/fire/on"', '"/api/fire/arm"')),
-    "  ⛔ 整支 live_panel 裡沒有「開啟自動下單」的端點")
+    "  關閉那條路只呼叫 disarm()（⛔ 沒有任何「開啟」的函式可以呼叫）")
+say('"/api/fire/arm"' not in LPSRC and '"/api/fire/method"' not in LPSRC,
+    "  ⛔ 除了 on／off／state 之外沒有別的 fire 端點")
+
+# ══ ⑬b ⭐⭐ 「打開」那一顆（2026-09-09 Benson 要求做在面板上）═══════════
+#    ⛔⛔ 「開」現在打得開了，所以這一節守的是**開的那條路只有一個入口、
+#       而且入口上每一道關卡都還在**。行為面（六道防護、mode 驗證、409、落地）
+#       由 `test_fire_routes.py` ③b 真的起服務打進去驗；這裡守的是
+#       **常數／文案／接線那半**（這個專案連五次的老形狀就是那半空白）。
+print("\n=== ⑬b ⭐⭐ 打開那一顆（⛔ 唯一一個會建立開關檔的地方）===")
+_lptree = ast.parse(LPSRC)
+_arm_fn = next((n for n in ast.walk(_lptree)
+                if isinstance(n, ast.FunctionDef) and n.name == "fire_arm_on"), None)
+say(_arm_fn is not None, "  live_panel 有 fire_arm_on()（建開關檔的唯一入口）")
+# ⛔⛔ 建檔這件事**只能在那一個函式裡**。同一把尺掃全檔：任何一個
+#    `os.open(...)` / `open(..., "w")` 打在 ARM_FLAG 上的地方都要落在 fire_arm_on 裡。
+_arm_lines = range(_arm_fn.lineno, (_arm_fn.end_lineno or _arm_fn.lineno) + 1) \
+    if _arm_fn else range(0)
+_creators = []
+for _n in ast.walk(_lptree):
+    if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n):
+        _creators.append((ast.unparse(_n)[:60],
+                          getattr(_n, "lineno", -1) in _arm_lines))
+say(len(_creators) == 1 and _creators[0][1],
+    "  ⛔⛔ 整支 live_panel 只有一個地方在建立開關檔，而且它就在 fire_arm_on 裡",
+    str(_creators))
+say(_arm_fn is not None and "O_EXCL" in ast.unparse(_arm_fn),
+    "  ⛔ 用的是 O_CREAT|O_EXCL ⇒ **結構上不可能蓋掉他已經有的那個檔**")
+def _nodoc(fn):
+    """⛔ 比程式碼要先把**說明**拿掉：這一節的說明本身就在講「用 O_EXCL」
+       「不再問一次 broker.is_live()」—— 連說明一起比的話，那幾條斷言是恆真的
+       （這個專案在【模擬】那一頁踩過同一個坑）。"""
+    if fn is None:
+        return ""
+    body = [n for n in fn.body]
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        body = body[1:]
+    return "\n".join(ast.unparse(n) for n in body)
+
+
+_armsrc = _nodoc(_arm_fn)
+say("auto_fire.METHODS" in _armsrc,
+    "  ⛔ mode 拿 auto_fire.METHODS 比（⛔ 不是自己寫死一份 A／B ＝兩把尺）")
+say(("METHODS" in _armsrc and "os.O_EXCL" in _armsrc
+     and _armsrc.index("METHODS") < _armsrc.index("os.O_EXCL")),
+    "  ⛔⛔ 而且**先驗再寫**（驗完才碰檔案）")
+# 行為面的兩條（⛔ 直接呼叫產品函式，不必起服務）
+_probe_dir = TMP / "armprobe"
+_probe_dir.mkdir(exist_ok=True)
+_old_flag = AF.ARM_FLAG
+AF.ARM_FLAG = _probe_dir / "AUTO_ORDERS_ON"
+try:
+    _c, _o = LP.fire_arm_on("C")
+    say(_c == 400 and not AF.ARM_FLAG.exists(),
+        "  ⛔ mode=C ⇒ 400，而且**一個檔都沒建**", f"{_c} {str(_o)[:60]}")
+    _c, _o = LP.fire_arm_on("A")
+    say(_c == 200 and AF.ARM_FLAG.read_bytes() == b"A",
+        "  尺的自證：mode=A ⇒ 真的建出來，內容就是一個 ASCII 字母",
+        f"{_c} {AF.ARM_FLAG.read_bytes()!r}")
+    _c, _o = LP.fire_arm_on("B")
+    say(_c == 409 and AF.ARM_FLAG.read_bytes() == b"A",
+        "  ⛔⛔ 已經開著再按 ⇒ 409，⛔ 原本那個檔一個位元組都沒被動到",
+        f"{_c} {AF.ARM_FLAG.read_bytes()!r}")
+finally:
+    AF.ARM_FLAG = _old_flag
+    shutil.rmtree(_probe_dir, ignore_errors=True)
+# ⛔ 確認條那句話：**兩種模式不可以寫同一句**（寫同一句就一定有一句是假的）
+_cr = LP.fire_arm_confirm(True)
+_cd = LP.fire_arm_confirm(False)
+say(_cr["live"] is True and _cd["live"] is False and _cr["text"] != _cd["text"],
+    "  ⛔ 真錢與演練兩句話不一樣", (_cr["text"][:24] + " ／ " + _cd["text"][:16]))
+say(all(s in _cr["text"] for s in ("真實下單", "你的錢", LP.SIGNAL_AT))
+    and ("%g" % LP.TP_POINTS) in _cr["text"],
+    "  ⛔ 真錢那句要講「用你的錢」「幾點送」「幾點停利停損」", _cr["text"])
+say("演練" in _cd["text"] and "不會真的送單" in _cd["text"]
+    and "你的錢" not in _cd["text"],
+    "  ⛔ 演練那句⛔ 不准出現「你的錢」（會嚇人，而且是假的）", _cd["text"])
+say("broker.is_live()" not in _nodoc(next(
+    (n for n in ast.walk(_lptree)
+     if isinstance(n, ast.FunctionDef) and n.name == "fire_arm_confirm"), None)),
+    "  ⛔ 那句話用的是傳進來的 live（⛔ 不再問一次 broker ＝ 兩把尺）")
+# 路由：⛔ 精確比對（放寬＝多開一批沒人審過的入口，跟 Q12 同一個形狀）
+say('if self.path == "/api/fire/on":' in _dp,
+    "  ⛔ 打開那條路由是**精確比對**（⛔ 不是 startswith／in）")
+# ⛔⛔ 【P0，2026-09-09 lab-qa】守衛套在 `do_POST` 的**入口**，不是逐條路由各自套。
+#    ⚠️ 這一條**一定要用 AST**：`do_POST` 的註解本身就在講 `fire_post_guard`，
+#       搜字串的話「把那次呼叫刪掉」照樣綠（R1 的同一個形狀）。
+_gcalls = [n for n in ast.walk(_dopost)
+           if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "fire_post_guard"]
+chk("  ⛔ do_POST 真的呼叫 fire_post_guard()（AST，⛔ 不是搜字串）", len(_gcalls), 1)
+_routes_in_post = [n.lineno for n in ast.walk(_dopost)
+                   if isinstance(n, ast.Compare) and "self.path ==" in ast.unparse(n)]
+say(bool(_gcalls) and bool(_routes_in_post)
+    and _gcalls[0].lineno < min(_routes_in_post),
+    "  ⛔⛔ 而且它在**第一條路由之前** ⇒ 每一個 POST 都會過（⛔ 不可能有漏掉的端點）",
+    f"guard@{_gcalls[0].lineno if _gcalls else '?'} "
+    f"vs 第一條路由@{min(_routes_in_post) if _routes_in_post else '?'}")
+_guard = next((n for n in ast.walk(_lptree)
+               if isinstance(n, ast.FunctionDef) and n.name == "fire_post_guard"), None)
+# ⛔⛔ 2026-09-09 R1 盤查抓到的第三個恆真守衛：這裡本來是 `ast.unparse(_guard)`，
+#    **而 `ast.unparse` 會把 docstring 一起吐出來** —— 那份 docstring 逐字列著
+#    Content-Type／X-Panel／Origin／X-Panel-Token／Sec-Fetch-Site／Host／compare_digest
+#    ⇒ **把六道檢查整組刪掉，下面這 7 條照樣全綠**。一律走 `_nodoc()`。
+_gsrc = _nodoc(_guard) + "\n" + _nodoc(next(
+    (n for n in ast.walk(_lptree)
+     if isinstance(n, ast.FunctionDef) and n.name == "_fire_browser_guard"), None))
+for _h in ("Content-Type", "X-Panel", "Origin", "X-Panel-Token",
+           "Sec-Fetch-Site", "Host"):
+    say(_h in _gsrc, f"  ⛔ 防護還在：{_h}")
+say("FIRE_TOKEN" in _gsrc and "compare_digest" in _gsrc,
+    "  ⛔ token 用 compare_digest 比（不是 ==）")
+# ⛔⛔ 2026-09-09 lab-qa 退件 R1：這一條本來是比原始碼字串，而 `do_GET` 的註解裡
+#    就有 `/api/fire/on` 與 `405` ⇒ 把真正那兩行整個刪掉照樣綠（lab-qa 實測）。
+#    改成**真的送請求進去**。
+for _m in ("GET", "HEAD"):
+    _c, _ct, _b = hit("/api/fire/on", _m)
+    say(_c == 405,
+        f"  ⛔ {_m} /api/fire/on ⇒ 405（**真的送一個請求進去**，⛔ 不是比字串）"
+        "　一個 <img src> 不可以幫他打開", str(_c))
+    say(not AF.ARM_FLAG.exists(), f"    ⇒ ⛔ 而且開關檔沒有被建出來（{_m}）")
+_c, _ct, _b = hit("/api/fire/on?mode=A", "GET")
+say(_c == 405, "  ⛔ 帶查詢字串的 GET 也是 405", str(_c))
+# 尺的自證：⛔ POST（帶齊標頭）**不是** 405 —— 不然「整個端點不見了」也會全綠
+_c, _ct, _b = hit("/api/fire/on", "POST", b'{"mode":"C"}',
+                  {"Content-Type": "application/json", "X-Panel": "1",
+                   "X-Panel-Token": LP.FIRE_TOKEN})
+say(_c == 400 and "做法" in (_b or ""),
+    "  尺的自證：帶齊標頭的 POST 走進 mode 檢查（⇒ 上面那幾條 405 不是恆真）",
+    f"{_c} {(_b or '')[:50]}")
+say(not AF.ARM_FLAG.exists(), "    ⇒ ⛔ 開關檔仍然沒有被建出來")
+
+# ⛔⛔ 前端那半（畫面／接線）—— 端到端由 `tools/probe/fire-tab.mjs` ⑪ 量，
+#    這裡是純 Python 這一層，兩層都要有（Q9 那次就是這一層整片空白）。
+_alon = page[page.index("function alOnHTML"):page.index("function alArm")]
+_alarm = page[page.index("function alArm"):page.index("document.addEventListener('click'",
+                                                      page.index("function alArm"))]
+say("if(D.flag_exists) return ''" in _alon,
+    "  ⛔ 已經開著的時候不畫「打開」（⛔ 開與關不可以同時在畫面上）")
+# ⛔ 先剝註解再比：alOnHTML 與 alArm 之間的那段**說明文字**現在就含「pfetch()」
+#    ⇒ 連註解一起比的話這一條會變成假紅（同一個坑的反面）。
+_alon_nc = _re.sub(r"(?m)^\s*//.*$", " ",
+                   _re.sub(r"/\*.*?\*/", " ", _alon, flags=_re.S))
+say("fetch(" not in _alon_nc,
+    "  ⛔⛔ 第一段（兩顆做法鈕）那一段**一個 fetch 都沒有**（沒確認就不准送）")
+# ⚠️ ⛔ 比的是 `esc(C.text)`（**真的畫出去的那一段**）不是 `C.text` ——
+#    `typeof C.text!=='string'` 那道防呆本身就含 "C.text"，比 "C.text" 的話
+#    「把文案改成前端寫死」那個突變**打不紅**（2026-09-09 fire-mutate Ⓝ7 實測）。
+say("esc(C.text)" in _alon and "arm_confirm" in _alon,
+    "  ⛔ 確認條那句話是從後端拿的（⛔ 前端不准自己猜真錢／演練）")
+say("al-conf real" in _alon or "' real'" in _alon,
+    "  ⛔ 真錢那一條有自己的樣子（⛔ 兩種模式不可以長一樣）")
+say("'/api/fire/on'" in _alarm and "pfetch(" in _alarm,
+    "  ⛔ 第二段才送請求，而且走的是共用的 pfetch()（⛔ 不自己寫一份標頭）")
+say("ALON.step='idle'" in page and "ALON.step='confirm'" in page,
+    "  兩段式的狀態機在（idle ↔ confirm）")
+_alent = page[page.index("function alEnter"):page.index("function alLoop")]
+say("ALON.step='idle'" in _alent,
+    "  ⛔ 切進這一頁一定回到「未確認」（⛔ 不可以留著上次展開到一半的確認條）")
 # ⛔⛔ 那顆鈕的**顯示條件**（2026-09-09 lab-qa 的 Q9：純 Python 這一層完全空白）：
 #    要看 `flag_exists`（檔案在不在），⛔ 不可以看 `armed`。
 #    他把開關檔存成 UTF-16／打成 `K線` 的時候 armed 是 False 但檔案還在 ——
@@ -1662,6 +1861,155 @@ say("D.armed" not in _alpaint,
 _alcond = _alpaint.split("setEl('aloff',", 1)[1].split("?", 1)[0].strip()
 chk("  ⛔ 那個條件逐字就是 D.flag_exists（⛔ 不准 || 也不准 &&）",
     _alcond, "D.flag_exists")
+
+# ══ ⑬c ⭐⭐ 確認條那句話：「今天」還是「下一個交易日」（2026-09-09 退件 R2）═══
+#    ⚠️ 原本寫死「**下一個交易日** 09:03:30」，但 `auto_fire` **沒有「今天開的不算」
+#       的閘門** ⇒ 他 08:50 按下去，13 分鐘後今天就送一口真單，而畫面說是明天。
+#    ⭐ Benson 裁示：**改文案、不加閘門**（「按了就開始」才是他要的行為）。
+#    ⛔⛔ 這一節守的是「兩邊同一把尺」：`fire_fires_today()` 的答案必須跟
+#       **真的驅動 `_auto_tick()` 走一遍那一天**的結果逐一相同。
+print("\n=== ⑬c ⭐⭐ 「今天 09:03:30」還是「下一個交易日 09:03:30」===")
+_DT = datetime.datetime
+
+
+def _would_fire_today(t0):
+    """
+    ⛔ 用**產品自己的 `_auto_tick()`** 走一遍那一天（面板 08:00 起一直開著），
+       記下 09:03:30 那一刻的掛勾是在哪個時刻被呼叫的；
+       「他在 t0 按下開關，今天還會不會送」＝ 那一刻**嚴格晚於** t0。
+    ⚠️ 剛好同一秒按下去是真正的競態（4Hz 迴圈已經跑過那一格了），
+       ⛔ 那種情況沒有一句話會是對的，所以用「嚴格晚於」＝ 保守地說「下一個交易日」。
+    """
+    fired, cur = [], [None]
+    _old_hook = LP.AUTO_SIG_HOOK
+    _old_auto = dict(LP.AUTO)
+    LP.AUTO_SIG_HOOK = lambda snap, d, lag: fired.append(cur[0])
+    LP.AUTO.update({"started": True, "day": None, "done": False, "settled": False,
+                    "eod": False, "gaps": 0.0, "queued": set()})
+    try:
+        t = _DT.combine(t0.date(), datetime.time(8, 0, 0))
+        end = _DT.combine(t0.date(), datetime.time(0, 0)) + \
+            datetime.timedelta(seconds=LP.SIGNAL_SEC + 5)
+        while t <= end:
+            cur[0] = t
+            LP._auto_tick(None, t, LP.market_session(t))
+            t += datetime.timedelta(seconds=1)
+    finally:
+        LP.AUTO_SIG_HOOK = _old_hook
+        LP.AUTO.clear()
+        LP.AUTO.update(_old_auto)
+        while not LP._AUTO_Q.empty():        # ⛔ 別把模擬產生的東西留在佇列裡
+            try:
+                LP._AUTO_Q.get_nowait()
+            except Exception:
+                break
+    return any(ts > t0 for ts in fired)
+
+
+# 週五 2026-09-11／週六 09-12／週日 09-13／週一 09-14（⛔ 寫死的日子，跟今天無關）
+_R2 = [
+    ("週一 08:00（開盤前）", _DT(2026, 9, 14, 8, 0, 0)),
+    ("週一 08:50（他真的會按的時間）", _DT(2026, 9, 14, 8, 50, 0)),
+    ("週一 09:03:29（差一秒）", _DT(2026, 9, 14, 9, 3, 29)),
+    ("週一 09:03:30（剛好那一秒）", _DT(2026, 9, 14, 9, 3, 30)),
+    ("週一 09:03:31（過了一秒）", _DT(2026, 9, 14, 9, 3, 31)),
+    ("週一 10:30（盤中）", _DT(2026, 9, 14, 10, 30, 0)),
+    ("週一 20:00（夜盤）", _DT(2026, 9, 14, 20, 0, 0)),
+    ("週五 08:50", _DT(2026, 9, 11, 8, 50, 0)),
+    ("週六 08:50（⛔ 不是交易日）", _DT(2026, 9, 12, 8, 50, 0)),
+    ("週日 08:50（⛔ 不是交易日）", _DT(2026, 9, 13, 8, 50, 0)),
+]
+_r2_true = 0
+for _name, _t in _R2:
+    _said = LP.fire_fires_today(_t)
+    _real = _would_fire_today(_t)
+    _r2_true += bool(_real)
+    chk(f"  {_name}：那句話說的 ＝ _auto_tick 真的會做的", _said, _real)
+# ⛔ 尺的自證：這一組裡**兩種答案都出現過**（不然「永遠回 False」也全綠）
+say(0 < _r2_true < len(_R2),
+    "  ⛔ 尺的自證：這一組時間點裡「今天會送」與「不會送」都出現過",
+    f"{_r2_true}/{len(_R2)} 會送")
+
+# ⛔ 第三個條件（`AUTO["done"]`）：上面那組模擬每次都把它重置了，所以單獨驗一次。
+#    這是「面板 09:10 才被看門狗重開」那個真實情境。
+_mon = _DT(2026, 9, 14, 8, 50, 0)
+_old_auto = dict(LP.AUTO)
+try:
+    LP.AUTO.update({"day": None, "done": False})
+    chk("  尺的自證：週一 08:50、今天還沒走過那一刻 ⇒ 今天",
+        LP.fire_fires_today(_mon), True)
+    LP.AUTO.update({"day": "2026-09-14", "done": True})
+    chk("  ⛔ 今天已經走過 09:03:30 了（面板 09:10 才重開）⇒ 下一個交易日",
+        LP.fire_fires_today(_mon), False)
+    LP.AUTO.update({"day": "2026-09-11", "done": True})
+    chk("  ⛔ 那個 done 是**別天**的 ⇒ 不算（⛔ 不可以只看 done）",
+        LP.fire_fires_today(_mon), True)
+finally:
+    LP.AUTO.clear()
+    LP.AUTO.update(_old_auto)
+
+# ── 那句話本身
+for _live in (True, False):
+    _t1 = LP.fire_arm_confirm(_live, _DT(2026, 9, 14, 8, 50, 0))
+    _t2 = LP.fire_arm_confirm(_live, _DT(2026, 9, 14, 10, 30, 0))
+    _tag = "真錢" if _live else "演練"
+    say("今天 " + LP.SIGNAL_AT in _t1["text"] and "下一個交易日" not in _t1["text"],
+        f"  ⛔ {_tag}・盤前按 ⇒ 那句話說「今天 {LP.SIGNAL_AT}」", _t1["text"])
+    say("下一個交易日 " + LP.SIGNAL_AT in _t2["text"] and "今天" not in _t2["text"],
+        f"  ⛔ {_tag}・盤後按 ⇒ 那句話說「下一個交易日 {LP.SIGNAL_AT}」", _t2["text"])
+# ⛔ 時刻的正本只有 SIGNAL_AT 一個（⛔ 那句話裡不准出現寫死的 09:03:30）
+say("09:03:30" not in _nodoc(next(
+    (n for n in ast.walk(_lptree)
+     if isinstance(n, ast.FunctionDef) and n.name == "fire_arm_confirm"), None)),
+    "  ⛔ 那句話裡沒有寫死的時刻（⛔ 一律走 SIGNAL_AT）")
+say("SIGNAL_SEC" in _nodoc(next(
+    (n for n in ast.walk(_lptree)
+     if isinstance(n, ast.FunctionDef) and n.name == "fire_fires_today"), None))
+    and "market_session" in _nodoc(next(
+        (n for n in ast.walk(_lptree)
+         if isinstance(n, ast.FunctionDef) and n.name == "fire_fires_today"), None)),
+    "  ⛔⛔ 判斷用的是 SIGNAL_SEC ＋ market_session（＝_auto_tick 那把尺），"
+    "⛔ 不是自己寫的 weekday()")
+
+# ══ ⑬d ⭐⭐ 前端：會改變狀態的 POST **只有一個出口**（pfetch）═══════════
+#    ⛔⛔ 【P0】後端現在每一個 POST 都要標頭與 token，前端漏一個呼叫點
+#       ＝ 他的某一顆鈕從此按不動（畫面上只寫「送不出去」，看不出是自己人擋的）。
+print("\n=== ⑬d ⭐⭐ 前端每一個 POST 都走同一個出口（pfetch）===")
+# ⛔ 先把 JS 註解剝掉再比（`/* … */` 與 `// …`）—— 這一節講的就是這些字，
+#    連註解一起比的話又是一條恆真守衛（R1 那個形狀）。
+# ⚠️ `page` 是「從 PAGE 開始到檔尾」，⛔ 含 PAGE 之後的 **Python 程式碼**
+#    （`do_POST` 的註解裡就寫著 `method:'POST'`）⇒ 一定要先切到 PAGE 這個字串為止，
+#    不然「前端只有一個 POST 出口」那條會被後端的一句註解弄成假紅。
+_page_nc = page[:page.index('</html>"""')]
+_page_nc = _re.sub(r"/\*.*?\*/", " ", _page_nc, flags=_re.S)
+_page_nc = _re.sub(r"(?m)^\s*//.*$", " ", _page_nc)
+_posts_js = _re.findall(r"method:'POST'", _page_nc)
+chk("  ⛔⛔ 整份前端只有**一個**地方寫 method:'POST'（那就是 pfetch）",
+    len(_posts_js), 1)
+_pf = _page_nc[_page_nc.index("function pfetch("):
+               _page_nc.index("}", _page_nc.index("body:body||'{}'"))]
+for _h in ("'Content-Type':'application/json'", "'X-Panel':'1'",
+           "'X-Panel-Token':PTOK"):
+    say(_h in _pf, f"  ⛔ pfetch 帶得出 {_h}")
+# ⛔⛔ token 有**兩個**更新點，職責不同、⛔ 不可以用同一條斷言含混過去
+#    （2026-09-09 fire-mutate Ⓝ5d 實測：只比「整份前端有沒有這個字串」的話，
+#     把 `tick()` 那一個拿掉照樣綠 —— 因為 `ptok()` 裡有一模一樣的一行）。
+_tick0 = _page_nc.index("async function tick(nf)")
+_tickfn = _page_nc[_tick0:_page_nc.index("LASTS=s;", _tick0) + 9]
+_ptokfn = _page_nc[_page_nc.index("function ptok("):_page_nc.index("function pfetch(")]
+say("PTOK=s.token" in _tickfn.replace(" ", ""),
+    "  ⛔⛔ tick()：token 跟著每 0.5 秒的 /api/state 換新"
+    "（⛔ 少了這行，看門狗重啟後他的平倉鈕會 403 按不動）")
+say("PTOK=s.token" in _ptokfn.replace(" ", ""),
+    "  ⛔ ptok()：還沒拿到 token 時先去要一次（畫面剛開就按下去也按得動）")
+chk("  ⛔ 整份前端**剛好兩個**地方會寫 PTOK（⛔ 不多不少）",
+    _page_nc.count("PTOK=s.token"), 2)
+# ⛔ 每一個會改變狀態的端點都要有人呼叫 pfetch（⛔ 少一個 ＝ 那顆鈕壞了）
+for _ep in ("/api/real/enter", "/api/real/close", "/api/note", "/api/replay",
+            "/api/fire/on", "/api/fire/off"):
+    say(f"pfetch('{_ep}'" in _page_nc, f"  ⛔ 前端用 pfetch 打 {_ep}")
+say("pfetch(url,body)" in _page_nc.replace(" ", ""),
+    "  ⛔ 練習那幾顆（/api/enter・/api/close・/api/undo）也走 pfetch")
 
 # ══ ⑭ ⛔ 他第一次建那個檔的每一種寫法（BOM／UTF-16）═════════════════
 print("\n=== ⑭ 開關檔的編碼：他第一次一定會用的那幾種寫法 ===")
@@ -1768,6 +2116,7 @@ say(not REAL_PATHS["AF.FIRE_DIR"].exists() or
 
 live_off()
 arm_clear()
+_SRV.shutdown()          # ⛔ 行為面那把量尺的服務先收掉，再刪暫存區
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))
 sys.exit(1 if FAIL else 0)

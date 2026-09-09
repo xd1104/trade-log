@@ -37,8 +37,10 @@ r"""
 
 import json
 import math
+import os
 import queue
 import re
+import secrets
 import sys
 import threading
 import time
@@ -47,6 +49,7 @@ from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd
@@ -3150,6 +3153,309 @@ def fire_sim_pairs(days):
     return out
 
 
+# ------------------------------------------------- 【自動下單】從面板打開（武裝真錢）
+
+# ⭐ 2026-09-09 Benson：「我覺得他現在的開關有點麻煩，可以幫我把開關做在面板那邊嗎？
+#    我按個鈕就可以開始了這樣。」⇒「開」從「自己在硬碟上建檔」改成面板上兩顆鈕。
+#    ⛔⛔ 這顆鈕按下去就是**武裝真錢**（真單開關也開著的話，下一個交易日 09:03:30
+#    會用他的錢送出委託單），所以規矩全部反過來寫：
+#      ・**兩段式**：兩顆「用XX開始」→ 畫面上的確認條 →「確定，打開」才會有請求出去。
+#        ⛔ 不用 window.confirm（pywebview／WebView2 裡不可靠）。
+#      ・確認條那句話的**正本在後端**（`fire_arm_confirm()`）—— 現在是真錢還是演練
+#        ⛔ 不准前端自己猜（猜錯就是把「會用你的錢」寫成「只是演練」）。
+#      ・端點 `POST /api/fire/on` 有**六道**防護（見 `fire_post_guard()`），
+#        ⛔ 缺一道就有繞法。
+#      ・已經開著再按 ⇒ **409**，⛔ 不覆蓋、⛔ 不當成換做法
+#        （換做法牽涉到「今天已經進場了怎麼辦」，這一輪不做）。
+#    ⛔ 建開關檔這件事**整個 repo 只有 `fire_arm_on()` 一個地方做得到**：
+#       `auto_fire.py` 對 `ARM_FLAG` 仍然只做 exists／read_bytes／replace／with_name
+#       四件事（`test_auto_fire.py` ⑬ 的 AST 斷言一個字都沒放寬）——
+#       **會送單的那個模組打不開自己的開關**，這是刻意留著的結構性保證。
+
+# 這個行程開機時隨機產一次。⛔ 不落地、不寫進網址、不放 cookie ——
+# 只從 `/api/fire/state` 的 JSON 拿得到，而那份回應**沒有 CORS 標頭**
+# ⇒ 別的網站的 JS 送得出請求但**讀不到內容** ⇒ 拿不到這個字串。
+FIRE_TOKEN = secrets.token_hex(16)
+# ⛔ 只認字面上的本機位址。網域名稱（就算現在解析到 127.0.0.1）一律不算 ——
+#    那正是 DNS rebinding 的形狀。
+FIRE_LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
+# POST body 的上限。⛔ 有上限本身就是一道防線：沒有的話，一個 `Content-Length: 9e9`
+#    就能讓那條執行緒一直讀。最長的 body 是心得（幾 KB），256 KB 綽綽有餘。
+MAX_POST_BYTES = 256 * 1024
+
+
+def _fire_host_ok(h):
+    """`Host` 要是本機的字面位址（⛔ 擋 DNS rebinding：把 evil.com 指到 127.0.0.1）。"""
+    h = (h or "").strip().lower()
+    if not h:
+        return False
+    if h.startswith("["):                       # [::1]:8770
+        h = h.split("]", 1)[0] + "]"
+    elif ":" in h:
+        h = h.rsplit(":", 1)[0]
+    return h in FIRE_LOOPBACK
+
+
+# ⛔ 真正的 `Origin` 只有 `scheme://host[:port]` 這一種形狀 —— 沒有帳號、沒有路徑、
+#    沒有查詢字串、沒有 fragment。⚠️ 只靠 `urlsplit().hostname` 判斷會漏：
+#    `http://evil@127.0.0.1` 的 hostname 是 `127.0.0.1` ⇒ 舊寫法會放行
+#    （2026-09-09 lab-qa 提）。瀏覽器送不出這種東西，所以**先驗形狀再看主機**。
+_FIRE_ORIGIN_RE = re.compile(
+    r"^https?://(?:\[[0-9A-Fa-f:.]+\]|[0-9A-Za-z._\-]+)(?::[0-9]{1,5})?$")
+
+
+def _fire_origin_ok(o):
+    """
+    有 `Origin` 的話必須是本機。⛔ **沒有** Origin 不算違規（非瀏覽器的呼叫沒有它，
+    例如 `test_fire_routes.py`）—— 這一道擋的是「別的網站的分頁」，
+    而瀏覽器對跨站的 POST **一定會**帶 Origin，網頁改不掉它。
+    ⛔ `null` 要擋：sandbox iframe 與 file:// 送的就是 `null`，那不是他的面板。
+    ⛔ 形狀不對的一律擋（`http://evil@127.0.0.1`、帶路徑、帶查詢字串）。
+    """
+    o = (o or "").strip()
+    if not o:
+        return True
+    if o.lower() == "null":
+        return False
+    if not _FIRE_ORIGIN_RE.match(o):
+        return False
+    try:
+        u = urlsplit(o)
+    except Exception:
+        return False
+    return u.scheme in ("http", "https") and (u.hostname or "").lower() in FIRE_LOOPBACK
+
+
+def _fire_browser_guard(headers):
+    """
+    ⭐ 「這個請求是不是**他自己那個分頁**發出來的」—— 三道**瀏覽器自己加、網頁改不掉**
+    的標頭（原本六道防護裡的 ③⑤⑥）。⛔ 這是唯一一份，POST 與 GET 兩條路共用：
+    兩邊各寫一份就一定有一份會忘記跟上（這個專案已經因為兩把尺被退件過）。
+
+      ③ `Origin` 有的話必須是本機（`null` 也算跨站）
+      ⑤ `Sec-Fetch-Site` 有的話必須是 `same-origin`／`none`（`fetch` 不准設 `Sec-` 開頭）
+      ⑥ `Host` 必須是本機**字面位址**（擋 DNS rebinding：evil.com 指到 127.0.0.1）
+    """
+    if not _fire_origin_ok(headers.get("Origin")):
+        return False
+    sfs = (headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if sfs and sfs not in ("same-origin", "none"):
+        return False
+    if not _fire_host_ok(headers.get("Host")):
+        return False
+    return True
+
+
+def fire_get_guard(headers):
+    """
+    ⛔⛔ **會端出 `X-Panel-Token` 的 GET 端點**（`/api/state`、`/api/fire/state`）的守衛。
+
+    ⚠️⚠️ 2026-09-09 lab-qa 證偽了原本寫在這裡的推理：舊註解說「就算哪天有人加了 CORS
+       標頭，①②③ 一起失效、④ token 還在」—— **不成立**。token 就放在當時**毫無防護**的
+       `/api/fire/state` 裡：DNS rebinding 下那份 JSON 是同源的，跨站讀得到 ⇒
+       ④ 跟著一起垮。**token 不是獨立的一道**，它的強度等於「拿得到它的那個端點」的強度。
+       所以會端出 token 的 GET 也要過 ③⑤⑥。
+
+    ⛔ 這裡**刻意不要** ①②④，理由各不相同（⛔ 不要把它們寫成同一個理由）：
+      ・① GET 沒有 body，沒有 Content-Type 可言。
+      ・④ 的來源就是這裡（要 token 才拿得到 token ＝ 死結）。
+      ・② **不是做不到，是會弄壞既有的呼叫方**：`panel_app.pyw`（桌面殼判斷伺服器
+        活著沒／版本舊了沒）與 `restart-panel.py` 都用 `urllib` 打 `/api/state`，
+        它們送不出 `X-Panel`。加了 ② ⇒ 他點捷徑開面板時**殼會判定伺服器沒起來**。
+      ⛔ 而 ③⑤⑥ 已經足以擋掉「別的網站的分頁」與 DNS rebinding（那兩樣是瀏覽器
+        自己加、網頁改不掉的），非瀏覽器的本機呼叫則因為沒有 Origin／Sec-Fetch 而照樣通。
+    """
+    if not _fire_browser_guard(headers):
+        return False, 403, "這個請求不是從面板發出來的"
+    return True, 200, ""
+
+
+def fire_post_guard(headers):
+    """
+    ⛔⛔ **這支面板每一個 POST 的防護**（`do_POST` 一進來就過，⛔ 不是逐條路由各自套）。
+
+    ⚠️⚠️ 2026-09-09 lab-qa 抓到的 P0：這道防護原本只掛在 `/api/fire/on` 上，
+       `/api/real/enter`／`/api/real/close` 一道都沒有 —— 他上網時**任何一個網頁**
+       都可以用一張純 HTML 的 `<form enctype="text/plain">`（不必 JS、不必 CORS、
+       不必 token）把 `{"dir":"long","x":"="}` 送進來，`broker.enter()` 真的被呼叫。
+       實測回 `200 {"ok": true, "msg": "已送出"}`。
+       ⇒ 所以現在改成**在 `do_POST` 的入口套一次**：結構上不可能再有「新加的端點忘了套」。
+
+    面板是本機 HTTP 伺服器 ⇒ 他電腦上**任何一個開著的分頁**都送得出請求到
+    `localhost:8770`，而他不會看到、也不會被問。所以這裡要擋的不是「壞人連進他的電腦」，
+    是「他自己開著的某個網頁」。⛔ 下面每一道**單獨拿掉都有繞法**，缺一道等於沒有：
+
+      ① **Content-Type 必須是 application/json**
+         ⛔ 表單那三種（`application/x-www-form-urlencoded`／`multipart/form-data`／
+            `text/plain`）是 CORS 眼中的「簡單請求」，**不需要 preflight**，
+            一個 `<form>` 自動送出就打得到。
+      ② **自訂標頭 `X-Panel: 1`**
+         簡單表單送不出自訂標頭；帶自訂標頭的 `fetch` 會被瀏覽器**強制走 preflight**
+         （OPTIONS），而我們**不回任何 CORS 標頭** ⇒ 那個 preflight 過不了、
+         真正的 POST 根本不會發出來。
+      ③ **`Origin` 有就必須是本機**（`null` 也算跨站）。
+      ④ **`X-Panel-Token`**：這個行程開機時隨機產的字串，只從 `/api/state`／
+         `/api/fire/state` 拿得到，而那兩份回應沒有 CORS 標頭、⛔ 而且**自己也過
+         `fire_get_guard()`（③⑤⑥）** ⇒ 跨站的 JS 讀不到 ⇒ 猜不到。
+         ⚠️⚠️ **舊註解在這裡寫錯過**（2026-09-09 lab-qa 證偽）：原本寫「①②③ 因為
+         有人加 CORS 標頭而一起失效時，④ token 還在」—— 不成立。當時 token 就放在
+         **毫無防護的** `/api/fire/state` 裡，DNS rebinding 下那份 JSON 是同源的、
+         讀得到 ⇒ ④ 跟著垮。**④ 不是獨立的一道**，它的強度 ＝ 端出它的那個 GET 的強度。
+         它真正補得起來的破口是「①②在某個新前端上被寫漏」那一種，⛔ 不是「CORS 被打開」。
+      ⑤ **`Sec-Fetch-Site`**：有的話必須是 `same-origin`／`none`。
+         那是瀏覽器自己加的、網頁**改不掉**（`fetch` 不准設 `Sec-` 開頭的標頭）。
+      ⑥ **`Host` 必須是本機字面位址**（擋 DNS rebinding）。
+
+    回 `(ok, code, msg)`。⛔ 訊息刻意不講「你少了哪一道」——
+       這顆鈕沒有「讓外面的人除錯」的需求。
+    """
+    ct = (headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if ct != "application/json":
+        return False, 415, "這個端點只收 application/json"
+    if (headers.get("X-Panel") or "").strip() != "1":
+        return False, 403, "這個請求不是從面板發出來的"
+    tok = (headers.get("X-Panel-Token") or "").strip()
+    # ⚠️ `compare_digest` 對**非 ASCII 的 str 會 raise TypeError**，而標頭是 latin-1
+    #    解出來的 ⇒ 外面塞一個 >127 的位元組就會讓這裡炸掉、例外冒到 handler（500）。
+    #    ⛔ 擋下來的方向是對的，但**不可以用例外當防線**（下一個人很容易把它包成 try/pass）。
+    if not tok.isascii() or not secrets.compare_digest(tok, FIRE_TOKEN):
+        return False, 403, "這個請求不是從面板發出來的"
+    # ③⑤⑥ ⛔ 走共用的那一份（`fire_get_guard` 用的是同一個函式 ＝ 只有一把尺）
+    if not _fire_browser_guard(headers):
+        return False, 403, "這個請求不是從面板發出來的"
+    return True, 200, ""
+
+
+def fire_fires_today(now=None):
+    """
+    ⭐⭐ **「按下去之後，第一次真的送單是今天還是下一個交易日？」**
+
+    ⚠️⚠️ 2026-09-09 lab-qa 退件 R2：確認條原本寫死「**下一個交易日** 09:03:30」，
+       但 `auto_fire` **沒有「今天開的不算」的閘門** —— 他 08:50 按下去，13 分鐘後
+       今天就送一口真單，而畫面告訴他是明天。
+       ⭐ Benson 裁示：**改文案、不加閘門**（「按了就開始」才是他要的行為）。
+
+    ⛔⛔ **這裡不准出現第二把尺。** 真正決定 09:03:30 會不會送的是 `_auto_tick()`，
+       它只看三樣東西 —— 這個函式就只准看那三樣：
+         ① `AUTO["done"]`  今天那一刻已經過去了（送了、或判定 late 跳過了）
+         ② `SIGNAL_SEC`    今天的牆上時鐘還沒走到那一秒
+         ③ `market_session(那一刻) == "day"`
+            ⛔ 用的是 `market_session` 這把**產品自己的**尺（週六日／夜盤都是它說了算），
+               ⛔ 不准自己寫 `weekday() < 5`。
+       兩邊被 `test_auto_fire.py` ⑬c 用**同一組時間點**綁死（那一條會真的驅動
+       `_auto_tick()` 跑一遍，比對兩邊的答案）。
+
+    ⚠️ 已知限制（跟 `market_session` 同一個）：**本機沒有國定假日表** ⇒ 平日的國定假日
+       這裡會說「今天」。那不是分岔 —— `_auto_tick()` 那天也一樣會走到 09:03:30
+       （只是沒有報價 ⇒ 記一列「沒送」）。兩邊講的是同一件事。
+    """
+    now = now or datetime.now()
+    # ① 今天那一刻已經過去了（`_auto_tick` 早就把 done 立起來了）⇒ 只能等下一個交易日
+    if AUTO.get("day") == str(now.date()) and AUTO.get("done"):
+        return False
+    # ② 牆上時鐘。⛔ 用 SIGNAL_SEC（跟 `_auto_tick` 同一個常數），不是 SIGNAL_AT 那個字串
+    if now.hour * 3600 + now.minute * 60 + now.second >= SIGNAL_SEC:
+        return False
+    # ③ 「今天的那一刻」是不是日盤 —— ⛔ 問 market_session，不要自己判斷星期
+    sig_at = datetime.combine(now.date(), dtime(0, 0)) + timedelta(seconds=SIGNAL_SEC)
+    return market_session(sig_at) == "day"
+
+
+def fire_arm_confirm(live, now=None):
+    """
+    兩段式確認**第二段那句話的正本**。⛔ 前端不准自己算「現在是不是真錢」——
+    畫面上那句話講錯的代價是「他以為只是演練，結果那天真的送了一口單」。
+    ⚠️ `live` 由呼叫端傳進來（就是 `auto_fire.state()` 算好的那一個），
+       ⛔ 這裡**不再問一次** `broker.is_live()` —— 同一件事兩把尺一定會有一把是錯的。
+    ⚠️ 「今天／下一個交易日」同理走 `fire_fires_today()`（跟 `_auto_tick` 同一組條件），
+       ⛔ 不准在這裡自己寫「明天」兩個字。
+    """
+    when = ("今天 " if fire_fires_today(now) else "下一個交易日 ") + SIGNAL_AT
+    if live:
+        return {"live": True, "when": when,
+                "text": ("現在是真實下單模式。打開之後，%s 會用你的錢"
+                         "真的送單，一天一次，%g 點停利／%g 點停損。"
+                         % (when, TP_POINTS, TP_POINTS))}
+    return {"live": False, "when": when,
+            "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}
+
+
+def _fire_arm_log(row):
+    """
+    ⭐ 「誰在什麼時候、用哪個做法、當下是不是真錢」落地一列。
+    ⛔ **刻意不寫進 `autofire/YYYY-MM.jsonl`**：那個檔有硬不變式
+       `fire + result + skip + eod + bad ＝ 總列數`，塞第五種 `rec` 進去會讓
+       既有守衛整組失效（`read_all()` 會把它算成 `bad` ＝ 看起來像壞資料）。
+       所以用同一個資料夾、同一種 jsonl 格式，但**檔名不同**（`arm-YYYY-MM.jsonl`，
+       ⛔ 不符合 `auto_fire._MONTH_RE` ⇒ `read_all()` 結構上不會撿到它）。
+    ⛔ 一定是 `open("a")`（看門狗重啟是常態）。寫不進去**不可以安靜**：
+       開關檔已經建好了（那才是真相），所以回報成功但把警告帶出去 ＋ 主控台印一行。
+    """
+    try:
+        auto_fire.FIRE_DIR.mkdir(parents=True, exist_ok=True)
+        p = auto_fire.FIRE_DIR / ("arm-" + str(row["date"])[:7] + ".jsonl")
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+        return None
+    except Exception as e:
+        msg = "開關打開了，但這一筆沒有記錄下來：" + str(e)[:120]
+        print("⚠️ [自動下單] " + msg, flush=True)
+        return msg
+
+
+def fire_arm_on(mode, who="panel"):
+    """
+    ⭐⭐ **整個 repo 唯一一個會建立 `AUTO_ORDERS_ON` 的地方。**
+    回傳 `(http_code, payload)`。⛔ 呼叫端必須先過 `fire_post_guard()`。
+
+    - `mode` 只准 `"A"` / `"B"`，⛔ **先驗再寫**（不准寫進檔案再回頭驗 ——
+      驗失敗那一瞬間開關就是開著的）。
+    - 寫檔用 `O_CREAT|O_EXCL` ⇒ **結構上不可能蓋掉他已經有的那個檔**
+      （已經開著再按 ⇒ 409，⛔ 不是換做法）。而且這一道連「兩個視窗同時按」
+      那種競態都擋得住（不是「先 exists() 再寫」那種查完再做）。
+    - 內容就是一個 ASCII 大寫字母，⛔ 不加 BOM、不加換行 ——
+      跟 `auto_fire._decode_flag()` 讀的那條路對齊（那邊 `strip().upper()`）。
+    """
+    if not isinstance(mode, str) or mode not in auto_fire.METHODS:
+        return 400, {"ok": False, "msg": "只能用「%s」或「%s」這兩個做法" % (
+            auto_fire.METHOD_NAME["A"], auto_fire.METHOD_NAME["B"])}
+    flag = auto_fire.ARM_FLAG
+    live = broker.is_live()
+    try:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(flag), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return 409, {"ok": False, "armed": auto_fire.arm()["on"],
+                     "msg": "已經開著了，要換做法請先關掉"}
+    except Exception as e:
+        return 500, {"ok": False, "msg": "打不開：" + str(e)[:150]}
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(mode.encode("ascii"))
+            f.flush()
+    except Exception as e:
+        # 檔案已經建出來但內容沒寫成 ⇒ 那是個「看不懂的開關檔」（auto_fire 會拒絕下單），
+        # ⛔ 但不可以留著讓他以為開好了：走產品自己的 disarm() 收乾淨。
+        try:
+            auto_fire.disarm()
+        except Exception:
+            pass
+        return 500, {"ok": False, "msg": "寫不進去：" + str(e)[:150]}
+    a = auto_fire.arm()
+    row = {"rec": "arm", "date": str(date.today()),
+           "at": datetime.now().isoformat(timespec="seconds"),
+           "method": mode, "live": live, "who": str(who)[:60],
+           "src": "panel", "flag": flag.name, "armed": a["on"]}
+    warn = _fire_arm_log(row)
+    print("[自動下單] 從面板打開：%s（%s）" % (
+        auto_fire.METHOD_NAME.get(mode, mode),
+        "真實下單模式" if live else "演練模式"), flush=True)
+    return 200, {"ok": True, "armed": a["on"], "method": a["method"],
+                 "live": live, "warn": warn,
+                 "msg": a["msg"] if a["on"] else (a["msg"] or "開關建好了")}
+
+
 # ---------------------------------------------------------------- 回顧分頁
 
 _VOLREF = {"map": None}
@@ -4747,6 +5053,36 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-off .btn{flex:none}
 .al-off .n{font-size:11.5px; color:var(--faint); line-height:1.6}
 .al-off .n b{color:var(--gold); font-weight:650}
+/* ⭐ 打開自動下單（2026-09-09 加）。⛔⛔ 這是這個面板上**唯一一顆會武裝真錢**的鈕，
+   所以視覺規矩跟別處不一樣，⛔ 不要「順手統一」掉：
+     ・第一段（兩顆做法鈕）＝金色框線的次要鈕：看得出來是「要動手了」，
+       但**還不是**那個決定（真正的決定在第二段）。
+     ・第二段（確認條）＝**真錢模式用紅底**。這個面板的鐵律是「紅綠只給損益」，
+       這裡是**唯一的例外**，而且是 Benson 2026-09-09 指定的：
+       那一刻要講的是「會用你的錢」，那不是狀態、是警告。
+     ・演練模式用中性灰 —— 同一條，⛔ 兩種模式不可以長一樣（長一樣＝那句警告失效）。 */
+.al-on{margin-top:13px}
+.al-on .row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.al-on .btn{flex:none; padding:11px 18px; font-size:14px;
+  background:var(--gold-soft); color:var(--gold); border-color:var(--gold-line)}
+.al-on .btn:hover:not(:disabled){background:rgba(227,169,81,.24)}
+.al-on .n{font-size:11.5px; color:var(--faint); line-height:1.7; margin-top:8px}
+.al-on .n b{color:var(--dim); font-weight:650}
+.al-conf{padding:12px 14px 13px; border-radius:var(--r-md);
+  border:1px solid var(--line); background:var(--surface-2)}
+.al-conf.real{border-color:var(--up-line); background:var(--up-soft)}
+.al-conf .q{font-size:13px; line-height:1.75; font-weight:650; color:var(--dim)}
+.al-conf.real .q{color:var(--up)}
+.al-conf .q b{font-weight:750}
+.al-conf .btns2{display:flex; gap:10px; margin-top:11px; flex-wrap:wrap}
+.al-conf .btn{flex:none; padding:11px 18px; font-size:14px}
+.al-conf .btn.go{background:var(--surface-2); color:var(--text); border-color:var(--line)}
+.al-conf.real .btn.go{background:var(--up-soft); color:var(--up);
+  border-color:var(--up-line)}
+.al-conf .btn.no{background:transparent; color:var(--faint); border-color:var(--line)}
+.al-conf .btn.no:hover:not(:disabled){color:var(--text); border-color:var(--faint)}
+.al-on .err{font-size:12px; color:var(--gold); line-height:1.7; margin-top:9px;
+  font-weight:600}
 /* 收盤平倉要他自己動手的那幾種：⛔ 不可以混在一般紀錄裡看不出來。 */
 .al-alarm{margin-top:11px; padding:9px 12px 10px; border-radius:var(--r-md);
   background:var(--gold-soft); border:1px solid var(--gold-line);
@@ -4858,13 +5194,18 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         ① 進度尺（#attrack）② 成績表的「你自己」兩列 ③ 帳本那一行
         ④〈這一頁在算什麼〉摺疊區。 -->
 <!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
-     ⛔⛔ **開難、關易**（Benson 2026-09-09 拍板）：
-       ・**開**只有一條路：他自己在硬碟上建 tools/shioaji/AUTO_ORDERS_ON，內容寫 A 或 B。
-         ⛔ 這一頁**永遠不准有「開啟」按鈕** —— 開關能從畫面上打開的那一刻，
-            「會不會亂送單」就從「讀一個檔」變成「讀整個前端」。
-       ・**關**有一顆按鈕（#aloff → POST /api/fire/off）。關掉永遠是安全的動作。
-         ⛔ 這是這一頁**唯一**一個會改變狀態的動作，⛔ 而且開關關著的時候
-            那顆鈕**不會出現**（沒東西可關）。守衛：fire-tab.mjs ② 與 ⑩。
+     ⛔⛔ **開難、關易**（Benson 2026-09-09 拍板；同日下午他要求「開」也做到畫面上）：
+       ・**開**＝ #alon 那兩顆做法鈕 → **第二段確認條** → 「確定，打開」
+         → POST /api/fire/on（六道防護，見 live_panel.fire_post_guard）。
+         ⛔ **兩段式不可以拿掉**：這是這個面板上唯一一顆會武裝真錢的鈕。
+         ⛔ 確認條那句話（現在是真錢還是演練）**一律從後端拿**（arm_confirm），
+            ⛔ 前端不准自己猜 —— 講錯的代價是「他以為只是演練，結果真的送了一口」。
+         ⛔ 第一段沒按「確定」之前**一個請求都不准出去**（fire-tab.mjs ⑪ 在守）。
+       ・**關**有一顆按鈕（#aloff → POST /api/fire/off）。關掉永遠是安全的動作，
+         所以**不跳確認**（⛔ 開跳、關不跳，這個不對稱是刻意的）。
+       ・⛔ 開著的時候**只有**「關閉」那一顆（⛔ 沒有「換做法」——
+         換做法牽涉到「今天已經進場了怎麼辦」，這一輪不做；再按一次開的話後端回 409）。
+         守衛：fire-tab.mjs ②／⑧c／⑩／⑪。
      ⛔ 這一段刻意放在 #tab-auto **之前**：autotest-backend.py ① 掃的是
         `<div id="tab-auto">` 到 `<!-- 【回顧】` 之間那一段（模擬那一頁的紅線
         「一行都不碰下單路徑」），放進去會讓那把尺量到不該量的東西。 -->
@@ -4879,6 +5220,10 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   </div>
   <div class="al-gates" id="algates"></div>
   <div class="al-how" id="alhow"></div>
+  <!-- ⭐ 打開（兩段式）。⛔ 只有開關**關著**時才會有東西畫進來（alPaint）：
+       開著的時候這裡是空的（要換做法請先關掉），關著的時候 #aloff 是空的。
+       ⛔ 兩個永遠不會同時有東西 —— 「開」與「關」同時在畫面上會讓他按錯。 -->
+  <div class="al-on" id="alon"></div>
   <!-- 關閉鈕。⛔ 只有開關檔存在時才會有東西畫進來（alPaint），
        關著的時候這裡是空的 —— 沒東西可關就不該有按鈕。 -->
   <div class="al-off" id="aloff"></div>
@@ -4998,6 +5343,33 @@ const pm=(v,d=0)=>(v>0?'+':'')+f(v,d);
 
 var lastMkt='', lastTrade='', lastStats='', lastWarn='', lastReal='', statsCache=null, statsAt=0;
 
+/* ══════════════════════════════════════════════════════════════════════
+   ⭐⭐ pfetch —— **這一頁每一個會改變狀態的 POST 唯一的出口**
+   ----------------------------------------------------------------------
+   ⛔⛔ 【2026-09-09 lab-qa 的 P0】後端 `do_POST` 現在**每一個** POST 都要過
+      `fire_post_guard()`（Content-Type／X-Panel／token／Origin／Sec-Fetch-Site／Host）
+      —— 因為在那之前，他上網時任何一個網頁都可以用一張純 HTML 表單
+      （不必 JS、不必 CORS、不必 token）打 `/api/real/enter`、用他的帳戶真的送單。
+   ⛔ 所以前端**每一個**呼叫點都必須帶那三樣。⛔ 不准有第二個地方自己寫
+      `fetch(url,{method:'POST',…})` —— 漏一個地方 ＝ 他的某一顆鈕從此按不動，
+      而畫面上只會顯示「送不出去」，看不出是自己人擋的。
+   ⚠️ token 來自 0.5 秒一次的 `/api/state`（見 `tick()`）：看門狗把面板重開之後
+      那個字串會變，靠這條路最多 0.5 秒就換到新的 ⇒ **他的「平倉」不會因此按不動**。
+      真的還沒拿到（畫面剛開、第一次 tick 還沒回來）就先去要一次再送 ——
+      ⛔ 那是一個 GET，不會有「送兩張單」的風險。
+   ══════════════════════════════════════════════════════════════════════ */
+var PTOK='';
+function ptok(){
+  if(PTOK) return Promise.resolve();
+  return fetch('/api/state').then(r=>r.json())
+    .then(s=>{ if(s&&s.token) PTOK=s.token; }).catch(()=>{});
+}
+function pfetch(url,body){
+  return ptok().then(()=>fetch(url,{method:'POST',
+    headers:{'Content-Type':'application/json','X-Panel':'1','X-Panel-Token':PTOK},
+    body:body||'{}'}));
+}
+
 /* ---------------- 真實下單 ----------------
    ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。
    記住狀態的話，某天心不在焉點到就是一個真實部位。 */
@@ -5051,8 +5423,7 @@ function realFire(dir){
   // （lab-qa 退件第 1 條）。平倉早就有 closing 擋著，進場一直沒有 —— 又是一邊做了一邊沒做。
   if(firing) return;
   firing=true; lastReal=''; tick(true);
-  fetch('/api/real/enter',{method:'POST',headers:{'Content-Type':'application/json'},
-                           body:JSON.stringify({dir:dir})})
+  pfetch('/api/real/enter',JSON.stringify({dir:dir}))
    .then(r=>r.json()).then(r=>{
       // warn＝進場成功但停利沒掛上，那也要跳出來讓他知道（不是失敗，但不能沉默）
       if(!r.ok||r.warn) alert(r.msg||'送不出去');
@@ -5067,7 +5438,7 @@ function realClose(){
   if(closing) return;
   closing=true;
   lastReal=''; tick(true);                 // 立刻把按鈕變成「平倉中…」
-  fetch('/api/real/close',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+  pfetch('/api/real/close')
    .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'平不掉'); })
    .catch(()=>alert('送不出去，請自己到大戶投平倉'))
    .then(()=>{ closing=false; lastReal=''; tick(true); });
@@ -5658,6 +6029,9 @@ const QMSG={
 
 async function tick(nf){
  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
+ /* ⛔⛔ token 每 0.5 秒跟著換新（看門狗重啟後那個字串會變）——
+    ⛔ 少了這一行，重啟之後他的「平倉」鈕會 403 按不動，而畫面上看不出原因。 */
+ if(s&&s.token) PTOK=s.token;
  LASTS=s;
  // 成績每 5 秒抓一次就好 —— 它會讀所有紀錄檔，沒必要跟著報價跳
  if(Date.now()-statsAt>5000){
@@ -6580,7 +6954,7 @@ document.addEventListener('click', function(e){
  const url=(a==='long'||a==='short')?'/api/enter':'/api/'+a;
  const body=(a==='long'||a==='short')?JSON.stringify({dir:a}):'{}';
  b.disabled=true;
- fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body})
+ pfetch(url,body)
   .then(r=>r.json())
   .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); statsAt=0; tick(); })
   .catch(()=>{})
@@ -6607,8 +6981,7 @@ document.addEventListener('click', function(e){
        // 真實交易的心得存進 real_trades/，不走練習那條同步鏈
        kind:(NOTE.kind==='real'?'real':undefined)};
    sv.disabled=true;
-   fetch('/api/note',{method:'POST',headers:{'Content-Type':'application/json'},
-                      body:JSON.stringify(b)})
+   pfetch('/api/note',JSON.stringify(b))
     .then(r=>r.json())
     .then(r=>{
       if(!r.ok){ sv.disabled=false; alert(r.msg||'存不起來'); return; }
@@ -7247,12 +7620,12 @@ function rpReveal(){
  RP.rev=B.length-1; RP.axis=null; RP.state='revealed';
  const rt=dayTrade(RP.date), J=RP.judge, Rr=RP.result;
  // 落地存檔到 replay_log/：這是事後重播，絕不寫進 practice_trades/（會污染真實練習統計）
- fetch('/api/replay',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({date:RP.date,judged:!!J,
+ pfetch('/api/replay',
+   JSON.stringify({date:RP.date,judged:!!J,
      dir:J?J.dir:null,entry:J?J.entry:null,time:J?J.time:null,note:J?J.note:'',
      exit:Rr?Rr.exit:null,exit_time:Rr?Rr.time:null,reason:Rr?Rr.reason:null,
      points:Rr?Rr.points:null,net:Rr?Rr.net:null,
-     same_dir:!!(rt&&J&&rt.dir===J.dir),day_dir:rt?rt.dir:null,day_time:rt?rt.time:null})})
+     same_dir:!!(rt&&J&&rt.dir===J.dir),day_dir:rt?rt.dir:null,day_time:rt?rt.time:null}))
   .then(r=>r.json()).then(x=>{ if(x&&x.tally){ TALLY=x.tally; rvRender(); } }).catch(()=>{});
  rvRender();
 }
@@ -9674,6 +10047,15 @@ rvBind();
    ⚠️ 這一頁不掛在 500ms 的 tick 上，只在切進來時抓 ＋ 停在這一頁時每 5 秒更新一次。
 */
 var AL={data:null,err:'',pending:false,seq:0,timer:null};
+/* ⭐ 「打開自動下單」的兩段式狀態（⛔ 只活在記憶體裡，⛔ 不寫 localStorage）：
+     step='idle'    兩顆做法鈕
+     step='confirm' 確認條（已經選了 mode，但**還沒**送出任何請求）
+   ⛔ 切走分頁再回來一定要回到 'idle'（見 alEnter）——「我剛剛按到哪裡了」
+      不可以跨分頁殘留，不然他回來時看到一條已經展開的確認條，
+      很容易當成「我剛剛好像已經開了」而直接按下去。
+   ⛔ 而且**不做逾時自動收回**：他可能中途去看別的分頁再回來（那條路由 alEnter 重設），
+      在同一頁上等多久都不該讓畫面自己跳掉。 */
+var ALON={step:'idle',mode:null,busy:false,err:''};
 const ALWAY={A:{n:'5 分 K',s:'09:00 起算'},B:{n:'開盤起',s:'08:45 起算'}};
 function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
 function alSub(k){ const w=ALWAY[k]; return w?w.s:''; }
@@ -9682,6 +10064,8 @@ function alF(v,d){ const n=alN(v); return n==null?'—':n.toFixed(d==null?1:d); 
 function alSigned(v){ const n=alN(v); return n==null?'—':(n>0?'+':'')+n.toFixed(1); }
 
 function alEnter(){
+ /* ⛔ 每次切進這一頁都回到「未確認」（⛔ 不可以留著上次展開到一半的確認條）。 */
+ ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';
  alFetch();
  if(AL.timer) clearTimeout(AL.timer);
  AL.timer=setTimeout(alLoop,5000);
@@ -9718,7 +10102,9 @@ function alPaint(){
    setEl('alsub','<span class="warn">'+esc(AL.err||'載入中…')+'</span>');
    /* ⛔ 讀不到狀態時那顆「關閉」鈕也要收起來 —— 我們根本不知道開關檔在不在，
       而那顆鈕的說明寫著「按下去就把 X 改名收起來」，留著就是一句沒把握的話。 */
+   /* ⛔⛔ 讀不到狀態時「打開」那兩顆更不能留：我們連現在是真錢還是演練都不知道。 */
    setEl('algates',''); setEl('alhow',''); setEl('altoday',''); setEl('aloff','');
+   setEl('alon','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
    return;
  }
@@ -9729,7 +10115,9 @@ function alPaint(){
    '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alSub(m))+
    ' · '+esc(D.signal_at||'')+' 送出 '+esc(String(D.qty||1))+' 口</i></span>';
  else if(D.arm_why==='off') st='<span class="al-badge">關閉中</span>'+
-   '<span class="al-way off">要用請自己建 '+esc(D.flag||'AUTO_ORDERS_ON')+'</span>';
+   /* ⛔ 這句話 2026-09-09 跟著改：以前只能自己建檔，現在下面那兩顆就開得起來。
+      舊句子（「要用請自己建 AUTO_ORDERS_ON」）留在畫面上會讓他以為按鈕不算數。 */
+   '<span class="al-way off">按下面那兩顆就可以開始</span>';
  else st='<span class="al-badge">拒絕下單</span>'+
    '<span class="al-way off">'+esc(D.arm_msg||alWhy(D.arm_why))+'</span>';
  setEl('alstate',st);
@@ -9778,10 +10166,13 @@ function alPaint(){
     **只留他真的要動手做的事**：怎麼建、怎麼關、方向怎麼判、風險。
     ⛔ 不准把「這一頁在算什麼」那種解釋牆搬進來。 */
  setEl('alhow',
-   '要開：在 <code>tools/shioaji/'+FLG+'</code> 裡寫一個 '+
+   /* ⛔ 主要的路現在是上面那兩顆鈕（Benson 2026-09-09：「我按個鈕就可以開始了這樣」）。
+      自己建檔那條**留著**：他之後可能在別的機器、或想在面板沒開著時先設好。 */
+   '要開：按上面那兩顆（<b>會再問你一次</b>才真的打開）。也可以自己在 '+
+   '<code>tools/shioaji/'+FLG+'</code> 裡寫一個 '+
    '<code>A</code>（'+esc(alName('A'))+'）或 <code>B</code>（'+esc(alName('B'))+'）；'+
-   '還要有 <code>'+esc(D.live_flag||'REAL_ORDERS_ON')+'</code> 才會真的送出去'+
-   '（<b>把真單關掉就等於連自動也關掉</b>）。<br>'+
+   '不管走哪一條，都還要有 <code>'+esc(D.live_flag||'REAL_ORDERS_ON')+'</code> '+
+   '才會真的送出去（<b>把真單關掉就等於連自動也關掉</b>）。<br>'+
    '<code class="cmd">Set-Content "tools\\shioaji\\'+FLG+'" "A" -Encoding ascii</code>'+
    '　<span class="warn">⚠️ 記事本存檔請選 <b>UTF-8</b>；PowerShell 的 '+
    '<b>&gt; 檔</b> 與 <b>Out-File</b> 存出來是 UTF-16。'+
@@ -9791,6 +10182,9 @@ function alPaint(){
    '<span class="warn">⚠️ 永豐沒有停損單，停損活在這台電腦的面板迴圈裡 —— '+
    '面板關掉／當掉／電腦睡著就沒有停損，'+eodT+' 的自動平倉也不會發生；'+
    '平不掉會在上面寫出來，那時請自己到大戶投平。</span>');
+
+ /* ── 打開（兩段式）：⛔ 只有開關檔**不在**的時候才畫（開著就只剩「關閉」）─── */
+ setEl('alon', alOnHTML(D));
 
  /* ── 關閉鈕：⛔ 只有開關檔存在時才畫（沒東西可關就不該有按鈕）────── */
  setEl('aloff', D.flag_exists
@@ -9814,17 +10208,96 @@ function alPaint(){
  setEl('alnotes',alNotesHTML(D,days));
 }
 
-/* ⭐ 【自動下單】唯一一個會改變狀態的動作，⛔ 而且它只會**關**。
-   ・不跳確認：關掉是安全方向（沿用真實下單那邊「平倉不跳確認」同一個道理）。
-   ・按完立刻重抓狀態 —— 他要看得到「真的關掉了」，不是相信一句 alert。
-   ⛔ 這一頁不准出現任何「開啟」的動作：開只有一條路（自己建那個檔）。 */
+/* ⭐⭐ 「打開自動下單」——**這是這個面板上唯一一顆會武裝真錢的鈕**。
+   ⛔ 兩段式：第一段（選做法）**一個請求都不送**，只把畫面換成確認條；
+      第二段按「確定，打開」才會真的打 POST /api/fire/on。
+   ⛔ 確認條那句話（真錢／演練）**只從後端拿**（D.arm_confirm.text），
+      ⛔ 前端不准自己判斷 —— 這一頁另外有 D.live，但那句話的措辭是後端的正本，
+      兩邊各寫一份就一定有一份是舊的。
+   ⛔ 後端沒回 arm_confirm ⇒ **不畫開啟鈕**（我們連現在是不是真錢都不知道，
+      這種時候給他一顆按鈕比不給更糟）。 */
+function alOnHTML(D){
+ if(D.flag_exists) return '';    /* 已經開著 ⇒ 這裡什麼都不畫（要換做法請先關掉） */
+ const C=D.arm_confirm;
+ if(!C||typeof C.text!=='string')
+   return '<div class="err">這個面板還不能從畫面上打開（後端沒有回報現在是'+
+     '真實下單還是演練）。要開請自己在 <b>tools/shioaji/'+
+     esc(D.flag||'AUTO_ORDERS_ON')+'</b> 裡寫一個字母。</div>';
+ if(ALON.step==='confirm'){
+   const m=ALON.mode;
+   /* ⛔ 這一條要當場講清楚**現在是哪一種**：真錢＝紅底（這個面板唯一的例外，
+      紅綠平常只給損益）、演練＝中性灰。⛔ 兩種絕不可以長一樣。 */
+   return '<div class="al-conf'+(C.live?' real':'')+'">'+
+     '<div class="q">'+(C.live?'⚠️ ':'')+esc(C.text)+'<br>要用「<b>'+
+       esc(alName(m))+'</b>」（'+esc(alSub(m))+'）開始嗎？</div>'+
+     '<div class="btns2">'+
+       '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
+         (ALON.busy?'打開中…':'確定，打開')+'</button>'+
+       '<button class="btn no" data-alno="1"'+(ALON.busy?' disabled':'')+'>取消</button>'+
+     '</div></div>'+
+     (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
+ }
+ /* 第一段：⛔ 做法直接寫在鈕上（他不必先去別的地方查哪個是哪個），
+    名字一律走 alName()／alSub()（⛔ 不准自己發明名字，也不准出現代號）。 */
+ return '<div class="row">'+
+   '<button class="btn" data-alon="A">用「'+esc(alName('A'))+'」開始</button>'+
+   '<button class="btn" data-alon="B">用「'+esc(alName('B'))+'」開始</button>'+
+   '</div>'+
+   '<div class="n">兩顆都是每個交易日 '+esc(D.signal_at||'')+' 送出 '+
+     esc(String(D.qty||1))+' 口：<b>'+esc(alName('A'))+'</b> 拿 '+esc(alSub('A'))+
+     '的價當參考、<b>'+esc(alName('B'))+'</b> 拿 '+esc(alSub('B'))+'的價當參考，'+
+     esc(D.signal_at||'')+' 的價比它高或持平做多、低做空。按下去會再問你一次。</div>'+
+   (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
+}
+
+/* ⭐ 第二段真的送出去。⛔ 六道防護裡有兩道是請求要帶的（自訂標頭 ＋ token）——
+   ⛔ 少帶一個後端就會擋（403），那是刻意的：**別的網頁帶不出這兩樣**。
+   ⚠️ 2026-09-09：改走跟其他每一顆鈕**同一個** `pfetch()` 出口 ——
+      這一頁自己寫一份標頭 ＝ 兩把尺，總有一天有一邊沒跟上。 */
+function alArm(){
+ if(ALON.busy) return;
+ const m=ALON.mode;
+ if(m!=='A'&&m!=='B'){ ALON.step='idle'; ALON.mode=null;
+   ALON.err='沒有選到做法，請再按一次'; alPaint(); return; }
+ ALON.busy=true; ALON.err=''; alPaint();
+ pfetch('/api/fire/on',JSON.stringify({mode:m}))
+  .then(r=>r.json()
+    .catch(()=>({ok:false,msg:'面板回了看不懂的東西（HTTP '+r.status+'）'}))
+    .then(j=>Object.assign({},j,{_code:r.status})))
+  .then(r=>{ ALON.busy=false; ALON.step='idle'; ALON.mode=null;
+    /* ⛔ 成功也可能有話要說（例如那一列紀錄沒寫進去）——不可以安靜地吞掉。 */
+    /* ⚠️ token 是每次啟動換一次的：面板剛被看門狗重開過的話，畫面上這一份是舊的
+       ⇒ 後端會擋（403）。⛔ 後端刻意不講「你是哪一道沒過」（那顆鈕沒有讓外面除錯的
+       需求），所以由前端補一句他做得到的下一步。 */
+    ALON.err=(r&&r.ok)?(r.warn||''):(((r&&r.msg)||'打不開')+
+      (r&&r._code===403?'（如果面板剛重新啟動過，請再按一次）':'')); })
+  .catch(()=>{ ALON.busy=false; ALON.step='idle'; ALON.mode=null;
+    ALON.err='打不開：連不上面板'; })
+  /* 按完立刻重抓狀態 —— 他要看得到「真的開起來了」，不是相信一句話。 */
+  .then(()=>alFetch());
+}
+
+/* ⭐ 【自動下單】會改變狀態的動作只有兩個：打開（兩段式）與關閉（一鍵）。
+   ・關掉**不跳確認**：那是安全方向（沿用真實下單那邊「平倉不跳確認」同一個道理）。
+   ・打開**一定跳確認**：⛔ 這個不對稱是刻意的，不要「順手統一」。
+   ・按完立刻重抓狀態 —— 他要看得到結果，不是相信一句 alert。 */
 document.addEventListener('click', function(e){
  if(TAB!=='fire') return;
+ /* 第一段：⛔ 只換畫面，**一個請求都不送**（fire-tab.mjs ⑪ 在守）。 */
+ const on=e.target.closest('[data-alon]');
+ if(on){ if(on.disabled) return;
+   ALON.step='confirm'; ALON.mode=on.getAttribute('data-alon'); ALON.err='';
+   alPaint(); return; }
+ /* 取消：⛔ 要真的回到兩顆鈕的狀態（不是只把條子藏起來）。 */
+ const no=e.target.closest('[data-alno]');
+ if(no){ if(no.disabled) return;
+   ALON.step='idle'; ALON.mode=null; ALON.err=''; alPaint(); return; }
+ const yes=e.target.closest('[data-alyes]');
+ if(yes){ if(yes.disabled) return; alArm(); return; }
  const b=e.target.closest('[data-aloff]');
  if(!b||b.disabled) return;
  b.disabled=true;
- fetch('/api/fire/off',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:'{}'})
+ pfetch('/api/fire/off')
   .then(r=>r.json())
   .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); })
   .catch(()=>{ alert('關不掉：連不上面板'); })
@@ -9952,8 +10425,24 @@ tick(); setInterval(tick,500);
 
 
 class Handler(BaseHTTPRequestHandler):
+    # ⛔ 連線層的逾時（2026-09-09）。⚠️ 光擋 `Content-Length: -1` 還不夠：
+    #    宣告 1000 卻只送 1 個位元組的連線，`rfile.read(n)` 一樣會**一直等**，
+    #    `ThreadingHTTPServer` 的執行緒就這樣一條一條被吃掉（外面的網頁做得到）。
+    #    ⚠️ 這是 socket 操作的逾時，⛔ 不是「處理時間」的上限 ——
+    #    面板在本機、最大的回應（K 棒／逐筆）也遠遠不到 30 秒。
+    #    `handle_one_request()` 自己會接住 timeout 並收掉那條連線（不會噴 traceback）。
+    timeout = 30
+
     def log_message(self, *a):
         pass
+
+    def do_HEAD(self):
+        # ⛔ 武裝那顆只收 POST。沒有 do_HEAD 的話 BaseHTTPRequestHandler 會回 501
+        #    （語意上也是拒絕），但這一顆要回**明確的 405**。
+        #    其餘路徑維持原本的行為（這支面板從來不服務 HEAD）。
+        if self.path.split("?", 1)[0] == "/api/fire/on":
+            return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
+        self.send_error(501, "Unsupported method ('HEAD')")
 
     def _json(self, code, obj):
         b = json.dumps(obj, ensure_ascii=False).encode()
@@ -9986,9 +10475,48 @@ class Handler(BaseHTTPRequestHandler):
                                           else "演練：單子已組好，沒有送出")})
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        # ⛔⛔⛔ 【P0，2026-09-09 lab-qa】**這支面板每一個 POST 都會動到真錢或改變狀態。**
+        #   以前防護只掛在 `/api/fire/on` 上，`/api/real/enter`／`/api/real/close`
+        #   一道都沒有 —— lab-qa 用一張**純 HTML** 的表單（不必 JS、不必 CORS、不必 token）
+        #     <form action="http://127.0.0.1:8770/api/real/enter" method="post"
+        #           enctype="text/plain">
+        #     <input name='{"dir":"long","x":"' value='"}'>
+        #   真的打進去了：瀏覽器送出 `{"dir":"long","x":"="}` ＝合法 JSON ⇒
+        #   `broker.enter('long', …)` 被呼叫、回 `200 {"ok": true, "msg": "已送出"}`。
+        #   **他上網時任何一個網頁都可以在他不知情的狀況下用他的帳戶送單／平倉。**
+        #
+        #   ⛔ 所以守衛套在**入口**，不是逐條路由各自套：
+        #     ・逐條套 ＝ 下一個人加端點時會忘記（這正是這次的成因）
+        #     ・入口套 ＝ 結構上不可能有「沒被審過的 POST」
+        #   ⛔ 這條規矩包含 `/api/fire/off`（關閉自動下單）。關掉雖然是**安全方向**
+        #     （不會賠錢），但「他以為開著、其實被某個網頁關掉了」＝ 整天安靜地沒送單，
+        #     而**安靜地少**是這個專案明令禁止的失敗模式。前端只有一個呼叫點，補標頭零風險。
+        #   ⚠️ 前端**每一個** POST 都走 `pfetch()` 那一個出口（⛔ 不准有第二個地方自己寫
+        #     `fetch(...,{method:'POST'})`），token 由 0.5 秒一次的 `/api/state` 一直換新
+        #     ⇒ 看門狗重啟後最多 0.5 秒就對得上，⛔ 他的「平倉」不會因此按不動。
+        #
+        # ⛔ `Content-Length` 一定要自己解（2026-09-09 lab-qa）：
+        #   ・`Content-Length: abc` ⇒ 舊寫法 `int()` 直接噴 traceback、斷連線
+        #   ・`Content-Length: -1` ⇒ `rfile.read(-1)` 會**一直讀到對方關連線**，
+        #     那條執行緒就這樣卡住（`ThreadingHTTPServer` 一條一條被吃掉）
+        #   兩個都回 400，另外加上限（⛔ 心得最長也就幾 KB）。
+        _cl = self.headers.get("Content-Length")
         try:
-            body = json.loads(self.rfile.read(n) or b"{}")
+            n = int(_cl) if (_cl or "").strip() else 0
+        except (TypeError, ValueError):
+            return self._json(400, {"ok": False, "msg": "Content-Length 看不懂"})
+        if n < 0 or n > MAX_POST_BYTES:
+            return self._json(400, {"ok": False, "msg": "body 太大或長度不合理"})
+        # ⚠️ 先把 body 讀掉再擋：擋下來卻不讀，連線裡剩下的位元組會被當成下一個請求解析。
+        try:
+            raw = self.rfile.read(n)
+        except Exception:
+            raw = b""
+        ok, code, msg = fire_post_guard(self.headers)
+        if not ok:
+            return self._json(code, {"ok": False, "msg": msg})
+        try:
+            body = json.loads(raw or b"{}")
         except Exception:
             body = {}
         st = CURRENT_STATE.get("today")
@@ -10006,15 +10534,36 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 ENTER_LOCK.release()
 
-        # 【自動下單】⭐ **這一頁唯一一個會改變狀態的動作，而且它只會關不會開。**
+        # 【自動下單】⭐ **關閉。這一條只會關，永遠不會開。**
         #   Benson 2026-09-09：「我用工具那邊關掉之後，才會失效」⇒ 開關沒有有效期，
         #   建了就一直有效，但要有一個關得掉的地方。
-        #   ⛔ 設計原則是**開難、關易**：
-        #     ・開＝他自己在硬碟上建 AUTO_ORDERS_ON（⛔ 畫面上永遠不會有「開啟」）
-        #     ・關＝這一顆。關掉永遠是安全的方向，所以做成一鍵、不跳確認
+        #   ⛔ 設計原則是**開難、關易**（2026-09-09 下午他要求「開」也做到面板上之後
+        #      仍然成立，只是「難」的意思變了）：
+        #     ・開＝上面那一條，**兩段式**＋六道防護（他要按兩次，第二次會被告知這是真錢）
+        #     ・關＝這一顆。關掉永遠是安全的方向，所以做成一鍵、**不跳確認**
         #       （沿用真實下單那邊「平倉不跳確認」同一個道理）。
-        #   ⛔ auto_fire.disarm() 結構上只會把開關檔移走 —— 整個 repo 的產品程式
-        #      沒有任何一行會建立 ARM_FLAG（test_auto_fire.py ⑬ 用 AST 在守）。
+        #       ⛔ 這個不對稱是刻意的，不要「順手統一」成兩邊都跳或兩邊都不跳。
+        #   ⛔ auto_fire.disarm() 結構上只會把開關檔移走 —— **auto_fire.py 裡
+        #      沒有任何一行會建立 ARM_FLAG**（test_auto_fire.py ⑬ 用 AST 在守）：
+        #      會送單的那個模組打不開自己的開關。建檔只有 fire_arm_on() 一個地方。
+        # 【自動下單】⭐ **打開**（2026-09-09 Benson 要求做在面板上）。
+        #   ⛔⛔ 按下去就是武裝真錢 ⇒ 這一條跟上面那顆「關閉」的規矩完全相反：
+        #     ・前端**兩段式**（兩顆「用XX開始」→ 確認條 →「確定，打開」）
+        #     ・這裡**六道防護**（`fire_post_guard`：Content-Type／自訂標頭／Origin／
+        #       一次性 token／Sec-Fetch-Site／Host）—— ⛔ 缺一道就有繞法：
+        #       他電腦上任何一個開著的網頁都送得到 localhost:8770。
+        #     ・`mode` ⛔ **先驗再寫**（不准寫進檔案再驗）
+        #     ・已經開著再按 ⇒ 409（⛔ 不覆蓋、不當成換做法）
+        #   ⛔ 路由是精確比對（`==`），⛔ 不可以 startswith／in ——
+        #      放寬＝多開一批沒人審過的入口（`test_fire_routes.py` ④ 在守）。
+        if self.path == "/api/fire/on":
+            # ⚠️ 六道防護在 `do_POST` 的入口就過了（每一個 POST 都過），
+            #    ⛔ 這裡不再呼叫第二次 —— 兩個地方各呼叫一次 ＝ 有一天會有一邊被拿掉。
+            m = body.get("mode") if isinstance(body, dict) else None
+            code, out = fire_arm_on(m, who=self.client_address[0]
+                                    if self.client_address else "?")
+            return self._json(code, out)
+
         if self.path == "/api/fire/off":
             try:
                 ok, msg = auto_fire.disarm()
@@ -10192,14 +10741,30 @@ class Handler(BaseHTTPRequestHandler):
             if out is None:
                 return self._json(404, {"error": "這天沒有紀錄", "date": want})
             return self._json(200, out)
-        # 【自動下單】⚠️ 這是**唯讀**的：它回報「開關開了沒／今天送了沒／為什麼沒送」。
-        #   ⛔⛔ 刻意**沒有**「開啟自動下單」的 POST 端點 —— 開難、關易：
-        #      **開**只有一條路（他自己在硬碟上建 AUTO_ORDERS_ON），
-        #      **關**才有一顆按鈕（POST /api/fire/off，見 do_POST；那條只會關不會開）。
+        # 【自動下單】⚠️ 這是**唯讀**的：它回報「開關開了沒／今天送了沒／為什麼沒送」，
+        #   另外帶兩樣「打開」那條路要用的東西：`arm_confirm`（確認條那句話的正本）
+        #   與 `token`（跨站讀不到這份 JSON ⇒ 拿不到它）。
+        #   ⛔ 改變狀態的 POST 只有兩個，都在 do_POST：`/api/fire/on`（兩段式＋六道防護）
+        #      與 `/api/fire/off`（一鍵，關掉永遠是安全方向）。
+        # ⛔⛔ 武裝那顆**只收 POST**：GET／HEAD 一律 405。
+        #    網頁上一個 <img src>、一條他點下去的連結、瀏覽器的預抓
+        #    都不可以變成「幫他打開自動下單」（GET 連 CORS 那一關都不用過）。
+        if self.path.split("?", 1)[0] == "/api/fire/on":
+            return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
         if self.path.startswith("/api/fire/state"):
+            # ⛔⛔ 這份 JSON 裡有 `token` ⇒ 它自己也要過 ③⑤⑥（2026-09-09 lab-qa）。
+            #    沒有這一道的話，DNS rebinding 下別的網站讀得到 token ⇒ 第 ④ 道形同虛設。
+            ok, code, msg = fire_get_guard(self.headers)
+            if not ok:
+                return self._json(code, {"ok": False, "msg": msg})
             try:
                 out = auto_fire.state()
                 out["sim"] = fire_sim_pairs(out.get("days") or [])
+                # ⛔ 「現在是真錢還是演練」那句話**在後端算**（前端不准猜），
+                #    而且拿的是 auto_fire 算好的那個 live ⇒ 只有一把尺。
+                out["arm_confirm"] = fire_arm_confirm(out.get("live"))
+                # 兩段式確認第二段要帶的 token。跨站讀不到這份 JSON ⇒ 拿不到它。
+                out["token"] = FIRE_TOKEN
                 return self._json(200, out)
             except Exception as e:
                 return self._json(500, {"error": str(e)[:200], "armed": False,
@@ -10247,10 +10812,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b)
             return
         if self.path.startswith("/api/state"):
+            # ⛔⛔ 這份 JSON 也帶 `token`（前端每 0.5 秒就換到最新的那一份 ⇒
+            #    看門狗重啟後他的「平倉」鈕不會突然按不動），所以它跟 /api/fire/state
+            #    同一個守衛。⛔ 拿掉這一道 ＝ 把 token 送給任何一個網頁。
+            ok, code, msg = fire_get_guard(self.headers)
+            if not ok:
+                return self._json(code, {"ok": False, "msg": msg})
             LAST_CLIENT["at"] = time.time()      # 有人在看（桌面 App 靠這個判斷關窗）
             with state_lock:
                 try:
-                    payload = json.dumps(STATE, ensure_ascii=False).encode()
+                    payload = json.dumps(dict(STATE, token=FIRE_TOKEN),
+                                         ensure_ascii=False).encode()
                 except TypeError as e:
                     # 【最後一道】STATE 裡混進不能序列化的東西時，舊版整支端點會炸掉、
                     # 回空字串 ⇒ 前端拿不到任何狀態、**畫面整個凍住**
@@ -10263,6 +10835,10 @@ class Handler(BaseHTTPRequestHandler):
                                     "live": False, "position": None,
                                     "can_enter": False,
                                     "why": "面板狀態出問題，請去大戶投確認部位"}
+                    # ⛔⛔ 這一條退路**一定要帶 token**：少了它，前端下一次
+                    #    `pfetch()` 就沒有 token ⇒ **他的「平倉」鈕當場按不動**。
+                    #    「寧可少一塊資料也不要讓面板瞎掉」在這裡的意思包含「按鈕還要能按」。
+                    safe["token"] = FIRE_TOKEN
                     payload = json.dumps(safe, ensure_ascii=False, default=str).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")

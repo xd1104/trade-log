@@ -71,10 +71,18 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 print(f"面板 handler 架在 127.0.0.1:{port}（沒有連永豐，broker.enter 是假的）\n")
 
 
-def post(path, payload):
+# ⛔⛔ 2026-09-09（lab-qa P0）：`do_POST` 現在**每一個** POST 都要過
+#    `fire_post_guard()`（Content-Type ＋ X-Panel ＋ token ＋ Origin／Sec-Fetch／Host），
+#    因為在那之前，他上網時任何一個網頁都能用一張純 HTML 表單打 `/api/real/enter`。
+#    ⇒ 這一支要模擬的是**他自己的面板**，所以標頭要帶齊（＝前端 `pfetch()` 送的那一組）。
+PANEL_HDR = {"Content-Type": "application/json", "X-Panel": "1",
+             "X-Panel-Token": LP.FIRE_TOKEN, "Sec-Fetch-Site": "same-origin"}
+
+
+def post(path, payload, headers=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
                                  data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json"})
+                                 headers=dict(PANEL_HDR if headers is None else headers))
     try:
         with urllib.request.urlopen(req) as r:
             return r.status, json.loads(r.read().decode())
@@ -110,6 +118,18 @@ broker._state["position"] = None
 code, body = post("/api/real/enter", {"dir": "short"})
 chk("  下一筆送得出去", code, 200)
 chk("  而且真的到 broker", CALLS, ["short"])
+
+print("\n=== ⛔⛔ 那張純 HTML 表單（lab-qa 的 P0）打不進來 ===")
+# ⚠️ 這一節跟「連按」無關，但它跟這一支共用同一個 handler ＋ 同一個假 broker，
+#    所以順手在這裡也守一次：**沒有標頭的那一種，一次都不可以到 broker**。
+CALLS.clear()
+broker._state["position"] = None
+code, body = post("/api/real/enter", {"dir": "long"},
+                  headers={"Content-Type": "text/plain;charset=UTF-8",
+                           "Origin": "https://evil.example",
+                           "Sec-Fetch-Site": "cross-site"})
+chk("  <form enctype=\"text/plain\"> ⇒ 415", code, 415)
+chk("  ⛔⛔ 而且 broker.enter 一次都沒有被呼叫", CALLS, [])
 
 print("\n=== 面板要知道自己跑的是不是最新的程式 ===")
 # 關視窗再開**不等於**重開面板（panel_app 看到伺服器活著就直接接上去），

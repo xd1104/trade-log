@@ -187,9 +187,8 @@ LP_MUT = [
      '        if self.path.startswith("/api/fire/state"):',
      '        if self.path.startswith("/api/fire/statXX"):'),
     ("Ⓑ GET 的路由整個刪掉",
-     '        if self.path.startswith("/api/fire/state"):\n            try:\n'
-     '                out = auto_fire.state()',
-     '        if False:\n            try:\n                out = auto_fire.state()'),
+     '        if self.path.startswith("/api/fire/state"):\n',
+     '        if False:\n'),
     ("Ⓒ 關閉那顆的路由改名（畫面上那顆鈕按下去 404）",
      '        if self.path == "/api/fire/off":', '        if self.path == "/api/fire/ofXX":'),
     ("Ⓓ 關閉那條改成「什麼都不做」（按了說成功，開關其實還開著）",
@@ -237,8 +236,210 @@ LP2_MUT = [
      '    if not AUTO["eod"] and 49410 <= secs < DAY_END_SEC:'),
     ("Ⓠ9 那顆「關閉」鈕改看 armed（開關檔壞掉時 armed=False ⇒ 他關不掉）",
      "setEl('aloff', D.flag_exists", "setEl('aloff', D.armed"),
-    ("Ⓠ9b 那顆鈕永遠畫出來（關著的時候整頁應該 0 顆按鈕）",
+    ("Ⓠ9b 那顆鈕永遠畫出來（關著的時候應該只有那兩顆「開始」）",
      "setEl('aloff', D.flag_exists", "setEl('aloff', true||D.flag_exists"),
+    # ── ⭐⭐ 「打開」那一顆（2026-09-09）：⛔ **文案／畫面／接線那半**
+    #    （這個專案連五輪的固定失敗形狀就是「只守自己剛寫的邏輯那半」）
+    ("Ⓝ1 確認條那句話兩種模式寫同一句（真錢那次會寫成「只是演練」）",
+     '        return {"live": True,', '        return {"live": False,'),
+    ("Ⓝ1b 真錢那句不提「你的錢」（他不會知道那一下代表什麼）",
+     '"真的送單，一天一次，%g 點停利／%g 點停損。"',
+     '"送出委託單。"'),
+    ("Ⓝ1c 演練那句改成真錢那種語氣（狼來了）",
+     '            "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}',
+     '            "text": "現在會用你的錢真的送單。"}'),
+    ("Ⓝ2 fire_arm_confirm 自己再問一次 broker（兩把尺）",
+     "def fire_arm_confirm(live, now=None):",
+     "def fire_arm_confirm(live, now=None):\n    live = broker.is_live()"),
+    # ── ⭐⭐ R2（2026-09-09 退件）：確認條的「今天／下一個交易日」
+    #    ⛔ 那句話必須跟 `_auto_tick()` 真正的觸發條件同一把尺。
+    ("Ⓡ1 文案退回退件前（永遠寫「下一個交易日」，盤前按下去就是假話）",
+     '    when = ("今天 " if fire_fires_today(now) else "下一個交易日 ") + SIGNAL_AT',
+     '    when = "下一個交易日 " + SIGNAL_AT'),
+    ("Ⓡ1b 文案反過來（永遠寫「今天」）",
+     '    when = ("今天 " if fire_fires_today(now) else "下一個交易日 ") + SIGNAL_AT',
+     '    when = "今天 " + SIGNAL_AT'),
+    ("Ⓡ2 fire_fires_today 永遠回 True（週末也說「今天」）",
+     '    return market_session(sig_at) == "day"', '    return True'),
+    ("Ⓡ3 fire_fires_today 永遠回 False（＝退回退件前的行為）",
+     '    # ① 今天那一刻已經過去了', '    return False\n    # ① 今天那一刻已經過去了'),
+    ("Ⓡ4 不看 AUTO['done']（面板 09:10 才重開，卻還說「今天會送」）",
+     '    if AUTO.get("day") == str(now.date()) and AUTO.get("done"):\n        return False',
+     '    if False:\n        return False'),
+    ("Ⓡ5 只看 done、不管是哪一天（昨天送過 ⇒ 今天永遠說「下一個交易日」）",
+     '    if AUTO.get("day") == str(now.date()) and AUTO.get("done"):',
+     '    if AUTO.get("done"):'),
+    ("Ⓡ6 牆上時鐘那道拿掉（09:04 按下去還說「今天」）",
+     '    if now.hour * 3600 + now.minute * 60 + now.second >= SIGNAL_SEC:\n        return False',
+     '    if False:\n        return False'),
+    # ⚠️ Ⓡ7 現在**行為上是等價的**（`market_session` 那把尺在 09:03:30 只剩星期在起作用），
+    #    但它是「兩把尺」的種子：哪天 market_session 長出假日表，這裡就會靜靜地分岔。
+    #    ⇒ 由 ⑬c 那條「判斷用的是 SIGNAL_SEC ＋ market_session」的原始碼斷言擋。
+    ("Ⓡ7 自己寫 weekday() 取代 market_session（⛔ 兩把尺的種子）",
+     '    return market_session(sig_at) == "day"', '    return now.weekday() < 5'),
+    ("Ⓝ3 開著的時候還是把「打開」畫出來（開與關同時在畫面上）",
+     "if(D.flag_exists) return '';", "if(false) return '';"),
+    ("Ⓝ4 第一段（選做法）就直接送出請求（⛔ 沒確認就武裝真錢）",
+     " return '<div class=\"row\">'+", " fetch('/api/fire/on');\n return '<div class=\"row\">'+"),
+    ("Ⓝ5 前端不帶自訂標頭（後端會擋 ⇒ **每一顆鈕**從此按不動）",
+     "'X-Panel':'1',", ""),
+    ("Ⓝ5b 前端不帶 token", "'X-Panel-Token':PTOK}", "}"),
+    # ── ⭐⭐ P0（2026-09-09）：前端「只有一個 POST 出口」那條鐵律
+    ("Ⓝ5c 平倉那顆自己寫一份 fetch（⛔ 第二把尺，漏標頭 ⇒ 他平不掉倉）",
+     "  pfetch('/api/real/close')",
+     "  fetch('/api/real/close',{method:'POST',"
+     "headers:{'Content-Type':'application/json'},body:'{}'})"),
+    # ⚠️ 這兩條要**分別**打得到（2026-09-09 第一版寫成 `" if(s&&s.token) PTOK=s.token;"`
+    #    ⇒ `.replace(old,new,1)` 換掉的是 `ptok()` 裡那一份（它排在前面），
+    #    而守衛只比「整份前端有沒有這個字串」⇒ **打不紅**。
+    #    ⛔ 通則：突變字串要**唯一**，守衛要**指名是哪一個函式裡的那一行**。
+    ("Ⓝ5d tick() 不更新 token（看門狗重啟後每一顆鈕都 403，而畫面看不出原因）",
+     " if(s&&s.token) PTOK=s.token;\n LASTS=s;", " LASTS=s;"),
+    ("Ⓝ5e ptok() 拿不到 token（畫面剛開、第一次 tick 還沒回來就按 ⇒ 403）",
+     ".then(s=>{ if(s&&s.token) PTOK=s.token; }).catch(()=>{});",
+     ".catch(()=>{});"),
+    # ── ⭐ R1（2026-09-09 退件）：那條 405 的守衛原本是恆真的（`do_GET` 的中文註解
+    #    本身就含 `/api/fire/on` 與 `405`）。改成行為斷言之後，這一條要在
+    #    **test_auto_fire 這一層**也紅得起來（以前只有 test_fire_routes 抓得到）。
+    ("Ⓡ8 GET /api/fire/on 不再回 405（⛔ 一個 <img src> 就幫他打開了）",
+     '        if self.path.split("?", 1)[0] == "/api/fire/on":\n'
+     '            return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})\n'
+     '        if self.path.startswith("/api/fire/state"):',
+     '        if self.path.startswith("/api/fire/state"):'),
+    ("Ⓡ9 GET /api/fire/state 的路由改名（端點整個不見，但字串還在檔案裡）",
+     '        if self.path.startswith("/api/fire/state"):\n',
+     '        if self.path.startswith("/api/fire/statXX"):\n'),
+    ("Ⓝ6 切進分頁時不重置兩段式（回來時看到一條展開到一半的確認條）",
+     " ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';\n alFetch();",
+     " alFetch();"),
+    ("Ⓝ7 確認條的文案改成前端自己寫死（後端說什麼都沒用）",
+     "esc(C.text)", "'現在是演練模式，會照跑但不會真的送單。'"),
+]
+
+# ── 第四組：**「打開」那顆的端點與六道防護**（只有 test_fire_routes.py 打得到）
+#    ⛔⛔ 這一組就是「別人幫我做的那一側」：每一道防護單獨拿掉都要有東西紅，
+#    ⛔ 打不紅 ＝ 那一道等於沒有（他電腦上任何一個網頁都能替他武裝真錢）。
+LP3_MUT = [
+    ("Ⓖ1 拿掉 Content-Type 檢查（⛔ 一個 <form> 就送得出去）",
+     '    if ct != "application/json":', '    if False:'),
+    ("Ⓖ1b Content-Type 只要「含有 json」就算（application/json-x…）",
+     '    if ct != "application/json":', '    if "json" not in ct:'),
+    ("Ⓖ2 拿掉自訂標頭 X-Panel（簡單請求不必 preflight）",
+     '    if (headers.get("X-Panel") or "").strip() != "1":', '    if False:'),
+    ("Ⓖ2b X-Panel 只看「有沒有」不看值", '.strip() != "1":', '.strip() == "\\x00":'),
+    ("Ⓖ3 拿掉 Origin 檢查（跨站 POST 直接成功）",
+     '    if not _fire_origin_ok(headers.get("Origin")):', '    if False:'),
+    # ⚠️ ⛔ 這一條原本寫成「把那個 if 改成 False」，但那是**等價突變**：
+    #    掉下去 urlsplit("null") 的 scheme 是空的，照樣回 False ⇒ 結構上打不紅
+    #    （2026-09-09 實測）。真正的弱化是「把 null 當成本機」，改成這個之後就紅了。
+    #    ⛔ 通則：打不紅先問「這個突變真的弱化了什麼嗎」，不要急著加測試。
+    ("Ⓖ3b Origin=null 當成合法（sandbox iframe／file://）",
+     '    if o.lower() == "null":\n        return False',
+     '    if o.lower() == "null":\n        return True'),
+    ("Ⓖ3c Origin 只比「開頭是不是 http://127.0.0.1」（127.0.0.1.evil.com 會過）",
+     '    return u.scheme in ("http", "https") and (u.hostname or "").lower() in FIRE_LOOPBACK',
+     '    return o.startswith("http://127.0.0.1")'),
+    ("Ⓖ4 拿掉 token（前三道都是「送不出來」，只有這道是「猜不到」）",
+     '    if not tok.isascii() or not secrets.compare_digest(tok, FIRE_TOKEN):',
+     '    if False:'),
+    ("Ⓖ4b token 沒帶就放行（空字串當成不必檢查）",
+     '    if not tok.isascii() or not secrets.compare_digest(tok, FIRE_TOKEN):',
+     '    if tok and not secrets.compare_digest(tok, FIRE_TOKEN):'),
+    ("Ⓖ4c 非 ASCII 的 token 讓 compare_digest 自己炸（⛔ 拿例外當防線）",
+     '    if not tok.isascii() or not secrets.compare_digest(tok, FIRE_TOKEN):',
+     '    if not secrets.compare_digest(tok, FIRE_TOKEN):'),
+    ("Ⓖ5 拿掉 Sec-Fetch-Site（瀏覽器自己加的那一道）",
+     '    if sfs and sfs not in ("same-origin", "none"):', '    if False:'),
+    ("Ⓖ6 拿掉 Host 檢查（⛔ DNS rebinding）",
+     '    if not _fire_host_ok(headers.get("Host")):', '    if False:'),
+    ("Ⓖ7 GET 也收（⛔ 一個 <img src> 就幫他打開了）",
+     '        if self.path.split("?", 1)[0] == "/api/fire/on":\n'
+     '            return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})\n'
+     '        if self.path.startswith("/api/fire/state"):',
+     '        if self.path.startswith("/api/fire/state"):'),
+    ("Ⓖ8 路由改用 startswith（/api/fire/onXX 全都會中）",
+     '        if self.path == "/api/fire/on":', '        if self.path.startswith("/api/fire/on"):'),
+    ("Ⓖ9 mode 不驗（C／D／亂碼全部寫得進去）",
+     '    if not isinstance(mode, str) or mode not in auto_fire.METHODS:', '    if False:'),
+    ("Ⓖ9b mode 先寫再驗（驗失敗那一瞬間開關已經是開著的）",
+     '    if not isinstance(mode, str) or mode not in auto_fire.METHODS:\n'
+     '        return 400, {"ok": False, "msg": "只能用「%s」或「%s」這兩個做法" % (\n'
+     '            auto_fire.METHOD_NAME["A"], auto_fire.METHOD_NAME["B"])}',
+     '    pass'),
+    ("Ⓖ10 拿掉 O_EXCL（⛔ 已經開著再按會把他的檔蓋掉）",
+     '        fd = os.open(str(flag), os.O_CREAT | os.O_EXCL | os.O_WRONLY)',
+     '        fd = os.open(str(flag), os.O_CREAT | os.O_TRUNC | os.O_WRONLY)'),
+    ("Ⓖ11 「打開」不落地（誰在什麼時候開的永遠查不到）",
+     '    warn = _fire_arm_log(row)', '    warn = None'),
+    ("Ⓖ11b 落地寫進 YYYY-MM.jsonl（⛔ 污染 autofire 帳本的不變式）",
+     '        p = auto_fire.FIRE_DIR / ("arm-" + str(row["date"])[:7] + ".jsonl")',
+     '        p = auto_fire.FIRE_DIR / (str(row["date"])[:7] + ".jsonl")'),
+    ("Ⓖ12 state 不帶 token（那顆鈕從此按不動，而且沒人看得出來）",
+     '                out["token"] = FIRE_TOKEN', '                pass'),
+    ("Ⓖ13 arm_confirm 不帶出去（前端只能自己猜真錢／演練）",
+     '                out["arm_confirm"] = fire_arm_confirm(out.get("live"))', '                pass'),
+    # ── ⛔⛔⛔ 【P0，2026-09-09 lab-qa】守衛套在 do_POST 入口這件事本身
+    ("Ⓟ1 守衛退回「只掛在 /api/fire/on」（⛔ 一張純 HTML 表單就能用他的帳戶送單）",
+     '        ok, code, msg = fire_post_guard(self.headers)\n'
+     '        if not ok:\n'
+     '            return self._json(code, {"ok": False, "msg": msg})\n'
+     '        try:\n'
+     '            body = json.loads(raw or b"{}")',
+     '        try:\n'
+     '            body = json.loads(raw or b"{}")'),
+    ("Ⓟ1b 守衛只在「不是真錢那兩條」時才過（⛔ 剛好放掉最危險的兩條）",
+     '        ok, code, msg = fire_post_guard(self.headers)',
+     '        ok, code, msg = (True, 200, "") '
+     'if self.path.startswith("/api/real/") else fire_post_guard(self.headers)'),
+    # ── ⛔ 「放寬型」：QA 說她打不紅的那兩種（token 只比前綴、Host 用 endswith）
+    ("Ⓟ2 token 只比前 8 碼（⛔ 舊的「token 猜錯」那條打不紅它）",
+     '    if not tok.isascii() or not secrets.compare_digest(tok, FIRE_TOKEN):',
+     '    if not tok.isascii() or tok[:8] != FIRE_TOKEN[:8]:'),
+    ("Ⓟ2b token 用 startswith（帶對的前綴再接一截也過）",
+     '    if not tok.isascii() or not secrets.compare_digest(tok, FIRE_TOKEN):',
+     '    if not tok.isascii() or not tok.startswith(FIRE_TOKEN[:8]):'),
+    ("Ⓟ3 Host 改用 endswith（⛔ evil-127.0.0.1 會過）",
+     '    return h in FIRE_LOOPBACK',
+     '    return any(h.endswith(x) for x in FIRE_LOOPBACK)'),
+    ("Ⓟ3b Host 改用 startswith（⛔ 127.0.0.1.evil.com 會過）",
+     '    return h in FIRE_LOOPBACK',
+     '    return any(h.startswith(x) for x in FIRE_LOOPBACK)'),
+    ("Ⓟ4 Origin 不驗形狀（⛔ http://evil@127.0.0.1 會過）",
+     '    if not _FIRE_ORIGIN_RE.match(o):\n        return False',
+     '    if False:\n        return False'),
+    # ── ⛔ Content-Length（⛔ abc ⇒ traceback 斷線；-1 ⇒ 執行緒卡住）
+    ("Ⓟ5 Content-Length 退回 int()（abc ⇒ 噴 traceback、-1 ⇒ 執行緒卡住）",
+     '        try:\n'
+     '            n = int(_cl) if (_cl or "").strip() else 0\n'
+     '        except (TypeError, ValueError):\n'
+     '            return self._json(400, {"ok": False, "msg": "Content-Length 看不懂"})\n'
+     '        if n < 0 or n > MAX_POST_BYTES:\n'
+     '            return self._json(400, {"ok": False, "msg": "body 太大或長度不合理"})',
+     '        n = int(_cl or 0)'),
+    ("Ⓟ5b 只擋看不懂的、不擋負數與超大（⛔ -1 那條路照樣卡住執行緒）",
+     '        if n < 0 or n > MAX_POST_BYTES:\n'
+     '            return self._json(400, {"ok": False, "msg": "body 太大或長度不合理"})',
+     '        if False:\n'
+     '            return self._json(400, {"ok": False, "msg": "body 太大或長度不合理"})'),
+    # ── ⛔ 端出 token 的兩個 GET 的守衛（④ 那一道的真正強度）
+    ("Ⓟ6 /api/fire/state 不設防（⛔ DNS rebinding 讀得到 token）",
+     '            ok, code, msg = fire_get_guard(self.headers)\n'
+     '            if not ok:\n'
+     '                return self._json(code, {"ok": False, "msg": msg})\n'
+     '            try:\n'
+     '                out = auto_fire.state()',
+     '            try:\n'
+     '                out = auto_fire.state()'),
+    ("Ⓟ7 /api/state 不設防（⛔ token 就在那份 JSON 裡）",
+     '            ok, code, msg = fire_get_guard(self.headers)\n'
+     '            if not ok:\n'
+     '                return self._json(code, {"ok": False, "msg": msg})\n'
+     '            LAST_CLIENT["at"] = time.time()',
+     '            LAST_CLIENT["at"] = time.time()'),
+    ("Ⓟ7b /api/state 不帶 token（他的每一顆鈕都要先繞一次才按得動）",
+     '                    payload = json.dumps(dict(STATE, token=FIRE_TOKEN),\n'
+     '                                         ensure_ascii=False).encode()',
+     '                    payload = json.dumps(STATE, ensure_ascii=False).encode()'),
 ]
 # ⚠️ `main()` 的接線（`eod_at=EOD_CLOSE_AT`、`AUTO_EOD_HOOK = auto_fire.on_eod`）
 #    **不在這一組**：`test_fire_routes.py` 自己接線、走不到 `main()`。
@@ -317,10 +518,16 @@ sweep("live_panel.py 的路由", LP_MUT, LPSRC, "live_panel.py", ROUTE_TEST, "LP
 #    所以 lab-qa 打在這裡的 Q11／Q9 整組打不紅。
 sweep("live_panel.py 的主迴圈與畫面", LP2_MUT, LPSRC, "live_panel.py", TEST,
       "LP_SRC_DIR")
+# ⛔⛔ 第四組打的是「打開自動下單」那顆的**端點與六道防護**（2026-09-09 加）。
+#    ⚠️ 這一組刻意全部打在「別人幫我做的那一側」——
+#    前四輪的固定失敗形狀就是「守衛只蓋到新寫的那一側，端點／文案／接線沒守」。
+sweep("live_panel.py 的「打開」端點與防護", LP3_MUT, LPSRC, "live_panel.py",
+      ROUTE_TEST, "LP_SRC_DIR")
 
 shutil.rmtree(TMP, ignore_errors=True)
-_tot = len(MUT) + len(LP_MUT) + len(LP2_MUT)
+_tot = len(MUT) + len(LP_MUT) + len(LP2_MUT) + len(LP3_MUT)
 print(f"\n{_tot} 個突變（auto_fire {len(MUT)} ＋ live_panel 路由 {len(LP_MUT)}"
-      f" ＋ live_panel 主迴圈／畫面 {len(LP2_MUT)}），打紅 {_tot - bad} 個"
+      f" ＋ live_panel 主迴圈／畫面 {len(LP2_MUT)}"
+      f" ＋ 「打開」端點與防護 {len(LP3_MUT)}），打紅 {_tot - bad} 個"
       + ("　全部通過 ✅" if not bad else f"　⛔ {bad} 個打不紅"))
 sys.exit(1 if bad else 0)

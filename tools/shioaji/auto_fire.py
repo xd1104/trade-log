@@ -21,8 +21,14 @@
 **檔案存在才會做事，而且開發／測試／AI 一律不准建它。**
 
 ⭐ **開難、關易**（Benson 2026-09-09：「我用工具那邊關掉之後，才會失效」）：
-   - **開**：只有一條路 —— 他自己在硬碟上建這個檔，內容 A 或 B。
-     ⛔ 程式裡**沒有任何一行**會建立 `ARM_FLAG`（`test_auto_fire.py` ⑬ 用 AST 在守）。
+   - **開**：⚠️ 2026-09-09 下午 Benson 要求「做在面板上，按個鈕就可以開始」之後，
+     這裡多了第二條路：面板上的**兩段式**按鈕 → `POST /api/fire/on` →
+     `live_panel.fire_arm_on()`（六道防護 ＋ 確認條 ＋ `O_CREAT|O_EXCL`）。
+     他自己在硬碟上建這個檔（內容 A 或 B）**仍然有效**，兩條路都認同一個檔。
+     ⛔⛔ 但**這個模組**（`auto_fire.py`）裡仍然沒有任何一行會建立 `ARM_FLAG`
+     （`test_auto_fire.py` ⑬ 用 AST 在守，一個字都沒放寬）——
+     **會送單的那個模組打不開自己的開關**，這是刻意留著的結構性保證。
+     建檔的地方整個 repo 只有 `live_panel.fire_arm_on()` 一個。
    - **關**：面板上一顆按鈕 → `POST /api/fire/off` → `disarm()`，把開關檔**改名**收起來。
      關掉永遠是安全的動作，所以做成一鍵、不跳確認（沿用「平倉不跳確認」同一個道理）。
    - **開關沒有有效期**：建了就一直有效，每個交易日都送，直到他自己關掉。
@@ -121,7 +127,9 @@ from datetime import date, datetime
 import broker            # ⛔ 唯一的下單出口。這個檔不自己組單、不自己送單
 
 HERE = pathlib.Path(__file__).resolve().parent
-ARM_FLAG = HERE / "AUTO_ORDERS_ON"      # ⛔ 只有 Benson 自己建；開發與測試不准建
+# ⛔ 只有 Benson 自己建、或他在面板上按那顆兩段式的鈕（live_panel.fire_arm_on）；
+#    ⛔⛔ 開發與測試**一律不准**把這個檔建出來（測試全部導到暫存區）。
+ARM_FLAG = HERE / "AUTO_ORDERS_ON"
 FIRE_DIR = HERE / "autofire"            # ⛔ 一定要 gitignore（含進場價與時間）
 
 # ⛔ 只支援 A 與 B。C（要 30 點）與 D（不判斷）是【模擬】那一頁的對照組，
@@ -338,8 +346,11 @@ def disarm():
     ⭐ **關掉自動下單。這個函式只會關，永遠不會開。**
 
     它做的唯一一件事是「把 `ARM_FLAG` 移走」——
-    ⛔ 這個模組（以及整個 repo 的產品程式）**沒有任何一行會建立 `ARM_FLAG`**，
-       所以這條路結構上就打不開開關（`test_auto_fire.py` ⑬ 用 AST 在守）。
+    ⛔ **這個模組**沒有任何一行會建立 `ARM_FLAG`，所以這條路結構上就打不開開關
+       （`test_auto_fire.py` ⑬ 用 AST 在守）。
+       ⚠️ 2026-09-09 更正：舊註解寫「整個 repo 的產品程式都沒有」——那句**已經不成立**
+       （面板上那顆鈕會走 `live_panel.fire_arm_on()` 建檔）。真正還成立、也真正重要的
+       是**會送單的這個模組**打不開自己的開關；建檔的入口整個 repo 只有那一個。
 
     **改名不刪掉**：他寫的那個字母留著（`AUTO_ORDERS_ON.off-YYYYmmdd-HHMMSS`），
     要再開的時候自己把檔名改回去就好；而那個檔名本身就是「幾點關的」的紀錄。

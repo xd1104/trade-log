@@ -353,6 +353,12 @@ chk("  資料到齊之後要退出載入狀態（不可以一直轉）", done2, 
 //    **只會被印出來，不算失敗、不影響 exit code** ⇒ 掛排程或只看「總結」的人會被安靜放行
 //    （lab-qa 2026-09-01 退件第 3 條）。錯誤要在**全部跑完之後**再驗一次。
 chk("  console 全程沒有任何錯誤（跑完所有測項）", ERRORS, []);
+
+/* ⛔⛔ 【P0，2026-09-09】後端每一個 POST 都要標頭與 token 之後，
+   前端漏帶的話那一下會被治具（走**產品自己的**守衛）記進 blocked_all。
+   ⛔ 這一支主要是量版面，但它也會按到幾顆鈕 —— 順手守一次「沒有被自己人擋掉」。 */
+const GG = await ctl("/posts");
+chk("  ⛔⛔ 整場沒有任何一下被守衛擋掉（403／415）", GG.blocked_all || [], []);
 if (ERRORS.length) console.log("\nconsole 錯誤：\n  " + ERRORS.join("\n  "));
 c.close();
 ch.kill();

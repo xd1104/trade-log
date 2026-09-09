@@ -704,6 +704,22 @@ chk("  部位顯示的是做空", /做空/.test(s11b.dir), true);
 chk("  平倉鈕寫「買進」＋「回補空單」", /買進/.test(s11b.txt) && /回補空單/.test(s11b.txt), true);
 chk("  而且沒有寫成賣出", /賣出/.test(s11b.txt), false);
 
+/* ═══ ⑫ ⛔⛔ 【P0，2026-09-09】他自己的鈕還按得動 ═══════════════════════
+   後端 `do_POST` 現在**每一個** POST 都要過 `fire_post_guard()`
+   （Content-Type ＋ X-Panel ＋ token ＋ Origin／Sec-Fetch-Site／Host），
+   因為在那之前，他上網時任何一個網頁都能用一張純 HTML 表單打 `/api/real/enter`。
+   ⛔ 治具的 `do_POST` 走的是**產品自己的**那個守衛（⛔ 不是治具自己放行），
+      所以前端只要有一個呼叫點漏帶標頭，那一下就會被記進 `blocked_all`。
+   ⛔ 「被擋 0 筆」單獨看是空話 —— 要配「真的成功送出過 N 筆」才算證據。 */
+console.log("\n=== ⑫ ⛔⛔ 每一顆鈕都還按得動（前端標頭一個都沒漏）===");
+const G = await ctl("/posts");
+chk("  ⛔⛔ 整場沒有任何一下被守衛擋掉（403／415）", G.blocked_all || [], []);
+chk(`  自證：這一場真的有 POST 通過守衛走進治具（共 ${(G.ok_all || []).length} 筆：`
+  + `${[...new Set(G.ok_all || [])].join(" ")}）`,
+  (G.ok_all || []).length > 0, true);
+chk("  ⛔ 其中包含「送單」那一顆（＝會動到真錢的那條路徑真的通）",
+  (G.ok_all || []).includes("/api/real/enter"), true);
+
 c.close();
 ch.kill();
 try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* Chrome 還握著暫存檔，無所謂 */ }
