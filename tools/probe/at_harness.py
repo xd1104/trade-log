@@ -30,8 +30,13 @@ sys.path.insert(0, str(HERE.parent / "shioaji"))
 import live_panel as LP          # noqa: E402
 import autotest_synth as SY      # noqa: E402
 
-PORT = 8773
-CTL = 8774
+# 埠可以用環境變數覆寫（⛔ 預設仍是 8773／8774，⛔ 永遠不可以是 8770）。
+# 【為什麼要這個】改過 live_panel.py 一定要**重起治具**才吃得到新的 PAGE，
+# 但舊的那個實例不一定關得掉 —— 有了這個就可以另起一份在別的埠，探針用 --url/--ctl 指過去。
+import os as _os                      # noqa: E402
+PORT = int(_os.environ.get("AT_PORT", "8773"))
+CTL = int(_os.environ.get("AT_CTL", "8774"))
+assert PORT != 8770 and CTL != 8770, "⛔ 不可以用 8770（他的面板正開著）"
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="at-harness-"))
 TODAY = str(date.today())
 

@@ -52,6 +52,7 @@ import numpy as np
 import pandas as pd
 
 import broker            # 真實下單。預設 dry run，見那個檔開頭的說明
+import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 
 try:
@@ -1968,6 +1969,24 @@ AUTO_REAL_DIR = HERE / "real_trades"    # ⛔ **唯讀**：他自己那一欄的
 
 SIGNAL_AT = "09:03:30"                  # ⛔ 只有這一個地方定義，不要散在程式各處
 SIGNAL_SEC = 9 * 3600 + 3 * 60 + 30
+
+# ⛔⛔ 【自動下單】的收盤平倉時刻。**正本只有這裡**，auto_fire 靠 configure() 接過去。
+#   為什麼是 13:43:30 而不是 13:45：
+#     ① 平不掉的時候要有時間重試。⚠️ **這裡不再放第二份數字**（2026-09-09 lab-qa
+#        退件 B1）：舊版這一段寫「兩輪要 ~59 秒」，跟 auto_fire.py、CLAUDE.md 各一份，
+#        **三份都是紙上算的、而且都跟實跑不一樣**（實測是三輪送單、9 張 IOC、78.2 秒，
+#        最後一張 13:44:38）。實測值的正本在 `auto_fire.EOD_WINDOW_S` 的註解，
+#        每次跑 `test_auto_fire.py` ⑫i 都會重量一次。
+#        重點只有一句：**做得完，而且做完還沒到 13:45（收盤後就送不出去了）**。
+#     ② 13:45 之後 `market_session()` 判成 closed ⇒ `check_real_position()` 直接 return
+#        ⇒ **停損也停了**。⚠️ ⛔ 但不可以說「收盤後完全沒有保護」（lab-qa 退件 B2）——
+#        **15:00 起 sess 變成 night，停損會恢復**；真正的空窗是 13:45~15:00 與
+#        05:00~08:45（再加週末與國定假日）。
+#     ③ 【模擬】那一頁的 `eod` 取的是標籤 13:43 那根（涵蓋 13:43~13:44）的收盤價
+#        （見 AUTO_EOD_LAST 的說明）—— 在那根之內平，跟模擬的基準最接近。
+#   ⚠️ 要改的話兩件事一起改：這裡的字串與秒數，⛔ 不可以只改一個。
+EOD_CLOSE_AT = "13:43:30"
+EOD_CLOSE_SEC = 13 * 3600 + 43 * 60 + 30
 C_THRESH = 30.0                         # C：|訊號| 要**超過**這麼多點才做
 RATE_MIN_N = 30                         # 少於這麼多筆就不給勝率 %（是選的，不是算的）
 CUM_MIN_N = 10                          # 少於這麼多筆就不畫累計線
@@ -2014,6 +2033,9 @@ AUTO_CACHE = {}                 # 檔名 -> {"key":(mtime,size), ...}
 AUTO_LOCK = threading.Lock()    # ⛔ 只保護這份快取，絕對不可以碰 state_lock
 _AUTO_Q = queue.Queue(maxsize=64)
 AUTO = {"started": False, "day": None, "done": False, "settled": False,
+        # eod ＝ 今天的收盤平倉觸發過了沒（⛔ 記憶體只是防重複觸發，
+        #       「這一天到底平了沒」的真相在 autofire/ 那個檔裡）
+        "eod": False,
         "gaps": 0.0, "warm": None, "warm_for": None, "queued": set(), "err": None,
         # ⛔ 一定要在這裡就有 0：`AUTO.get("tick_err", 0)` 那種寫法會讓「有沒有真的在數」
         #    變成看不出來的事，而這個計數是「出錯了但沒有安靜地吞」唯一的痕跡。
@@ -2060,6 +2082,23 @@ def _auto_dir(v):
         return None
     v = int(v)
     return v if v in (1, 0, -1) else None
+
+
+def auto_sig(px, open0845, p0900):
+    """
+    09:03:30 那一刻的兩個訊號值（點）。**這是唯一的正本。**
+
+      A  P(09:03:30) − P(09:00)
+      B  P(09:03:30) − Open(08:45)
+
+    ⛔ 拿不到參考價就回 None（**不是 0**）——「那天沒做」跟「那天算不出來」
+       必須分得出來。
+    ⚠️ 抽成一支函式是刻意的：【自動下單（模擬）】那一頁與【自動下單】（會真的送單）
+       **一定要用同一把尺**。各寫一份的話，哪天改了算式只會改到一邊，
+       而「模擬記的方向」跟「真的送出去的方向」就對不起來了 —— 那正是這兩頁存在的理由。
+    """
+    return (None if p0900 is None else round(px - p0900, 1),
+            None if open0845 is None else round(px - open0845, 1))
 
 
 def auto_dirs(sig_a, sig_b, thresh=C_THRESH):
@@ -2235,8 +2274,7 @@ def _auto_record(snap):
     warm = AUTO["warm"] if AUTO.get("warm_for") == d else _auto_warm(d)
     o845 = _auto_num(snap.get("open0845"))
     p900 = _auto_num(snap.get("p0900"))
-    sig_a = None if p900 is None else round(px - p900, 1)
-    sig_b = None if o845 is None else round(px - o845, 1)
+    sig_a, sig_b = auto_sig(px, o845, p900)      # ⛔ 訊號算式的正本只有一份
     row = {
         "rec": "sig", "date": d, "src": "live",
         "at": snap["at"], "at_lag_ms": snap["at_lag_ms"],
@@ -2469,6 +2507,40 @@ def _auto_put(kind, arg):
         print(f"⚠️ [程式下單] 佇列滿了，丟掉一件 {kind}", flush=True)
 
 
+def _auto_noop(snap, day, lag_ms):
+    """預設的 09:03:30 掛勾：**什麼都不做**。"""
+    return None
+
+
+# ⛔⛔ 09:03:30 那一刻唯一的對外出口。**預設是 no-op**，只有 main() 會把它接到
+#    auto_fire.on_signal（＝會真的送單的那一段）。所以：
+#      ・--replay、測試治具、任何 import 這個檔的人 ⇒ 掛勾是 no-op ⇒ 一張單都不會出去
+#      ・【自動下單（模擬）】那一頁的資料路徑（_auto_record／_auto_settle／autotest/）
+#        完全沒有改變，它仍然只是模擬
+#    ⛔ 這一行以外不准有第二個地方指派 AUTO_SIG_HOOK；掛上去的函式**只准 put_nowait**
+#      （auto_fire.on_signal 自己也有一層 try，永遠不往外丟例外）。
+#    ⚠️ 為什麼要共用同一份快照，而不是讓自動下單自己再讀一次價：
+#      再讀一次就是**兩把尺**（相差幾毫秒就可能算出相反的方向）⇒
+#      「真的送出去的方向」跟「模擬那一頁記下來的方向」對不起來，
+#      而那個對照正是這兩頁存在的理由。
+AUTO_SIG_HOOK = _auto_noop
+
+
+def _auto_eod_noop(day, lag_ms):
+    """預設的收盤平倉掛勾：**什麼都不做**（跟 `_auto_noop` 同一套規矩）。"""
+    return None
+
+
+# ⛔⛔ 13:43:30 那一刻唯一的對外出口（收盤自動平倉）。**預設是 no-op**，
+#    只有 main() 會把它接到 auto_fire.on_eod。
+#    ⚠️ 這一條會**送出平倉單**，所以規矩跟 AUTO_SIG_HOOK 一模一樣：
+#      ・這一行以外不准有第二個地方指派它
+#      ・掛上去的函式**只准 put_nowait**（真正的平倉在 auto_fire 自己的執行緒上跑，
+#        `broker.close()` 會等成交最多十幾秒 —— ⛔ 那絕對不可以卡在 4Hz 主迴圈上，
+#        那條迴圈就是他的停損）
+AUTO_EOD_HOOK = _auto_eod_noop
+
+
 def _auto_tick(st, now, sess):
     """
     ⚠️⚠️ **這個函式跑在 4Hz 主迴圈上，而那條迴圈就是他的停損。**
@@ -2478,7 +2550,8 @@ def _auto_tick(st, now, sess):
         return
     d = str(now.date())
     if AUTO["day"] != d:
-        AUTO.update({"day": d, "done": False, "settled": False, "gaps": 0.0})
+        AUTO.update({"day": d, "done": False, "settled": False, "eod": False,
+                     "gaps": 0.0})
         _auto_put("warm", d)
     if sess != "day":
         return
@@ -2495,8 +2568,30 @@ def _auto_tick(st, now, sess):
             # ⛔⛔ 面板是 09:10 才開起來的（或看門狗剛重啟）⇒ **這一刻的價不是
             #     09:03:30 的價**。拿它記進去，那筆成績就是假的而且看不出來。
             _auto_put("miss", (d, "late"))
+            # 掛勾也要收到「這一天跳過了」—— 不然那一天在【自動下單】那一頁
+            # 連一列「為什麼沒送」都沒有（＝安靜地少）。⛔ 跳過就是跳過，不補單。
+            AUTO_SIG_HOOK(None, d, lag)
         else:
-            _auto_put("record", _auto_snap(st, now))
+            snap = _auto_snap(st, now)
+            _auto_put("record", snap)
+            # ⛔ 只准 put_nowait。掛勾預設是 no-op，接上去的是 auto_fire.on_signal。
+            AUTO_SIG_HOOK(snap, d, lag)
+    # ⛔⛔ 收盤自動平倉。505 天裡有 40 天（≈8%）走完一整天都沒碰到 ±100 ⇒
+    #     大約每 12 個交易日就有一天會抱過夜盤，**而他可能不在**。
+    #     ⚠️ 這裡只有整數比較與 put_nowait；真正的平倉在 auto_fire 自己的執行緒上。
+    #     ⚠️ 上面已經 `if sess != "day": return`，所以這條只會在日盤（<13:45）觸發；
+    #        13:45 之後重啟面板不會再送平倉單（也送不出去）。
+    #     ⛔ **時鐘往前跳的防護**（2026-09-09 lab-qa 提）：這一整段唯一的時間來源是
+    #        本機的 `datetime.now()`。NTP 校時往前跳過 13:43:30（或他手動改系統時間）
+    #        會讓「早上」也落進這個條件 ⇒ 一口早上剛開的部位當場被平掉。
+    #        所以觸發那一刻的 `secs` **必須真的落在 [EOD_CLOSE_SEC, DAY_END_SEC)**
+    #        這個半開區間裡；跳出區間就不觸發（漏平最多是他多抱一晚＝現況，
+    #        平錯是把他的單平掉 —— 沿用同一條不對稱原則）。
+    #        ⚠️ 上界不能靠上面那句 `sess != "day"` 代勞：那把尺是**另一個**函式
+    #        （market_session）算的，改了那邊這裡就靜靜地沒有上界了。
+    if not AUTO["eod"] and EOD_CLOSE_SEC <= secs < DAY_END_SEC:
+        AUTO["eod"] = True
+        AUTO_EOD_HOOK(d, (secs - EOD_CLOSE_SEC) * 1000 + now.microsecond // 1000)
     if not AUTO["settled"] and secs >= AUTO_SETTLE_AFTER:
         AUTO["settled"] = True
         _auto_put("settle", d)
@@ -3026,6 +3121,35 @@ def auto_day(d):
             "bars": [[b["t"], b["o"], b["h"], b["l"], b["c"]] for b in bars]}
 
 
+def fire_sim_pairs(days):
+    """
+    【自動下單】那一頁要的「同一天，模擬那邊記了什麼」。**唯讀。**
+
+    他之後要比的是「真的送出去的」跟「模擬的」差多少：滑價、成交價差、
+    以及沒送成的那幾天模擬有沒有記到。兩邊都是一天一列、同一個 09:03:30、
+    同一把訊號的尺（`auto_sig()` / `auto_dirs()`），所以用 `date` 就對得起來。
+
+    ⛔ 這裡**只讀** autotest/ 的那份模擬紀錄，一個位元組都不寫；
+       也 ⛔ 不把兩邊的成績相加（一個是模擬、一個是真的送出去，相加沒有意義）。
+    """
+    want = {r.get("date") for r in (days or []) if isinstance(r, dict)}
+    if not want:
+        return {}
+    recs, _led = _auto_read()
+    out = {}
+    for d in want:
+        r = recs.get(d)
+        if r is None:
+            continue
+        runs = r.get("runs") or {}
+        out[d] = {"px": r.get("px"), "at": r.get("at"),
+                  "miss": bool(r.get("miss")), "why": r.get("why"),
+                  "sig": r.get("sig") or {}, "dirs": r.get("dirs") or {},
+                  # 只給 A／B 的模擬結果（C／D 不是自動下單的選項）
+                  "runs": {k: runs.get(k) for k in ("A", "B") if runs.get(k)}}
+    return out
+
+
 # ---------------------------------------------------------------- 回顧分頁
 
 _VOLREF = {"map": None}
@@ -3277,6 +3401,11 @@ def review_payload():
 
 
 # ------------------------------------------------- Bar Replay 的判斷（獨立存檔）
+
+# ⛔ 日期就是檔名（`replay_file`），所以進來的字串一定要先驗形狀 ——
+#    `/api/replay` 那條路在收 body 之前就用它擋掉亂七八糟的 date。
+_REPLAY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def replay_file(d):
     return REPLAY_DIR / f"{d}.json"
@@ -4565,6 +4694,66 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .at-advrow input[type=range]{flex:1; min-width:180px; accent-color:var(--gold)}
 .at-advrow b{font-family:var(--font-mono); color:var(--text); min-width:56px}
 .at-fold .note{font-size:11px; color:var(--faint); margin-top:8px; line-height:1.6}
+
+/* ══════════ 【自動下單】（會真的送單的那一頁）══════════
+   版面沿用【自動下單（模擬）】那一套（.card / .sec-head / .at-title / .at-tbl），
+   ⛔ 差別只有三件事，而且每一件都要**一眼看得到**：
+     ① 現在是開還是關　② 選了哪個做法　③ 今天送了沒／為什麼沒送
+   ⛔ 這一頁沒有任何 button／form／input —— 開關只有一條路：他自己建 AUTO_ORDERS_ON。 */
+.al-state{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+/* 關著＝中性灰（⛔ 不是紅色：關著是**正常**狀態，跟休市的連線燈同一個道理）；
+   開著＝金色（這個面板既有的「注意，這是什麼種類」的意思）。
+   ⛔ 絕對不准用紅綠 —— 紅綠在這個面板只給損益。 */
+.al-badge{flex:none; font-size:12px; font-weight:700; font-family:var(--font-sans);
+  letter-spacing:.3px; border-radius:999px; padding:4px 13px 5px; white-space:nowrap;
+  line-height:1.5; color:var(--faint); background:var(--surface-2);
+  border:1px solid var(--line)}
+.al-badge.on{color:var(--gold); background:var(--gold-soft); border-color:var(--gold-line)}
+.al-way{font-size:19px; font-weight:700; color:var(--text); line-height:1.2}
+.al-way i{display:block; font-style:normal; font-size:11.5px; font-weight:500;
+  color:var(--faint); font-family:var(--font-mono); margin-top:3px}
+.al-way.off{font-size:15px; color:var(--dim); font-weight:600}
+.al-how{margin-top:11px; font-size:11.5px; color:var(--dim); line-height:1.75}
+.al-how code{font-family:var(--font-mono); color:var(--gold); font-size:11.5px}
+/* 可以直接貼的指令：⛔ 一定要能整行看完（斷行不斷字），不然他會複製到半截。 */
+.al-how code.cmd{display:inline-block; margin-top:2px; padding:3px 8px 4px;
+  background:var(--surface-2); border:1px solid var(--line); border-radius:6px;
+  color:var(--text); word-break:break-all; white-space:normal; line-height:1.6}
+.al-how .warn{color:var(--gold)}
+.al-how b{color:var(--text); font-weight:650}
+.al-gates{display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
+  background:var(--line-soft); border-radius:var(--r-md); overflow:hidden; margin-top:11px}
+.al-gates .c{background:var(--surface); padding:9px 12px 10px; min-width:0}
+.al-gates .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.al-gates .v{font-size:14px; font-weight:650; color:var(--text); margin-top:3px;
+  line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.al-gates .v.off{color:var(--faint); font-weight:600}
+.al-today{margin-top:2px}
+.al-today .t{font-size:17px; font-weight:700; color:var(--text); line-height:1.35}
+.al-today .t.off{font-size:15px; color:var(--dim); font-weight:650}
+.al-today .d{font-size:12px; color:var(--faint); line-height:1.7; margin-top:5px}
+.al-today .d b{color:var(--dim); font-weight:650; font-family:var(--font-mono)}
+/* 紀錄清單。⛔ 沿用 .at-tbl（同一個面板裡「一排結果」長得都一樣）。 */
+.al-tbl td .why{display:block; font-size:11px; color:var(--faint);
+  font-family:var(--font-sans); margin-top:2px; white-space:normal}
+.al-tbl .ok{color:var(--gold)}
+.al-tbl .no{color:var(--faint)}
+.al-empty{font-size:12px; color:var(--faint); line-height:1.8; padding:10px 2px}
+/* 關閉鈕。⛔ 這是這一頁唯一一顆按鈕，而且只有開關檔存在時才畫得出來。
+   ⛔ 不用紅色（紅綠只給損益），用跟「手動平倉」同一顆 .btn.flat2 的語彙 ——
+      兩者都是「安全方向的收手動作」。 */
+.al-off{margin-top:13px; display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+.al-off .btn{flex:none}
+.al-off .n{font-size:11.5px; color:var(--faint); line-height:1.6}
+.al-off .n b{color:var(--gold); font-weight:650}
+/* 收盤平倉要他自己動手的那幾種：⛔ 不可以混在一般紀錄裡看不出來。 */
+.al-alarm{margin-top:11px; padding:9px 12px 10px; border-radius:var(--r-md);
+  background:var(--gold-soft); border:1px solid var(--gold-line);
+  color:var(--gold); font-size:12px; line-height:1.7; font-weight:600}
+@media(max-width:720px){
+  .al-gates{grid-template-columns:1fr}
+}
 @media(max-width:1024px){
   .at-title .h{font-size:19px}
   .at-pairs{grid-template-columns:1fr}
@@ -4586,12 +4775,16 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          「早盤細節」四個字塞進來會讓這一格比左右寬約 30px，語意交給卡片標題補。 -->
     <button data-tab="tick">細節</button>
     <button data-tab="review">回顧</button>
-    <!-- 【程式下單】放最右：前三顆是「現在 → 更細 → 回頭看自己」的時間動線，
-         這一頁是研究性質，接在最後。⛔ 不可以插在中間。
-         名字是 Benson 自己定的（2026-09-07）。⛔ 不叫「模擬」——
-         面板已經有「模擬練習單」（practice_trades/），同一個詞兩個意思會分不出來。
-         四個字實測仍落在 .tabs button 的 min-width:100px 之內，四顆等寬。 -->
-    <button data-tab="auto">程式下單</button>
+    <!-- 【自動下單（模擬）】放右邊倒數第二：前三顆是「現在 → 更細 → 回頭看自己」的
+         時間動線，這一頁是研究性質，接在後面。⛔ 不可以插在中間。
+         ⚠️ 2026-09-09 從「程式下單」改名成「自動下單（模擬）」（Benson 指示）——
+            隔壁多了一顆會真的送單的【自動下單】，兩顆的名字必須一眼分得出來，
+            **括號裡那兩個字是唯一的差別，⛔ 不准拿掉**。 -->
+    <button data-tab="auto">自動下單（模擬）</button>
+    <!-- ⛔⛔ 【自動下單】＝**會真的送出委託單**的那一頁，所以放最右（動線的終點）。
+         這一頁本身**沒有任何開關**：要用只能自己在硬碟上建 tools/shioaji/AUTO_ORDERS_ON，
+         而且照樣受 REAL_ORDERS_ON 管。⛔ 不准在這裡加按鈕。 -->
+    <button data-tab="fire">自動下單</button>
   </div>
   <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
 </div>
@@ -4664,6 +4857,46 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
      ⛔ 這一頁已經拿掉四樣東西，⛔ **一樣都不准加回來**（守衛：autotest-tab.mjs ⑤／㉔）：
         ① 進度尺（#attrack）② 成績表的「你自己」兩列 ③ 帳本那一行
         ④〈這一頁在算什麼〉摺疊區。 -->
+<!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
+     ⛔⛔ **開難、關易**（Benson 2026-09-09 拍板）：
+       ・**開**只有一條路：他自己在硬碟上建 tools/shioaji/AUTO_ORDERS_ON，內容寫 A 或 B。
+         ⛔ 這一頁**永遠不准有「開啟」按鈕** —— 開關能從畫面上打開的那一刻，
+            「會不會亂送單」就從「讀一個檔」變成「讀整個前端」。
+       ・**關**有一顆按鈕（#aloff → POST /api/fire/off）。關掉永遠是安全的動作。
+         ⛔ 這是這一頁**唯一**一個會改變狀態的動作，⛔ 而且開關關著的時候
+            那顆鈕**不會出現**（沒東西可關）。守衛：fire-tab.mjs ② 與 ⑩。
+     ⛔ 這一段刻意放在 #tab-auto **之前**：autotest-backend.py ① 掃的是
+        `<div id="tab-auto">` 到 `<!-- 【回顧】` 之間那一段（模擬那一頁的紅線
+        「一行都不碰下單路徑」），放進去會讓那把尺量到不該量的東西。 -->
+<div id="tab-fire" hidden>
+
+ <div class="card l1">
+  <div class="at-head">
+   <div class="at-title">
+    <div class="h al-state" id="alstate"></div>
+    <div class="s" id="alsub"></div>
+   </div>
+  </div>
+  <div class="al-gates" id="algates"></div>
+  <div class="al-how" id="alhow"></div>
+  <!-- 關閉鈕。⛔ 只有開關檔存在時才會有東西畫進來（alPaint），
+       關著的時候這裡是空的 —— 沒東西可關就不該有按鈕。 -->
+  <div class="al-off" id="aloff"></div>
+ </div>
+
+ <div class="card">
+  <div class="sec-head"><h2>今天</h2><span class="count" id="alcount"></span></div>
+  <div class="al-today" id="altoday"></div>
+ </div>
+
+ <div class="card">
+  <div class="sec-head"><h2>紀錄</h2><span class="count" id="allogn"></span></div>
+  <div class="at-tblwrap"><table class="at-tbl al-tbl" id="altbl"></table></div>
+  <div class="al-empty" id="alempty"></div>
+  <div class="at-notes" id="alnotes"></div>
+ </div>
+</div>
+
 <div id="tab-auto" hidden>
 
  <div class="card chart l1">
@@ -4748,7 +4981,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  </div>
 </div>
 
-<div class="foot">只顯示已經發生的客觀數字，不做預測、不給買賣訊號。<br>練習下單為模擬，不會送單到永豐。</div>
+<!-- ⚠️ 2026-09-09 補上「自動下單（模擬）」那五個字：這一句原本只講練習單，
+     而現在面板上有兩顆長得很像的分頁，其中一顆**會真的送單**。
+     ⛔ 不可以把這句話寫成「這個面板不會送單」—— 那是一句假話
+     （即時分頁的真實下單卡、以及【自動下單】都會送）。 -->
+<div class="foot">只顯示已經發生的客觀數字，不做預測、不給買賣訊號。<br>練習下單與【自動下單（模擬）】都是模擬，不會送單到永豐。</div>
 </div>
 <script>
 var WIN=7;
@@ -7179,10 +7416,13 @@ function setTab(t){
  if(t!=='review'){ rpStop(); if(RP.state==='running') RP.state='paused'; }
  // 離開【細節】就把 2 秒輪詢停掉（它只有在那一頁前景時才該跑）
  if(t!=='tick'&&TK.timer){ clearTimeout(TK.timer); TK.timer=null; }
+ // 離開【自動下單】也把 5 秒輪詢停掉（它只在那一頁前景時才該跑）
+ if(t!=='fire'&&AL.timer){ clearTimeout(AL.timer); AL.timer=null; }
  document.getElementById('tab-live').hidden=(t!=='live');
  document.getElementById('tab-tick').hidden=(t!=='tick');
  document.getElementById('tab-review').hidden=(t!=='review');
  document.getElementById('tab-auto').hidden=(t!=='auto');
+ document.getElementById('tab-fire').hidden=(t!=='fire');
  document.querySelectorAll('.tabs button').forEach(b=>
    b.classList.toggle('on',b.getAttribute('data-tab')===t));
  if(t==='review'){ lastPane=''; if(!RV) rvFetch(); else rvRender(); }
@@ -7190,6 +7430,9 @@ function setTab(t){
  // 【程式下單】的資料不掛在 500ms 的 tick 上，只在切進來／換天／按窗口時抓。
  // 後端的即時報價、持倉監控、±100 自動停利停損全程都在跑，切分頁完全不影響那一條路。
  else if(t==='auto'){ atEnter(); }
+ // 【自動下單】同樣不掛在 500ms 的 tick 上：後端的送單、持倉監控、±100 停利停損
+ // 全程都在跑，切不切進這一頁完全不影響。
+ else if(t==='fire'){ alEnter(); }
  // 切回即時時立刻呼叫一次 tick()（後端的報價、持倉監控、±100 自動停利停損
  // 全程都在跑，切分頁完全不影響那一條路）
  else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); }
@@ -9414,6 +9657,296 @@ document.addEventListener('keydown',function(e){
 window.addEventListener('resize',()=>{ if(TAB==='auto') atPaint(); });
 
 rvBind();
+
+/* ══════════════ 【自動下單】分頁：會真的送出委託單的那一頁 ══════════════
+
+   版面沿用【自動下單（模擬）】那一套（同樣的 .card / .sec-head / .at-title / .at-tbl），
+   ⛔ 差別只有三件事，而且每一件都要**一眼看得到**：
+     ① 現在是開還是關　② 選了哪個做法　③ 今天送了沒／為什麼沒送
+
+   ⛔⛔ 這一段**一顆按鈕都沒有**（沒有 button／form／input／[data-act]／[data-rdir]），
+        也**不打任何 POST**。開關只有一條路：他自己在硬碟上建 AUTO_ORDERS_ON。
+        畫面上按得到的開關 ＝「會不會亂送單」從「讀一個檔」變成「讀整個前端」。
+   ⛔ 顏色沿用這個面板的規矩：**紅綠只給損益**；開／關用金色與中性灰
+      （關著是正常狀態，⛔ 不是紅色 —— 跟休市的連線燈同一個道理）。
+   ⛔ 名字只寫「5 分 K」「開盤起」，⛔ 畫面上不准出現 A／B 這種代號
+      （【模擬】那一頁為這件事被退件過一次：「我要從哪裡知道現在我看的是哪個做法？」）。
+   ⚠️ 這一頁不掛在 500ms 的 tick 上，只在切進來時抓 ＋ 停在這一頁時每 5 秒更新一次。
+*/
+var AL={data:null,err:'',pending:false,seq:0,timer:null};
+const ALWAY={A:{n:'5 分 K',s:'09:00 起算'},B:{n:'開盤起',s:'08:45 起算'}};
+function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
+function alSub(k){ const w=ALWAY[k]; return w?w.s:''; }
+function alN(v){ return (typeof v==='number'&&isFinite(v))?v:null; }
+function alF(v,d){ const n=alN(v); return n==null?'—':n.toFixed(d==null?1:d); }
+function alSigned(v){ const n=alN(v); return n==null?'—':(n>0?'+':'')+n.toFixed(1); }
+
+function alEnter(){
+ alFetch();
+ if(AL.timer) clearTimeout(AL.timer);
+ AL.timer=setTimeout(alLoop,5000);
+}
+function alLoop(){
+ if(TAB!=='fire'){ AL.timer=null; return; }
+ alFetch(); AL.timer=setTimeout(alLoop,5000);
+}
+function alFetch(){
+ const my=++AL.seq; AL.pending=true;
+ return fetch('/api/fire/state').then(r=>r.json()).then(x=>{
+   if(my!==AL.seq) return;
+   AL.pending=false;
+   /* 治具與舊版後端會回一個空物件 —— 那不是「關閉中」，是「問不到」，
+      ⛔ 兩件事不可以寫同一句（寫同一句一定有一句是假的）。 */
+   if(!x||typeof x!=='object'||!('armed' in x)){ AL.data=null; AL.err='這個面板還沒有自動下單那一段（後端沒有回報狀態）'; }
+   else { AL.data=x; AL.err=x.error||''; }
+   alPaint();
+ }).catch(()=>{ if(my!==AL.seq) return; AL.pending=false; AL.data=null;
+   AL.err='連不上面板'; alPaint(); });
+}
+
+/* 每一種「沒送」都要有自己的一句話。⛔ 正本在後端 auto_fire.WHY（隨端點送過來），
+   這裡只是後端沒回時的退路 —— 兩邊寫不一樣的話，畫面上那句就是假的。 */
+function alWhy(x,fallback){
+ const T=(AL.data&&AL.data.why_texts)||{};
+ return T[x]||fallback||x||'';
+}
+
+function alPaint(){
+ const D=AL.data;
+ if(!D){
+   setEl('alstate','<span class="al-badge">讀不到狀態</span>');
+   setEl('alsub','<span class="warn">'+esc(AL.err||'載入中…')+'</span>');
+   /* ⛔ 讀不到狀態時那顆「關閉」鈕也要收起來 —— 我們根本不知道開關檔在不在，
+      而那顆鈕的說明寫著「按下去就把 X 改名收起來」，留著就是一句沒把握的話。 */
+   setEl('algates',''); setEl('alhow',''); setEl('altoday',''); setEl('aloff','');
+   setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
+   return;
+ }
+ const armed=!!D.armed, m=D.method, live=!!D.live;
+ /* ── ① 現在是開還是關 ＋ ② 選了哪個做法 ─────────────────────── */
+ let st;
+ if(armed) st='<span class="al-badge on">開啟中</span>'+
+   '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alSub(m))+
+   ' · '+esc(D.signal_at||'')+' 送出 '+esc(String(D.qty||1))+' 口</i></span>';
+ else if(D.arm_why==='off') st='<span class="al-badge">關閉中</span>'+
+   '<span class="al-way off">要用請自己建 '+esc(D.flag||'AUTO_ORDERS_ON')+'</span>';
+ else st='<span class="al-badge">拒絕下單</span>'+
+   '<span class="al-way off">'+esc(D.arm_msg||alWhy(D.arm_why))+'</span>';
+ setEl('alstate',st);
+ /* ⛔ 真單開關要跟自動開關一起講：他關掉真單就等於連自動也關掉，
+    但畫面上如果只寫「開啟中」，他會以為單真的會出去。 */
+ /* ⛔ 這一行不要複述上面那個名字（上面已經寫了「5 分 K」＋「09:00 起算」）——
+    這裡要講的是**後果**：09:03:30 一到會發生什麼事。 */
+ const sigT=esc(D.signal_at||''), eodT=esc(D.eod_at||'');
+ let sub='<span>'+(armed
+   ?(live?'⚠️ '+sigT+' 一到，程式會自己送出 1 口真單（你不在也會送）'
+         :sigT+' 一到會走完整條路，但真單開關關著 ⇒ 不會真的送出去')
+   :'一張單都不會送出去')+'</span>';
+ /* 開關沒有有效期：⛔ 這件事一定要寫出來，不然他會以為「今天開的、今天有效」。 */
+ if(armed) sub+='<span class="sep">·</span><span>開關沒有有效期，'+
+   '<b>每個交易日都會送</b>，直到你自己關掉</span>';
+ /* ⛔ 收盤平倉是這一段最會賠錢的地方（沒平就是抱過夜盤），一定要寫在最上面。 */
+ if(armed&&eodT) sub+='<span class="sep">·</span><span>'+eodT+
+   ' 會自動平倉（<b>只平自動下單開的那一口</b>，你自己開的單不會碰）</span>';
+ /* ⚠️ 真單關著時最容易被誤會的一件事：症狀（按不了進場）跟原因（演練部位）
+    看起來毫無關係，不寫他會以為面板壞了。 */
+ if(armed&&!live) sub+='<span class="sep">·</span><span class="warn">'+
+   '⚠️ 演練也會產生一個<b>演練部位</b> —— 那口部位開著的時候，'+
+   '你自己在【即時】那一頁<b>按不了進場</b>（會寫「已經有部位了」）。'+
+   '要自己下單就先按手動平倉，或把這個開關關掉。</span>';
+ if(D.err) sub+='<span class="sep">·</span><span class="warn">送單那一段出過錯 '+
+   esc(String(D.err_n||0))+' 次（停損不受影響）：'+esc(D.err)+'</span>';
+ setEl('alsub',sub);
+
+ setEl('algates',
+   '<div class="c"><div class="k">自動下單開關（'+esc(D.flag||'')+'）</div>'+
+     '<div class="v'+(armed?'':' off')+'">'+esc(armed?('開著 · '+alName(m)):'沒有這個檔')+'</div></div>'+
+   '<div class="c"><div class="k">真單開關（'+esc(D.live_flag||'')+'）</div>'+
+     '<div class="v'+(live?'':' off')+'">'+
+       esc(live?'開著 · 會真的送出去':'關著 · 只會演練')+'</div></div>'+
+   '<div class="c"><div class="k">送出去的內容</div>'+
+     '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利 &plusmn;'+esc(alF(D.tp,0))+
+       ' 點 · 一天 1 次</div></div>');
+
+ /* ── 怎麼開、怎麼關（⛔ 開只有一條路，關才有按鈕）─────────────────── */
+ /* ⚠️ 這一段一定要**直接給可以貼的指令**：lab-qa 實測他最可能用的兩種寫法
+    （Notepad 另存選 UTF-8 with BOM、PowerShell 的 "A" > 檔＝UTF-16LE）
+    以前都會讓畫面寫「看不懂」。後端現在讀得懂了，但**第一次就給對的做法**
+    才是真的把「第一次一定會失敗的路徑」當成主流程做。 */
+ const FLG=esc(D.flag||'AUTO_ORDERS_ON');
+ /* ⛔ 這一頁被 Benson 退件過一次，理由是「一大堆多餘的文字」。所以這一段
+    **只留他真的要動手做的事**：怎麼建、怎麼關、方向怎麼判、風險。
+    ⛔ 不准把「這一頁在算什麼」那種解釋牆搬進來。 */
+ setEl('alhow',
+   '要開：在 <code>tools/shioaji/'+FLG+'</code> 裡寫一個 '+
+   '<code>A</code>（'+esc(alName('A'))+'）或 <code>B</code>（'+esc(alName('B'))+'）；'+
+   '還要有 <code>'+esc(D.live_flag||'REAL_ORDERS_ON')+'</code> 才會真的送出去'+
+   '（<b>把真單關掉就等於連自動也關掉</b>）。<br>'+
+   '<code class="cmd">Set-Content "tools\\shioaji\\'+FLG+'" "A" -Encoding ascii</code>'+
+   '　<span class="warn">⚠️ 記事本存檔請選 <b>UTF-8</b>；PowerShell 的 '+
+   '<b>&gt; 檔</b> 與 <b>Out-File</b> 存出來是 UTF-16。'+
+   '（存錯也不會亂送 —— 讀不懂一律拒絕下單。）</span><br>'+
+   '要關：按下面那顆。方向怎麼判：'+sigT+' 的價比參考價<b>高或持平</b>做多、低做空，'+
+   '<b>剛好持平（差 0 點）算做多</b>（跟【自動下單（模擬）】同一把尺）。<br>'+
+   '<span class="warn">⚠️ 永豐沒有停損單，停損活在這台電腦的面板迴圈裡 —— '+
+   '面板關掉／當掉／電腦睡著就沒有停損，'+eodT+' 的自動平倉也不會發生；'+
+   '平不掉會在上面寫出來，那時請自己到大戶投平。</span>');
+
+ /* ── 關閉鈕：⛔ 只有開關檔存在時才畫（沒東西可關就不該有按鈕）────── */
+ setEl('aloff', D.flag_exists
+   ? '<button class="btn flat2" data-aloff="1">關閉自動下單</button>'+
+     '<span class="n">按下去就把 <b>'+FLG+'</b> 改名收起來（內容留著），'+
+     '之後<b>不會再送任何單</b>。要再開就自己把檔名改回去。</span>'+
+     (D.off_msg?'<span class="n">'+esc(D.off_msg)+'</span>':'')
+   : (D.off_msg?'<span class="n">'+esc(D.off_msg)+'</span>':''));
+
+ /* ── ③ 今天送了沒／為什麼沒送 ─────────────────────────────── */
+ const days=D.days||[], today=D.today||'', row=days.find(r=>r&&r.date===today)||null;
+ setEl('alcount',esc(today));
+ setEl('altoday',alTodayHTML(D,row)+alEodHTML(D,row));
+
+ /* ── 紀錄（要能跟【自動下單（模擬）】那一頁對得起來）───────────── */
+ setEl('allogn',days.length?(days.length+' 天'):'');
+ setEl('altbl',days.length?alTblHTML(D,days):'');
+ setEl('alempty',days.length?'':
+   '還沒有任何紀錄。開關關著的時候，'+esc(D.signal_at||'')+' 一到只會在這裡記一列「沒送」，'+
+   '不會有任何委託單出去。');
+ setEl('alnotes',alNotesHTML(D,days));
+}
+
+/* ⭐ 【自動下單】唯一一個會改變狀態的動作，⛔ 而且它只會**關**。
+   ・不跳確認：關掉是安全方向（沿用真實下單那邊「平倉不跳確認」同一個道理）。
+   ・按完立刻重抓狀態 —— 他要看得到「真的關掉了」，不是相信一句 alert。
+   ⛔ 這一頁不准出現任何「開啟」的動作：開只有一條路（自己建那個檔）。 */
+document.addEventListener('click', function(e){
+ if(TAB!=='fire') return;
+ const b=e.target.closest('[data-aloff]');
+ if(!b||b.disabled) return;
+ b.disabled=true;
+ fetch('/api/fire/off',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:'{}'})
+  .then(r=>r.json())
+  .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); })
+  .catch(()=>{ alert('關不掉：連不上面板'); })
+  .then(()=>{ b.disabled=false; alFetch(); });
+});
+
+function alTodayHTML(D,r){
+ const nowS=alSecs(D.now), sigS=alSecs(D.signal_at);
+ if(!r){
+   if(nowS!=null&&sigS!=null&&nowS<sigS)
+     return '<div class="t off">還沒到 '+esc(D.signal_at||'')+'</div>'+
+       '<div class="d">'+(D.armed?'開關是開著的（'+esc(alName(D.method))+'）。':
+         '開關是關著的，'+esc(D.signal_at||'')+' 一到會在紀錄裡留一列「沒送」。')+'</div>';
+   /* ⛔ 「沒有紀錄」跟「有紀錄、沒送」是兩件事，不可以寫同一句。 */
+   return '<div class="t off">今天沒有紀錄</div>'+
+     '<div class="d">'+esc(D.signal_at||'')+' 那一刻面板沒有跑到這一段（沒開著、或那時還在啟動）。'+
+     '<b>不補單</b>。</div>';
+ }
+ if(r.rec==='result'&&r.ok){
+   const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
+   return '<div class="t">'+esc(live_word(r))+'：'+esc(alName(r.method)||'')+' → '+esc(dir)+
+     '　1 口</div><div class="d">進場 <b>'+esc(alF(r.entry))+'</b>'+
+     '　停利 <b>'+esc(alF(r.tp))+'</b>'+
+     '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px))+'</b>'+
+     '　滑價 <b>'+esc(alSigned(r.slip))+'</b> 點'+
+     (r.has_target?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>')+
+     (r.warn?'<br><span style="color:var(--gold)">'+esc(r.warn)+'</span>':'')+'</div>';
+ }
+ if(r.rec==='result'&&!r.ok)
+   return '<div class="t off">沒有送成</div><div class="d">'+
+     esc(r.why_msg||alWhy(r.why))+'</div>';
+ if(r.rec==='fire')      /* stage 停在 sending ＝ 決定送單之後程式中斷了 */
+   return '<div class="t off">不知道下場</div><div class="d">'+
+     esc(r.why_msg||alWhy('crashed'))+'</div>';
+ return '<div class="t off">沒有送單</div><div class="d">'+
+   esc(r.why_msg||alWhy(r.why))+'</div>';
+}
+/* 收盤平倉：⛔ 「還沒到」「平掉了」「沒東西可平」「不是我的、不碰」「平不掉」
+   五種**一句都不准混**（混一句就一定有一句是假的）。 */
+function alEodHTML(D,r){
+ const e=(r&&r.eod)||null, eodT=esc(D.eod_at||'');
+ if(!eodT) return '';
+ if(!e){
+   const nowS=alSecs(D.now), edS=alSecs(D.eod_at);
+   /* 只有「今天真的開出部位了」才需要預告收盤平倉，其他日子講了只是雜訊。 */
+   const opened=!!(r&&r.rec==='result'&&r.ok);
+   if(!opened) return '';
+   if(nowS!=null&&edS!=null&&nowS<edS)
+     return '<div class="d">'+eodT+' 會自動平倉（<b>只平這一口</b>）。</div>';
+   return '<div class="al-alarm">⚠️ '+eodT+' 已經過了，但這一天<b>沒有留下收盤平倉的紀錄</b>'+
+     ' —— 面板那時可能沒開著。請自己到大戶投確認部位。</div>';
+ }
+ const body=esc(e.why_msg||alWhy(e.why))+
+   (e.at?'　<b>'+esc(e.at)+'</b>':'')+
+   (alN(e.exit)!=null?'　出場 <b>'+esc(alF(e.exit))+'</b>':'')+
+   (alN(e.points)!=null?'　<b>'+esc(alSigned(e.points))+'</b> 點':'');
+ if(e.alarm) return '<div class="al-alarm">'+body+'</div>';
+ return '<div class="d">'+body+'</div>';
+}
+function live_word(r){ return r.live?'已送出委託單':'演練（沒有真的送出去）'; }
+function alSecs(hms){
+ const m=/^(\d\d):(\d\d):(\d\d)/.exec(String(hms||''));
+ return m?(+m[1]*3600+ +m[2]*60+ +m[3]):null;
+}
+
+function alTblHTML(D,days){
+ const sim=D.sim||{};
+ let h='<thead><tr><th>日期</th><th>做法</th><th>方向</th><th>結果</th>'+
+   '<th>進場</th><th>停利</th><th>滑價</th><th>模擬那邊</th></tr></thead><tbody>';
+ for(const r of days.slice(0,60)){
+   const s=sim[r.date]||null;
+   const sent=(r.rec==='result'&&r.ok);
+   const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
+   let res;
+   if(sent) res='<span class="ok">'+esc(r.live?'送出去了':'演練')+'</span>';
+   else if(r.rec==='fire') res='<span class="ok">不知道下場</span>';
+   else res='<span class="no">沒送</span>';
+   let simTxt='—';
+   if(s){
+     const run=(s.runs||{})[r.method||'B']||null;
+     simTxt=(s.px==null?'—':alF(s.px))+(run&&alN(run.pts)!=null?
+       '　'+alSigned(run.pts)+' 點':'');
+     if(s.miss) simTxt='那邊也沒記到';
+   }
+   h+='<tr><td class="nm">'+esc(r.date||'')+'</td>'+
+     '<td>'+esc(alName(r.method)||'—')+'</td>'+
+     '<td>'+esc(sent?dir:'—')+'</td>'+
+     '<td>'+res+(sent?'':'<span class="why">'+esc(r.why_msg||alWhy(r.why))+'</span>')+'</td>'+
+     '<td>'+esc(sent?alF(r.entry):'—')+'</td>'+
+     '<td>'+esc(sent?alF(r.tp):'—')+'</td>'+
+     '<td>'+esc(sent?alSigned(r.slip):'—')+'</td>'+
+     '<td>'+esc(simTxt)+'</td></tr>';
+ }
+ return h+'</tbody>';
+}
+
+/* ⛔ 常態統計不畫；**異常**才畫（沿用【模擬】那一頁 atNotesHTML 的規矩）。
+   ⛔ 但「異常」一項都不准少 —— 安靜地少是這個專案明令禁止的失敗模式。 */
+function alNotesHTML(D,days){
+ const L=D.ledger||{}, out=[];
+ /* ⛔ fire + result + skip + eod + bad ＝ 檔案總列數（收盤平倉那一列也要有去處）。 */
+ const tot=alN(L.total)||0, sum=(alN(L.fire)||0)+(alN(L.result)||0)+(alN(L.skip)||0)+
+   (alN(L.eod)||0);
+ if(alN(L.bad)) out.push('讀不出來的紀錄 '+L.bad+' 列');
+ if(tot&&sum+(alN(L.bad)||0)!==tot) out.push('⚠️ 帳本對不起來：檔案 '+tot+' 列、認得的只有 '+sum+' 列');
+ const stuck=days.filter(r=>r&&r.rec==='fire').length;
+ if(stuck) out.push('⚠️ 有 '+stuck+' 天停在「送出去了但不知道結果」，請自己到大戶投確認');
+ /* ⛔ 收盤沒平掉／不敢動的日子要**單獨數出來**：那幾天的部位是抱過夜盤的。 */
+ const eodBad=days.filter(r=>r&&r.eod&&r.eod.alarm).length;
+ /* ⚠️ 這一句⛔ 不要再列舉原因（2026-09-09：`eod_cant_tell` 加進來時這裡差點漏掉——
+    列舉式的文案每多一種結局就要記得改一次，而它不會有任何東西提醒你）。
+    每一天為什麼沒平，那一列自己那句話（why_msg）寫得清清楚楚。 */
+ if(eodBad) out.push('⚠️ 有 '+eodBad+' 天收盤沒有自動平掉（原因看那一天的紀錄）'+
+   '，請自己到大戶投確認那幾天的部位');
+ /* 模擬那邊有記、這邊卻連一列都沒有 ⇒ 兩頁不同步（面板版本不一致或接線掉了） */
+ const miss=Object.keys(D.sim||{}).filter(d=>!days.some(r=>r&&r.date===d)).length;
+ if(miss) out.push('模擬那一頁有 '+miss+' 天，這裡沒有對應的紀錄');
+ if(D.armed&&!D.started) out.push('⚠️ 開關是開的，但送單執行緒沒有起來');
+ if(D.armed&&!D.wired) out.push('⚠️ 開關是開的，但面板沒有把自動下單接起來');
+ return out.map(t=>'<span>'+esc(t)+'</span>').join('<span class="sep">·</span>');
+}
+
 tick(); setInterval(tick,500);
 </script></body></html>"""
 
@@ -9473,6 +10006,23 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 ENTER_LOCK.release()
 
+        # 【自動下單】⭐ **這一頁唯一一個會改變狀態的動作，而且它只會關不會開。**
+        #   Benson 2026-09-09：「我用工具那邊關掉之後，才會失效」⇒ 開關沒有有效期，
+        #   建了就一直有效，但要有一個關得掉的地方。
+        #   ⛔ 設計原則是**開難、關易**：
+        #     ・開＝他自己在硬碟上建 AUTO_ORDERS_ON（⛔ 畫面上永遠不會有「開啟」）
+        #     ・關＝這一顆。關掉永遠是安全的方向，所以做成一鍵、不跳確認
+        #       （沿用真實下單那邊「平倉不跳確認」同一個道理）。
+        #   ⛔ auto_fire.disarm() 結構上只會把開關檔移走 —— 整個 repo 的產品程式
+        #      沒有任何一行會建立 ARM_FLAG（test_auto_fire.py ⑬ 用 AST 在守）。
+        if self.path == "/api/fire/off":
+            try:
+                ok, msg = auto_fire.disarm()
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": "關不掉：" + str(e)[:150]})
+            return self._json(200 if ok else 409, {"ok": ok, "msg": msg,
+                                                   "armed": auto_fire.arm()["on"]})
+
         if self.path == "/api/real/close":
             ok, err = broker.close("manual")
             return self._json(200 if ok else 409,
@@ -9521,6 +10071,23 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/api/replay":
             # Bar Replay 的判斷 → 只寫 replay_log/，不進 practice_trades/
+            # ⛔ 欄位驗證（2026-09-09 lab-qa 提，比照 /api/enter）：
+            #    舊版收到空 body 也回 200，並在 replay_log/ 寫進一列**整列都是 null**
+            #    的假紀錄 —— 它會被算進勝率統計，而畫面上看不出那一列是垃圾。
+            #    ⚠️ 日期是檔名（`replay_file(d)`），不驗形狀等於讓外面決定寫哪個檔。
+            _d = body.get("date")
+            if not (isinstance(_d, str) and _REPLAY_DATE_RE.match(_d)):
+                return self._json(400, {"ok": False, "msg": "date 要是 YYYY-MM-DD"})
+            if not isinstance(body.get("judged"), bool):
+                return self._json(400, {"ok": False, "msg": "judged 要是 true／false"})
+            if body.get("judged"):
+                if body.get("dir") not in ("long", "short"):
+                    return self._json(400, {"ok": False,
+                                            "msg": "有判斷的話 dir 要是 long 或 short"})
+                if not isinstance(body.get("entry"), (int, float)) \
+                        or isinstance(body.get("entry"), bool):
+                    return self._json(400, {"ok": False,
+                                            "msg": "有判斷的話 entry 要是數字"})
             try:
                 rec = {k: body.get(k) for k in
                        ("date", "judged", "dir", "entry", "time", "note",
@@ -9625,6 +10192,19 @@ class Handler(BaseHTTPRequestHandler):
             if out is None:
                 return self._json(404, {"error": "這天沒有紀錄", "date": want})
             return self._json(200, out)
+        # 【自動下單】⚠️ 這是**唯讀**的：它回報「開關開了沒／今天送了沒／為什麼沒送」。
+        #   ⛔⛔ 刻意**沒有**「開啟自動下單」的 POST 端點 —— 開難、關易：
+        #      **開**只有一條路（他自己在硬碟上建 AUTO_ORDERS_ON），
+        #      **關**才有一顆按鈕（POST /api/fire/off，見 do_POST；那條只會關不會開）。
+        if self.path.startswith("/api/fire/state"):
+            try:
+                out = auto_fire.state()
+                out["sim"] = fire_sim_pairs(out.get("days") or [])
+                return self._json(200, out)
+            except Exception as e:
+                return self._json(500, {"error": str(e)[:200], "armed": False,
+                                        "days": [], "sim": {},
+                                        "today": str(date.today())})
         if self.path.startswith("/api/bars"):
             q = self.path.split("?", 1)[1] if "?" in self.path else ""
             want, tf, full = None, CHART_TF, False
@@ -10044,6 +10624,10 @@ def run_replay(hist, day_str):
 
 
 def main():
+    # ⛔ 09:03:30 的掛勾只有這裡會接（接上去就會真的送單，見 auto_fire.py）。
+    #    13:43:30 的收盤平倉掛勾同理（接上去就會真的送出平倉單）。
+    #    沒有 global 的話下面那兩行只會建區域變數 ⇒ 接線靜靜地沒生效。
+    global AUTO_SIG_HOOK, AUTO_EOD_HOOK
     if not MATRIX.exists():
         print("找不到 intraday.csv，請先跑 build_intraday.py")
         return
@@ -10248,6 +10832,24 @@ def main():
     #       所以重播歷史資料**不會**在 autotest/ 裡寫出假的一天。
     threading.Thread(target=_auto_worker, daemon=True).start()
     AUTO["started"] = True
+
+    # 【自動下單】會真的送出委託單的那一段。⛔ **預設是關著的** ——
+    #    沒有 tools/shioaji/AUTO_ORDERS_ON 這個檔就完全不送（而且那個檔只有他自己建）；
+    #    就算有，也照樣受 REAL_ORDERS_ON 管（broker.enter → broker._send → is_live）。
+    #    ⛔ 接線只能在這裡：--replay 與所有治具都走不到 main()，掛勾維持 no-op。
+    auto_fire.configure(signal_at=SIGNAL_AT, signal_sec=SIGNAL_SEC,
+                        late_ms=AUTO_LATE_MS, gap_s=AUTO_GAP_S, tp_points=TP_POINTS,
+                        sig_fn=auto_sig, dirs_fn=auto_dirs, eod_at=EOD_CLOSE_AT)
+    auto_fire.start()
+    AUTO_SIG_HOOK = auto_fire.on_signal
+    # ⛔⛔ 收盤自動平倉：**只平自動下單自己開的那一口**（auto_fire._looks_ours）。
+    #    他自己手動進場的部位絕對不碰。
+    AUTO_EOD_HOOK = auto_fire.on_eod
+    _arm = auto_fire.arm()
+    print("【自動下單】" + ("已開啟：" + _arm["msg"] +
+                           ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")
+                           if _arm["on"] else "關閉中 —— " + _arm["msg"]))
+    print(f"【自動下單】收盤平倉 {EOD_CLOSE_AT}（⛔ 只平自動下單開的那一口）")
 
     # 啟動時一定要建立狀態，不能等到 08:30 ——
     # 否則半夜啟動的話 session["state"] 是 None，收到的報價全部被丟掉。

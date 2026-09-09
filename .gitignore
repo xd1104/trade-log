@@ -39,5 +39,11 @@ tools/shioaji/real_trades/
 # 逐筆報價紀錄（很大，而且是市場資料，不進版控）
 tools/shioaji/tick_logs/
 
-# 【程式下單】分頁的模擬紀錄（含進場價與時間，repo 是公開的）
+# 【自動下單（模擬）】分頁的模擬紀錄（含進場價與時間，repo 是公開的）
 tools/shioaji/autotest/
+
+# 【自動下單】：開關與紀錄都只留本機（開關檔存在＝程式會自己送單）
+# ⚠️ 用 * 是因為畫面上那顆「關閉」鈕是**改名**（AUTO_ORDERS_ON.off-YYYYmmdd-HHMMSS）
+#    不是刪掉 —— 內容留著他才好再開回去，而那個檔一樣不可以進版控。
+tools/shioaji/AUTO_ORDERS_ON*
+tools/shioaji/autofire/

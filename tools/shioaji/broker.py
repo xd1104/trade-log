@@ -167,24 +167,47 @@ _REALIZED = {"at": 0.0, "rows": []}
 REALIZED_TTL = 60.0        # 秒。這是要跟券商拿的，不能每 0.25 秒問一次
 
 
-def realized_today():
+def realized_today(fresh=False):
     """
     跟券商要今天的**已實現損益**。⚠️ 唯讀，不送任何單。
 
     這是損益的真相 —— 券商自己算的，含實際成交價。我們自己記的 deal_price 只是快路徑，
-    對不上時以這裡為準。問不到就回空陣列，不要編。
+    對不上時以這裡為準。
+
+    ⛔⛔ **「問不到」回 `None`，⛔ 不是空陣列**（2026-09-09 lab-qa 退件 M1）。
+       舊版查詢失敗時靜靜地回上一次的快取（開機第一次就是 `[]`）⇒ 呼叫端**結構上**
+       分不出「券商說今天沒有已實現損益」與「我們根本沒問到」。
+       `auto_fire._already_closed()` 正是靠這一份在判「他是不是中途自己平掉、
+       又自己開了一口新的」—— 它把「問不到」讀成「沒有平過」，於是**送出一張
+       平掉他部位的單**（lab-qa 實測 X4／X5 各一張）。
+       這就是 `broker_position()` 回 `"unknown"` 的同一條鐵律（**查不到 ≠ 沒有**），
+       已實現損益這一條當初漏了 unknown 態。
+         - 回 `list`（可能是空的）＝ **真的問到了**，那就是券商的答案
+         - 回 `None` ＝ **問不到**，⛔ 呼叫端不准把它當成「沒有」
+    ⛔ 失敗時**不准拿舊快取充數**：舊快取只證明「一分鐘前是這樣」，而 13:43:30
+       那一刻要判的正是「這一分鐘之內他有沒有自己平掉」。
+
+    `fresh=True` ⇒ 略過 TTL 快取、一定重問一次。**收盤自動平倉那一道守衛要用這個**：
+    59 秒前的快照對「他剛剛自己平掉了沒」是無效證據（lab-qa 實測 X5 就是這個形狀 ——
+    快取沒過期而且是空的 ⇒ 照樣送出一張平倉單）。
+    ⚠️ 一般顯示用途（`trades_today()` 補出場價）維持吃快取 ——
+       ⛔ 那條路每 0.25 秒會被畫面叫到，不能每次都去問券商。
     """
-    if not is_live() or _state["api"] is None:
+    if not is_live():
+        # 演練模式：整個 broker 都是 dry run，券商那邊本來就不會有我們的成交
+        # ⇒ 這是一個**確定的答案**（空的），不是「問不到」。
         return []
+    if _state["api"] is None:
+        return None                       # 還沒連上永豐 ⇒ ⛔ 問不到，不是「沒有」
     now = time.time()
-    if now - _REALIZED["at"] < REALIZED_TTL:
+    if not fresh and now - _REALIZED["at"] < REALIZED_TTL:
         return _REALIZED["rows"]
     d = str(date.today())
     try:
         rows = _state["api"].list_profit_loss(_state["account"], d, d) or []
     except Exception as e:
         _state["last_error"] = "問不到已實現損益：" + str(e)[:120]
-        return _REALIZED["rows"]
+        return None                       # ⛔ 不回舊快取、也不回 []
     out = []
     for r in rows:
         try:
@@ -208,6 +231,10 @@ def trades_today():
 
     自己記的那份如果缺出場價（市價單送出時價格欄是 0，事後又問不到成交明細），
     就拿券商的已實現損益補 —— **補得起來才顯示數字，補不起來就留白**。
+
+    ⚠️ `realized_today()` 現在會回 `None`（＝問不到）。這裡的行為**一個字都沒變**：
+       問不到就補不起來 ⇒ 留白。⛔ 但不可以寫成 `realized_today() or []` ——
+       那正是把「問不到」跟「沒有」壓成同一件事的寫法（M1 就是這樣長出來的）。
     """
     f = TRADE_DIR / f"{date.today()}.jsonl"
     rows = []
@@ -221,7 +248,10 @@ def trades_today():
     holes = [t for t in rows if t.get("points") is None]
     if not holes:
         return rows
-    pool = list(realized_today())
+    real = realized_today()
+    if real is None:
+        return rows          # 問不到 ⇒ 補不起來 ⇒ 留白（跟舊版行為一模一樣）
+    pool = list(real)
     for t in holes:
         hit = None
         for r in pool:

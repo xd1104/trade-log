@@ -437,9 +437,18 @@ class H(BaseHTTPRequestHandler):
         return self._send(200, json.dumps({"ok": True, "msg": "ok"}, ensure_ascii=False))
 
 
-srv = ThreadingHTTPServer(("127.0.0.1", 8771), H)
+# 埠可以用環境變數覆寫（⛔ 預設仍是 8771／8772，⛔ 永遠不可以是 8770）。
+# 【為什麼要這個】改過 live_panel.py 一定要**重起治具**才吃得到新的 PAGE，
+# 但舊的那個實例不一定關得掉（沒有權限收掉別人起的行程）——
+# 有了這個就可以另起一份在別的埠，探針用 --url/--ctl 指過去。
+import os as _os                                            # noqa: E402
+FE_PORT = int(_os.environ.get("FE_PORT", "8771"))
+FE_CTL = int(_os.environ.get("FE_CTL", "8772"))
+assert FE_PORT != 8770 and FE_CTL != 8770, "⛔ 不可以用 8770（他的面板正開著）"
+
+srv = ThreadingHTTPServer(("127.0.0.1", FE_PORT), H)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
-print("治具起來了 http://127.0.0.1:8771/   （假狀態，沒有連永豐）", flush=True)
+print(f"治具起來了 http://127.0.0.1:{FE_PORT}/   （假狀態，沒有連永豐）", flush=True)
 
 # 讓外面的腳本可以改模式／讀 POST 紀錄
 class Ctl(H):
@@ -503,9 +512,9 @@ class Ctl(H):
         return self._send(200, "{}")
 
 
-ctl = ThreadingHTTPServer(("127.0.0.1", 8772), Ctl)
+ctl = ThreadingHTTPServer(("127.0.0.1", FE_CTL), Ctl)
 threading.Thread(target=ctl.serve_forever, daemon=True).start()
-print("控制埠 8772：/mode/flat /mode/holding /mode/with_target /mode/short /mode/stale /mode/closed"
+print(f"控制埠 {FE_CTL}：/mode/flat /mode/holding /mode/with_target /mode/short /mode/stale /mode/closed"
       " /vol/full /vol/few /vol/reasons /posts /reset /slow", flush=True)
 print("　　　　　　 /tick/where /tick/reset /tick/clock/HH:MM /tick/grow/N /tick/half",
       flush=True)

@@ -597,7 +597,10 @@ def fresh_pos(direction="long", entry=47088):
 connect(DealAPI(deal=47110))
 broker.is_live = lambda: True
 broker.FILL_WAIT = 1.2
-broker.realized_today = lambda: []          # 這一段不要去問券商損益，測的是自己記的那條路
+# 這一段不要去問券商損益，測的是自己記的那條路。
+# ⛔ 先把正本存起來 —— 下面「已實現損益」那一節要用真的那一支（2026-09-09 加）。
+_REAL_RT = broker.realized_today
+broker.realized_today = lambda *a, **k: []
 fresh_pos()
 ok, err = broker.close("manual")
 chk("  平倉成功", ok, True)
@@ -703,6 +706,149 @@ blocked("  進場價對不上就不寫", broker.set_trade_note(DAY_A, "10:33", 9
 blocked("  沒有那一天就不寫", broker.set_trade_note("1999-12-31", "10:33", 47090, "x"),
         "找不到")
 broker._HIST["at"] = 0.0
+
+print("\n=== 已實現損益：⛔「問不到」不可以用空陣列冒充（2026-09-09 lab-qa 退件 M1）===")
+# ⛔⛔ 這一節守的是 broker 自己那條鐵律的另一半：**查不到 ≠ 沒有**。
+#    `broker_position()` 早就會回 `"unknown"`，但 `realized_today()` 當初漏了 unknown 態 ——
+#    它 `except` 之後靜靜地回上一次的快取（開機第一次就是 `[]`），
+#    於是 `auto_fire._already_closed()` 把「問不到」讀成「他沒有平過」⇒ **送出一張
+#    平掉他部位的單**（lab-qa 實測 X4／X5 各一張）。
+broker.realized_today = _REAL_RT             # 換回正本
+
+
+def say(name, cond, extra=""):
+    global FAIL
+    FAIL += not cond
+    print(("  OK   " if cond else "  FAIL ") + name + (f"  {extra}" if extra else ""))
+
+
+class PnlAPI:
+    """有 `list_profit_loss` 的假券商。`boom=True` ⇒ 那一支丟例外（網路抖）。"""
+
+    def __init__(self, rows=(), boom=False):
+        self.rows, self.boom, self.n = list(rows), boom, 0
+
+    def list_profit_loss(self, acc=None, d1=None, d2=None):
+        self.n += 1
+        if self.boom:
+            raise RuntimeError("網路斷了")
+        return self.rows
+
+    def list_positions(self, acc=None):
+        return []
+
+
+def _pnl_row(entry, cover, direction="Buy", qty=1, pnl=100.0):
+    return type("R", (), {"direction": direction, "entry_price": entry,
+                          "cover_price": cover, "pnl": pnl, "quantity": qty})()
+
+
+def _reset_pnl():
+    broker._REALIZED.update({"at": 0.0, "rows": []})
+
+
+# ① 演練模式：券商那邊本來就不會有我們的成交 ⇒ 空陣列是**確定的答案**
+_reset_pnl()
+broker._state["api"] = PnlAPI([_pnl_row(47000, 47100)])
+broker.is_live = lambda: False
+chk("  演練模式 → 回空陣列（確定的答案，不是「問不到」）", broker.realized_today(), [])
+
+# ② 還沒連上永豐（api 是 None）⇒ ⛔ 問不到，不是「沒有」
+_reset_pnl()
+broker.is_live = lambda: True
+broker._state["api"] = None
+say("  ⛔ 還沒連上永豐 → 回 None（問不到）", broker.realized_today() is None,
+    repr(broker.realized_today()))
+
+# ③ 真的問到了 ⇒ 回 list（含空 list ＝ 券商說今天沒有）
+_reset_pnl()
+_ok_api = PnlAPI([_pnl_row(47000, 47100)])
+broker._state["api"] = _ok_api
+_got = broker.realized_today()
+chk("  問得到 → 回 list", isinstance(_got, list), True)
+chk("    內容解得出來（進場／出場／方向）",
+    (_got[0]["entry"], _got[0]["exit"], _got[0]["dir"]), (47000.0, 47100.0, "long"))
+_reset_pnl()
+broker._state["api"] = PnlAPI([])
+chk("  券商回答「今天沒有」→ 回空 list（⛔ 那也是一個答案）", broker.realized_today(), [])
+
+# ④ ⛔⛔ 查詢失敗 ⇒ 回 None，而且**不准拿舊快取充數**
+_reset_pnl()
+_boom = PnlAPI(boom=True)
+broker._state["api"] = _boom
+say("  ⛔ 查詢丟例外 → 回 None", broker.realized_today() is None,
+    repr(broker.realized_today()))
+say("    而且把原因記進 last_error（畫面上看得到）",
+    "已實現損益" in (broker._state.get("last_error") or ""),
+    broker._state.get("last_error"))
+# 先成功一次把快取填起來，再讓它壞掉並且讓 TTL 過期 ⇒ ⛔ 不可以回那份舊快取
+_reset_pnl()
+broker._state["api"] = PnlAPI([_pnl_row(47000, 47100)])
+say("  前置：先成功一次，快取裡有一筆", len(broker.realized_today() or []) == 1)
+broker._REALIZED["at"] = 0.0                 # TTL 過期
+broker._state["api"] = PnlAPI(boom=True)
+say("  ⛔⛔ 快取過期＋查詢失敗 → 回 None（**不准**回上一次那份舊快取）",
+    broker.realized_today() is None, repr(broker.realized_today()))
+say("    （舊快取本身還留著，只是不准拿它當證據）",
+    len(broker._REALIZED["rows"]) == 1, str(broker._REALIZED["rows"]))
+
+# ⑤ TTL 快取 vs fresh=True（X5 的形狀：快取沒過期而且是空的）
+_reset_pnl()
+_c = PnlAPI([])
+broker._state["api"] = _c
+chk("  前置：問一次，券商說沒有", broker.realized_today(), [])
+chk("    快取生效 ⇒ 再問不會再打券商", (broker.realized_today(), _c.n), ([], 1))
+_c.rows = [_pnl_row(47000, 47100)]           # 他在大戶投平掉了（TTL 之內）
+chk("  ⚠️ 吃快取那條路看不到（59 秒前的快照）", broker.realized_today(), [])
+say("  ⛔ fresh=True 一定重問一次 ⇒ 看得到他剛剛平掉了",
+    len(broker.realized_today(fresh=True) or []) == 1,
+    str(broker.realized_today(fresh=True)))
+say("    （而且真的多打了一次券商）", _c.n >= 3, f"呼叫 {_c.n} 次")
+
+print("\n=== 成績單補出場價：⛔ 既有行為一個字都不可以變 ===")
+# ⛔ `trades_today()` 拿已實現損益補出場價，「問不到」時**原本就是留白** ——
+#    M1 的修法不可以改到這條路的行為（lab-qa 的驗收條件）。
+(broker.TRADE_DIR / f"{TODAY}.jsonl").write_text(json.dumps(
+    {"date": str(TODAY), "dir": "long", "qty": 1, "entry_time": "10:41:08",
+     "entry": 47088.0, "exit_time": "10:55:00", "exit": None,
+     "reason": "manual", "points": None}, ensure_ascii=False) + "\n",
+    encoding="utf-8")
+_reset_pnl()
+broker._state["api"] = PnlAPI(boom=True)
+_t = broker.trades_today()
+chk("  問不到已實現損益 → 那一筆照樣讀得回來", len(_t), 1)
+chk("  ⛔ 出場價留白（⛔ 不編、也不會炸）", _t[0]["exit"], None)
+chk("  ⛔ 點數也留白", _t[0]["points"], None)
+say("    ⛔ 而且沒有標成「跟券商對來的」", _t[0].get("src") is None, str(_t[0].get("src")))
+_reset_pnl()
+broker._state["api"] = PnlAPI([_pnl_row(47088.0, 47110.0)])
+_t = broker.trades_today()
+chk("  問得到 → 補得起來（出場價）", _t[0]["exit"], 47110.0)
+chk("    點數也算得出來（做多 47088→47110 ＝ +22）", _t[0]["points"], 22.0)
+chk("    而且標得出這個數字是跟券商對來的", _t[0].get("src"), "broker")
+
+print("\n=== ⛔ 進場價容差只有一把尺（broker 補洞 ＝ auto_fire 認人）===")
+# ⛔ `auto_fire.EOD_PX_TOL` 的註解說「跟 broker.trades_today() 補洞用的容差同一個數」，
+#    但 broker 這邊是**行內寫死的 1.0** ⇒ 結構上是兩把尺，改一邊另一邊不會跟著改。
+#    這裡不改 broker（那不在這一輪的授權範圍），改成**用行為把兩把尺綁在一起**：
+#    容差以內要補得起來、容差以外不准補。哪天有人動了任何一邊，這兩項就會紅。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import auto_fire as _AF                                            # noqa: E402
+for _mul, _want_fill, _label in ((0.9, True, "容差以內"), (1.1, False, "容差以外")):
+    (broker.TRADE_DIR / f"{TODAY}.jsonl").write_text(json.dumps(
+        {"date": str(TODAY), "dir": "long", "qty": 1, "entry_time": "10:41:08",
+         "entry": 47088.0, "exit_time": "10:55:00", "exit": None,
+         "reason": "manual", "points": None}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    _reset_pnl()
+    broker._state["api"] = PnlAPI(
+        [_pnl_row(47088.0 + _AF.EOD_PX_TOL * _mul, 47110.0)])
+    _t = broker.trades_today()
+    say(f"  {_label}（差 {_AF.EOD_PX_TOL * _mul:.2f} 點）⇒ "
+        f"{'補得起來' if _want_fill else '⛔ 不准補'}",
+        (_t[0]["exit"] is not None) is _want_fill, str(_t[0]["exit"]))
+(broker.TRADE_DIR / f"{TODAY}.jsonl").unlink()
+_reset_pnl()
 
 print("\n=== 收尾：這支測試不可以碰到真正的紀錄 ===")
 # 這一節守的是「測試本身有沒有污染他的資料」，不是產品行為。

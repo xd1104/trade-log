@@ -172,15 +172,37 @@ await reload();
 
 /* ═══ ① 分頁與第一畫面 ═══════════════════════════════════════════════ */
 console.log("=== ① 分頁 ===");
-chk("頂列四顆分頁", await ev(`[...document.querySelectorAll('.tabs button')].map(b=>b.textContent)`),
-  ["即時", "細節", "回顧", "程式下單"]);
-chk("⛔ 分頁名是「程式下單」，不是「對照」也不是「模擬」",
-  await ev(`document.querySelector('[data-tab="auto"]').textContent`), "程式下單");
-chk("放最右", await ev(`[...document.querySelectorAll('.tabs button')].pop().getAttribute('data-tab')`), "auto");
+/* 2026-09-09：這一顆從「程式下單」改名成「自動下單（模擬）」，右邊多了一顆
+   **會真的送出委託單**的「自動下單」。⛔ 兩顆的差別只有括號裡那兩個字 ——
+   名字寫錯／括號被拿掉就分不出哪一頁會送單，那是這個面板最貴的一種誤會。 */
+chk("頂列五顆分頁", await ev(`[...document.querySelectorAll('.tabs button')].map(b=>b.textContent)`),
+  ["即時", "細節", "回顧", "自動下單（模擬）", "自動下單"]);
+chk("⛔ 這一頁的分頁名是「自動下單（模擬）」，⛔ 括號那兩個字不准拿掉",
+  await ev(`document.querySelector('[data-tab="auto"]').textContent`), "自動下單（模擬）");
+chk("⛔ 會真的送單的那一頁在最右邊",
+  await ev(`[...document.querySelectorAll('.tabs button')].pop().getAttribute('data-tab')`), "fire");
+chk("模擬這一頁排在它左邊（倒數第二）",
+  await ev(`[...document.querySelectorAll('.tabs button')].slice(-2)[0].getAttribute('data-tab')`), "auto");
 chk("TAB", await ev("TAB"), "auto");
 chk("即時分頁被藏起來", await ev("document.getElementById('tab-live').hidden"), true);
-chk("四顆分頁等寬", await ev(`(()=>{const w=[...document.querySelectorAll('.tabs button')]
-  .map(b=>Math.round(b.getBoundingClientRect().width)); return new Set(w).size;})()`), 1);
+/* ⚠️ 五顆**不再等寬**：「自動下單（模擬）」八個字比 min-width 100px 寬。
+   真正要守的不是等寬，是**分頁列不可以換行、也不可以把時鐘擠出頂列** ——
+   換行的話那一排就不像分頁了。等寬那條斷言換成這兩條。 */
+const tabW = await ev(`(()=>{const bs=[...document.querySelectorAll('.tabs button')];
+  const r=bs.map(b=>b.getBoundingClientRect());
+  const top=document.querySelector('.topbar').getBoundingClientRect();
+  return {w:r.map(x=>Math.round(x.width)), rows:new Set(r.map(x=>Math.round(x.top))).size,
+    tabs:Math.round(document.querySelector('.tabs').getBoundingClientRect().width),
+    topbar:Math.round(top.width),
+    clockRight:Math.round(document.querySelector('.clock').getBoundingClientRect().right),
+    topbarRight:Math.round(top.right)};})()`);
+chk("⛔ 分頁列不准換行（五顆排在同一列）", tabW.rows, 1);
+say(tabW.clockRight <= tabW.topbarRight + 1,
+  "⛔ 時鐘沒有被擠出頂列", `clock 右緣 ${tabW.clockRight} / topbar 右緣 ${tabW.topbarRight}`);
+say(tabW.w.slice(0, 3).every(x => x === tabW.w[0]),
+  "前三顆（即時／細節／回顧）仍然等寬", JSON.stringify(tabW.w));
+console.log("    分頁寬度：" + JSON.stringify(tabW.w) + "　分頁列總寬 " + tabW.tabs
+  + "　頂列 " + tabW.topbar);
 
 /* ═══ ② ⛔ 這一頁沒有任何會送單的東西（§15-1）════════════════════════ */
 console.log("\n=== ② ⛔ 碰不到下單路徑 ===");

@@ -146,9 +146,15 @@ await sleep(2200);
 
 /* ═══ ① 進得去、畫得出來、console 零錯誤 ═══════════════════════════════ */
 console.log("=== ① 分頁與第一畫面 ===");
-// 2026-09-07 加【程式下單】之後從三顆變四顆。⛔【細節】仍然必須在第 2 顆（下一條在守）。
-chk("頂列四顆分頁", await ev(`[...document.querySelectorAll('.tabs button')].map(b=>b.textContent)`),
-  ["即時", "細節", "回顧", "程式下單"]);
+// 2026-09-07 加【程式下單】之後從三顆變四顆；2026-09-09 那顆改名成
+// 「自動下單（模擬）」、右邊再加一顆會真的送單的「自動下單」⇒ 五顆。
+// ⛔【細節】仍然必須在第 2 顆（下一條在守）。
+// ⛔ 兩顆「自動下單」的差別只有括號裡那兩個字 —— 名字寫錯就分不出哪一頁會送單。
+chk("頂列五顆分頁", await ev(`[...document.querySelectorAll('.tabs button')].map(b=>b.textContent)`),
+  ["即時", "細節", "回顧", "自動下單（模擬）", "自動下單"]);
+chk("⛔ 會真的送單的那一顆在最右邊",
+  await ev(`[...document.querySelectorAll('.tabs button')].slice(-1)[0].getAttribute('data-tab')`),
+  "fire");
 chk("分頁順序：細節在中間",
   await ev(`[...document.querySelectorAll('.tabs button')][1].getAttribute('data-tab')`), "tick");
 say(await goTick(), "切進【細節】並載入完成");
