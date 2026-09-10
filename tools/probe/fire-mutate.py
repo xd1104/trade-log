@@ -15,6 +15,7 @@
 跑法：
     PYTHONIOENCODING=utf-8 PYTHONUTF8=1 .venv\\Scripts\\python.exe tools\\probe\\fire-mutate.py
 """
+import atexit
 import os
 import pathlib
 import shutil
@@ -29,6 +30,34 @@ LPSRC = (SHIO / "live_panel.py").read_text(encoding="utf-8")
 TEST = SHIO / "test_auto_fire.py"
 ROUTE_TEST = SHIO / "test_fire_routes.py"
 PY = sys.executable
+
+# ⛔⛔⛔ **真的**那個開關檔。這一支從頭到尾只讀它、只印它，⛔ 一行程式都不准寫它、
+#    改名它、刪除它 —— 那是他自己按下去的東西，動了就等於在他不知情的情況下
+#    關掉（或打開）他的自動下單。
+REAL_ARM = SHIO / "AUTO_ORDERS_ON"
+
+
+def _real_arm_line(tag):
+    """收尾（與啟動）都印一行，跟 `fire_harness.py`／`test_fire_routes.py` 對齊。"""
+    return "%s真的 %s：%s" % (
+        tag, REAL_ARM.name, "存在" if REAL_ARM.exists() else "不存在")
+
+
+# ⛔⛔ **啟動時就拒絕跑**（2026-09-10 P0）。理由不是「測試會紅」，是這支曾經被中斷之後
+#    在**真的** tools/shioaji/ 留下 `AUTO_ORDERS_ON` ＋ `autofire/arm-*.jsonl`，
+#    而 `REAL_ORDERS_ON` 開著 ⇒ 那個殘骸留到隔天早上就是**一口沒有任何人授權的真單**。
+#    ⚠️ 兩者都在 `.gitignore` 裡 ⇒ **`git status` 看不見它**。
+#    ⛔ 正確的處置是「**不跑**」，⛔ 不是清掉它、不是備份它、不是繞過它 ——
+#       他自己按開的那個檔，這支沒有任何權力去動。
+#    ⇒ 他真的在用自動下單的日子，這支測試就跑不了。**那是設計，不是壞掉。**
+if REAL_ARM.exists():
+    print("⛔ " + _real_arm_line("") + "（他自己開著的）")
+    print("⛔ 這支拒絕啟動：它會把每一支子測試都變成假紅燈，")
+    print("   而那幾支（fire_harness.py／test_fire_routes.py）本來就會拒絕啟動。")
+    print("⛔ ⛔ 不要為了跑測試把那個檔搬走／改名／刪掉 ——")
+    print("   那等於在他不知情的情況下關掉他的自動下單。")
+    print("   要跑這支，請等他自己在面板上按「關閉自動下單」之後。")
+    sys.exit(2)
 
 # （名字, 原文, 換成什麼）—— 每一個都是「把一道守衛拿掉」
 MUT = [
@@ -212,6 +241,13 @@ LP_MUT = [
     ("Ⓑ6c 日期只看有沒有值（`../../boom` 會被當成檔名）",
      '            if not (isinstance(_d, str) and _REPLAY_DATE_RE.match(_d)):',
      '            if not _d:'),
+    # ── Ⓣ1（2026-09-09 lab-qa 建議 1）：`/api/state` **序列化失敗那條退路**的 token。
+    #    CLAUDE.md 給那一行標了 ⛔⛔（「少了它，面板一出狀況他就同時失去畫面與按鈕」），
+    #    但在這之前**刪掉它兩支測試全綠**：Ⓟ7b 打的是正常那條路（token 在
+    #    `dict(STATE, token=…)` 裡），跟這條退路是兩行不同的程式。
+    #    ⇒ 守它的是 `test_fire_routes.py` ③f（真的塞一個序列化不了的東西進 STATE）。
+    ("Ⓣ1 /api/state 的序列化退路不帶 token（面板一出狀況他同時失去畫面與按鈕）",
+     '                    safe["token"] = FIRE_TOKEN\n', ''),
 ]
 
 # ── 第三組：**live_panel 的主迴圈與畫面**（只有 test_auto_fire.py 打得到）
@@ -269,9 +305,17 @@ LP2_MUT = [
     ("Ⓡ5 只看 done、不管是哪一天（昨天送過 ⇒ 今天永遠說「下一個交易日」）",
      '    if AUTO.get("day") == str(now.date()) and AUTO.get("done"):',
      '    if AUTO.get("done"):'),
+    # ⚠️⚠️ 2026-09-10 修：這一條的**突變目標字串過期了**（那天上午條件 ② 加了
+    #    `+ AUTO_LATE_MS / 1000`）⇒ 它**整條沒跑**，而舊版的總結把「沒跑」印成
+    #    「打紅」。⛔ 目標字串是會隨產品一起腐爛的東西，總結一定要看得到「沒跑」。
     ("Ⓡ6 牆上時鐘那道拿掉（09:04 按下去還說「今天」）",
-     '    if now.hour * 3600 + now.minute * 60 + now.second >= SIGNAL_SEC:\n        return False',
+     '    if now.hour * 3600 + now.minute * 60 + now.second >= SIGNAL_SEC + AUTO_LATE_MS / 1000:\n        return False',
      '    if False:\n        return False'),
+    # ⛔⛔ 補送窗口那一段（2026-09-10 上午加的）**本來零守衛**：拿掉它，
+    #    ⑬c 上面那 10 項全綠（那一組模擬「面板一路開著」⇒ 永遠由條件 ① 擋下來）。
+    #    紅的是 ⑬c 新的「看門狗剛重啟」那一組。
+    ("Ⓡ6b 補送窗口拿掉（面板剛重啟的那 3 秒按下去，說「下一個交易日」卻今天就送）",
+     '>= SIGNAL_SEC + AUTO_LATE_MS / 1000:', '>= SIGNAL_SEC:'),
     # ⚠️ Ⓡ7 現在**行為上是等價的**（`market_session` 那把尺在 09:03:30 只剩星期在起作用），
     #    但它是「兩把尺」的種子：哪天 market_session 長出假日表，這裡就會靜靜地分岔。
     #    ⇒ 由 ⑬c 那條「判斷用的是 SIGNAL_SEC ＋ market_session」的原始碼斷言擋。
@@ -468,41 +512,82 @@ def run(src_dir, test=None, var="AF_SRC_DIR"):
     return p.returncode, out
 
 
-TMP = pathlib.Path(tempfile.mkdtemp(prefix="fire-mut-"))
-bad = 0
+TMP = pathlib.Path(tempfile.mkdtemp(prefix="fire-mut-")).resolve()
+
+
+def _cleanup():
+    """
+    ⛔⛔ **任何結束路徑都要把暫存區收乾淨**（Ctrl-C、例外、逾時、正常結束）——
+    這支被中斷過一次，留下的殘骸差點變成隔天早上一口沒人授權的真單。
+
+    ⛔ 白名單語意（CLAUDE.md「擋破壞性操作要列舉准許的地方」）：
+       只准刪「`mkdtemp` 開出來的那一個資料夾」本身，而且要先驗它真的長那個樣子。
+       ⛔ 這支程式裡**沒有任何一行**會刪 `tools/shioaji/` 底下的東西。
+    """
+    p = TMP
+    if p.name.startswith("fire-mut-") and p.parent != p and p.is_dir():
+        shutil.rmtree(p, ignore_errors=True)
+    # 收尾一定要講一句真的那個開關檔在不在（跟另外兩支對齊）——
+    # ⛔ 只是「看一眼並印出來」，不做任何處置。
+    print("　" + _real_arm_line(""), flush=True)
+
+
+atexit.register(_cleanup)
+
+
+RESULTS = []            # 每一組一筆，總結那句話**只准照這裡的實測數字寫**
 
 
 def sweep(title, muts, src, fname, test, var):
-    """一組突變。回傳打不紅的個數。⛔ 先做尺的自證（沒有突變時要全綠）。"""
-    global bad
+    """一組突變。⛔ 先做尺的自證（沒有突變時要全綠）。
+
+    ⚠️⚠️ **2026-09-10 修「總結會說謊」**（PM 裁示）：尺的自證沒過時整組不跑是對的
+       （跑了也不能解讀 —— 分不出是突變打紅的還是本來就紅的），
+       但舊版只記一句 `bad += 1`，總結照樣印「128 個突變…打紅 126」——
+       **那一次 85 個突變一個都沒跑，卻被算成打紅了。**
+       ⛔ **一支會謊報成績的測試工具比沒有還危險。**
+       現在：跳過的一律進 `skipped`（⛔ 不併進「打紅」），總結逐組列出，
+       而且只要有任何一個沒跑或沒打紅，**整支非零離開**。
+    """
+    r = {"title": title, "n": len(muts), "ran": 0, "killed": 0,
+         "alive": [], "skipped": 0, "base_ok": False, "why": ""}
+    RESULTS.append(r)
     print(f"\n=== 尺的自證：{title} 原封不動要全綠 ===")
     (TMP / fname).write_text(src, encoding="utf-8")
     code, out = run(TMP, test, var)
     base_ok = (code == 0 and "全部通過" in out)
+    r["base_ok"] = base_ok
     print(("  OK   " if base_ok else "  FAIL ") + f"原封不動的 {fname}：全部通過"
           + ("" if base_ok else "  ⇒ " + out[-800:]))
     if not base_ok:
-        bad += 1
+        r["skipped"] = len(muts)
+        r["why"] = "尺的自證沒過（原封不動就不是綠的）"
+        print(f"  ⛔ 這一組 {len(muts)} 個突變**整組沒跑** —— "
+              f"⛔ 那不叫「打紅」，總結會分開算，離開碼非零。")
         return
     print(f"\n=== 突變（{title}）：每一道守衛拿掉都要有東西紅 ===")
     for name, old, new in muts:
         if old not in src:
-            print(f"  FAIL {name}  ⇒ ⛔ 突變目標不在原始碼裡（守衛可能已經被改掉了）")
-            bad += 1
+            print(f"  FAIL {name}  ⇒ ⛔ 突變目標不在原始碼裡（守衛可能已經被改掉了）"
+                  f"＝**這個突變沒跑**")
+            r["skipped"] += 1
             continue
         mutated = src.replace(old, new, 1)
         if mutated == src:
-            print(f"  FAIL {name}  ⇒ ⛔ 換完之後內容沒變")
-            bad += 1
+            print(f"  FAIL {name}  ⇒ ⛔ 換完之後內容沒變＝**這個突變沒跑**")
+            r["skipped"] += 1
             continue
         (TMP / fname).write_text(mutated, encoding="utf-8")
         code, out = run(TMP, test, var)
         nfail = sum(1 for ln in out.splitlines() if ln.startswith("  FAIL"))
         summed = ("全部通過" in out) or ("項沒過" in out)
         killed = code != 0
-        tag = "OK   " if killed else "FAIL "
-        bad += not killed
-        print(f"  {tag}{name}  ⇒ {'紅了' if killed else '⛔ 打不紅'}"
+        r["ran"] += 1
+        r["killed"] += bool(killed)
+        if not killed:
+            r["alive"].append(name)
+        print(f"  {'OK   ' if killed else 'FAIL '}{name}  "
+              f"⇒ {'紅了' if killed else '⛔ 打不紅'}"
               f"（FAIL {nfail} 項{'' if summed else '、⚠️ 沒有印出總結'}）")
         if not killed:
             print("        " + out[-400:].replace("\n", "\n        "))
@@ -525,9 +610,29 @@ sweep("live_panel.py 的「打開」端點與防護", LP3_MUT, LPSRC, "live_pane
       ROUTE_TEST, "LP_SRC_DIR")
 
 shutil.rmtree(TMP, ignore_errors=True)
-_tot = len(MUT) + len(LP_MUT) + len(LP2_MUT) + len(LP3_MUT)
+
+# ══ 總結 ⛔ 只准照 RESULTS 的實測數字寫 ═══════════════════════════════════
+#    ⛔⛔ 「沒跑」與「打紅」是兩件事，**不可以合併成一個數字**（2026-09-10 修）。
+_tot = sum(r["n"] for r in RESULTS)
+_ran = sum(r["ran"] for r in RESULTS)
+_killed = sum(r["killed"] for r in RESULTS)
+_alive = sum(len(r["alive"]) for r in RESULTS)
+_skipped = sum(r["skipped"] for r in RESULTS)
+print("\n=== 總結 ===")
+for r in RESULTS:
+    print(f"  {r['title']}：{r['n']} 個 ⇒ 實跑 {r['ran']}、打紅 {r['killed']}、"
+          f"打不紅 {len(r['alive'])}、⛔ 沒跑 {r['skipped']}"
+          + (f"（{r['why']}）" if r["why"] else ""))
+    for _n in r["alive"]:
+        print(f"      ⛔ 打不紅：{_n}")
 print(f"\n{_tot} 個突變（auto_fire {len(MUT)} ＋ live_panel 路由 {len(LP_MUT)}"
       f" ＋ live_panel 主迴圈／畫面 {len(LP2_MUT)}"
-      f" ＋ 「打開」端點與防護 {len(LP3_MUT)}），打紅 {_tot - bad} 個"
-      + ("　全部通過 ✅" if not bad else f"　⛔ {bad} 個打不紅"))
-sys.exit(1 if bad else 0)
+      f" ＋ 「打開」端點與防護 {len(LP3_MUT)}）："
+      f"實跑 {_ran}、打紅 {_killed}、打不紅 {_alive}、⛔ 沒跑 {_skipped}")
+if _killed == _tot:
+    print("全部通過 ✅")
+else:
+    # ⛔ 這句話要說得出「哪一種沒過」——「沒跑」被說成「打紅」就是上一版的病。
+    print(f"⛔ {_tot - _killed} 個沒有打紅"
+          + (f"（其中 {_skipped} 個**根本沒跑**）" if _skipped else ""))
+sys.exit(0 if _killed == _tot else 1)

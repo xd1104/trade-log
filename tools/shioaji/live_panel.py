@@ -3153,6 +3153,120 @@ def fire_sim_pairs(days):
     return out
 
 
+# ---------------------------------- 【自動下單】那一口的「下場」（⛔ 唯讀 real_trades/）
+#
+# ⛔⛔ **這一段補的是一個真的 bug，不是新功能**（2026-09-10 lab-ux 查到、PM 拍板）：
+#    `auto_fire._eod()` 在停利成交的日子走的是 `pos is None → eod_flat`，
+#    而撈出場價的 `_eod_exit_of()` **只掛在 `eod_closed` 那一條路上** ⇒
+#    **停利成交的那些天，`autofire/*.jsonl` 裡永遠不會有出場價與點數**
+#    （不是「等收盤才有」，是永遠沒有）。而那正是他最想看的那幾天。
+#
+# ⇒ 修法選的是候選 1：**在端點層唯讀比對 `real_trades/`**。
+#    ⛔ 不動 `auto_fire.py` 的邏輯、⛔ 不動 `broker.py`、⛔ 不碰停損那條路 ——
+#       出場價的真相本來就已經在 `real_trades/` 裡（`broker.record_trade()` 寫的，
+#       停利成交、他按平倉、收盤平倉、reconcile 發現部位不見了，四種都會留一列）。
+#    ⛔ 讀法**沿用既有的 `_auto_mine_day()`**（明文標「唯讀 real_trades/，
+#       一個位元組都不寫」），⛔ 不新寫一份檔案存取。
+#
+# ⛔⛔ **對不到／對到多筆一律留白**（沿用「問不到成交價就留白」那條鐵律）：
+#    ⛔ 不准挑一筆、⛔ 不准拿現價頂。**留白看得出來是缺，編的數字看不出來。**
+#    而且「對不起來」跟「還開著」**不是同一句話** —— 前者長得像「那口其實沒平掉」，
+#    所以它要有自己的 tag ＋ 摘要那一行的示警（⛔ 但不擋，那不是錯誤）。
+#
+# ⛔ **效能**：`/api/fire/state` 每 5 秒被輪詢，而 HTTP 執行緒跟 4Hz 主迴圈
+#    （＝他的停損）搶同一個 GIL ⇒ ⛔ 不可以每次全掃。兩道：
+#      ① 只看畫面上那份清單的前 `FIRE_REAL_DAYS` 天（跟 `alListHTML()` 同一個數）；
+#      ② 每一天一份 `(mtime_ns, size)` 快取 —— 過去的日子那個檔一輩子不會再變，
+#         所以穩態下**一次 stat、零次讀檔**。
+#    ⚠️ 快取鍵要帶 size，⛔ 只比 mtime 不夠（同一秒續寫會讓畫面停在舊資料，
+#       跟 `_auto_read_month` 同一個坑）。
+
+FIRE_REAL_DAYS = 60             # ⛔ 跟前端 alTblHTML() 的 slice(0, 60) 是同一個數
+_FIRE_REAL_CACHE = {}           # date -> ((mtime_ns, size) | None, [那天的來回])
+_FIRE_REAL_LOCK = threading.Lock()   # ⛔ 只保護這份快取，絕對不可以碰 state_lock
+
+
+def _fire_real_day(d):
+    """某一天他的 `real_trades/`（⛔ 唯讀）＋ `(mtime, size)` 快取。"""
+    p = AUTO_REAL_DIR / f"{d}.jsonl"
+    try:
+        st = p.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None                  # 那天沒有檔（＝他那天沒有平掉任何一趟）
+    with _FIRE_REAL_LOCK:
+        hit = _FIRE_REAL_CACHE.get(d)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+    rows = _auto_mine_day(d) if key is not None else []
+    with _FIRE_REAL_LOCK:
+        _FIRE_REAL_CACHE[d] = (key, rows)
+    return rows
+
+
+def fire_real_pairs(days, today=None, now=None, eod_at=None):
+    """
+    【自動下單】那一口**後來怎麼了**。一天一筆，`date` 當鍵。**唯讀。**
+
+    鑰匙 ＝ `(date, entry_time 比到分, entry ±EOD_PX_TOL, dir)` ——
+    ⛔ **沿用既有的那套認人方式**（`broker.set_trade_note()`／
+    `auto_fire._looks_ours()`／`_eod_exit_of()` 配的是同一組欄位），
+    容差直接拿 `auto_fire.EOD_PX_TOL`，⛔ 不在這裡寫死第二個 1.0（那就是兩把尺）。
+
+    `state` 五種，⛔ 一種都不准跟別種寫同一句：
+      `ok`      對到**恰好一筆**（出場價／時間／點數／理由照抄那一列；
+                ⚠️ `exit`／`points` 本來就可能是 None ＝ 問不到成交價，那也照實留白）
+      `open`    今天、而且收盤平倉那一刻還沒到 ⇒ **那口還開著**（正常，不示警）
+      `drill`   演練（`live:false`）⇒ 那一趟**結構上不存在**於 `real_trades/`
+                （`broker.close()` 在 dry run 時**不會**呼叫 `record_trade()`），
+                ⛔ 所以絕對不可以把它算成「對不起來」
+      `none`    對不到 ⇒ **留白 ＋ 示警**（它跟「那口其實沒平掉」長得像）
+      `many`    對到多筆 ⇒ 同上，⛔ 不准挑一筆
+    """
+    out = {}
+    tol = auto_fire.EOD_PX_TOL
+    # ⚠️ 兩個都是後端自己產的 `HH:MM:SS`（補零、等長）⇒ 直接比字串就是比時刻，
+    #    ⛔ 不必再開一支「時分秒轉秒數」的函式（那就是第二把尺）。
+    hhmmss = re.compile(r"^\d\d:\d\d:\d\d$")
+    can_time = bool(hhmmss.match(str(now or "")) and hhmmss.match(str(eod_at or "")))
+    for r in (days or [])[:FIRE_REAL_DAYS]:
+        if not isinstance(r, dict):
+            continue
+        d = r.get("date")
+        # ⛔ 只有「真的開出部位」那幾天才有下場可談；沒送的那幾天講什麼都是雜訊。
+        if not d or r.get("rec") != "result" or not r.get("ok"):
+            continue
+        if not r.get("live"):
+            out[d] = {"state": "drill"}
+            continue
+        e, dv = _auto_num(r.get("entry")), r.get("dir")
+        want_t = str(r.get("entry_time") or "")[:5]
+        hits = []
+        for t in _fire_real_day(d):
+            if t.get("dir") != dv or not dv:
+                continue
+            # ⚠️ 面板重啟後撿回來的部位 entry_time 是 None ⇒ 這裡對不上是**對的**
+            #    （寧可留白，不可以把別人的一趟掛到自動下單頭上）。
+            if not want_t or str(t.get("entry_time") or "")[:5] != want_t:
+                continue
+            te = _auto_num(t.get("entry"))
+            if te is None or e is None or abs(te - e) > tol:
+                continue
+            hits.append(t)
+        if len(hits) == 1:
+            t = hits[0]
+            out[d] = {"state": "ok", "exit": _auto_num(t.get("exit")),
+                      "exit_time": t.get("exit_time"),
+                      "points": _auto_num(t.get("points")), "why": t.get("why")}
+        elif not hits:
+            # 今天、而且還沒到收盤平倉那一刻 ⇒ 那口本來就還開著（⛔ 不是對不起來）。
+            holding = (d == today and can_time and str(now) < str(eod_at))
+            out[d] = {"state": "open" if holding else "none"}
+        else:
+            out[d] = {"state": "many", "n": len(hits)}
+    return out
+
+
 # ------------------------------------------------- 【自動下單】從面板打開（武裝真錢）
 
 # ⭐ 2026-09-09 Benson：「我覺得他現在的開關有點麻煩，可以幫我把開關做在面板那邊嗎？
@@ -3354,7 +3468,19 @@ def fire_fires_today(now=None):
     if AUTO.get("day") == str(now.date()) and AUTO.get("done"):
         return False
     # ② 牆上時鐘。⛔ 用 SIGNAL_SEC（跟 `_auto_tick` 同一個常數），不是 SIGNAL_AT 那個字串
-    if now.hour * 3600 + now.minute * 60 + now.second >= SIGNAL_SEC:
+    #    ⛔⛔ **要加上 `AUTO_LATE_MS`**（2026-09-10 PM 裁示，原本只寫 `>= SIGNAL_SEC`）：
+    #    `_auto_tick` 在 09:03:30 之後**還有 `AUTO_LATE_MS` 的補送窗口**（lag 在窗口內照樣送）。
+    #    面板若在那幾秒**還在啟動**（`serve()` 起來了、`AUTO["started"]` 還沒打開，
+    #    中間卡著 `connect()` 的網路等待），他這時候按下去 ——
+    #    舊版畫面會說「下一個交易日」，但它**今天就會送一口真單**。
+    #    ⇒ 錯的方向是危險那一邊，所以窗口整段都要算「今天」。
+    #    正常情況（面板一直開著）由條件 ① 擋下來，行為不變。
+    #    ⚠️ 邊界（誠實講）：`_auto_tick` 的判準是 `lag > AUTO_LATE_MS`（＝ lag 剛好
+    #       3000ms 還是會送），而這裡只看到「秒」⇒ **09:03:33.000 那一個瞬間**
+    #       它會送、這句話卻說「下一個交易日」。4Hz 的迴圈要剛好落在微秒 0 才踩得到，
+    #       ⛔ 不要為了它把整個 09:03:33 那一秒都說成「今天」（那一秒其餘 999ms
+    #       其實是 late、不會送，反過來又變成另一句假話）。
+    if now.hour * 3600 + now.minute * 60 + now.second >= SIGNAL_SEC + AUTO_LATE_MS / 1000:
         return False
     # ③ 「今天的那一刻」是不是日盤 —— ⛔ 問 market_session，不要自己判斷星期
     sig_at = datetime.combine(now.date(), dtime(0, 0)) + timedelta(seconds=SIGNAL_SEC)
@@ -5019,14 +5145,20 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-way i{display:block; font-style:normal; font-size:11.5px; font-weight:500;
   color:var(--faint); font-family:var(--font-mono); margin-top:3px}
 .al-way.off{font-size:15px; color:var(--dim); font-weight:600}
-.al-how{margin-top:11px; font-size:11.5px; color:var(--dim); line-height:1.75}
-.al-how code{font-family:var(--font-mono); color:var(--gold); font-size:11.5px}
-/* 可以直接貼的指令：⛔ 一定要能整行看完（斷行不斷字），不然他會複製到半截。 */
-.al-how code.cmd{display:inline-block; margin-top:2px; padding:3px 8px 4px;
-  background:var(--surface-2); border:1px solid var(--line); border-radius:6px;
-  color:var(--text); word-break:break-all; white-space:normal; line-height:1.6}
-.al-how .warn{color:var(--gold)}
-.al-how b{color:var(--text); font-weight:650}
+/* ⭐⭐ 風險條（2026-09-10 取代整段〈怎麼開〉的教學）。
+   ⛔ 這一段是**砍剩下來的兩句**，⛔ 一句都不准再刪：
+     ① 停損活在這台電腦的面板迴圈裡（面板關掉／當掉／電腦睡著就沒有停損，
+        13:43:30 的自動平倉也不會發生）
+     ② 這個開關**沒有有效期**（每個交易日都會送，直到他自己關掉）
+   ⛔ 用**金色**（這個面板既有的「注意」語彙），⛔ 不用紅綠 —— 紅綠只給損益，
+      唯一的例外是兩段式確認條的「真錢」那一版。 */
+.al-risk{margin-top:12px; padding:11px 14px 12px; border-radius:var(--r-md);
+  background:var(--gold-soft); border:1px solid var(--gold-line)}
+.al-risk p{display:flex; gap:9px; font-size:12.5px; line-height:1.7; color:var(--gold);
+  font-weight:600; margin:0}
+.al-risk p+p{margin-top:8px; padding-top:8px; border-top:1px solid rgba(227,169,81,.22)}
+.al-risk i{font-style:normal; flex:none}
+.al-risk b{color:var(--text); font-weight:750}
 .al-gates{display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
   background:var(--line-soft); border-radius:var(--r-md); overflow:hidden; margin-top:11px}
 .al-gates .c{background:var(--surface); padding:9px 12px 10px; min-width:0}
@@ -5040,11 +5172,23 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-today .t.off{font-size:15px; color:var(--dim); font-weight:650}
 .al-today .d{font-size:12px; color:var(--faint); line-height:1.7; margin-top:5px}
 .al-today .d b{color:var(--dim); font-weight:650; font-family:var(--font-mono)}
-/* 紀錄清單。⛔ 沿用 .at-tbl（同一個面板裡「一排結果」長得都一樣）。 */
-.al-tbl td .why{display:block; font-size:11px; color:var(--faint);
-  font-family:var(--font-sans); margin-top:2px; white-space:normal}
-.al-tbl .ok{color:var(--gold)}
-.al-tbl .no{color:var(--faint)}
+/* ⭐⭐ 紀錄清單（2026-09-10 從表格改成卡片）。
+   ⛔⛔ **照抄練習 `row(t,ns)` 與真實 `realCard(t)` 那一份 `.trade`，⛔ 不要重新設計。**
+   （2026-09-03 Benson 退過一次：「真實的交易紀錄要跟練習的交易紀錄的形式長的一樣，
+     我不是說過了嗎」——「像 X 一樣」講的是**形式**，換顏色換間距都解不掉。）
+   所以這裡**一個 `.trade`／`.tr-*`／`.dir`／`.tag` 的樣式都沒有重寫**，
+   只加兩條這一頁獨有的：
+     ・`.al-list`：限寬 640px 靠左 —— 全寬 1395px 時 `.tr-px` 會把點數推到很遠，
+       形式就不像了（`.tr-res` 是靠右的，中間那條 `flex:1` 拉多長就差多遠）。
+     ・`.trade .al-meta`：做法／滑價／模擬那邊擠不進 `.tr-px` 的 157.6px
+       （`.tag` 4 個字就已經吃掉餘裕），只好另起一行。
+       ⛔ 樣式**逐字照抄 `.trade .noteline`**（同一個位置、11.5px、--faint、
+       nowrap ＋ ellipsis）—— 那一行在練習／真實的卡片上就是「附註」的位置，
+       自己另發明一種樣式就又不一樣了。 */
+.al-list{max-width:640px}
+.trade .al-meta{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  background:none; border:0; padding:0; margin-top:5px; font-size:11.5px;
+  color:var(--faint); line-height:1.5; font-family:var(--font-mono)}
 .al-empty{font-size:12px; color:var(--faint); line-height:1.8; padding:10px 2px}
 /* 關閉鈕。⛔ 這是這一頁唯一一顆按鈕，而且只有開關檔存在時才畫得出來。
    ⛔ 不用紅色（紅綠只給損益），用跟「手動平倉」同一顆 .btn.flat2 的語彙 ——
@@ -5219,7 +5363,10 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    </div>
   </div>
   <div class="al-gates" id="algates"></div>
-  <div class="al-how" id="alhow"></div>
+  <!-- ⭐⭐ 風險條（2026-09-10）：整段〈怎麼開〉的教學砍掉之後**必須留下來**的那兩句
+       （停損活在這台電腦裡／這個開關沒有有效期）。⛔ 一句都不准再刪。
+       開著才畫；關著的時候「沒有有效期」那句改掛在他正要按的那顆鈕旁邊。 -->
+  <div id="alrisk"></div>
   <!-- ⭐ 打開（兩段式）。⛔ 只有開關**關著**時才會有東西畫進來（alPaint）：
        開著的時候這裡是空的（要換做法請先關掉），關著的時候 #aloff 是空的。
        ⛔ 兩個永遠不會同時有東西 —— 「開」與「關」同時在畫面上會讓他按錯。 -->
@@ -5236,7 +5383,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 
  <div class="card">
   <div class="sec-head"><h2>紀錄</h2><span class="count" id="allogn"></span></div>
-  <div class="at-tblwrap"><table class="at-tbl al-tbl" id="altbl"></table></div>
+  <!-- ⛔⛔ 跟練習成績／真實成績底下那份清單**同一種卡片**（`.list` ＋ `.trade`）。
+       ⛔ `.list>*{flex:none}` 由 `.list` 自己帶著，⛔ 不可以省 ——
+          `.list` 是有 max-height 的 flex 直欄，少了那條、筆數一多就是**把每一列壓扁**
+          （實測 107px 被壓成 21.6px），而且筆數少的時候完全看不出來。 -->
+  <div class="list al-list" id="altbl"></div>
   <div class="al-empty" id="alempty"></div>
   <div class="at-notes" id="alnotes"></div>
  </div>
@@ -5359,6 +5510,17 @@ var lastMkt='', lastTrade='', lastStats='', lastWarn='', lastReal='', statsCache
       ⛔ 那是一個 GET，不會有「送兩張單」的風險。
    ══════════════════════════════════════════════════════════════════════ */
 var PTOK='';
+/* ⭐⭐ 403 的時候要對「他自己」說的那一句（⛔ 不是後端那句話）。
+   ⛔⛔ 後端回的是「這個請求不是從面板發出來的」—— 那句話是講給**外面的網頁**聽的，
+      端到他面前是**誤導**：他明明就是站在面板上按的。
+   ⚠️⚠️ 這句話的第一件事是**把「沒送出去」講死**，理由不是美觀：
+      `ENTER_LOCK`／`firing`／`closing` 只擋得住「同時按兩下」，
+      擋不掉「他以為沒送、過三秒再按一次」。看門狗重啟後的那 ≤0.5 秒是一個
+      **新的失敗外觀**，等於多給了他一個「再按一次」的理由 ——
+      所以這句話絕對不可以讓他懷疑「是不是其實送出去了，只是畫面沒更新」。
+   ⚠️ 它是**共用**的一句（十條路由都可能回 403）⇒ ⛔ 不准寫成「一張單都沒有」
+      那種只對下單成立的字（存心得、寫重播也走這裡）。 */
+var P403='這次沒有送出去，面板剛重新啟動過。請再按一次（剛剛那一下不算，不會變成兩筆）。';
 function ptok(){
   if(PTOK) return Promise.resolve();
   return fetch('/api/state').then(r=>r.json())
@@ -5367,7 +5529,19 @@ function ptok(){
 function pfetch(url,body){
   return ptok().then(()=>fetch(url,{method:'POST',
     headers:{'Content-Type':'application/json','X-Panel':'1','X-Panel-Token':PTOK},
-    body:body||'{}'}));
+    body:body||'{}'})).then(function(r){
+      if(r.status!==403) return r;
+      /* 看門狗剛把面板重開過 ⇒ 手上這份 token 是舊的。把它清掉，
+         下一次 `ptok()` 就會先去 `/api/state` 要一份新的（⛔ 那是一個 GET）。
+         ⛔⛔ **絕對不做自動重送。** 這個出口上掛著 `/api/real/enter` ——
+            自動重試就是教程式在他沒看見的情況下送第二張單。
+            清 token ＋ 換一句話就夠了，那一下要由**他**再按。
+         ⚠️ 回一個長得像 Response 的東西（`status` ＋ `json()`），
+            呼叫端一律 `r.json()`／看 `r.status` ⇒ ⛔ 十個呼叫點一個都不用改。 */
+      PTOK='';
+      return {status:403, ok:false,
+              json:function(){ return Promise.resolve({ok:false,msg:P403}); }};
+    });
 }
 
 /* ---------------- 真實下單 ----------------
@@ -5802,7 +5976,11 @@ function realScore(all){
       ⚠️ 不可以改用 text-overflow:ellipsis 把它藏起來 —— 那是把問題藏起來不是修好，
          而且筆數少的時候看起來完全正常（09-03 成交價那個 bug 就是這樣活了兩天）。
       守衛：`hold-to-fire.mjs` ⑧b6（每一種理由各造一張卡，斷言全部不折行）。 */
-const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的'};
+/* ⚠️ 2026-09-10 多一個 `eod`（收盤自動平倉，`broker.close("eod")` 寫進去的理由）——
+   【自動下單】那一頁的紀錄卡**共用這一份**，⛔ 不准另外寫第二份 map
+   （兩份就一定有一份會漏掉新的理由，而畫面上只會安靜地寫「其他」）。
+   ⛔ 「收盤」也照樣守 4 字上限。 */
+const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的', eod:'收盤'};
 function rwhy(t){ return RWHY[t&&t.reason]||'其他'; }
 
 /* 新到舊排序。⚠️ 明著照 date + entry_time 排，不要依賴 trades_all 的既有順序 ——
@@ -10103,7 +10281,7 @@ function alPaint(){
    /* ⛔ 讀不到狀態時那顆「關閉」鈕也要收起來 —— 我們根本不知道開關檔在不在，
       而那顆鈕的說明寫著「按下去就把 X 改名收起來」，留著就是一句沒把握的話。 */
    /* ⛔⛔ 讀不到狀態時「打開」那兩顆更不能留：我們連現在是真錢還是演練都不知道。 */
-   setEl('algates',''); setEl('alhow',''); setEl('altoday',''); setEl('aloff','');
+   setEl('algates',''); setEl('alrisk',''); setEl('altoday',''); setEl('aloff','');
    setEl('alon','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
    return;
@@ -10111,9 +10289,14 @@ function alPaint(){
  const armed=!!D.armed, m=D.method, live=!!D.live;
  /* ── ① 現在是開還是關 ＋ ② 選了哪個做法 ─────────────────────── */
  let st;
+ /* ⚠️ 「差 0 點算做多」原本寫在〈怎麼開〉那段（2026-09-10 整段砍掉）。
+    CLAUDE.md 明訂這件事**畫面上要說**（`auto_dirs` 的 `sig >= 0` 是刻意選的那一邊，
+    跟【自動下單（模擬）】同一把尺），而砍掉之後「開著」那個狀態就沒有地方講了
+    ⇒ 併進做法名字底下那一行小字（⛔ 不另外多一行，開關區的行數不變）。 */
  if(armed) st='<span class="al-badge on">開啟中</span>'+
    '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alSub(m))+
-   ' · '+esc(D.signal_at||'')+' 送出 '+esc(String(D.qty||1))+' 口</i></span>';
+   ' · 差 0 點算做多 · '+esc(D.signal_at||'')+' 送出 '+
+   esc(String(D.qty||1))+' 口</i></span>';
  else if(D.arm_why==='off') st='<span class="al-badge">關閉中</span>'+
    /* ⛔ 這句話 2026-09-09 跟著改：以前只能自己建檔，現在下面那兩顆就開得起來。
       舊句子（「要用請自己建 AUTO_ORDERS_ON」）留在畫面上會讓他以為按鈕不算數。 */
@@ -10127,12 +10310,17 @@ function alPaint(){
     這裡要講的是**後果**：09:03:30 一到會發生什麼事。 */
  const sigT=esc(D.signal_at||''), eodT=esc(D.eod_at||'');
  let sub='<span>'+(armed
+   /* ⛔ 兩個開關的關係要講清楚（原本寫在〈怎麼開〉那段，2026-09-10 整段砍掉）：
+      `auto_fire` 裡**沒有**第二道 `REAL_ORDERS_ON` 判斷，一律走 `broker._send()`
+      ⇒ 關掉真單就等於連自動也關掉。這句話只在真單關著時出現（＝條件式那幾條之一），
+      所以開著＋真單也開著的時候行數不變。 */
    ?(live?'⚠️ '+sigT+' 一到，程式會自己送出 1 口真單（你不在也會送）'
-         :sigT+' 一到會走完整條路，但真單開關關著 ⇒ 不會真的送出去')
+         :sigT+' 一到會走完整條路，但真單開關關著 ⇒ 不會真的送出去'+
+          '（<b>把真單關掉就等於連自動也關掉</b>）')
    :'一張單都不會送出去')+'</span>';
- /* 開關沒有有效期：⛔ 這件事一定要寫出來，不然他會以為「今天開的、今天有效」。 */
- if(armed) sub+='<span class="sep">·</span><span>開關沒有有效期，'+
-   '<b>每個交易日都會送</b>，直到你自己關掉</span>';
+ /* ⚠️ 「開關沒有有效期」那句 2026-09-10 **搬到底下的 `.al-risk`**（金色風險條）——
+    它跟「停損活在這台電腦裡」是同一個等級的事，混在這排小字裡看不見。
+    ⛔ 搬走不是刪掉：關著的時候它掛在那顆「開始」旁邊（見 alOnHTML）。 */
  /* ⛔ 收盤平倉是這一段最會賠錢的地方（沒平就是抱過夜盤），一定要寫在最上面。 */
  if(armed&&eodT) sub+='<span class="sep">·</span><span>'+eodT+
    ' 會自動平倉（<b>只平自動下單開的那一口</b>，你自己開的單不會碰）</span>';
@@ -10156,47 +10344,47 @@ function alPaint(){
      '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利 &plusmn;'+esc(alF(D.tp,0))+
        ' 點 · 一天 1 次</div></div>');
 
- /* ── 怎麼開、怎麼關（⛔ 開只有一條路，關才有按鈕）─────────────────── */
- /* ⚠️ 這一段一定要**直接給可以貼的指令**：lab-qa 實測他最可能用的兩種寫法
-    （Notepad 另存選 UTF-8 with BOM、PowerShell 的 "A" > 檔＝UTF-16LE）
-    以前都會讓畫面寫「看不懂」。後端現在讀得懂了，但**第一次就給對的做法**
-    才是真的把「第一次一定會失敗的路徑」當成主流程做。 */
- const FLG=esc(D.flag||'AUTO_ORDERS_ON');
- /* ⛔ 這一頁被 Benson 退件過一次，理由是「一大堆多餘的文字」。所以這一段
-    **只留他真的要動手做的事**：怎麼建、怎麼關、方向怎麼判、風險。
-    ⛔ 不准把「這一頁在算什麼」那種解釋牆搬進來。 */
- setEl('alhow',
-   /* ⛔ 主要的路現在是上面那兩顆鈕（Benson 2026-09-09：「我按個鈕就可以開始了這樣」）。
-      自己建檔那條**留著**：他之後可能在別的機器、或想在面板沒開著時先設好。 */
-   '要開：按上面那兩顆（<b>會再問你一次</b>才真的打開）。也可以自己在 '+
-   '<code>tools/shioaji/'+FLG+'</code> 裡寫一個 '+
-   '<code>A</code>（'+esc(alName('A'))+'）或 <code>B</code>（'+esc(alName('B'))+'）；'+
-   '不管走哪一條，都還要有 <code>'+esc(D.live_flag||'REAL_ORDERS_ON')+'</code> '+
-   '才會真的送出去（<b>把真單關掉就等於連自動也關掉</b>）。<br>'+
-   '<code class="cmd">Set-Content "tools\\shioaji\\'+FLG+'" "A" -Encoding ascii</code>'+
-   '　<span class="warn">⚠️ 記事本存檔請選 <b>UTF-8</b>；PowerShell 的 '+
-   '<b>&gt; 檔</b> 與 <b>Out-File</b> 存出來是 UTF-16。'+
-   '（存錯也不會亂送 —— 讀不懂一律拒絕下單。）</span><br>'+
-   '要關：按下面那顆。方向怎麼判：'+sigT+' 的價比參考價<b>高或持平</b>做多、低做空，'+
-   '<b>剛好持平（差 0 點）算做多</b>（跟【自動下單（模擬）】同一把尺）。<br>'+
-   '<span class="warn">⚠️ 永豐沒有停損單，停損活在這台電腦的面板迴圈裡 —— '+
-   '面板關掉／當掉／電腦睡著就沒有停損，'+eodT+' 的自動平倉也不會發生；'+
-   '平不掉會在上面寫出來，那時請自己到大戶投平。</span>');
+ /* ── ⭐⭐ 風險條（2026-09-10 取代整段〈怎麼開〉）───────────────────
+    ⛔ **砍掉的是教學，不是風險。** 拿掉的是：自己建檔的做法、`Set-Content …`、
+       UTF-8／UTF-16 的編碼提醒、「要關：按下面那顆」、方向怎麼判、
+       「改名收起來、要再開就自己把檔名改回去」——
+       那些現在畫面上都有更直接的東西（兩顆鈕就在下面、關的那顆也在下面）。
+    ⛔⛔ **留下來的只有兩句，而且要更醒目**（金色，⛔ 不用紅綠）：
+       ① 停損活在這台電腦裡 —— 這是這個工具最會賠錢的一件事，
+          而且他**看不出來**（面板關掉的時候沒有任何東西會告訴他）。
+       ② 這個開關沒有有效期 —— 他自己的原話是「我用工具那邊關掉之後，才會失效」，
+          不寫他會以為「今天開的、今天有效」。
+    ⛔ 只有**開著**的時候畫（關著的時候沒有停損可談；「沒有有效期」那句改掛在
+       他正要按的那顆鈕旁邊，見 alOnHTML）。 */
+ setEl('alrisk', armed
+   ? '<div class="al-risk">'+
+       '<p><i>⚠️</i><span>停損活在<b>這台電腦的面板迴圈</b>裡 —— '+
+         '面板關掉／當掉／電腦睡著就<b>沒有停損</b>'+
+         (eodT?('，'+eodT+' 的自動平倉也不會發生'):'')+'。</span></p>'+
+       '<p><i>⚠️</i><span>這個開關<b>沒有有效期</b> —— '+
+         '<b>每個交易日都會送</b>，直到你自己按下面那顆關掉。</span></p>'+
+     '</div>'
+   : '');
 
  /* ── 打開（兩段式）：⛔ 只有開關檔**不在**的時候才畫（開著就只剩「關閉」）─── */
  setEl('alon', alOnHTML(D));
 
  /* ── 關閉鈕：⛔ 只有開關檔存在時才畫（沒東西可關就不該有按鈕）────── */
+ /* ⚠️ 說明只留**按下去會怎樣**（2026-09-10 精簡）：「把 X 改名收起來（內容留著）、
+    要再開就自己把檔名改回去」是**實作細節**，而且「要再開」那半已經是假的 ——
+    上面那兩顆鈕就開得起來，叫他去改檔名是把他推回最麻煩的那條路。 */
  setEl('aloff', D.flag_exists
    ? '<button class="btn flat2" data-aloff="1">關閉自動下單</button>'+
-     '<span class="n">按下去就把 <b>'+FLG+'</b> 改名收起來（內容留著），'+
-     '之後<b>不會再送任何單</b>。要再開就自己把檔名改回去。</span>'+
+     '<span class="n">按下去之後<b>不會再送任何單</b>。</span>'+
      (D.off_msg?'<span class="n">'+esc(D.off_msg)+'</span>':'')
    : (D.off_msg?'<span class="n">'+esc(D.off_msg)+'</span>':''));
 
  /* ── ③ 今天送了沒／為什麼沒送 ─────────────────────────────── */
  const days=D.days||[], today=D.today||'', row=days.find(r=>r&&r.date===today)||null;
  setEl('alcount',esc(today));
+ /* ⛔⛔ 「今天」這一塊吃的是**跟紀錄清單同一份資料**（2026-09-10 一起改）：
+    只改清單不改這裡的話，畫面會同時寫著「紀錄：出場 +100」與
+    「今天：已送出委託單，13:43:30 會自動平倉」—— 後面那句在那一刻已經是假話。 */
  setEl('altoday',alTodayHTML(D,row)+alEodHTML(D,row));
 
  /* ── 紀錄（要能跟【自動下單（模擬）】那一頁對得起來）───────────── */
@@ -10228,8 +10416,13 @@ function alOnHTML(D){
    /* ⛔ 這一條要當場講清楚**現在是哪一種**：真錢＝紅底（這個面板唯一的例外，
       紅綠平常只給損益）、演練＝中性灰。⛔ 兩種絕不可以長一樣。 */
    return '<div class="al-conf'+(C.live?' real':'')+'">'+
+     /* ⚠️ 「沒有有效期」那句在這裡**再講一次**（2026-09-10）：這是他按下去之前
+        最後一個畫面，而「開一次＝以後每天都送」正是他最容易誤會的一件事。
+        ⛔ 這是**前端加的一行**，⛔ 不准去動後端 `fire_arm_confirm()` 那句正本
+        （那句話的職責是「現在是真錢還是演練」，被 `test_auto_fire.py` ⑬b 綁著）。 */
      '<div class="q">'+(C.live?'⚠️ ':'')+esc(C.text)+'<br>要用「<b>'+
-       esc(alName(m))+'</b>」（'+esc(alSub(m))+'）開始嗎？</div>'+
+       esc(alName(m))+'</b>」（'+esc(alSub(m))+'）開始嗎？'+
+       '<br>打開之後<b>每個交易日都會送，直到你自己關掉</b>。</div>'+
      '<div class="btns2">'+
        '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
          (ALON.busy?'打開中…':'確定，打開')+'</button>'+
@@ -10243,10 +10436,17 @@ function alOnHTML(D){
    '<button class="btn" data-alon="A">用「'+esc(alName('A'))+'」開始</button>'+
    '<button class="btn" data-alon="B">用「'+esc(alName('B'))+'」開始</button>'+
    '</div>'+
+   /* ⚠️ 「比它高或持平做多、低做空」這句 ⛔ 不可以跟著〈怎麼開〉一起砍掉 ——
+      2026-09-10 之後**整頁只剩這裡在講方向怎麼判**，而「剛好持平（差 0 點）算做多」
+      是這個工具刻意選的那一邊（跟【自動下單（模擬）】同一把尺），畫面上一定要說。
+      ⚠️ 「打開之後每個交易日都會送」那句是**開著時 `.al-risk` 第二條**的同一件事：
+      關著的時候他正要按的就是這顆鈕，所以掛在這裡（⛔ 不是兩件事，是同一句話
+      在兩種狀態下各掛在他當下看得到的地方）。 */
    '<div class="n">兩顆都是每個交易日 '+esc(D.signal_at||'')+' 送出 '+
      esc(String(D.qty||1))+' 口：<b>'+esc(alName('A'))+'</b> 拿 '+esc(alSub('A'))+
      '的價當參考、<b>'+esc(alName('B'))+'</b> 拿 '+esc(alSub('B'))+'的價當參考，'+
-     esc(D.signal_at||'')+' 的價比它高或持平做多、低做空。按下去會再問你一次。</div>'+
+     esc(D.signal_at||'')+' 的價比它高或持平做多、低做空。'+
+     '按下去會<b>再問你一次</b>；打開之後<b>每個交易日都會送，直到你自己關掉</b>。</div>'+
    (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
 }
 
@@ -10268,9 +10468,10 @@ function alArm(){
     /* ⛔ 成功也可能有話要說（例如那一列紀錄沒寫進去）——不可以安靜地吞掉。 */
     /* ⚠️ token 是每次啟動換一次的：面板剛被看門狗重開過的話，畫面上這一份是舊的
        ⇒ 後端會擋（403）。⛔ 後端刻意不講「你是哪一道沒過」（那顆鈕沒有讓外面除錯的
-       需求），所以由前端補一句他做得到的下一步。 */
-    ALON.err=(r&&r.ok)?(r.warn||''):(((r&&r.msg)||'打不開')+
-      (r&&r._code===403?'（如果面板剛重新啟動過，請再按一次）':'')); })
+       需求）。⚠️ 2026-09-09：那句人話**搬進 `pfetch()`**（`P403`）——
+       十條路由都可能 403，一頁補一句就是十把尺，總有一頁沒補到。
+       所以這裡直接用 `r.msg` 就好，⛔ 不要再自己接一句（會變成兩句疊在一起）。 */
+    ALON.err=(r&&r.ok)?(r.warn||''):((r&&r.msg)||'打不開'); })
   .catch(()=>{ ALON.busy=false; ALON.step='idle'; ALON.mode=null;
     ALON.err='打不開：連不上面板'; })
   /* 按完立刻重抓狀態 —— 他要看得到「真的開起來了」，不是相信一句話。 */
@@ -10318,13 +10519,27 @@ function alTodayHTML(D,r){
  }
  if(r.rec==='result'&&r.ok){
    const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
-   return '<div class="t">'+esc(live_word(r))+'：'+esc(alName(r.method)||'')+' → '+esc(dir)+
+   /* ⛔ 「送出去了」跟「已經出場了」是兩件事，⛔ 不准寫同一句 —— 停利在券商成交的
+      那些天，`auto_fire` 那一側結構上看不到出場（見 fire_real_pairs 的說明），
+      所以這裡跟紀錄清單一樣，出場那半從唯讀比對 `real_trades/` 的結果拿。 */
+   const R=(D.real||{})[r.date]||null, st=R?R.state:null, done=(st==='ok');
+   const head=done?('已出場（'+esc(rwhy({reason:R.why}))+'）'):esc(live_word(r));
+   return '<div class="t">'+head+'：'+esc(alName(r.method)||'')+' → '+esc(dir)+
      '　1 口</div><div class="d">進場 <b>'+esc(alF(r.entry))+'</b>'+
-     '　停利 <b>'+esc(alF(r.tp))+'</b>'+
+     (done?('　出場 <b>'+esc(alF(R.exit))+'</b>'+
+            (R.exit_time?('（'+esc(String(R.exit_time).slice(0,8))+'）'):'')+
+            (alN(R.points)!=null?('　<b>'+esc(alSigned(R.points))+'</b> 點'):
+              '　<span style="color:var(--gold)">問不到成交價，點數留白</span>'))
+          :('　停利 <b>'+esc(alF(r.tp))+'</b>'))+
      '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px))+'</b>'+
      '　滑價 <b>'+esc(alSigned(r.slip))+'</b> 點'+
-     (r.has_target?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>')+
-     (r.warn?'<br><span style="color:var(--gold)">'+esc(r.warn)+'</span>':'')+'</div>';
+     ((!done&&r.has_target)||done?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>')+
+     (r.warn?'<br><span style="color:var(--gold)">'+esc(r.warn)+'</span>':'')+
+     /* ⛔ 對不起來要**說出來**（示警但不擋）：留白跟「那口其實沒平掉」長得一樣。 */
+     ((st==='none'||st==='many')?'<br><span style="color:var(--gold)">'+
+       '⚠️ 對不到這一趟來回的紀錄（出場價與點數留白）'+
+       (st==='many'?'——同一天有好幾筆對得上，不挑':'')+
+       '，請自己到大戶投確認那口部位。</span>':'')+'</div>';
  }
  if(r.rec==='result'&&!r.ok)
    return '<div class="t off">沒有送成</div><div class="d">'+
@@ -10345,6 +10560,16 @@ function alEodHTML(D,r){
    /* 只有「今天真的開出部位了」才需要預告收盤平倉，其他日子講了只是雜訊。 */
    const opened=!!(r&&r.rec==='result'&&r.ok);
    if(!opened) return '';
+   /* ⛔⛔ **那一口已經出場了就不要再預告收盤平倉**（2026-09-10）：停利在券商成交的
+      日子最常見，`auto_fire` 那一側不會留下 `eod` 那一列（它 13:43:30 才會跑），
+      舊版於是在盤中一直寫「13:43:30 會自動平倉」、收盤後又跳金色警示
+      「沒有留下收盤平倉的紀錄」—— **兩句在那一天都是假的**。
+      ⛔ 這是第七種結局，有自己的一句話（⛔ 不准跟那六種混）。 */
+   const R=(D.real||{})[r.date]||null;
+   if(R&&R.state==='ok')
+     return '<div class="d">這一口'+(R.exit_time?('已經在 <b>'+esc(String(R.exit_time).slice(0,8))+
+       '</b> 出場了'):'已經出場了')+'（'+esc(rwhy({reason:R.why}))+'），'+
+       '不需要 '+eodT+' 的自動平倉。</div>';
    if(nowS!=null&&edS!=null&&nowS<edS)
      return '<div class="d">'+eodT+' 會自動平倉（<b>只平這一口</b>）。</div>';
    return '<div class="al-alarm">⚠️ '+eodT+' 已經過了，但這一天<b>沒有留下收盤平倉的紀錄</b>'+
@@ -10363,35 +10588,86 @@ function alSecs(hms){
  return m?(+m[1]*3600+ +m[2]*60+ +m[3]):null;
 }
 
+/* ⭐⭐ 紀錄清單（2026-09-10 從表格改成 `.trade` 卡片）。
+   ⛔⛔ **這是照抄，不是重新設計。** 正本是練習的 `row(t,ns)` 與真實的 `realCard(t)`
+   （2026-09-03 Benson 退件：「真實的交易紀錄要跟練習的交易紀錄的形式長的一樣，
+     我不是說過了嗎」）—— 在他所有看得到紀錄的地方（手機 App／練習成績／真實成績），
+   紀錄都是同一張卡片，這一頁不可以是唯一的例外。
+   沿用：`.trade` / `.tr-date` / `.dir` / `.tr-px` / `.arrow` / `.tag` / `.tr-res` / `.list`。
+   ⚠️ 數字的格式也照抄（`f()` 印價、`pm()` 印點數）——
+      ⛔ 不要在這裡自己改成一位小數，那就又是「只有這一頁不一樣」。
+
+   ⛔ 硬限制（`hold-to-fire.mjs` ⑧b6 記過的那條）：`.tr-px` 只有 **157.6px**，
+      `.tag` **最多 4 個字** —— 6 字 ＝ 161px 會折行，那張卡 65px 變 80px，
+      跟練習的卡片就不一樣高了，而「形式長的一樣」正是這一版的要求。
+      所以 tag 一律 ≤4 字：停利／停損／收盤／持有中／對不起來／演練／沒送／下落不明。
+
+   ⛔ 自動下單獨有的三件事（做法／滑價／模擬那邊）擠不進 `.tr-px` ⇒ 另起一行 `.al-meta`
+      （樣式逐字照抄 `.trade .noteline`）。 */
+/* 後端有沒有端出「那一口後來怎麼了」那一份對照。⛔ 沒有 ≠ 對不起來。 */
+function alHasReal(D){ return !!(D&&D.real&&typeof D.real==='object'); }
+function alSimTxt(D,r){
+ const s=(D.sim||{})[r.date]||null;
+ if(!s) return '模擬那邊 —';
+ if(s.miss) return '模擬那邊也沒記到';
+ const run=(s.runs||{})[r.method||'B']||null;
+ return '模擬那邊 '+(run&&alN(run.pts)!=null?alSigned(run.pts):'—');
+}
+function alCard(D,r){
+ /* ⛔ 出場那半的來源是後端唯讀比對 `real_trades/` 的結果（見 fire_real_pairs）。
+    ⛔ 對不到就留白 —— 不猜輸贏、不拿現價頂。
+    ⚠️ **「後端根本沒有端出 `real`」跟「對不到」是兩件事**（舊版後端／別的治具）：
+       ⛔ 前者不可以寫成「對不起來」——那是一句假話（我們根本沒查過）。 */
+ const R=alHasReal(D)?((D.real[r.date])||null):undefined, st=R?R.state:(R===null?null:'nodata');
+ const sent=(r.rec==='result'&&r.ok), done=(st==='ok');
+ const pts=done?alN(R.points):null;
+ /* ⛔ 算得出點數才有輸贏色；還開著／對不起來／演練一律維持 `--ghost` 灰
+    （`.trade::before` 的預設）—— 跟 `realCard()` 同一條規矩，
+    勝敗也同一套定義：**點數 > 0 才算勝，0 算敗**。 */
+ const cls=(pts==null)?'':(pts>0?' win':' loss');
+ /* ⛔ 每一種狀態一個 tag，⛔ 一種都不准跟別種寫同一個字
+    （「還開著」跟「對不起來」長得像，但一個是正常、一個要他去大戶投看）。 */
+ let tag;
+ if(!sent) tag=(r.rec==='fire')?'下落不明':'沒送';
+ else if(done) tag=rwhy({reason:R.why});
+ else if(st==='drill') tag='演練';
+ else if(st==='open') tag='持有中';
+ else if(st==='nodata') tag='送出了';    /* 後端沒查 ⇒ 只講我們知道的那半 */
+ else tag='對不起來';
+ const px=sent
+   ? f(r.entry)+'<span class="arrow">&rarr;</span>'+
+     (done?(alN(R.exit)==null?'—':f(R.exit)):'—')+' <span class="tag">'+tag+'</span>'
+   : '— <span class="tag">'+tag+'</span>';
+ const et=esc(String(r.entry_time||'').slice(0,8)), xt=esc(String((R&&R.exit_time)||'').slice(0,8));
+ let meta;
+ /* ⚠️ 「為什麼沒送」那句話**包在 `.why` 裡**（舊版表格的 `td .why` 同一個界定）：
+    它印的是後端那句原話（例：「讀到『C』，只認得 A 或 B」）—— 講的是
+    **你該往那個檔案裡寫什麼**，不是「這個做法叫什麼名字」，所以它不在
+    「孤立 A／B 零命中」那把尺裡。⛔ 沒有這個包裝的話，那把尺會被自己的原話打紅，
+    而唯一的「修法」就是去改後端那句話 —— 那是把尺弄壞不是把東西修好。 */
+ if(!sent) meta='<span class="why">'+esc(r.why_msg||alWhy(r.why))+'</span> · '+
+   esc(alSimTxt(D,r));
+ else if(done) meta=esc(alName(r.method)||'—')+' · '+(et?(et+(xt?' → '+xt:'')):'—')+
+   ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r));
+ else if(st==='none'||st==='many') meta=esc(alName(r.method)||'—')+
+   (et?(' · '+et+' 送出'):'')+' · 對不到那一趟來回的紀錄，出場請到大戶投看';
+ else meta=esc(alName(r.method)||'—')+(et?(' · '+et+' 送出'):'')+
+   ' · 停利掛 '+esc(alF(r.tp,0))+' · 滑價 '+esc(alSigned(r.slip))+
+   ' · '+esc(alSimTxt(D,r));
+ return '<div class="trade'+cls+'"><div class="tr-top">'+
+   '<span class="tr-date">'+esc(r.date?r.date.slice(5):'')+'</span>'+
+   (sent&&(r.dir==='long'||r.dir==='short')
+     ? '<span class="dir '+(r.dir==='long'?'l':'s')+'">'+
+       (r.dir==='long'?'▲ 多':'▼ 空')+'</span>' : '')+
+   '<span class="tr-px">'+px+'</span>'+
+   '<span class="tr-res '+(pts==null?'na':(pts>0?'r-win':'r-loss'))+'">'+
+     (pts==null?'—':pm(pts))+'</span></div>'+
+   '<div class="al-meta">'+meta+'</div></div>';
+}
 function alTblHTML(D,days){
- const sim=D.sim||{};
- let h='<thead><tr><th>日期</th><th>做法</th><th>方向</th><th>結果</th>'+
-   '<th>進場</th><th>停利</th><th>滑價</th><th>模擬那邊</th></tr></thead><tbody>';
- for(const r of days.slice(0,60)){
-   const s=sim[r.date]||null;
-   const sent=(r.rec==='result'&&r.ok);
-   const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
-   let res;
-   if(sent) res='<span class="ok">'+esc(r.live?'送出去了':'演練')+'</span>';
-   else if(r.rec==='fire') res='<span class="ok">不知道下場</span>';
-   else res='<span class="no">沒送</span>';
-   let simTxt='—';
-   if(s){
-     const run=(s.runs||{})[r.method||'B']||null;
-     simTxt=(s.px==null?'—':alF(s.px))+(run&&alN(run.pts)!=null?
-       '　'+alSigned(run.pts)+' 點':'');
-     if(s.miss) simTxt='那邊也沒記到';
-   }
-   h+='<tr><td class="nm">'+esc(r.date||'')+'</td>'+
-     '<td>'+esc(alName(r.method)||'—')+'</td>'+
-     '<td>'+esc(sent?dir:'—')+'</td>'+
-     '<td>'+res+(sent?'':'<span class="why">'+esc(r.why_msg||alWhy(r.why))+'</span>')+'</td>'+
-     '<td>'+esc(sent?alF(r.entry):'—')+'</td>'+
-     '<td>'+esc(sent?alF(r.tp):'—')+'</td>'+
-     '<td>'+esc(sent?alSigned(r.slip):'—')+'</td>'+
-     '<td>'+esc(simTxt)+'</td></tr>';
- }
- return h+'</tbody>';
+ /* ⛔ 60 天跟後端 `FIRE_REAL_DAYS` 是**同一個數**：後端只對那幾天比對出場，
+    這裡多印一天就會有一張永遠寫「對不起來」的卡（而那是假的）。 */
+ return days.slice(0,60).map(r=>alCard(D,r)).join('');
 }
 
 /* ⛔ 常態統計不畫；**異常**才畫（沿用【模擬】那一頁 atNotesHTML 的規矩）。
@@ -10412,6 +10688,15 @@ function alNotesHTML(D,days){
     每一天為什麼沒平，那一列自己那句話（why_msg）寫得清清楚楚。 */
  if(eodBad) out.push('⚠️ 有 '+eodBad+' 天收盤沒有自動平掉（原因看那一天的紀錄）'+
    '，請自己到大戶投確認那幾天的部位');
+ /* ⛔⛔ 「對不到出場紀錄」要**示警但不擋**（2026-09-10）：那一天的卡片上是留白的，
+    而**留白跟「那口其實沒平掉」長得一模一樣** —— 不講的話他只會覺得畫面壞了，
+    講了他才知道要去大戶投看。⛔ 這跟上面那條「收盤沒平掉」是兩件事，不准併成一句
+    （一個是程式知道自己沒平，一個是程式對不上帳）。 */
+ const R=D.real||{};
+ const nomatch=days.filter(r=>r&&R[r.date]&&
+   (R[r.date].state==='none'||R[r.date].state==='many')).length;
+ if(nomatch) out.push('⚠️ 有 '+nomatch+' 天對不到出場紀錄（那幾天的出場價與點數留白），'+
+   '請自己到大戶投確認');
  /* 模擬那邊有記、這邊卻連一列都沒有 ⇒ 兩頁不同步（面板版本不一致或接線掉了） */
  const miss=Object.keys(D.sim||{}).filter(d=>!days.some(r=>r&&r.date===d)).length;
  if(miss) out.push('模擬那一頁有 '+miss+' 天，這裡沒有對應的紀錄');
@@ -10760,6 +11045,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 out = auto_fire.state()
                 out["sim"] = fire_sim_pairs(out.get("days") or [])
+                # ⛔ 「那一口後來怎麼了」**唯讀** real_trades/ 比對出來的
+                #    （`auto_fire` 那一側結構上拿不到停利成交的出場價，見上面那一段）。
+                #    ⛔ 對不到就留白，⛔ 不挑一筆、⛔ 不拿現價頂。
+                out["real"] = fire_real_pairs(out.get("days") or [],
+                                              today=out.get("today"),
+                                              now=out.get("now"),
+                                              eod_at=out.get("eod_at"))
                 # ⛔ 「現在是真錢還是演練」那句話**在後端算**（前端不准猜），
                 #    而且拿的是 auto_fire 算好的那個 live ⇒ 只有一把尺。
                 out["arm_confirm"] = fire_arm_confirm(out.get("live"))
@@ -10767,8 +11059,21 @@ class Handler(BaseHTTPRequestHandler):
                 out["token"] = FIRE_TOKEN
                 return self._json(200, out)
             except Exception as e:
+                # ⚠️ **這條退路刻意不帶 token**（⛔ 不是漏掉）。跟 `/api/state`
+                #    那條退路**不是同一件事**：
+                #    ① 前端的 token 只有**一個**來源，就是 `/api/state`
+                #       （`tick()` 與 `ptok()` 那兩行 `PTOK=s.token`，
+                #        `test_auto_fire.py` ⑬d 斷言整份前端**剛好兩個** ⇒
+                #        這裡加了也沒有人會拿）。
+                #    ② `/api/state` 那條退路回的是 **200 ＋ 一份能用的狀態**
+                #       （「寧可少一塊資料也不要讓面板瞎掉」），少了 token
+                #       他的平倉鈕會當場按不動；這裡回的是 **500 ＝ 這一頁掛了**，
+                #       前端 `alFetch()` 當錯誤處理，本來就沒有「還要能按」這回事。
+                #    ③ ⛔ token 的強度 ＝「端出它的那些 GET」的強度 ⇒
+                #       **少一個端出它的地方就少一份要守的**。
+                #    ⛔ 哪天有人讓前端改從 `/api/fire/state` 拿 token，這裡要一起改。
                 return self._json(500, {"error": str(e)[:200], "armed": False,
-                                        "days": [], "sim": {},
+                                        "days": [], "sim": {}, "real": {},
                                         "today": str(date.today())})
         if self.path.startswith("/api/bars"):
             q = self.path.split("?", 1)[1] if "?" in self.path else ""

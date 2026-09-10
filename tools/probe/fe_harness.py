@@ -128,6 +128,12 @@ REASON_TRADES = [
      "exit_time": "09:29:00", "exit": 47233.0, "reason": "manual", "points": 30.0},
     {"date": "2026-08-27", "dir": "short", "qty": 1, "entry_time": "09:31:00", "entry": 47234.0,
      "exit_time": "09:39:00", "exit": 47204.0, "reason": "closed_elsewhere", "points": 30.0},
+    # ⚠️ 2026-09-10 多一種：`eod`（【自動下單】的收盤自動平倉，`broker.close("eod")`
+    #    寫進去的理由）。RWHY 是**單一來源**（.n-row／真實卡片／【自動下單】的紀錄卡
+    #    三邊共用），多一個鍵就要在這裡多一張卡，否則那條「4 字上限」對新的那一種
+    #    等於沒人在守。⛔ 價格照這個專案的規矩自己編（12000 附近）。
+    {"date": "2026-08-27", "dir": "long", "qty": 1, "entry_time": "09:51:00", "entry": 12206.0,
+     "exit_time": "09:59:00", "exit": 12226.0, "reason": "eod", "points": 20.0},
     # 認不得的內部代號 → 前端一律印「其他」，代號本身絕不可以外露
     {"date": "2026-08-27", "dir": "long", "qty": 1, "entry_time": "09:41:00", "entry": 47205.0,
      "exit_time": "09:49:00", "exit": 47175.0, "reason": "sl_test", "points": -30.0},
@@ -494,6 +500,18 @@ class Ctl(H):
             POSTS.clear()                 # ⚠️ 只清紀錄，**不可以順手改 MODE**
             BLOCKED.clear()
             return self._send(200, "{}")
+        if p == "/blocked/forget":
+            # ⛔⛔ **只有一個合法用途**：`hold-to-fire.mjs` ⑬ 那一節會**故意**製造一次
+            #    403（token 過期的樣子）。治具是常駐的，好幾支探針共用同一個行程 ⇒
+            #    那一筆會留在 `blocked_all` 裡，讓**下一支**探針（`tabs-visual.mjs`
+            #    的「整場沒有任何一下被守衛擋掉」）變成假紅燈。
+            # ⛔ 所以這條**跟 `/reset` 分開、名字取得很難按錯**，而且呼叫端必須
+            #    **先斷言那一筆就是自己製造的那一筆**、再叫它忘記（⑬ 就是這樣做的）。
+            # ⛔ 絕對不可以把它併進 `/reset` —— 那等於把「這一整場有沒有被擋」
+            #    這道尺廢掉（那是 P0 的守衛）。
+            BLOCKED_ALL.clear()
+            BLOCKED.clear()
+            return self._send(200, "{}")
         if p.startswith("/mode/"):
             MODE["v"] = p.split("/")[-1]
             return self._send(200, "{}")
@@ -549,7 +567,7 @@ class Ctl(H):
 ctl = ThreadingHTTPServer(("127.0.0.1", FE_CTL), Ctl)
 threading.Thread(target=ctl.serve_forever, daemon=True).start()
 print(f"控制埠 {FE_CTL}：/mode/flat /mode/holding /mode/with_target /mode/short /mode/stale /mode/closed"
-      " /vol/full /vol/few /vol/reasons /posts /reset /slow", flush=True)
+      " /vol/full /vol/few /vol/reasons /posts /reset /blocked/forget /slow", flush=True)
 print("　　　　　　 /tick/where /tick/reset /tick/clock/HH:MM /tick/grow/N /tick/half",
       flush=True)
 print(f"逐筆治具：{TICKLOGS}（合成資料，價格 12000 附近；他的 tick_logs 一個位元組都沒碰）",

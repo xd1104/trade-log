@@ -109,6 +109,28 @@ def _sim_rows(days):
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _real_rows(items):
+    """
+    他自己的成績單（`real_trades/YYYY-MM-DD.jsonl`）——【自動下單】那一口
+    **後來怎麼了**就是從這裡比對出來的（`LP.fire_real_pairs()`，唯讀）。
+
+    ⛔ 只寫**暫存區**（`LP.AUTO_REAL_DIR` 已經導到 TMP）。
+    ⛔⛔ 價格一律 12000 附近、時間與點數全是編的 —— ⛔ 絕對不可以出現他真實的數字
+       （repo 是公開的，2026-09-04 洩漏過一次）。
+    """
+    d = LP.AUTO_REAL_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    for p in d.glob("*.jsonl"):
+        p.unlink()
+    for row in items:
+        with (d / (row["date"] + ".jsonl")).open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # ⚠️ **治具限定**：產品那邊過去的日子那個檔一輩子不會再變，所以 `(mtime, size)`
+    #    快取永遠有效；治具卻會就地重寫同一天 ⇒ 這裡把快取戳破。
+    #    ⛔ 這不是產品的行為，⛔ 不要因此以為那份快取需要別的失效條件。
+    LP._FIRE_REAL_CACHE.clear()
+
+
 def _rebuild():
     """重建整個暫存資料集。⛔ 只寫暫存區。"""
     if AF.FIRE_DIR.exists():
@@ -116,9 +138,53 @@ def _rebuild():
     AF.FIRE_DIR.mkdir(parents=True, exist_ok=True)
     LP.AUTO_CACHE.clear()
     rows, sim = [], []
+    _real_rows([])
     if ST["rows"] == "none":
         _sim_rows([])
         return
+    if ST["rows"] == "exits":
+        # ⭐⭐ 2026-09-10：紀錄卡的**六種下場**各一天。
+        #    ⛔ 這一組治具存在的理由：`auto_fire` 那一側**結構上**拿不到停利成交的
+        #       出場價（`_eod_exit_of()` 只掛在 `eod_closed` 那條路），
+        #       所以出場那半一律是從 `real_trades/` 唯讀比對出來的。
+        #    ⛔ 「對不起來」要跟「還開著」長得不一樣 —— 兩者的留白一模一樣，
+        #       但一個是正常、一個要他自己去大戶投看。
+        def _fire(n, **kw):
+            r = {"rec": "result", "stage": "done", "date": _d(n), "method": "B",
+                 "dir": "long", "px": 12010.0, "ok": True, "why": None,
+                 "why_msg": None, "entry": 12013.0, "tp": 12113.0, "slip": 3.0,
+                 "has_target": True, "entry_time": "09:03:31", "warn": None,
+                 "live": True, "qty": 1}
+            r.update(kw)
+            return r
+        rows += [
+            _fire(1),                                   # ① 停利成交
+            _fire(2, dir="short", entry=11987.0, tp=11887.0),   # ② 停損
+            _fire(3),                                   # ③ 收盤平倉
+            _fire(4),                                   # ④ 對不起來（real_trades 沒有）
+            _fire(5, live=False),                       # ⑤ 演練（結構上不會有紀錄）
+            _fire(6),                                   # ⑥ 對到了但問不到成交價
+            # 今天：還開著（時鐘 10:30 < 13:43:30）
+            _fire(0),
+        ]
+        rows[-1]["date"] = TODAY
+        for n in (0, 1, 2, 3, 4, 5, 6):
+            sim.append((TODAY if n == 0 else _d(n), 12010.0))
+        _real_rows([
+            {"date": _d(1), "dir": "long", "qty": 1, "entry_time": "09:03:31",
+             "entry": 12013.0, "exit_time": "09:41:52", "exit": 12113.0,
+             "reason": "tp", "points": 100.0},
+            {"date": _d(2), "dir": "short", "qty": 1, "entry_time": "09:03:31",
+             "entry": 11987.0, "exit_time": "10:12:04", "exit": 12087.0,
+             "reason": "sl", "points": -100.0},
+            {"date": _d(3), "dir": "long", "qty": 1, "entry_time": "09:03:31",
+             "entry": 12013.0, "exit_time": "13:43:34", "exit": 12013.0,
+             "reason": "eod", "points": 0.0},
+            # ⑥ 問不到成交價 ⇒ exit/points 留白（broker 既有行為）
+            {"date": _d(6), "dir": "long", "qty": 1, "entry_time": "09:03:31",
+             "entry": 12013.0, "exit_time": "11:05:00", "exit": None,
+             "reason": "closed_elsewhere", "points": None},
+        ])
     if ST["rows"] in ("mixed", "today", "eodfail", "eodok", "eodnotours",
                       "eodcanttell"):
         # 今天：真的送出去了（做多）
@@ -187,6 +253,24 @@ def _rebuild():
              "dir": "long", "entry": 12013.0, "tries": 0, "live": True},
         ]
         sim.append((TODAY, 12010.0))
+    if ST["rows"] == "exittoday":
+        # ⭐⭐ **今天那一口已經停利成交了**（真實世界最常見的那一天）。
+        #    ⛔ `auto_fire` 那一側在這一天**什麼都不會留下**（13:43:30 才會跑 `_eod`，
+        #       而且那時候 `pos is None` ⇒ `eod_flat`，⛔ 永遠不會有出場價）——
+        #       所以舊版畫面會一直寫「已送出委託單」＋「13:43:30 會自動平倉」，
+        #       收盤後再跳一句「沒有留下收盤平倉的紀錄」。**三句在這一天都是假的。**
+        rows += [
+            {"rec": "result", "stage": "done", "date": TODAY, "method": "B",
+             "dir": "long", "px": 12010.0, "ok": True, "why": None, "why_msg": None,
+             "entry": 12013.0, "tp": 12113.0, "slip": 3.0, "has_target": True,
+             "entry_time": "09:03:31", "warn": None, "live": True, "qty": 1},
+        ]
+        sim.append((TODAY, 12010.0))
+        _real_rows([
+            {"date": TODAY, "dir": "long", "qty": 1, "entry_time": "09:03:31",
+             "entry": 12013.0, "exit_time": "09:41:52", "exit": 12113.0,
+             "reason": "tp", "points": 100.0},
+        ])
     if ST["rows"] == "mixed":
         # 過去幾天：每一種「沒送」各一天（⛔ 每一種都要在畫面上看得到原因）
         cases = [
@@ -304,6 +388,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/fire/state"):
             out = AF.state()
             out["sim"] = LP.fire_sim_pairs(out.get("days") or [])
+            # ⛔ 「那一口後來怎麼了」走**產品的** `fire_real_pairs()`（唯讀 real_trades/）
+            #    —— 治具自己算一份的話，「產品對不起來」在探針上會全綠。
+            #    ⚠️ 時鐘要餵治具的假時鐘（產品那邊是 `out["now"]`，下面才會被蓋掉）。
+            out["real"] = LP.fire_real_pairs(out.get("days") or [],
+                                             today=out.get("today"),
+                                             now=ST["clock"],
+                                             eod_at=out.get("eod_at"))
             # ⛔ 兩段式確認那句話與 token 都走**產品的**那一份（見上面 do_POST 的理由）
             out["arm_confirm"] = LP.fire_arm_confirm(out.get("live"), _fake_now())
             out["token"] = LP.FIRE_TOKEN

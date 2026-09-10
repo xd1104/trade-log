@@ -122,7 +122,7 @@ const unmutate = fn => ev(`(()=>{ if(window.__orig&&window.__orig[${JSON.stringi
 /* ⚠️ 突變之後要戳破 setEl 的 e.__html 快取，不然重畫沖不掉舊節點
    （【模擬】那一頁第一版就是這樣紅了三條）。 */
 const repaint = () => ev(`(()=>{
-  for(const id of ['alstate','alsub','algates','alhow','alon','aloff','altoday','altbl',
+  for(const id of ['alstate','alsub','algates','alrisk','alon','aloff','altoday','altbl',
                    'alempty','alnotes','alcount','allogn']){
     const e=document.getElementById(id); if(e) e.__html=null; }
   alPaint(); return 1;})()`);
@@ -221,8 +221,12 @@ say((await ev(`getComputedStyle(document.querySelector('#tab-fire .al-badge')).c
   !== "rgb(238, 90, 84)",
   "  ⛔ 關著不是紅色（關著是正常狀態，紅綠只給損益）",
   await ev(`getComputedStyle(document.querySelector('#tab-fire .al-badge')).color`));
-say(t.includes("永豐沒有停損單"),
-  "  ⛔ 有把「面板關掉就沒有停損」這件事寫在畫面上");
+/* ⚠️⚠️ 2026-09-10：「面板關掉就沒有停損」那句話從〈怎麼開〉那段搬到**金色風險條**
+   （`.al-risk`），而且**只在開著的時候畫** —— 開關關著就沒有那口自動部位可談，
+   UX 規格定的「關著剩 5 行」就是這個意思。開著時那一條在 ⑧b 驗（那裡 arm=B）。 */
+say(!t.includes("停損活在"),
+  "  ⛔ 關著的時候不畫風險條（沒有自動下單就沒有那兩件事要提醒）");
+chk("    而且風險條真的是空的", await ev(`document.getElementById('alrisk').innerHTML`), "");
 
 /* ═══ ④ 開著：選了哪個做法要看得到，⛔ 不准寫代號 ══════════════════ */
 console.log("\n=== ④ 開著：看得到選了哪個做法 ===");
@@ -239,42 +243,46 @@ say(!(await ev(`document.getElementById('alstate').innerText`)).includes("5 分 
   "  ⛔ 狀態那一行不會同時出現另一個做法的名字");
 /* ⛔⛔ 孤立的 A／B 代號零命中（【模擬】那一頁為這件事被 Benson 退件過一次：
    「我要從哪裡知道現在我看的是哪個做法？」）。
-   ⚠️ **這一頁有一個合法的例外，而且只有一個**：〈怎麼開〉那段（`#alhow`）——
-      他要**自己把那個字母打進檔案裡**，那個字母就是操作本身，不是「做法的名字」。
-      所以規則收緊成兩條，⛔ 不是放寬：
-        ① `#alhow` **以外**的地方，孤立的 A／B 零命中；
-        ② `#alhow` 裡面的每一個 A／B 都必須包在 <code> 裡（＝長得像檔案內容），
-           ⛔ 不准以純文字出現（那就變回「A＝5 分 K」那種對照說明了）。 */
-const lone = await ev(`(()=>{const sel=['#alstate','#altoday','.al-tbl td:nth-child(2)',
-    '#alon'];
+   ⚠️⚠️ **2026-09-10：規則收緊了，⛔ 不是放寬。** 舊版有一個合法的例外
+      ——〈怎麼開〉那段（`#alhow`），因為他要**自己把那個字母打進檔案裡**。
+      那一整段已經隨開關區精簡整個砍掉（開／關兩顆鈕就在畫面上，
+      不必再教他建檔）⇒ **那個例外也跟著沒了** ⇒ 現在是「整頁零命中」。 */
+/* ⚠️ 量之前要把 `.why`（後端那句「為什麼沒送」的原話）**剝掉** ——
+   舊版表格的做法欄是 `td:nth-child(2)`、原因在另一格 `td .why`，天生就分開；
+   改成卡片之後兩者同在 `.al-meta` 這一行，所以產品把原話包進 `<span class="why">`，
+   ⛔ 這是**保持原本的界定範圍**，不是放寬（原話講的是「你該往檔案裡寫什麼」，
+   不是「這個做法叫什麼名字」，而 Benson 退件的那件事發生在名字上）。 */
+const STRIP = `(e)=>{const c=e.cloneNode(true);
+  c.querySelectorAll('.why').forEach(x=>x.remove());
+  c.style.position='absolute'; c.style.left='-9999px';
+  document.body.appendChild(c); const s=c.innerText; c.remove(); return s;}`;
+const lone = await ev(`(()=>{const strip=${STRIP};
+  const sel=['#alstate','#altoday','#altbl .al-meta','#alon','#alrisk'];
   const out=[];
   for(const s of sel) for(const e of document.querySelectorAll('#tab-fire '+s))
-    out.push(...((e.innerText||'').match(/(^|[^0-9A-Za-z])[AB]([^0-9A-Za-z]|$)/g)||[]));
+    out.push(...((strip(e)||'').match(/(^|[^0-9A-Za-z])[AB]([^0-9A-Za-z]|$)/g)||[]));
   return out;})()`);
-chk("  ⛔ 講「哪個做法」的四個地方（狀態／今天／做法欄／開啟鈕）孤立字母零命中",
+chk("  ⛔ 講「哪個做法」的地方（狀態／今天／卡片第二行／開啟鈕／風險條）孤立字母零命中",
   lone, []);
-/* ⚠️ 為什麼「原因欄」不在上面那把尺裡（⛔ 這是界定範圍，不是放寬）：
-   原因欄印的是後端那句話（例：「讀到『C』，只認得 A 或 B」）——
+say(!(await ev(`!!document.getElementById('alhow')`)),
+  "  ⛔〈怎麼開〉那段（#alhow）已經整個不存在（開關區精簡）");
+/* ⛔ 收緊之後的那條：**整個 #tab-fire** 都不准有孤立的 A／B。
+   ⚠️ 檔名（AUTO_ORDERS_ON／REAL_ORDERS_ON）不會命中 —— 那個 A 兩邊都黏著字母。 */
+const loneAll = await ev(`(()=>{const strip=${STRIP};
+  return (strip(document.getElementById('tab-fire'))
+    .match(/(^|[^0-9A-Za-z])[AB]([^0-9A-Za-z]|$)/g)||[]);})()`);
+chk("  ⛔ 整個 #tab-fire 孤立 A／B 零命中（⛔ 這是收緊，不是放寬）", loneAll, []);
+/* ⚠️ 為什麼「原因欄」不在這把尺的破口上（⛔ 這是界定範圍，不是放寬）：
+   原因印的是後端那句話（例：「讀到『C』，只認得 A 或 B」）——
    它講的是**你該往那個檔案裡寫什麼**，不是「這個做法叫什麼名字」。
-   Benson 退件的那件事（「我要從哪裡知道現在我看的是哪個做法？」）發生在**做法的名字**上，
-   而那三個地方已經被上面那條守死了。 */
-say((await ev(`[...document.querySelectorAll('#tab-fire .al-tbl td:nth-child(2)')]
-  .map(e=>e.innerText)`)).every(s => ["—", "5 分 K", "開盤起"].includes(s.trim())),
-  "  做法欄只會出現名字或「—」",
+   ⚠️ 所以上面那條「整頁零命中」只在**沒有那種原因**的狀態下量（現在是 arm=B）；
+      ⑤ 那一節（內容看不懂）另外量它自己那句話。 */
+say((await ev(`[...document.querySelectorAll('#tab-fire #altbl .al-meta')]
+  .map(e=>(e.innerText||'').split(' · ')[0])`))
+  .every(s => ["—", "5 分 K", "開盤起"].includes(s.trim()) || s.length > 6),
+  "  卡片第二行開頭是做法的名字（⛔ 不是代號）",
   JSON.stringify(await ev(`[...new Set([...document.querySelectorAll(
-    '#tab-fire .al-tbl td:nth-child(2)')].map(e=>e.innerText.trim()))]`)));
-const howLoose = await ev(`(()=>{const h=document.getElementById('alhow').cloneNode(true);
-  h.querySelectorAll('code').forEach(e=>e.replaceWith(document.createTextNode('〔〕')));
-  document.body.appendChild(h); h.style.position='absolute'; h.style.left='-9999px';
-  const s=h.innerText; h.remove();
-  return (s.match(/(^|[^0-9A-Za-z])[AB]([^0-9A-Za-z]|$)/g)||[]);})()`);
-chk("  ⛔〈怎麼開〉裡的 A／B 全部包在 <code> 裡（＝檔案內容，不是做法的名字）",
-  howLoose, []);
-say((await ev(`[...document.querySelectorAll('#alhow code')].map(e=>e.textContent)`))
-  .filter(x => x === "A" || x === "B").length === 2,
-  "  而且 A 與 B 各出現一次（他要打進檔案的就是那一個字母）");
-say((await ev(`document.getElementById('tab-fire').innerText`)).includes("AUTO_ORDERS_ON"),
-  "  （檔名裡的字母不算 —— 那是檔名不是做法代號）");
+    '#tab-fire #altbl .al-meta')].map(e=>(e.innerText||'').split(' · ')[0].trim()))]`)));
 
 /* ═══ ⑤ 內容看不懂 ⇒ 拒絕下單並講出讀到什麼 ═════════════════════ */
 console.log("\n=== ⑤ 開關內容看不懂 ===");
@@ -331,10 +339,36 @@ for (const [nm, s] of [["開關關著", "自動下單是關著的"],
 ["送到一半當掉", "不知道那一張單的下場"]]) {
   say(t.includes(s), `  ${nm} → 原因寫在畫面上`);
 }
-say(t.includes("做空") && t.includes("11987"), "  做空那一天的方向與進場價都看得到");
+/* ⚠️ 2026-09-10：改成 `.trade` 卡片之後，方向是那顆 `.dir` 藥丸（「▼ 空」）——
+   ⛔ 那是**照抄**練習／真實那份卡片（`row()` / `realCard()` 都是這樣寫的），
+   ⛔ 不可以為了讓這條斷言過就在這一頁自己改回「做空」兩個字。 */
+say(t.includes("▼ 空") && t.includes("11987"), "  做空那一天的方向與進場價都看得到");
+chk("    而且那顆藥丸掛的是 .dir.s（跟練習／真實同一套）",
+  await ev(`[...document.querySelectorAll('#altbl .dir')].some(
+    e=>e.classList.contains('s'))`), true);
 say(t.includes("模擬那邊"), "  有「跟模擬對得起來」那一欄");
-const nrows = await ev(`document.querySelectorAll('#tab-fire .al-tbl tbody tr').length`);
-say(nrows >= 8, "  每一天都有一列", String(nrows));
+/* ⚠️ 2026-09-10：從表格改成 `.trade` 卡片（跟練習／真實同一種），所以數的是卡片。 */
+const nrows = await ev(`document.querySelectorAll('#tab-fire #altbl .trade').length`);
+say(nrows >= 8, "  每一天都有一張卡", String(nrows));
+/* ⛔⛔ 「形式長的一樣」是這一版的要求（2026-09-03 Benson 退件過一次）⇒
+   卡片裡的骨架必須跟練習／真實那份逐項對得上，⛔ 不可以只是「看起來很像」。 */
+const cardShape = await ev(`(()=>{const c=document.querySelector('#tab-fire #altbl .trade');
+  if(!c) return null;
+  return {top:!!c.querySelector('.tr-top'), date:!!c.querySelector('.tr-date'),
+          px:!!c.querySelector('.tr-px'), res:!!c.querySelector('.tr-res'),
+          tag:!!c.querySelector('.tag'), meta:!!c.querySelector('.al-meta')};})()`);
+chk("  ⛔ 卡片骨架跟練習／真實那份一樣（.tr-top/.tr-date/.tr-px/.tr-res/.tag ＋ .al-meta）",
+  cardShape, { top: true, date: true, px: true, res: true, tag: true, meta: true });
+/* ⛔ `.tag` 最多 4 個字：6 字 ＝ 161px > `.tr-px` 的 157.6px ⇒ 折行 ⇒ 那張卡 65→80px
+   ⇒ 跟練習的卡片就不一樣高了（hold-to-fire.mjs ⑧b6 記過同一條）。 */
+const tags = await ev(`[...new Set([...document.querySelectorAll('#tab-fire #altbl .tag')]
+  .map(e=>e.textContent.trim()))]`);
+say(tags.every(s => s.length <= 4), "  ⛔ 每一個 tag 都 ≤4 個字（超過會折行、卡片變高）",
+  JSON.stringify(tags));
+/* ⛔ 卡片不准折行（＝高度要跟練習那份一致）。同一批卡片高度只能有一種。 */
+const hs = await ev(`[...new Set([...document.querySelectorAll('#tab-fire #altbl .trade')]
+  .map(e=>Math.round(e.getBoundingClientRect().height)))]`);
+say(hs.length === 1, "  ⛔ 每一張卡一樣高（沒有任何一張折行）", JSON.stringify(hs));
 
 /* ═══ ⑧b 收盤自動平倉：畫面上要講得出來 ═════════════════════════════ */
 console.log("\n=== ⑧b 收盤自動平倉（13:43:30）===");
@@ -347,6 +381,24 @@ say(t.includes("只平自動下單開的那一口") || t.includes("只平自動�
   "  ⛔⛔ 而且明講「只平自動下單開的那一口」（他自己的單不會被碰）");
 say(t.includes("開關沒有有效期"),
   "  ⛔ 明講開關沒有有效期（每個交易日都會送，直到你自己關掉）");
+/* ⛔⛔ 開關區精簡之後**必須留下來、而且要更醒目**的那兩句（2026-09-10 UX 規格）。
+   ⛔ 一句都不准再刪 —— 它們是這個工具最會賠錢、而他最看不出來的兩件事。 */
+say(t.includes("停損活在") && t.includes("沒有停損"),
+  "  ⛔⛔ 開著時把「停損活在這台電腦裡、面板關掉就沒有停損」寫在畫面上");
+say(t.includes("的自動平倉也不會發生"),
+  "    ⛔ 而且明講那時候收盤自動平倉也不會發生");
+/* ⛔ 量的是**真的畫出來的顏色**（文字掛在 `p` 上，不是外框那一層）＋ 尺寸 ——
+   ⛔ 不可以只驗「那段字在 DOM 裡」（keyring 那次「按鈕其實是透明的」的教訓）。 */
+const riskCss = await ev(`(()=>{const e=document.querySelector('#alrisk .al-risk p');
+  if(!e) return null; const s=getComputedStyle(e);
+  const b=getComputedStyle(e.parentNode); const r=e.getBoundingClientRect();
+  return [s.color, b.backgroundColor, Math.round(r.width), Math.round(r.height)];})()`);
+say(riskCss && riskCss[0] === "rgb(227, 169, 81)",
+  "    ⛔ 字是金色（面板既有的「注意」語彙，⛔ 不用紅綠）", JSON.stringify(riskCss));
+say(riskCss && riskCss[2] > 200 && riskCss[3] > 15,
+  "    ⛔ 而且真的畫得出來（尺寸量過）", JSON.stringify(riskCss));
+chk("    ⛔ 恰好兩條（⛔ 一條都不准少）",
+  await ev(`document.querySelectorAll('#alrisk .al-risk p').length`), 2);
 say(/剛好持平|差 0 點/.test(t),
   "  訊號剛好是 0 的時候算做多 —— 這件事寫在畫面上（跟模擬那一頁一致）");
 /* ⚠️ 真單關著時最容易被誤會的一件事：症狀（按不了進場）跟原因（演練部位）看起來無關 */
@@ -418,6 +470,68 @@ say((await ev(`(()=>{const r=document.querySelector(
     return [Math.round(r.width),Math.round(r.height)];})()`)));
 await ctl("/f/rows/today"); await refetch();
 
+/* ═══ ⑧d ⭐⭐ 那一口**後來怎麼了**（2026-09-10）═════════════════════
+   ⛔⛔ 這一節在守的是一個**真的 bug**：`auto_fire._eod()` 在停利成交的日子走的是
+      `pos is None → eod_flat`，而撈出場價的 `_eod_exit_of()` 只掛在 `eod_closed`
+      那一條路 ⇒ **停利成交的日子，`autofire/*.jsonl` 永遠不會有出場價與點數**。
+      修法是端點層唯讀比對 `real_trades/`（`live_panel.fire_real_pairs()`）。
+   ⛔ 六種下場**一種都不准跟別種寫同一句**；⛔ 對不到就留白 ＋ 示警，
+      ⛔ 不准挑一筆、不准拿現價頂（「留白看得出來是缺，編的數字看不出來」）。
+   ⛔ 而且卡片的**形式**要跟練習／真實那份一樣（2026-09-03 Benson 退件過一次）。 */
+console.log("\n=== ⑧d ⭐⭐ 出場那半（唯讀比對 real_trades/）===");
+await ctl("/f/arm/B"); await ctl("/f/live/on");
+await ctl("/f/rows/exits"); await ctl("/f/clock/10:30:00"); await refetch();
+const EX = await ev(`(()=>[...document.querySelectorAll('#altbl .trade')].map(c=>({
+  tag:(c.querySelector('.tag')||{}).textContent||'',
+  px:c.querySelector('.tr-px').innerText.replace(/\\s+/g,''),
+  res:c.querySelector('.tr-res').innerText.trim(),
+  win:c.classList.contains('win'), loss:c.classList.contains('loss'),
+  meta:c.querySelector('.al-meta').innerText,
+  h:Math.round(c.getBoundingClientRect().height*10)/10})))()`);
+chk("  七天七張卡", EX.length, 7);
+chk("  ⛔ 六種下場各有自己的 tag（⛔ 一種都不准跟別種寫同一個字）",
+  EX.map(r => r.tag), ["持有中", "停利", "停損", "收盤", "對不起來", "演練", "別處平的"]);
+say(EX[1].px === "12013→12113停利" && EX[1].res === "+100" && EX[1].win,
+  "  ⛔ 停利成交那一天：出場價與點數都印得出來（＝這一輪修掉的那個 bug）",
+  EX[1].px + " " + EX[1].res);
+say(EX[2].res === "-100" && EX[2].loss, "  停損那一天：點數是負的、左緣掛 .loss", EX[2].res);
+say(EX[3].res === "0" && EX[3].loss,
+  "  ⛔ 收盤平掉 0 點算敗（沿用「點數 > 0 才算勝」同一套定義）", EX[3].res);
+say(EX[0].tag === "持有中" && EX[0].res === "—" && !EX[0].win && !EX[0].loss,
+  "  ⛔ 還開著：點數留白，左緣**維持灰**（⛔ 不准先染紅綠）");
+say(EX[4].tag === "對不起來" && EX[4].res === "—" && !EX[4].win && !EX[4].loss,
+  "  ⛔ 對不起來：一樣留白（⛔ 不挑一筆、不拿現價頂）");
+say(EX[4].meta.includes("大戶投"), "    而且告訴他去哪裡看", EX[4].meta);
+say(EX[0].tag !== EX[4].tag,
+  "  ⛔⛔ 「還開著」跟「對不起來」⛔ 不准長一樣（兩邊的留白一模一樣）");
+say(EX[6].tag === "別處平的" && EX[6].res === "—" && !EX[6].win && !EX[6].loss,
+  "  ⛔ 對到了但問不到成交價 ⇒ 出場價與點數照樣留白、不猜輸贏");
+say(EX[5].tag === "演練", "  ⛔ 演練那一天有自己的 tag（結構上不會有 real_trades 那一列）");
+say(!(await ev(`document.getElementById('alnotes').innerText`)).includes("演練") ||
+  (await ev(`document.getElementById('alnotes').innerText`)).includes("對不到出場紀錄"),
+  "  ⛔ 演練不可以被算成「對不起來」");
+const nm = await ev(`document.getElementById('alnotes').innerText`);
+say(/有\s*1\s*天對不到出場紀錄/.test(nm), "  ⛔ 摘要那一行示警**但不擋**（恰好 1 天）", nm);
+say(EX.every(r => r.tag.length <= 4), "  ⛔ 每一個 tag ≤4 字",
+  JSON.stringify([...new Set(EX.map(r => r.tag))]));
+chk("  ⛔ 七張卡一樣高（沒有任何一張折行 ⇒ 形式跟練習那份一致）",
+  [...new Set(EX.map(r => r.h))].length, 1);
+/* ⛔⛔ 「今天」那一塊吃的是同一份資料 —— 不一起改的話會變成
+   「紀錄寫 +100、今天還寫著 13:43:30 會自動平倉」。 */
+await ctl("/f/rows/exittoday"); await refetch();
+const T2 = await ev(`document.getElementById('altoday').innerText`);
+say(T2.includes("已出場"), "  ⛔ 今天那一口平掉了 ⇒ 抬頭寫「已出場」（⛔ 不是「已送出委託單」）", T2.split("\n")[0]);
+say(T2.includes("12113") && T2.includes("+100"), "    出場價與點數都在「今天」那一塊");
+say(!T2.includes("會自動平倉"),
+  "  ⛔⛔ 而且**不再預告 13:43:30 會自動平倉**（那一口已經不在了，講了就是假話）");
+say(T2.includes("不需要"), "    改成講「不需要收盤平倉」（第七種結局，⛔ 不跟那六種混）", T2);
+await ctl("/f/clock/14:00:00"); await refetch();
+const T3 = await ev(`document.getElementById('altoday').innerText`);
+say(!T3.includes("沒有留下收盤平倉的紀錄"),
+  "  ⛔⛔ 收盤之後也不可以跳「沒有留下收盤平倉的紀錄」的金色警示（那一口 09:27 就出場了）",
+  T3.replace(/\n/g, " | "));
+await ctl("/f/clock/10:30:00"); await ctl("/f/rows/today"); await refetch();
+
 /* ═══ ⑧c ⭐ 開難、關易：那一顆「關閉」鈕 ═══════════════════════════ */
 console.log("\n=== ⑧c ⭐ 開難關易（唯一一顆會改變狀態的按鈕）===");
 await ctl("/f/arm/B"); await refetch();
@@ -484,7 +598,7 @@ say(await ev("AL.data&&AL.data.armed===false"),
 /* 尺的自證：這顆鈕真的是靠 [data-aloff] 觸發的（隨便點別的地方不會送 POST）*/
 const p0 = REQS.filter(r => r.m !== "GET").length;
 await ev(`document.getElementById('alstate').click();
-          document.getElementById('alhow').click(); 1`);
+          document.getElementById('alrisk').click(); 1`);
 await sleep(400);
 chk("  負控組：點這一頁別的地方不會送出任何 POST",
   REQS.filter(r => r.m !== "GET").length - p0, 0);
@@ -720,10 +834,11 @@ if (await mutate("alOnHTML", "(C.live?' real':'')", "''")) {
 }
 if (await mutate("alName", "return w?w.n:''", "return k")) {
   await repaint();
-  const l2 = await ev(`(()=>{const sel=['#alstate','#altoday','.al-tbl td:nth-child(2)'];
+  const l2 = await ev(`(()=>{const strip=${STRIP};
+    const sel=['#alstate','#altoday','#altbl .al-meta'];
     let n=0;
     for(const s of sel) for(const e of document.querySelectorAll('#tab-fire '+s))
-      n+=((e.innerText||'').match(/(^|[^0-9A-Za-z])[AB]([^0-9A-Za-z]|$)/g)||[]).length;
+      n+=((strip(e)||'').match(/(^|[^0-9A-Za-z])[AB]([^0-9A-Za-z]|$)/g)||[]).length;
     return n;})()`);
   say(l2 > 0, "  ⇒ 名字換回代號時，④ 那條孤立字母的尺真的會抓到", String(l2));
   await unmutate("alName");

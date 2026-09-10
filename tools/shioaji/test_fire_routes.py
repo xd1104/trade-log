@@ -628,6 +628,60 @@ for _p in ("/api/state", "/api/fire/state"):
 say(True, "    ⇒ ⛔ token 不再是「放在毫無防護的端點上」——"
           "④ 那一道的強度等於這兩個 GET 的強度")
 
+# ── ③f ⛔⛔ /api/state **序列化失敗那條退路**（2026-09-09 lab-qa 建議 1）
+#    ⚠️⚠️ 為什麼要有這一節：`safe["token"] = FIRE_TOKEN` 那一行 CLAUDE.md 標了 ⛔⛔
+#       （「少了它，面板一出狀況他就同時失去畫面與按鈕」），但把它刪掉
+#       **兩支測試全綠、fire-mutate 也打不到** —— 那條路上原本一個守衛都沒有。
+#       （Ⓟ7b 打的是正常那條路：正常路徑的 token 在 `dict(STATE, token=…)` 裡，
+#         跟這條退路是兩行不同的程式。）
+#    ⚠️ 真實案例（2026-09-01）：永豐的 Trade 物件跟著真實部位塞進 STATE ⇒
+#       整支端點炸掉、回空字串 ⇒ 他手上有單卻**看不到、也按不掉**。
+print("\n  ── ⛔⛔ /api/state 序列化失敗時的退路（他手上有單的那一天）")
+
+
+class _Unserializable:
+    """⛔ `json.dumps` 一定序列化不了的東西（＝當年那個 Trade 物件的替身）。"""
+
+
+_ST_REAL_SENTINEL = object()
+_st_real0 = LP.STATE.get("real", _ST_REAL_SENTINEL)
+try:
+    with LP.state_lock:
+        LP.STATE["real"] = {"live": True, "position": _Unserializable(),
+                            "can_enter": True}
+    c, ct, b = _req("/api/state")
+    j = as_json(b) or {}
+    say(c == 200, "    ⛔ 整支端點不可以炸掉（舊版回空字串 ⇒ 畫面整個凍住）", f"{c}")
+    say("json" in ct.lower() and isinstance(as_json(b), dict),
+        "    照樣回得出 JSON", f"{ct[:40]} {b[:70]}")
+    say(j.get("token") == LP.FIRE_TOKEN,
+        "    ⛔⛔ 這條退路**照樣帶 token**（少了它，他的『平倉』鈕當場按不動）",
+        str(list(j))[:80])
+    say(isinstance(j.get("real"), dict) and j["real"].get("can_enter") is False,
+        "    ⛔ 而且真實那一塊改成「進不了場」（⛔ 不可以假裝一切正常）",
+        str(j.get("real"))[:90])
+    say("序列化失敗" in str((j.get("real") or {}).get("error") or ""),
+        "    ⛔ 講得出是什麼壞了", str((j.get("real") or {}).get("error"))[:70])
+    say("大戶投" in str((j.get("real") or {}).get("why") or ""),
+        "    ⛔ 而且叫他去大戶投確認部位（⛔ 不是安靜地少一塊）",
+        str((j.get("real") or {}).get("why"))[:70])
+    say(j.get("status") == LP.STATE.get("status"),
+        "    ⛔ 其他區塊照樣端得出來（寧可少一塊資料，不要讓整個面板瞎掉）",
+        str(j.get("status")))
+finally:
+    with LP.state_lock:
+        if _st_real0 is _ST_REAL_SENTINEL:
+            LP.STATE.pop("real", None)
+        else:
+            LP.STATE["real"] = _st_real0
+# ⛔ 尺的自證：還原之後那個端點恢復正常 ——
+#    不然「永遠走退路」也會讓上面那幾條全綠（而那正是最糟的狀態）。
+c, ct, b = _req("/api/state")
+j = as_json(b) or {}
+say(c == 200 and j.get("token") == LP.FIRE_TOKEN
+    and "序列化失敗" not in b,
+    "    尺的自證：還原之後 /api/state 走的是正常那條路（⛔ 不是一直走退路）", f"{c}")
+
 # ── ④ ⛔ 除了那兩顆，沒有任何「改設定」的端點
 print("\n=== ④ ⛔ 沒有其他會改變狀態的端點 ===")
 # ⛔⛔ 這裡**一定要有前綴撞名的那幾條**（2026-09-09 lab-qa 突變 Q12 打不紅）：

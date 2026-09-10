@@ -720,6 +720,91 @@ chk(`  自證：這一場真的有 POST 通過守衛走進治具（共 ${(G.ok_a
 chk("  ⛔ 其中包含「送單」那一顆（＝會動到真錢的那條路徑真的通）",
   (G.ok_all || []).includes("/api/real/enter"), true);
 
+/* ═══ ⑬ ⛔⛔ token 過期（看門狗剛重啟過）：那一下要說人話 ═══════════════
+   看門狗把面板重開之後的 ≤0.5 秒，畫面上那份 token 是舊的 ⇒ 後端 403。
+   ⛔ 後端那句「這個請求不是從面板發出來的」是講給**外面的網頁**聽的，
+      端到他面前是誤導 —— 他明明就是站在面板上按的。
+   ⚠️⚠️ 這一條的真正理由不是美觀：`firing`／`closing`／`ENTER_LOCK` 只擋得住
+      「同時按兩下」，擋不掉「他以為沒送、再按一次」。403 這個新的失敗外觀
+      **等於多給了他一個再按一次的理由** ⇒ 那句話一定要把「這次沒送出去」講死。
+   ⛔⛔ 而且 **不准自動重送**：這條路上掛著 `/api/real/enter`，
+      自動重試就是教程式在他沒看見的情況下送第二張單。 */
+console.log("\n=== ⑬ ⛔⛔ token 過期：說人話 ＋ 清 token ＋ 一張單都不准出去 ===");
+await ctl("/reset");
+await ctl("/mode/flat");
+await sleep(900);
+await goTab("real");
+// 真實下單開關前面已經打開過；⛔ 不確定就自己補一次（沒開的話那顆鈕根本不在畫面上）
+await evalJS(`(()=>{ if(!document.querySelector('[data-rdir]')){
+  const t=document.querySelector('[data-rt]'); if(t) t.click(); } })()`);
+await sleep(900);
+/* ⚠️⚠️ 為什麼要包一層 `pfetch`，兩個理由都是「不這樣做就量不到」：
+   ① **注入舊 token 的時機**：`tick()` 每 0.5 秒就把 PTOK 換成最新的，
+      事先在外面塞一個舊值，等長按 650ms 到期時早就被補回去了（測了個寂寞）。
+      包在這裡＝在**真正送出去的那一瞬間**手上拿的是舊的，正是看門狗剛重啟的樣子。
+   ② **讀 PTOK 的時機**：事後讀一定讀到「已經被 tick 補回來的那一份」。
+      這一層跑在產品自己那個 403 handler **之後**、同一輪微任務裡 ⇒
+      讀到的就是「pfetch 清完之後」的值，tick 插不進來。
+   ⛔ 這一層只注入與觀察，**不改產品的行為**（標頭、重送與否都還是產品自己決定）。 */
+await evalJS(`(()=>{ window.__ptokAt403=null; window.__stale1=false;
+  window.__origPfetch=window.pfetch;
+  window.pfetch=function(u,b){
+    if(window.__stale1){ window.__stale1=false; window.PTOK='__stale__'; }
+    return window.__origPfetch(u,b).then(function(r){
+      if(r&&r.status===403) window.__ptokAt403=window.PTOK; return r; }); };
+  return true; })()`);
+const ok13a = ((await ctl("/posts")).ok_all || []).length;
+const blk13a = ((await ctl("/posts")).blocked_all || []).length;
+const dlg13a = DIALOGS.length;
+// 看門狗重啟的樣子：送出去的那一瞬間，畫面上這一份 token 是上一個行程的
+await evalJS(`window.__stale1=true; true`);
+await press('[data-rdir="long"]', { ms: HOLD + 350 });
+await sleep(1500);
+const G13 = await ctl("/posts");
+const msg13 = DIALOGS.slice(dlg13a).join("|");
+chk("  ⛔⛔ 後端 **0 次**呼叫（那一下是真的沒送出去）",
+  (G13.ok_all || []).length - ok13a, 0);
+chk("  ⛔⛔ 治具收到的單也是 0 張", (await posts()).length, 0);
+chk("  （尺自證）那一下真的打到後端了，而且是被守衛擋成 403",
+  (G13.blocked_all || []).slice(blk13a), [["/api/real/enter", 403]]);
+chk("  ⛔ 跳出來的是人話：把「這次沒有送出去」講死",
+  /這次沒有送出去/.test(msg13), true);
+chk("  ⛔ 而且告訴他下一步是再按一次", /再按一次/.test(msg13), true);
+chk("  ⛔ 還要講清楚剛剛那一下不會變成第二筆（他最怕的是重複下單）",
+  /不會變成兩筆/.test(msg13), true);
+chk("  ⛔⛔ ⛔ 不可以把後端那句「不是從面板發出來的」端到他面前",
+  /不是從面板發出來/.test(msg13), false);
+chk("  ⛔⛔ PTOK 當場被清掉（下一次會先去 /api/state 要一份新的）",
+  await evalJS(`window.__ptokAt403`), "");
+/* ⛔ 恢復之後再按一次：只准有**一筆**（⛔ 不可以因為前面那一下而變成兩筆，
+   也就是「不准自動重送」的行為證據）。 */
+await ctl("/reset");
+await ctl("/mode/flat");
+await sleep(1200);                         // 等 tick() 把新的 token 換上來
+const ok13b = ((await ctl("/posts")).ok_all || []).length;
+await press('[data-rdir="long"]', { ms: HOLD + 350 });
+await sleep(1500);
+const p13 = await posts();
+chk("  ⛔ 恢復之後他再按一次：只有一筆", p13.length, 1);
+chk("    而且就是那一顆送單鈕", p13[0], ["/api/real/enter", { dir: "long" }]);
+chk("  ⛔ 後端也只多被呼叫一次（⛔ 沒有自動重送那一筆）",
+  ((await ctl("/posts")).ok_all || []).length - ok13b, 1);
+chk("  （尺自證）這一次沒有再被守衛擋掉",
+  ((await ctl("/posts")).blocked_all || []).length - (G13.blocked_all || []).length, 0);
+// 收尾：把觀察用的那一層拆掉（⛔ 不要留在頁面上影響後面的人）
+await evalJS(`(()=>{ if(window.__origPfetch){ window.pfetch=window.__origPfetch;
+  window.__origPfetch=null; } return true; })()`);
+/* ⛔⛔ 收尾第二件：治具是常駐的、好幾支探針共用同一個行程 ⇒ 上面**故意**製造的那一次
+   403 會留在 `blocked_all` 裡，讓下一支跑的 `tabs-visual.mjs`（「整場沒有任何一下
+   被守衛擋掉」）變成**假紅燈**。⛔ 上面已經逐筆斷言過那一筆就是我自己造的，
+   這裡才叫治具忘記；⛔ 這條控制端點跟 `/reset` 是分開的兩個名字，不可以合併。 */
+const B13 = (await ctl("/posts")).blocked_all || [];
+chk("  （收尾自證）要忘記的就是我自己造的那一筆，⛔ 沒有別人的",
+  B13, [["/api/real/enter", 403]]);
+await ctl("/blocked/forget");
+chk("  ⛔ 忘記之後 blocked_all 是乾淨的（下一支探針不會吃到我的假紅燈）",
+  ((await ctl("/posts")).blocked_all || []).length, 0);
+
 c.close();
 ch.kill();
 try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* Chrome 還握著暫存檔，無所謂 */ }

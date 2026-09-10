@@ -1872,25 +1872,45 @@ print("\n=== ⑬c ⭐⭐ 「今天 09:03:30」還是「下一個交易日 09:03:
 _DT = datetime.datetime
 
 
-def _would_fire_today(t0):
-    """
+def _fire_today_pair(t0):
+    """回 (那句話說的, `_auto_tick` 真的會做的) —— ⛔ **兩邊在同一個世界裡問**。
+
     ⛔ 用**產品自己的 `_auto_tick()`** 走一遍那一天（面板 08:00 起一直開著），
-       記下 09:03:30 那一刻的掛勾是在哪個時刻被呼叫的；
-       「他在 t0 按下開關，今天還會不會送」＝ 那一刻**嚴格晚於** t0。
-    ⚠️ 剛好同一秒按下去是真正的競態（4Hz 迴圈已經跑過那一格了），
-       ⛔ 那種情況沒有一句話會是對的，所以用「嚴格晚於」＝ 保守地說「下一個交易日」。
+       記下 09:03:30 那一刻的掛勾是在哪個時刻被呼叫的。
+
+    ⚠️⚠️ **2026-09-10 PM 裁示，修的是測試的模型、⛔ 沒有動產品**（原本 2 項紅）：
+      1. **兩邊共用同一份 `AUTO`**。舊版先在「AUTO 沒 done」的世界問
+         `fire_fires_today()`，再拿「面板 08:00 一路開著（09:03:30 早就送過了）」
+         的模擬當答案 —— **兩邊在講不同的世界**，09:03:31 那一格必紅。
+         現在是：先把 t0 **之前**的每一秒餵給 `_auto_tick()`（＝他按下去的那一刻，
+         面板已經走到哪就是哪），**在那個狀態下**問那句話，再繼續跑完剩下的時間。
+         ⛔ t0 那一格**要留在後面跑**：他按下去的時候，那一秒的 tick 還沒輪到
+         （HTTP 執行緒與 4Hz 主迴圈是併行的）。
+      2. **比較方式跟 `_auto_tick()` 一致：`>=`，不是 `>`**。
+         舊版寫「嚴格晚於 t0」＝ 一個保守約定，但**產品在那一秒真的會送**
+         ⇒ 正確答案是「今天」。⛔ 測試要模擬的是產品真正在做的事，
+         不是我們希望它做的事。
     """
     fired, cur = [], [None]
     _old_hook = LP.AUTO_SIG_HOOK
     _old_auto = dict(LP.AUTO)
-    LP.AUTO_SIG_HOOK = lambda snap, d, lag: fired.append(cur[0])
+    # ⛔ 「真的會送」＝ 掛勾拿到 **snap**。`_auto_tick` 在「太晚了」那條路也會呼叫掛勾
+    #    （`AUTO_SIG_HOOK(None, d, lag)` ＝ 記一列 late、**不送**）——
+    #    只數「掛勾被呼叫過」會把「跳過」算成「送了」。
+    LP.AUTO_SIG_HOOK = lambda snap, d, lag: (fired.append(cur[0])
+                                             if snap is not None else None)
     LP.AUTO.update({"started": True, "day": None, "done": False, "settled": False,
                     "eod": False, "gaps": 0.0, "queued": set()})
     try:
         t = _DT.combine(t0.date(), datetime.time(8, 0, 0))
         end = _DT.combine(t0.date(), datetime.time(0, 0)) + \
             datetime.timedelta(seconds=LP.SIGNAL_SEC + 5)
-        while t <= end:
+        while t <= end and t < t0:           # ── 他按下去**之前**的每一秒
+            cur[0] = t
+            LP._auto_tick(None, t, LP.market_session(t))
+            t += datetime.timedelta(seconds=1)
+        said = LP.fire_fires_today(t0)       # ⛔ 就在這個狀態下問那句話
+        while t <= end:                      # ── 剩下的時間照跑
             cur[0] = t
             LP._auto_tick(None, t, LP.market_session(t))
             t += datetime.timedelta(seconds=1)
@@ -1903,7 +1923,7 @@ def _would_fire_today(t0):
                 LP._AUTO_Q.get_nowait()
             except Exception:
                 break
-    return any(ts > t0 for ts in fired)
+    return said, any(ts >= t0 for ts in fired)
 
 
 # 週五 2026-09-11／週六 09-12／週日 09-13／週一 09-14（⛔ 寫死的日子，跟今天無關）
@@ -1921,14 +1941,67 @@ _R2 = [
 ]
 _r2_true = 0
 for _name, _t in _R2:
-    _said = LP.fire_fires_today(_t)
-    _real = _would_fire_today(_t)
+    _said, _real = _fire_today_pair(_t)      # ⛔ 同一個 AUTO 世界問出來的兩個答案
     _r2_true += bool(_real)
     chk(f"  {_name}：那句話說的 ＝ _auto_tick 真的會做的", _said, _real)
 # ⛔ 尺的自證：這一組裡**兩種答案都出現過**（不然「永遠回 False」也全綠）
 say(0 < _r2_true < len(_R2),
     "  ⛔ 尺的自證：這一組時間點裡「今天會送」與「不會送」都出現過",
     f"{_r2_true}/{len(_R2)} 會送")
+
+
+# ── ⛔⛔ 「看門狗剛重啟」那個世界（`AUTO` 還沒 done）─────────────────────
+#    ⚠️⚠️ 上面那一組模擬的是「面板 08:00 一路開著」⇒ 09:03:30 一到 `AUTO["done"]`
+#       就是 True、之後永遠由條件 ① 擋下來 ⇒ **那一組結構上驗不到條件 ② 的補送窗口**
+#       （`>= SIGNAL_SEC + AUTO_LATE_MS/1000`，2026-09-10 上午加的那一段）。
+#       ⛔ 別以為上面那組有守到它 —— 把 `+ AUTO_LATE_MS/1000` 拿掉，上面 10 項全綠。
+#    這一段把世界換成「面板在 09:03:3x 才剛起來（`connect()` 卡了幾秒）」，
+#    那正是那一段程式要修的情境：畫面說「下一個交易日」，但它今天就會送。
+def _restart_pair(t0):
+    """回 (那句話說的, `_auto_tick` 真的會送嗎) —— 面板剛起來、今天還沒走過那一刻。"""
+    got = []
+    _oh, _oa = LP.AUTO_SIG_HOOK, dict(LP.AUTO)
+    LP.AUTO_SIG_HOOK = lambda snap, d, lag: got.append(snap is not None)
+    LP.AUTO.update({"started": True, "day": None, "done": False, "settled": False,
+                    "eod": False, "gaps": 0.0, "queued": set()})
+    try:
+        said = LP.fire_fires_today(t0)       # 他就在這一刻按下去
+        LP._auto_tick(None, t0, LP.market_session(t0))
+    finally:
+        LP.AUTO_SIG_HOOK = _oh
+        LP.AUTO.clear()
+        LP.AUTO.update(_oa)
+        while not LP._AUTO_Q.empty():
+            try:
+                LP._AUTO_Q.get_nowait()
+            except Exception:
+                break
+    return said, any(got)
+
+
+# ⚠️ 邊界（`fire_fires_today` 的說明裡也寫了）：`_auto_tick` 的判準是
+#    `lag > AUTO_LATE_MS`（lag 剛好 3000ms 還是會送），而那句話只看得到「秒」⇒
+#    **`09:03:33.000` 那一個瞬間**兩邊是不一致的。4Hz 的迴圈要剛好落在微秒 0
+#    才踩得到，⛔ 不要為了它把整個 09:03:33 那一秒都說成「今天」
+#    （那一秒其餘 999ms 其實是 late ⇒ 反過來又變成另一句假話）。
+#    ⇒ 這一組**刻意跳過那一個瞬間**，並用 `.001` 與 `.999` 把兩邊都夾住。
+_R3 = [
+    ("剛重啟・09:03:30.000（那一刻才起來）", _DT(2026, 9, 14, 9, 3, 30)),
+    ("剛重啟・09:03:31（補送窗口內 lag=1000ms）", _DT(2026, 9, 14, 9, 3, 31)),
+    ("剛重啟・09:03:32.999（窗口的最後一刻 lag=2999ms）",
+     _DT(2026, 9, 14, 9, 3, 32, 999000)),
+    ("剛重啟・09:03:33.001（過了窗口 lag=3001ms ⇒ 記 late 不送）",
+     _DT(2026, 9, 14, 9, 3, 33, 1000)),
+    ("剛重啟・09:03:40（早就過了 ⇒ 記 late 不送）", _DT(2026, 9, 14, 9, 3, 40)),
+]
+_r3_true = 0
+for _name, _t in _R3:
+    _said, _real = _restart_pair(_t)
+    _r3_true += bool(_real)
+    chk(f"  {_name}：那句話說的 ＝ _auto_tick 真的會做的", _said, _real)
+say(0 < _r3_true < len(_R3),
+    "  ⛔ 尺的自證：這一組裡「今天真的會送」與「不會送」都出現過",
+    f"{_r3_true}/{len(_R3)} 會送")
 
 # ⛔ 第三個條件（`AUTO["done"]`）：上面那組模擬每次都把它重置了，所以單獨驗一次。
 #    這是「面板 09:10 才被看門狗重開」那個真實情境。
