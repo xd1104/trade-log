@@ -4368,6 +4368,8 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .n-hd{display:flex; align-items:center; gap:12px; padding:14px 18px 13px 20px}
 .n-hd .t{font-size:13px; font-weight:750; letter-spacing:1.4px; color:var(--text)}
 .n-hd .s{font-size:11.5px; color:var(--dim); margin-top:2px; font-family:var(--font-mono)}
+/* 2026-09-14 減字：副標＋第二顆藥丸併成標頭右邊一行小字（「微台 1 口・±N 點」） */
+.n-hd .meta{font-size:11.5px; color:var(--faint); font-family:var(--font-mono); white-space:nowrap}
 .n-hd .grow{flex:1; min-width:0}
 .n-chip{font-size:10.5px; font-weight:700; letter-spacing:.6px; border-radius:5px;
   padding:3px 8px; white-space:nowrap}
@@ -4989,6 +4991,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   align-items:center; flex-wrap:wrap; line-height:1.3}
 .at-title .s .sep{color:var(--ghost)}
 .at-title .s .warn{color:var(--gold)}
+/* 【自動下單】開著＋真單也開著時副標整行併進標題（2026-09-14），空的就不要佔那 5px */
+.at-title .s:empty{display:none}
 /* ⛔ 恰好 1 顆、不可關閉。探針會真的數畫面上有幾顆（不是掃原始碼）。 */
 .simlock{flex:none; font-size:10.5px; font-weight:650; font-family:var(--font-sans);
   letter-spacing:.3px; color:var(--gold); background:var(--gold-soft);
@@ -5055,7 +5059,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   padding:0 8px 7px; letter-spacing:.4px; white-space:nowrap;
   font-family:var(--font-sans); border-bottom:1px solid var(--line-soft)}
 .at-tbl th:first-child,.at-tbl td:first-child{text-align:left; padding-left:2px}
-.at-tbl th:last-child,.at-tbl td:last-child{text-align:left; padding-right:2px}
+/* 2026-09-14「證得出來嗎」那一欄拿掉之後最後一欄是數字（每筆）⇒ 靠右，不再靠左 */
+.at-tbl th:last-child,.at-tbl td:last-child{padding-right:2px}
 .at-tbl td{font-size:12.5px; color:var(--dim); text-align:right; padding:8px;
   white-space:nowrap; border-bottom:1px solid var(--line-soft)}
 .at-tbl tr:last-child td{border-bottom:0}
@@ -5080,7 +5085,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    指示從畫面上拿掉（原話：「然後我自己的這邊都拿掉」）—— ⛔ 不要再加回來。
    ⚠️ 後端 _auto_mine_day／_auto_mine_rows **刻意留著**（他之後可能會想加回來），
       連同「只讀不寫」的守衛（autotest-backend.py ⑧c）一起留 —— 只是前端不畫。 */
-.at-ceil{margin-top:11px; font-size:11.5px; color:var(--dim); line-height:1.6;
+/* 2026-09-14 搬到表頭底下（免責只講一次：不算勝率／天花板／有沒有超過 全在這一行） */
+.at-ceil{margin:-2px 2px 10px; font-size:11.5px; color:var(--dim); line-height:1.6;
   display:flex; align-items:baseline; gap:7px; flex-wrap:wrap}
 .at-ceil .dot{color:var(--faint)}
 .at-ceil b{color:var(--text); font-family:var(--font-mono); font-weight:650}
@@ -5168,14 +5174,16 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         13:43:30 的自動平倉也不會發生）
      ② 這個開關**沒有有效期**（每個交易日都會送，直到他自己關掉）
    ⛔ 用**金色**（這個面板既有的「注意」語彙），⛔ 不用紅綠 —— 紅綠只給損益，
-      唯一的例外是兩段式確認條的「真錢」那一版。 */
-.al-risk{margin-top:12px; padding:11px 14px 12px; border-radius:var(--r-md);
-  background:var(--gold-soft); border:1px solid var(--gold-line)}
-.al-risk p{display:flex; gap:9px; font-size:12.5px; line-height:1.7; color:var(--gold);
-  font-weight:600; margin:0}
-.al-risk p+p{margin-top:8px; padding-top:8px; border-top:1px solid rgba(227,169,81,.22)}
-.al-risk i{font-style:normal; flex:none}
-.al-risk b{color:var(--text); font-weight:750}
+      唯一的例外是兩段式確認條的「真錢」那一版。
+   ⚠️ 2026-09-14 降層級（lab-ux 定案 C、Benson 拍板）：兩句**一字不刪**，只把整段金字改成
+      灰字、金色只留左緣與圖示、關鍵字白 —— 整段塗金反而讓真正要看的兩個關鍵字
+      （沒有停損／每個交易日都會送）失去對比。⛔ 仍然不用紅綠。 */
+.al-risk{margin-top:12px; padding:10px 14px 11px 13px; border-radius:var(--r-md);
+  background:var(--surface-2); border:1px solid var(--line-soft); border-left:3px solid var(--gold)}
+.al-risk p{display:flex; gap:9px; font-size:12px; line-height:1.65; color:var(--dim); margin:0}
+.al-risk p+p{margin-top:4px}
+.al-risk i{font-style:normal; color:var(--gold); flex:none}
+.al-risk b{color:var(--text); font-weight:700}
 .al-gates{display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
   background:var(--line-soft); border-radius:var(--r-md); overflow:hidden; margin-top:11px}
 .al-gates .c{background:var(--surface); padding:9px 12px 10px; min-width:0}
@@ -5203,6 +5211,12 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
        nowrap ＋ ellipsis）—— 那一行在練習／真實的卡片上就是「附註」的位置，
        自己另發明一種樣式就又不一樣了。 */
 .al-list{max-width:640px}
+/* 「今天」那一塊已出場時併進紀錄第一列（2026-09-14）：金框＋日期欄寫「今天」＋「已出場」標。
+   ⛔ 金＝「現在」（跟翻頁列的即時燈同一個意思），⛔ 不是輸贏色。卡片高度不變（tag 仍 ≤4 字）。 */
+.trade.tr-today{border-color:var(--gold-line)}
+.trade.tr-today .tr-date{color:var(--text); font-weight:650}
+.tr-chip{font-size:10px; font-weight:700; color:var(--gold); background:var(--gold-soft);
+  border-radius:5px; padding:1px 6px; letter-spacing:.5px; white-space:nowrap}
 .trade .al-meta{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   background:none; border:0; padding:0; margin-top:5px; font-size:11.5px;
   color:var(--faint); line-height:1.5; font-family:var(--font-mono)}
@@ -5393,7 +5407,10 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="al-off" id="aloff"></div>
  </div>
 
- <div class="card">
+ <!-- 今天那一口**已經出場**時整張卡收起來（alPaint 設 hidden），改併進底下「紀錄」的第一列
+      （金框＋「今天」＋「已出場」標，2026-09-14 一件事只講一次）。
+      ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／持有中／收盤警示）照舊畫在這裡。 -->
+ <div class="card" id="altodaycard">
   <div class="sec-head"><h2>今天</h2><span class="count" id="alcount"></span></div>
   <div class="al-today" id="altoday"></div>
  </div>
@@ -5440,9 +5457,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  <div class="card at-score">
   <div class="sec-head"><h2>成績</h2><span class="count" id="atcount"></span></div>
   <div class="seg at-seg" id="atwin"></div>
-  <div class="at-tblwrap"><table class="at-tbl" id="attbl"></table></div>
-  <!-- ⛔ 同上：title 的數字是算出來寫進去的，⛔ 不要寫死。 -->
+  <!-- 免責只講一次（2026-09-14 搬到表頭底下）：不算勝率／每筆要差幾點才分得出高下／目前有沒有超過。
+       「勝率」那一欄只有算得出 %（≥ RATE_MIN_N 筆）才會出現；「證得出來嗎」那一欄拿掉，資訊在這一行。
+       ⛔ 同上：title 的數字是算出來寫進去的，⛔ 不要寫死。 -->
   <div class="at-ceil" id="atceil"></div>
+  <div class="at-tblwrap"><table class="at-tbl" id="attbl"></table></div>
   <div class="at-notes" id="atnotes"></div>
  </div>
 
@@ -5494,11 +5513,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  </div>
 </div>
 
-<!-- ⚠️ 2026-09-09 補上「自動下單（模擬）」那五個字：這一句原本只講練習單，
-     而現在面板上有兩顆長得很像的分頁，其中一顆**會真的送單**。
-     ⛔ 不可以把這句話寫成「這個面板不會送單」—— 那是一句假話
-     （即時分頁的真實下單卡、以及【自動下單】都會送）。 -->
-<div class="foot">只顯示已經發生的客觀數字，不做預測、不給買賣訊號。<br>練習下單與【自動下單（模擬）】都是模擬，不會送單到永豐。</div>
+<!-- 頁尾那兩行（「只顯示已經發生的客觀數字…」「練習下單與【自動下單（模擬）】都是模擬…」）
+     2026-09-14 依 lab-ux 定案 A 拿掉：第一句是給工程的原則（正本在 CLAUDE.md），
+     第二句頁籤副標與【模擬】頁的鎖印已經在講。⛔ 原則本身沒有放寬。 -->
 </div>
 <script>
 // ⛔ 下單規則的數字只在 Python 定義一次（TP_POINTS／SL_POINTS／SIGNAL_AT），PAGE 定義完就替換進來。前端不准自己寫死。
@@ -5707,10 +5724,11 @@ function paintBadge(R){
    下單維持**單擊**（練習不需要長按防呆），按鈕維持描邊＋淡底 ——
    那是它跟真實區在形狀上的分界，不要改成實心。 */
 function simZone(){
+  /* 2026-09-14 減字（lab-ux 定案 A）：「模擬・不會送單」只留頁籤那一顆；
+     副標與藥丸併成右邊一行小字。⛔ 停利點數照樣從 RULE_TP 來，不寫死。 */
   return '<div class="n-zone z-sim">'+
-    '<div class="n-hd"><div class="grow"><div class="t">練習下單</div>'+
-    '<div class="s">微台 TMF・1 口・固定 &plusmn;'+RULE_TP+' 點</div></div>'+
-    '<span class="n-chip c-sim">模擬・不會送單</span></div>'+
+    '<div class="n-hd"><div class="grow"><div class="t">練習下單</div></div>'+
+    '<span class="meta">微台 1 口・&plusmn;'+RULE_TP+' 點</span></div>'+
     '<div class="n-sep"></div><div class="n-bd" id="simbody"></div>'+
     '<div id="simtr"></div><div id="simstats"></div></div>';
 }
@@ -5728,8 +5746,7 @@ function simBody(s){
   // 這不是 UX 取捨，所以按鈕真的停用（後端 /api/enter 也擋一次）。
   const q=quoteState(s), off=q!=='live', dis=off?' disabled':'';
   let h='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(livePx(s))+
-    (off?'<span class="qty" style="margin-left:8px">非即時</span>':'')+'</div></div>'+
-    '<div class="qty">1 口・固定</div></div>'+
+    (off?'<span class="qty" style="margin-left:8px">非即時</span>':'')+'</div></div></div>'+
     '<div class="btns" style="margin-top:12px">'+
     '<button class="btn long" data-act="long"'+dis+'>&#9650; 做多</button>'+
     '<button class="btn short" data-act="short"'+dis+'>&#9660; 做空</button></div>';
@@ -5745,8 +5762,7 @@ function simBody(s){
 function simTrades(s){
   const T=s.today_trades||[];
   if(!T.length)
-    return '<div class="n-trh">今天的練習交易</div>'+
-      '<div class="n-empty">今天還沒有練習紀錄。進場之後這裡會一筆一筆長出來。</div>';
+    return '<div class="n-trh">今天的練習交易　<span class="c">還沒有</span></div>';
   let sum=0; T.forEach(t=>sum+=t._net);
   let h='<div class="n-trh">今天的練習交易　<span class="c">'+T.length+' 筆</span>'+
     '<span class="net '+sgn(sum)+'">'+pm(Math.round(sum*10)/10)+' 點</span></div>'+
@@ -5770,13 +5786,12 @@ function simRow(t){
 /* ══════════════ 真實分頁 ══════════════════════════════════════════
    ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。 */
 function realZone(R){
-  const chip = !REAL_ON ? '<span class="n-chip c-off">關閉中・按右邊打開</span>'
-    : (R.live ? '<span class="n-chip c-real">真的會送單</span>'
-              // 藥丸太長會把標頭那行「微台 TMF・1 口・固定 ±100 點」擠成兩行（實測）
-              : '<span class="n-chip c-sim">演練模式・不送出</span>');
+  /* 2026-09-14 減字（lab-ux 定案 A）：「真的會送單／演練模式」頁籤已經在講，這裡不再掛第二顆藥丸；
+     只留「關閉中・按右邊打開」那一顆（那是開關狀態的提示，頁籤上沒有）。 */
+  const chip = !REAL_ON ? '<span class="n-chip c-off">關閉中・按右邊打開</span>' : '';
   return '<div class="n-zone z-real">'+
-    '<div class="n-hd"><div class="grow"><div class="t">真實下單</div>'+
-    '<div class="s">微台 TMF・1 口・固定 &plusmn;'+RULE_TP+' 點</div></div>'+
+    '<div class="n-hd"><div class="grow"><div class="t">真實下單</div></div>'+
+    '<span class="meta">微台 1 口・&plusmn;'+RULE_TP+' 點</span>'+
     chip+'<div class="sw'+(REAL_ON?' on':'')+'" data-rt="1"><i></i></div></div>'+
     // ⛔ 【有部位就一定要看得到，開關關著也一樣】
     //    `REAL_ON` 只是「要不要露出下單按鈕」的保險蓋，不是「有沒有部位」。
@@ -5837,7 +5852,7 @@ function realBody(s){
     const q=quoteState(s), px=livePx(s), ok=R.can_enter&&!firing;
     h+='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(px)+
        (q!=='live'?'<span class="qty" style="margin-left:8px">非即時</span>':'')+
-       '</div></div><div class="qty">1 口・固定不能改</div></div>'+
+       '</div></div></div>'+
        '<div class="n-fire">'+fireBtn('long',px,!ok)+fireBtn('short',px,!ok)+'</div>';
     h+= firing
       ? '<div class="n-firing">送出中…<div class="s">等券商回報成交（最多 5 秒）。'+
@@ -6451,12 +6466,13 @@ function chartSVG(s){
  // 形狀沿用練習那一套（三角形／菱形／持有區間），另外加一圈金色光環區分真假。
  const T0=(barsCache.trades)||[];
  const RT=(!viewDate&&s.real&&s.real.trades)?s.real.trades:[];
+ // ⚠️ `_pts` 留著原始的 points（可能是 null＝問不到成交價）：`_net` 為了畫圖把 null 當 0，
+ //    翻頁列數「真單 N 筆 ±x 點」時不可以把那個 0 當成真的點數（pagerHTML 會看 `_pts`）。
  const T=T0.concat(RT.filter(t=>t.entry!=null&&t.entry_time).map(t=>({
      time:String(t.entry_time).slice(0,5), entry:t.entry, exit:t.exit,
      dir:t.dir, _exit_time:t.exit==null?null:String(t.exit_time||''),
-     _net:t.points==null?0:t.points, _real:true})));
+     _net:t.points==null?0:t.points, _pts:t.points, _real:true})));
  const live=!viewDate;
- const cname=(s.conn&&s.conn.contract_name)||'微台';
  const first=G.all[0], last=G.all[G.all.length-1];
  // 沒有即時報價時退回「最後一根 K 棒的收盤」，別把舊的成交價當現價用（Bug A）。
  const q=quoteState(s);
@@ -6750,13 +6766,14 @@ function chartSVG(s){
  }
  const pick=pickOpen?calHTML():'';
  // 報價區第三行：把舊版擠在 mini 列開頭那句「報價 休市中（上面是收盤價，非即時）」
- // 搬上來，跟昨收、合約、更新時間放在一起。
+ // 搬上來，跟昨收、更新時間放在一起。
+ // 2026-09-14 減字：合約名（微型臺指期貨 202609）只留左上品牌列，這裡不再寫第二次。
  // ⚠ 更新時間放在獨立的 <span id="cupd">：它每秒都在變，寫進 #chead 的字串裡
  //   會讓整個標頭（含翻頁列按鈕）每秒被重建一次 —— paintChart 會另外單獨更新它。
  const qs=live
    ? (q==='live'
       ? '<span class="live"><i></i>即時</span><span class="sep">·</span>'+
-        '<span>昨收 '+f(ref)+'</span><span class="sep">·</span><span>'+cname+'</span>'+
+        '<span>昨收 '+f(ref)+'</span>'+
         '<span class="sep">·</span><span id="cupd"></span>'
       : '<span class="live dead"><i></i>'+(q==='closed'?'休市中':'收不到報價')+'</span>'+
         '<span class="sep">·</span><span>昨收 '+f(ref)+'</span><span class="sep">·</span>'+
@@ -6815,8 +6832,15 @@ function pagerHTML(T){
  const bd=(barsCache&&barsCache.date)||'';
  const loading=barsPending||(!!bd&&cur!==bd);
  const dayS=cur.slice(5), noS=((barsCache&&barsCache.night_open)||'').slice(5);
- const n=T?T.length:((me&&me.n)||0);
- const net=T?T.reduce((a,t)=>a+t._net,0):((me&&me.net)||0);
+ // ⛔ T 是 chartSVG 拼好的「練習 ＋ 真實」（真實那幾筆帶 `_real:true`，為了畫在圖上）——
+ //    「練習 N 筆」只准數練習的。2026-09-14 修：那天右欄寫「還沒有練習紀錄」、
+ //    翻頁列卻寫「練習 1 筆 −N 點」，那一筆其實是自動真單。真單另外數成「真單 N 筆」；
+ //    問不到成交價的真單點數留白（不拿 _net 的 0 冒充）。
+ //    日期索引那條路（me.n／me.net）本來就只算 practice_trades/，不必改。
+ const TP=T?T.filter(t=>!t._real):null, TR=T?T.filter(t=>t._real):[];
+ const n=TP?TP.length:((me&&me.n)||0);
+ const net=TP?TP.reduce((a,t)=>a+t._net,0):((me&&me.net)||0);
+ const rn=TR.length, rnet=TR.some(t=>t._pts==null)?null:TR.reduce((a,t)=>a+t._net,0);
  // 下排：純說明。即時那天也照樣寫日期（金點已經在講「現在」了，再寫「今天」是重複）；
  // 沒練習寫「未練習」而不是整段消失 —— 消失會讓上下兩行的位置跳動。
  // partial＝夜盤那一段還沒到齊（剛啟動、還沒連上永豐）。
@@ -6837,6 +6861,8 @@ function pagerHTML(T){
        // 負號用 U+2212 不用 hyphen，等寬字型下跟 + 對得齊（只改這裡，不動全域的 pm()）
        ? '練習 '+n+' 筆 <b class="'+sgn(net)+'">'+pm(net).replace('-','−')+'</b> 點'
        : '未練習')+'</span>'+
+     (rn?('<span class="sep">·</span><span>真單 '+rn+' 筆'+(rnet==null?''
+       :(' <b class="'+sgn(rnet)+'">'+pm(rnet).replace('-','−')+'</b> 點'))+'</span>'):'')+
      // 這個分隔點跟著鍵盤提示一起藏（窄視窗會把提示收掉，只留一個孤零零的「·」很醜）
      '<span class="sep k">·</span>'+
      '<span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
@@ -9501,7 +9527,6 @@ function atTodayHTML(){
  }
  return AT_ORDER.map(k=>{
    const dr=D.dirs?D.dirs[k]:null;
-   const sg=(k==='A')?atN((D.sig||{}).A):(k==='D'?null:atN((D.sig||{}).B));
    const run=(D.runs||{})[k];
    /* ⛔ 方向一律中性色（.dir）。這是全站唯一「程式現在說了什麼方向」的地方，
       染成紅綠會讓它看起來像一個令人興奮的訊號。紅綠只給點數。 */
@@ -9509,9 +9534,11 @@ function atTodayHTML(){
    if(dr==null){ dtxt='算不出訊號'; cls=' off'; }
    else if(dr===0){ dtxt='這天不做'; cls=' off'; }
    else dtxt=(dr>0?'做多':'做空');
-   /* ⚠️ C 這裡**不再重複寫門檻** —— 名字裡已經寫著「要 N 點」了（規格 §9.3 同一條）。 */
-   const sgt=(k==='D')?'不判斷方向'
-     :(sg==null?'訊號 —':('訊號 '+pm(sg,1)+' 點'));
+   /* ⚠️ C 這裡**不再重複寫門檻** —— 名字裡已經寫著「要 N 點」了（規格 §9.3 同一條）。
+      ⛔ 2026-09-14：「訊號 +145.0 點」那一行拿掉 —— 那是訊號強度（CLAUDE.md：UI 不得出現
+         預測／勝率預估／期望值／買賣建議／訊號強度）。畫面上只留方向與已發生的進出場價；
+         訊號數值照樣記在檔案裡（後端 `sig` 一個字都沒改）。D 那格的「不判斷方向」是說明不是數值，留著。 */
+   const sgt=(k==='D')?'不判斷方向':'';
    let rs;
    /* ⛔ 還沒摸到 ±100、日盤也還沒收 ⇒ 「持倉中」，⛔ 不可以是一個假的點數
       （2026-09-08：舊版拿盤中最後一根 K 棒的收盤價算出「09:05 收盤平 ±67」）。 */
@@ -9525,7 +9552,7 @@ function atTodayHTML(){
      ' <span class="'+sgn(run.pts)+'">'+pm(run.pts,0)+'</span> 點';
    return '<div class="c"><div class="k"><b>'+atName(k)+'</b>'+atSub(k)+'</div>'+
      '<div class="dir'+cls+'">'+dtxt+'</div>'+
-     '<div class="sg">'+sgt+'</div><div class="rs">'+rs+'</div></div>';
+     (sgt?('<div class="sg">'+sgt+'</div>'):'')+'<div class="rs">'+rs+'</div></div>';
  }).join('');
 }
 
@@ -9557,37 +9584,36 @@ function atRateCell(r){
  if(!r.n||r.n<min) return '<td class="rate na">不到 '+min+' 筆，不算 %</td>';
  return '<td class="rate">'+r.rate+'%</td>';
 }
-function atProveCell(r){
- const c=r.ceiling;
- if(c==null||r.avg==null) return '<td><span class="tag">還不夠</span></td>';
- return '<td>'+(r.over
-   ?'<span class="tag over" title="一次超過不等於證明">超過 '+c+' 點</span>'
-   :'<span class="tag">在雜訊裡（&lt;'+c+' 點）</span>')+'</td>';
-}
-function atRow(k,name,sub,r,extra,cls){
+/* ⛔ 2026-09-14「這批資料證得出來嗎」那一欄拿掉（atProveCell）：四格全寫同一句
+   「在雜訊裡（<149.4 點）」＝同一件事講四次。天花板與「目前有沒有一條超過」
+   仍然在 atCeilHTML 那一行（現在放表頭底下），資訊沒有少。 */
+function atRow(k,name,sub,r,extra,cls,showRate){
  const pts=r.pts||0;
  return '<tr'+(cls?(' class="'+cls+'"'):'')+'>'+
   '<td class="nm">'+name+'<i>'+sub+'</i></td>'+
   '<td>'+(r.n||0)+(extra||'')+'</td>'+
   '<td>'+(r.w||0)+'–'+(r.l||0)+'</td>'+
-  atRateCell(r)+
+  (showRate?atRateCell(r):'')+
   '<td class="pts '+sgn(pts)+'">'+pm(pts,0)+'</td>'+
-  '<td class="avg '+sgn(r.avg||0)+'">'+(r.avg==null?'—':pm(r.avg,1))+'</td>'+
-  atProveCell(r)+'</tr>';
+  '<td class="avg '+sgn(r.avg||0)+'">'+(r.avg==null?'—':pm(r.avg,1))+'</td></tr>';
 }
 function atTblHTML(){
  const S=AT.stats;
  if(!S||!S.rows) return '';
+ /* 「勝率」那一欄只有**算得出 %** 的時候才出現（後端 rate 在 n < RATE_MIN_N 時回 null）——
+    樣本不夠時四格全寫「不到 30 筆，不算 %」是同一句講四次（2026-09-14 減字），
+    那句改講一次、放在表頭底下那一行（atCeilHTML）。⛔ 門檻仍然是後端的，前端不自己算。 */
+ const showRate=AT_ORDER.some(k=>S.rows[k]&&S.rows[k].rate!=null);
  /* ⚠️ 對 Benson 一律叫「做法」，⛔ 不叫「算法／策略／模型」（規格 §2 的用字規矩）。 */
- let html='<tr><th>做法</th><th>筆數</th><th>勝–敗</th><th>勝率</th>'+
-   '<th>累計點數</th><th>每筆</th><th>這批資料證得出來嗎</th></tr>';
+ let html='<tr><th>做法</th><th>筆數</th><th>勝–敗</th>'+(showRate?'<th>勝率</th>':'')+
+   '<th>累計點數</th><th>每筆</th></tr>';
  for(const k of AT_ORDER){
    const r=S.rows[k];
    /* ⛔ C 那一列的筆數要寫成「3（+17 天沒做）」，只寫 3 會讓人以為只累積了 3 天。 */
    const extra=(k==='C'&&r.skip)?(' <span class="sub">(+'+r.skip+' 天沒做)</span>'):'';
    /* ⛔ 第一欄是**名字**不是代號，底下那行小字是 AT_SUB（規格 §2.0 的名字表）。
       ⚠️ 那行小字有守衛在盯（autotest-tab.mjs ㉑）—— lab-qa 把它清空過，134/134 全綠。 */
-   html+=atRow(k,atName(k),atSub(k),r,extra);
+   html+=atRow(k,atName(k),atSub(k),r,extra,'',showRate);
  }
  /* ⛔⛔ 「你自己（全部）」與「你自己（同口徑）」那兩列、連同上面那條
     「▼ 你自己真的做的（口徑不同…）」分隔，已於 2026-09-08 依 Benson 指示拿掉
@@ -9605,11 +9631,17 @@ function atCeilHTML(){
    return '<span class="dot">●</span><span>0 筆 ⇒ 什麼都測不出來。</span>';
  // ⛔ 這一行也不准出現代號（規格 §2.0 ⑥「目前『X』超過這條線」）
  const over=AT_ORDER.filter(k=>S.rows&&S.rows[k]&&S.rows[k].over).map(k=>'「'+atName(k)+'」');
+ /* 2026-09-14 免責講一次（lab-ux 定案 C 的文案）：
+      「只有 5 筆：不算勝率；每筆要差 149.4 點以上才分得出高下，目前四條都沒有。」
+    「不算勝率」那半只在 n < RATE_MIN_N 時講（門檻是後端的 rate_min_n）；
+    超過門檻之後表格會自己長出「勝率」欄，這裡就只講天花板。 */
+ const min=atN(S.rate_min_n)||30;
  return '<span class="dot">●</span>'+
-  '<span>'+n+' 筆 ⇒ 只分得出「每筆差 <b>'+c+'</b> 點以上」。</span>'+
-  '<span class="hit">'+(over.length
-    ?('目前 '+over.join('、')+' 超過這條線（一次超過不等於證明）')
-    :'目前沒有一條超過')+'</span>';
+  '<span>'+(n<min?('只有 '+n+' 筆：不算勝率；'):(n+' 筆：'))+
+  '每筆要差 <b>'+c+'</b> 點以上才分得出高下，'+
+  (over.length
+    ?('<span class="hit">目前 '+over.join('、')+' 超過（一次超過不等於證明）</span>')
+    :'目前四條都沒有')+'。</span>';
 }
 function atNotesHTML(){
  /* ⛔⛔ 2026-09-08 Benson：「下面這個我根本看不懂是在幹嘛的」⇒ **帳本那一行拿掉**
@@ -10312,10 +10344,15 @@ function alPaint(){
     CLAUDE.md 明訂這件事**畫面上要說**（`auto_dirs` 的 `sig >= 0` 是刻意選的那一邊，
     跟【自動下單（模擬）】同一把尺），而砍掉之後「開著」那個狀態就沒有地方講了
     ⇒ 併進做法名字底下那一行小字（⛔ 不另外多一行，開關區的行數不變）。 */
+ /* 2026-09-14 一件事只講一次（lab-ux 定案 C）：原本副標那兩句（「09:03:00 一到會自己送 1 口真單
+    （你不在也會送）」「13:43:30 會自動平倉（只平自動下單開的那一口）」）併進這一行小字，
+    副標只剩條件式的警告（真單關著／出過錯）。⛔ 時刻一律用後端的 signal_at／eod_at。 */
  if(armed) st='<span class="al-badge on">開啟中</span>'+
    '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alSub(m))+
-   ' · 差 0 點算做多 · '+esc(D.signal_at||'')+' 送出 '+
-   esc(String(D.qty||1))+' 口</i></span>';
+   ' · 差 0 點算做多 · '+esc(D.signal_at||'')+(live?' 自動送 ':' 演練送 ')+
+   esc(String(D.qty||1))+' 口'+(live?'（你不在也會送）':'')+
+   (D.eod_at?(' · '+esc(D.eod_at)+' 自動平那一口，你自己開的單不會碰'):'')+
+   '</i></span>';
  else if(D.arm_why==='off') st='<span class="al-badge">關閉中</span>'+
    /* ⛔ 這句話 2026-09-09 跟著改：以前只能自己建檔，現在下面那兩顆就開得起來。
       舊句子（「要用請自己建 AUTO_ORDERS_ON」）留在畫面上會讓他以為按鈕不算數。 */
@@ -10328,38 +10365,42 @@ function alPaint(){
  /* ⛔ 這一行不要複述上面那個名字（上面已經寫了「5 分 K」＋「09:00 起算」）——
     這裡要講的是**後果**：09:03:30 一到會發生什麼事。 */
  const sigT=esc(D.signal_at||''), eodT=esc(D.eod_at||'');
- let sub='<span>'+(armed
-   /* ⛔ 兩個開關的關係要講清楚（原本寫在〈怎麼開〉那段，2026-09-10 整段砍掉）：
-      `auto_fire` 裡**沒有**第二道 `REAL_ORDERS_ON` 判斷，一律走 `broker._send()`
-      ⇒ 關掉真單就等於連自動也關掉。這句話只在真單關著時出現（＝條件式那幾條之一），
-      所以開著＋真單也開著的時候行數不變。 */
-   ?(live?'⚠️ '+sigT+' 一到，程式會自己送出 1 口真單（你不在也會送）'
-         :sigT+' 一到會走完整條路，但真單開關關著 ⇒ 不會真的送出去'+
-          '（<b>把真單關掉就等於連自動也關掉</b>）')
-   :'一張單都不會送出去')+'</span>';
- /* ⚠️ 「開關沒有有效期」那句 2026-09-10 **搬到底下的 `.al-risk`**（金色風險條）——
+ const subs=[];
+ /* ⛔ 兩個開關的關係要講清楚（原本寫在〈怎麼開〉那段，2026-09-10 整段砍掉）：
+    `auto_fire` 裡**沒有**第二道 `REAL_ORDERS_ON` 判斷，一律走 `broker._send()`
+    ⇒ 關掉真單就等於連自動也關掉。這句話只在真單關著時出現（＝條件式那幾條之一）。
+    ⚠️ 2026-09-14：開著＋真單也開著時副標**整行是空的**（那句「會自己送 1 口真單（你不在也會送）」
+       與「13:43:30 會自動平倉（只平那一口）」已併進上面標題那行小字，不再講第二次）。 */
+ if(!armed) subs.push('<span>一張單都不會送出去</span>');
+ else if(!live) subs.push('<span>'+sigT+' 一到會走完整條路，但真單開關關著 ⇒ 不會真的送出去'+
+   '（<b>把真單關掉就等於連自動也關掉</b>）</span>');
+ /* ⚠️ 「開關沒有有效期」那句 2026-09-10 **搬到底下的 `.al-risk`**（風險條）——
     它跟「停損活在這台電腦裡」是同一個等級的事，混在這排小字裡看不見。
     ⛔ 搬走不是刪掉：關著的時候它掛在那顆「開始」旁邊（見 alOnHTML）。 */
- /* ⛔ 收盤平倉是這一段最會賠錢的地方（沒平就是抱過夜盤），一定要寫在最上面。 */
- if(armed&&eodT) sub+='<span class="sep">·</span><span>'+eodT+
-   ' 會自動平倉（<b>只平自動下單開的那一口</b>，你自己開的單不會碰）</span>';
+ /* ⛔ 收盤平倉是這一段最會賠錢的地方（沒平就是抱過夜盤），一定要寫在最上面
+    —— 2026-09-14 起寫在標題那行小字（st），不在這裡重複。 */
+ let sub=subs.join('<span class="sep">·</span>');
+ const sep=()=>(sub?'<span class="sep">·</span>':'');
  /* ⚠️ 真單關著時最容易被誤會的一件事：症狀（按不了進場）跟原因（演練部位）
     看起來毫無關係，不寫他會以為面板壞了。 */
- if(armed&&!live) sub+='<span class="sep">·</span><span class="warn">'+
+ if(armed&&!live) sub+=sep()+'<span class="warn">'+
    '⚠️ 演練也會產生一個<b>演練部位</b> —— 那口部位開著的時候，'+
    '你自己在【即時】那一頁<b>按不了進場</b>（會寫「已經有部位了」）。'+
    '要自己下單就先按手動平倉，或把這個開關關掉。</span>';
- if(D.err) sub+='<span class="sep">·</span><span class="warn">送單那一段出過錯 '+
+ if(D.err) sub+=sep()+'<span class="warn">送單那一段出過錯 '+
    esc(String(D.err_n||0))+' 次（停損不受影響）：'+esc(D.err)+'</span>';
  setEl('alsub',sub);
 
+ /* 三顆狀態卡的短標（2026-09-14 lab-ux 定案 C）：「自動下單」「真單」「每天送」。
+    開關檔叫什麼（AUTO_ORDERS_ON／REAL_ORDERS_ON）改掛在 title（滑過去看得到），
+    ⛔ 不是拿掉 —— 「拒絕下單：讀到 K線」那條路他還是要知道去哪個檔看。 */
  setEl('algates',
-   '<div class="c"><div class="k">自動下單開關（'+esc(D.flag||'')+'）</div>'+
+   '<div class="c" title="'+esc(D.flag||'')+'"><div class="k">自動下單</div>'+
      '<div class="v'+(armed?'':' off')+'">'+esc(armed?('開著 · '+alName(m)):'沒有這個檔')+'</div></div>'+
-   '<div class="c"><div class="k">真單開關（'+esc(D.live_flag||'')+'）</div>'+
+   '<div class="c" title="'+esc(D.live_flag||'')+'"><div class="k">真單</div>'+
      '<div class="v'+(live?'':' off')+'">'+
        esc(live?'開著 · 會真的送出去':'關著 · 只會演練')+'</div></div>'+
-   '<div class="c"><div class="k">送出去的內容</div>'+
+   '<div class="c"><div class="k">每天送</div>'+
      '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利 &plusmn;'+esc(alF(D.tp,0))+
        ' 點 · 一天 1 次</div></div>');
 
@@ -10375,12 +10416,14 @@ function alPaint(){
           不寫他會以為「今天開的、今天有效」。
     ⛔ 只有**開著**的時候畫（關著的時候沒有停損可談；「沒有有效期」那句改掛在
        他正要按的那顆鈕旁邊，見 alOnHTML）。 */
+ /* ⚠️ 2026-09-14 只降層級、一字不刪（樣式見 .al-risk）：圖示改用純文字 ⚠（&#9888;）而不是 emoji，
+    金色才套得上去；整段灰字、關鍵字白。 */
  setEl('alrisk', armed
    ? '<div class="al-risk">'+
-       '<p><i>⚠️</i><span>停損活在<b>這台電腦的面板迴圈</b>裡 —— '+
+       '<p><i>&#9888;</i><span>停損活在<b>這台電腦的面板迴圈</b>裡 —— '+
          '面板關掉／當掉／電腦睡著就<b>沒有停損</b>'+
          (eodT?('，'+eodT+' 的自動平倉也不會發生'):'')+'。</span></p>'+
-       '<p><i>⚠️</i><span>這個開關<b>沒有有效期</b> —— '+
+       '<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
          '<b>每個交易日都會送</b>，直到你自己按下面那顆關掉。</span></p>'+
      '</div>'
    : '');
@@ -10403,12 +10446,19 @@ function alPaint(){
  setEl('alcount',esc(today));
  /* ⛔⛔ 「今天」這一塊吃的是**跟紀錄清單同一份資料**（2026-09-10 一起改）：
     只改清單不改這裡的話，畫面會同時寫著「紀錄：出場 +100」與
-    「今天：已送出委託單，13:43:30 會自動平倉」—— 後面那句在那一刻已經是假話。 */
- setEl('altoday',alTodayHTML(D,row)+alEodHTML(D,row));
+    「今天：已送出委託單，13:43:30 會自動平倉」—— 後面那句在那一刻已經是假話。
+    ⭐ 2026-09-14 一件事只講一次：今天那一口**已經出場**（真單對到了 real_trades/ 那一趟、
+       而且收盤那一段沒有警示）時，整張「今天」卡收起來，改併進「紀錄」第一列
+       （金框＋「今天」＋「已出場」標，見 alCard 的 today 版）—— 同一筆點數不再寫兩次。
+    ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／下落不明／持有中／對不到／收盤警示）照舊畫這張卡。 */
+ const merged=alTodayMerged(D,row);
+ const tcard=document.getElementById('altodaycard');
+ if(tcard) tcard.hidden=merged;
+ setEl('altoday',merged?'':(alTodayHTML(D,row)+alEodHTML(D,row)));
 
  /* ── 紀錄（要能跟【自動下單（模擬）】那一頁對得起來）───────────── */
  setEl('allogn',days.length?(days.length+' 天'):'');
- setEl('altbl',days.length?alTblHTML(D,days):'');
+ setEl('altbl',days.length?alTblHTML(D,days,merged?today:''):'');
  setEl('alempty',days.length?'':
    '還沒有任何紀錄。開關關著的時候，'+esc(D.signal_at||'')+' 一到只會在這裡記一列「沒送」，'+
    '不會有任何委託單出去。');
@@ -10602,6 +10652,15 @@ function alEodHTML(D,r){
  return '<div class="d">'+body+'</div>';
 }
 function live_word(r){ return r.live?'已送出委託單':'演練（沒有真的送出去）'; }
+/* 「今天」卡要不要併進紀錄第一列：只有「送出去了 ＋ 已對到出場（state ok）＋ 收盤那段沒有警示」
+   這一種結局才併（那是唯一資訊完全重疊的狀態）。⛔ 判準跟 alTodayHTML／alEodHTML 用同一份資料。 */
+function alTodayMerged(D,r){
+ if(!r||r.rec!=='result'||!r.ok) return false;
+ const R=(D.real||{})[r.date]||null;
+ if(!R||R.state!=='ok') return false;
+ if(r.eod&&r.eod.alarm) return false;
+ return true;
+}
 function alSecs(hms){
  const m=/^(\d\d):(\d\d):(\d\d)/.exec(String(hms||''));
  return m?(+m[1]*3600+ +m[2]*60+ +m[3]):null;
@@ -10632,7 +10691,7 @@ function alSimTxt(D,r){
  const run=(s.runs||{})[r.method||'B']||null;
  return '模擬那邊 '+(run&&alN(run.pts)!=null?alSigned(run.pts):'—');
 }
-function alCard(D,r){
+function alCard(D,r,isToday){
  /* ⛔ 出場那半的來源是後端唯讀比對 `real_trades/` 的結果（見 fire_real_pairs）。
     ⛔ 對不到就留白 —— 不猜輸贏、不拿現價頂。
     ⚠️ **「後端根本沒有端出 `real`」跟「對不到」是兩件事**（舊版後端／別的治具）：
@@ -10666,6 +10725,16 @@ function alCard(D,r){
     而唯一的「修法」就是去改後端那句話 —— 那是把尺弄壞不是把東西修好。 */
  if(!sent) meta='<span class="why">'+esc(r.why_msg||alWhy(r.why))+'</span> · '+
    esc(alSimTxt(D,r));
+ /* 今天版（「今天」卡併進來的那一列）：把原本「今天」卡才有的兩樣（「不需要收盤平倉」／
+    後端的 warn）接在同一行 —— 只講一次。
+    ⚠️ lab-ux demo 這一行還有「（signal_at 的價 X）」：實測塞進去會超過 .al-meta 的 609px
+       （670px，被 ellipsis 吃掉尾巴的「13:43:30 不會再平倉」），而那個價 ＝ 進場價 − 滑價、
+       兩個都在這張卡上 ⇒ 拿掉它，不拿掉收盤那句。⛔ 不准折行（卡片要跟其他列一樣高）。 */
+ else if(done&&isToday) meta=esc(alName(r.method)||'—')+' · '+(et?(et+' 進'):'—')+
+   (xt?(' → '+xt+' 出'):'')+
+   ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r))+
+   (D.eod_at?(' · '+esc(D.eod_at)+' 不會再平倉'):'')+
+   (r.warn?(' · <span style="color:var(--gold)">'+esc(r.warn)+'</span>'):'');
  else if(done) meta=esc(alName(r.method)||'—')+' · '+(et?(et+(xt?' → '+xt:'')):'—')+
    ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r));
  else if(st==='none'||st==='many') meta=esc(alName(r.method)||'—')+
@@ -10673,20 +10742,23 @@ function alCard(D,r){
  else meta=esc(alName(r.method)||'—')+(et?(' · '+et+' 送出'):'')+
    ' · 停利掛 '+esc(alF(r.tp,0))+' · 滑價 '+esc(alSigned(r.slip))+
    ' · '+esc(alSimTxt(D,r));
- return '<div class="trade'+cls+'"><div class="tr-top">'+
-   '<span class="tr-date">'+esc(r.date?r.date.slice(5):'')+'</span>'+
+ /* 今天版：金框、日期欄寫「今天」、點數旁掛「已出場」標（⛔ 標掛在 .tr-res 前面，
+    不塞進 157.6px 的 .tr-px —— 塞進去會折行，卡片就跟練習那份不一樣高了）。 */
+ return '<div class="trade'+cls+(isToday?' tr-today':'')+'"><div class="tr-top">'+
+   '<span class="tr-date">'+(isToday?'今天':esc(r.date?r.date.slice(5):''))+'</span>'+
    (sent&&(r.dir==='long'||r.dir==='short')
      ? '<span class="dir '+(r.dir==='long'?'l':'s')+'">'+
        (r.dir==='long'?'▲ 多':'▼ 空')+'</span>' : '')+
    '<span class="tr-px">'+px+'</span>'+
+   (isToday&&done?'<span class="tr-chip">已出場</span>':'')+
    '<span class="tr-res '+(pts==null?'na':(pts>0?'r-win':'r-loss'))+'">'+
      (pts==null?'—':pm(pts))+'</span></div>'+
    '<div class="al-meta">'+meta+'</div></div>';
 }
-function alTblHTML(D,days){
+function alTblHTML(D,days,todayMerged){
  /* ⛔ 60 天跟後端 `FIRE_REAL_DAYS` 是**同一個數**：後端只對那幾天比對出場，
     這裡多印一天就會有一張永遠寫「對不起來」的卡（而那是假的）。 */
- return days.slice(0,60).map(r=>alCard(D,r)).join('');
+ return days.slice(0,60).map(r=>alCard(D,r,!!(todayMerged&&r&&r.date===todayMerged))).join('');
 }
 
 /* ⛔ 常態統計不畫；**異常**才畫（沿用【模擬】那一頁 atNotesHTML 的規矩）。

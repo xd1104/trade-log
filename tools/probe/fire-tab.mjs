@@ -213,7 +213,10 @@ say((await ev(`document.querySelectorAll('#tab-live button').length`)) > 0,
 console.log("\n=== ③ 關著（出貨狀態）===");
 let t = await txt();
 say(t.includes("關閉中"), "  寫著「關閉中」");
-say(t.includes("AUTO_ORDERS_ON"), "  寫得出開關檔叫什麼");
+/* ⚠️ 2026-09-14 減字：三顆狀態卡改短標（自動下單／真單／每天送），開關檔的檔名改掛在
+   那一格的 title（滑過去看得到）——⛔ 不是拿掉，innerText 量不到所以改量 title。 */
+say(await ev(`[...document.querySelectorAll('#algates .c')].some(e=>(e.title||'').includes('AUTO_ORDERS_ON'))`),
+  "  寫得出開關檔叫什麼（掛在狀態卡的 title）");
 say(t.includes("按下面那兩顆就可以開始"), "  而且講得出怎麼開（⛔ 就是那兩顆鈕）");
 chk("  開關徽章不是「開啟中」",
   await ev(`document.querySelector('#tab-fire .al-badge').textContent`), "關閉中");
@@ -297,7 +300,8 @@ console.log("\n=== ⑥ ⛔ 同時受 REAL_ORDERS_ON 管 ===");
 await ctl("/f/arm/B"); await ctl("/f/live/off"); await refetch();
 t = await txt();
 say(t.includes("只會演練"), "  真單關著時明講「只會演練」");
-say(t.includes("REAL_ORDERS_ON"), "  寫得出是哪個開關");
+say(await ev(`[...document.querySelectorAll('#algates .c')].some(e=>(e.title||'').includes('REAL_ORDERS_ON'))`),
+  "  寫得出是哪個開關（掛在狀態卡的 title，2026-09-14 減字）");
 say(t.includes("把真單關掉就等於連自動也關掉"), "  ⛔ 而且講清楚兩個開關的關係");
 await ctl("/f/live/on"); await refetch();
 t = await txt();
@@ -377,7 +381,9 @@ t = await txt();
 const eodAt = await ev("(AL.data&&AL.data.eod_at)||''");
 say(!!eodAt, "  後端端得出收盤平倉的時刻", String(eodAt));
 say(t.includes(eodAt), "  ⛔ 那個時刻寫在畫面上", String(eodAt));
-say(t.includes("只平自動下單開的那一口") || t.includes("只平自動下單自己開的那一口"),
+/* ⚠️ 2026-09-14 這句併進標題那行小字，措辭是 lab-ux 定案的「13:43:30 自動平那一口，你自己開的單不會碰」。 */
+say(t.includes("只平自動下單開的那一口") || t.includes("只平自動下單自己開的那一口") ||
+    (t.includes("自動平那一口") && t.includes("你自己開的單不會碰")),
   "  ⛔⛔ 而且明講「只平自動下單開的那一口」（他自己的單不會被碰）");
 say(t.includes("開關沒有有效期"),
   "  ⛔ 明講開關沒有有效期（每個交易日都會送，直到你自己關掉）");
@@ -389,12 +395,16 @@ say(t.includes("的自動平倉也不會發生"),
   "    ⛔ 而且明講那時候收盤自動平倉也不會發生");
 /* ⛔ 量的是**真的畫出來的顏色**（文字掛在 `p` 上，不是外框那一層）＋ 尺寸 ——
    ⛔ 不可以只驗「那段字在 DOM 裡」（keyring 那次「按鈕其實是透明的」的教訓）。 */
+/* ⚠️ 2026-09-14 降層級（lab-ux 定案 C、Benson 拍板）：兩句一字不刪，但整段金字改成灰字（--dim）、
+   金色只留左緣（3px）與圖示、關鍵字白。尺跟著改：驗「字是灰、圖示與左緣是金、⛔ 仍然不是紅綠」。 */
 const riskCss = await ev(`(()=>{const e=document.querySelector('#alrisk .al-risk p');
   if(!e) return null; const s=getComputedStyle(e);
   const b=getComputedStyle(e.parentNode); const r=e.getBoundingClientRect();
-  return [s.color, b.backgroundColor, Math.round(r.width), Math.round(r.height)];})()`);
-say(riskCss && riskCss[0] === "rgb(227, 169, 81)",
-  "    ⛔ 字是金色（面板既有的「注意」語彙，⛔ 不用紅綠）", JSON.stringify(riskCss));
+  const i=e.querySelector('i'); const ic=i?getComputedStyle(i).color:null;
+  return [s.color, b.backgroundColor, Math.round(r.width), Math.round(r.height), ic, b.borderLeftColor, b.borderLeftWidth];})()`);
+say(riskCss && riskCss[0] === "rgb(141, 149, 163)" && riskCss[4] === "rgb(227, 169, 81)" &&
+    riskCss[5] === "rgb(227, 169, 81)" && parseFloat(riskCss[6]) >= 3,
+  "    ⛔ 字是灰的（降層級），金色只留圖示與左緣（面板既有的「注意」語彙，⛔ 不用紅綠）", JSON.stringify(riskCss));
 say(riskCss && riskCss[2] > 200 && riskCss[3] > 15,
   "    ⛔ 而且真的畫得出來（尺寸量過）", JSON.stringify(riskCss));
 chk("    ⛔ 恰好兩條（⛔ 一條都不准少）",
@@ -519,14 +529,23 @@ chk("  ⛔ 七張卡一樣高（沒有任何一張折行 ⇒ 形式跟練習那�
 /* ⛔⛔ 「今天」那一塊吃的是同一份資料 —— 不一起改的話會變成
    「紀錄寫 +100、今天還寫著 13:43:30 會自動平倉」。 */
 await ctl("/f/rows/exittoday"); await refetch();
-const T2 = await ev(`document.getElementById('altoday').innerText`);
-say(T2.includes("已出場"), "  ⛔ 今天那一口平掉了 ⇒ 抬頭寫「已出場」（⛔ 不是「已送出委託單」）", T2.split("\n")[0]);
-say(T2.includes("12113") && T2.includes("+100"), "    出場價與點數都在「今天」那一塊");
+/* ⚠️ 2026-09-14 一件事只講一次：今天那一口**已出場**時「今天」卡整張收起來（hidden），
+   併進「紀錄」第一列（.trade.tr-today：金框＋日期欄「今天」＋「已出場」標）。
+   所以這一段改量那一列 ＋ 斷言「今天」卡真的收起來、同一筆點數不再寫兩次。 */
+const T2 = await ev(`(document.querySelector('#altbl .trade.tr-today')||{innerText:''}).innerText`);
+chk("  ⛔ 已出場 ⇒「今天」那張卡收起來（不再跟紀錄第一列寫同一筆）",
+  await ev(`document.getElementById('altodaycard').hidden`), true);
+say(T2.includes("今天") && T2.includes("已出場"),
+  "  ⛔ 今天那一口平掉了 ⇒ 紀錄第一列標「今天」＋「已出場」（⛔ 不是「已送出委託單」）", T2.split("\n")[0]);
+say(T2.includes("12113") && T2.includes("+100"), "    出場價與點數都在那一列");
 say(!T2.includes("會自動平倉"),
   "  ⛔⛔ 而且**不再預告 13:43:30 會自動平倉**（那一口已經不在了，講了就是假話）");
-say(T2.includes("不需要"), "    改成講「不需要收盤平倉」（第七種結局，⛔ 不跟那六種混）", T2);
+say(T2.includes("不會再平倉"), "    改成講「13:43:30 不會再平倉」（第七種結局，⛔ 不跟那六種混）", T2);
+chk("    ⛔ 那一列跟其他列一樣高（沒有折行）",
+  await ev(`[...new Set([...document.querySelectorAll('#altbl .trade')].map(e=>Math.round(e.getBoundingClientRect().height)))].length`), 1);
 await ctl("/f/clock/14:00:00"); await refetch();
-const T3 = await ev(`document.getElementById('altoday').innerText`);
+const T3 = await ev(`document.getElementById('altoday').innerText+'|'+
+  (document.querySelector('#altbl .trade.tr-today')||{innerText:''}).innerText`);
 say(!T3.includes("沒有留下收盤平倉的紀錄"),
   "  ⛔⛔ 收盤之後也不可以跳「沒有留下收盤平倉的紀錄」的金色警示（那一口 09:27 就出場了）",
   T3.replace(/\n/g, " | "));

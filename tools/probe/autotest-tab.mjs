@@ -347,19 +347,25 @@ await reload();
 chk("3 天 ⇒ AT.stats.n", await ev("AT.stats.n"), 3);
 chk("⛔ 成績表一個百分比都沒有",
   await ev(`document.getElementById('attbl').textContent.match(/\\d+%/)`), null);
-say((await ev(`document.getElementById('attbl').textContent`)).includes("不到 30 筆，不算 %"),
-  "  改成寫「不到 30 筆，不算 %」");
+/* ⚠️ 2026-09-14 減字（lab-ux 定案 C、Benson 拍板）：「不到 30 筆，不算 %」不再一格一格寫四次，
+   改成表頭底下那一行（#atceil）講一次「只有 N 筆：不算勝率」；「勝率」那一欄只在
+   後端算得出 %（rate != null）時才長出來。⛔ 門檻本身沒動（後端 rate_min_n 照樣是 30）。 */
+say((await ev(`document.getElementById('atceil').textContent`)).includes("不算勝率"),
+  "  改成在表頭底下講一次「只有 N 筆：不算勝率」");
+chk("  ⛔ 樣本不夠時連「勝率」那一欄都不畫（不是畫一欄空的）",
+  await ev(`[...document.querySelectorAll('#attbl th')].map(e=>e.textContent).includes('勝率')`), false);
 /* 負控組：這道門檻**前後端各有一道**（後端 rate 直接回 null）——
    所以只拿掉前端那道還是印不出 %（第一版探針就這樣誤以為「負控組打不紅」）。
-   要重現的故障是「有人在前端自己算勝率」，所以兩件事都做：拿掉門檻 ＋ 就地算。 */
-console.log("  負控組：拿掉前端門檻，而且在前端自己算勝率");
-if (await mutate("atRateCell", "if(!r.n||r.n<min)", "if(false)") &&
+   要重現的故障是「有人在前端自己算勝率」，所以三件事都做：硬把欄位畫出來 ＋ 拿掉門檻 ＋ 就地算。 */
+console.log("  負控組：硬把勝率欄畫出來、拿掉前端門檻，而且在前端自己算勝率");
+if (await mutate("atTblHTML", "S.rows[k].rate!=null", "true") &&
+    await mutate("atRateCell", "if(!r.n||r.n<min)", "if(false)") &&
     await mutate("atRateCell", "r.rate+'%</td>'", "Math.round(r.w/r.n*100)+'%</td>'")) {
   await ev("atPaintStats()");
   say(!!(await ev(`document.getElementById('attbl').textContent.match(/\\d+%/)`)),
     "  門檻拿掉之後真的會冒出百分比 ⇒ 這一條會紅",
     (await ev(`document.getElementById('attbl').textContent`)).match(/\d+%/g)?.join(" "));
-  await unmutate("atRateCell");
+  await unmutate("atRateCell"); await unmutate("atTblHTML");
   await ev("atPaintStats()");
 }
 chk("  還原後又沒有百分比了",
@@ -485,15 +491,17 @@ await ev(`document.querySelector('#tab-auto .at-today .dir').style.color=''`);
 console.log("\n=== ⑩ 天花板 ===");
 const ceilTxt = () => ev(`document.getElementById('atceil').textContent`);
 say(await ev(`document.getElementById('atceil').offsetParent!==null`), "常駐在畫面上");
-const m20 = (await ceilTxt()).match(/每筆差 ([\d.]+) 點以上/);
-say(!!m20, "文案符合「每筆差 X 點以上」", await ceilTxt());
+/* ⚠️ 2026-09-14 文案改成 lab-ux 定案的那句「每筆要差 X 點以上才分得出高下」（多一個「要」字），
+   尺跟著改；數字仍然要是算出來的（下面 n=120 那一段在驗）。 */
+const m20 = (await ceilTxt()).match(/每筆要差 ([\d.]+) 點以上/);
+say(!!m20, "文案符合「每筆要差 X 點以上」", await ceilTxt());
 /* ⚠️ 天花板跟的是**成績表那個窗口的筆數**（它就貼在表格底下），所以要換窗口不是換天數。
    進度尺跟的才是累積筆數 —— 兩個數字刻意不同，見 ⑤。 */
 await ctl("/at/days/120");
 await reload();
 await ev(`AT.swin=0; atFetchStats()`); await sleep(900);
 chk("  切到「全部」⇒ 窗口變成 120 筆", await ev("AT.stats.n"), 120);
-const m120 = (await ceilTxt()).match(/每筆差 ([\d.]+) 點以上/);
+const m120 = (await ceilTxt()).match(/每筆要差 ([\d.]+) 點以上/);
 say(!!m120 && Number(m20[1]) > Number(m120[1]),
   "n=20 的門檻 > n=120 的門檻（證明它隨筆數變，不是寫死的字串）",
   `${m20 && m20[1]} → ${m120 && m120[1]}`);
@@ -502,7 +510,7 @@ await ev(`AT.swin=20; atFetchStats()`); await sleep(900);
 console.log("  負控組：把 atCeiling 改成回傳常數");
 if (await mutate("atCeiling", "return Math.round(z*s/Math.sqrt(n)*10)/10;", "return 42.0;")) {
   await ev("atPaintStats()");
-  const bad120 = (await ceilTxt()).match(/每筆差 ([\d.]+) 點以上/);
+  const bad120 = (await ceilTxt()).match(/每筆要差 ([\d.]+) 點以上/);
   say(bad120 && Number(bad120[1]) === 42, "  兩個 n 會得到同一個值 ⇒ 這一條會紅", bad120 && bad120[1]);
   await unmutate("atCeiling");
   await ev("atPaintStats()");
