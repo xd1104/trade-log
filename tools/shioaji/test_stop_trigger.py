@@ -64,55 +64,59 @@ def chk(name, got, want):
 TP, SL = LP.TP_POINTS, LP.SL_POINTS
 print(f"面板設定：停利 +{TP:.0f}、停損 −{SL:.0f}、報價超過 {broker.STALE_ALARM} 秒視為不新鮮\n")
 
-print("=== 做多：進場 45000，停損在 44900 ===")
+# ⛔ 價格一律從 TP／SL 推（2026-09-14 從 ±100 改成 ±130 時，寫死的 44900／45100 整段變紅）
+E = 45000.0
+FAR_LONG = E - SL - 100          # 早就穿過多單停損很遠的價
+
+print(f"=== 做多：進場 {E:.0f}，停損在 {E - SL:.0f} ===")
 setup("long", 45000)
-LP.check_real_position(45050, 1)
-chk("  45050（還在賺）不平倉", CALLS, [])
-LP.check_real_position(44901, 1)
-chk("  44901（差 1 點到停損）不平倉", CALLS, [])
-LP.check_real_position(44900, 1)
-chk("  44900（剛好到停損）→ 平倉", CALLS, ["sl"])
+LP.check_real_position(E + 50, 1)
+chk(f"  {E + 50:.0f}（還在賺）不平倉", CALLS, [])
+LP.check_real_position(E - SL + 1, 1)
+chk(f"  {E - SL + 1:.0f}（差 1 點到停損）不平倉", CALLS, [])
+LP.check_real_position(E - SL, 1)
+chk(f"  {E - SL:.0f}（剛好到停損）→ 平倉", CALLS, ["sl"])
 
 setup("long", 45000)
-LP.check_real_position(44850, 1)
-chk("  44850（跳空穿過停損）→ 平倉", CALLS, ["sl"])
+LP.check_real_position(E - SL - 50, 1)
+chk(f"  {E - SL - 50:.0f}（跳空穿過停損）→ 平倉", CALLS, ["sl"])
 
 print("\n=== 做多：停利那一邊面板不可以出手 ===")
 setup("long", 45000)
-LP.check_real_position(45100, 1)
-chk("  45100（到停利）面板不送單 —— 那張限價單掛在券商", CALLS, [])
-LP.check_real_position(45300, 1)
-chk("  45300（遠遠超過停利）面板照樣不送單", CALLS, [])
+LP.check_real_position(E + TP, 1)
+chk(f"  {E + TP:.0f}（到停利）面板不送單 —— 那張限價單掛在券商", CALLS, [])
+LP.check_real_position(E + TP + 200, 1)
+chk(f"  {E + TP + 200:.0f}（遠遠超過停利）面板照樣不送單", CALLS, [])
 
-print("\n=== 做空：進場 45000，停損在 45100 ===")
+print(f"\n=== 做空：進場 {E:.0f}，停損在 {E + SL:.0f} ===")
 setup("short", 45000)
-LP.check_real_position(44950, 1)
-chk("  44950（還在賺）不平倉", CALLS, [])
-LP.check_real_position(45099, 1)
-chk("  45099（差 1 點）不平倉", CALLS, [])
-LP.check_real_position(45100, 1)
-chk("  45100（到停損）→ 平倉", CALLS, ["sl"])
+LP.check_real_position(E - 50, 1)
+chk(f"  {E - 50:.0f}（還在賺）不平倉", CALLS, [])
+LP.check_real_position(E + SL - 1, 1)
+chk(f"  {E + SL - 1:.0f}（差 1 點）不平倉", CALLS, [])
+LP.check_real_position(E + SL, 1)
+chk(f"  {E + SL:.0f}（到停損）→ 平倉", CALLS, ["sl"])
 
 setup("short", 45000)
-LP.check_real_position(44900, 1)
-chk("  44900（到停利）面板不送單", CALLS, [])
+LP.check_real_position(E - TP, 1)
+chk(f"  {E - TP:.0f}（到停利）面板不送單", CALLS, [])
 
 print("\n=== 報價不新鮮：絕對不可以拿舊價判停損 ===")
 setup("long", 45000)
-LP.check_real_position(44800, broker.STALE_ALARM + 5)
+LP.check_real_position(FAR_LONG, broker.STALE_ALARM + 5)
 chk("  價格早就穿過停損，但報價是舊的 → 不平倉", CALLS, [])
 chk("  有記下「從什麼時候開始瞎了」", LP.REAL_STALE["since"] is not None, True)
 
 setup("long", 45000)
-LP.check_real_position(44800, None)
+LP.check_real_position(FAR_LONG, None)
 chk("  一筆報價都沒收到（age=None）→ 不平倉", CALLS, [])
 chk("  一樣記下開始時間", LP.REAL_STALE["since"] is not None, True)
 
 print("\n=== 報價恢復之後要立刻補平 ===")
 setup("long", 45000)
-LP.check_real_position(44800, broker.STALE_ALARM + 5)   # 先瞎掉
+LP.check_real_position(FAR_LONG, broker.STALE_ALARM + 5)   # 先瞎掉
 chk("  瞎的時候沒動作", CALLS, [])
-LP.check_real_position(44800, 1)                        # 報價回來了
+LP.check_real_position(FAR_LONG, 1)                        # 報價回來了
 chk("  報價一回來就平倉", CALLS, ["sl"])
 chk("  瞎掉的計時清掉", LP.REAL_STALE["since"], None)
 
@@ -120,7 +124,7 @@ print("\n=== 停損平不掉：部位要留著，而且不可以每 0.25 秒狂�
 setup("long", 45000)
 CLOSE_OK["v"] = False
 for _ in range(8):                     # 模擬主迴圈連續跑 8 圈
-    LP.check_real_position(44800, 1)
+    LP.check_real_position(FAR_LONG, 1)
 chk("  平不掉時部位要留著（清掉的話停損就停了）",
     (broker._state.get("position") or {}).get("dir"), "long")
 chk("  有嘗試平倉", len(CALLS) >= 1, True)
@@ -130,11 +134,11 @@ CLOSE_OK["v"] = True
 print("\n=== 休市時不可以喊「報價中斷」 ===")
 setup("long", 45000)
 LP.REAL_STALE["since"] = 123.0
-LP.check_real_position(44800, 9999, "closed")
+LP.check_real_position(FAR_LONG, 9999, "closed")
 chk("  休市：不平倉（沒有報價，判什麼停損）", CALLS, [])
 chk("  休市：不算斷線，警報要收掉", LP.REAL_STALE["since"], None)
 setup("long", 45000)
-LP.check_real_position(44800, broker.STALE_ALARM + 5, "live")
+LP.check_real_position(FAR_LONG, broker.STALE_ALARM + 5, "live")
 chk("  盤中收不到報價：這才要記成斷線", LP.REAL_STALE["since"] is not None, True)
 
 print("\n=== 沒有部位時什麼都不做 ===")

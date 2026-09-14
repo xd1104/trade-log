@@ -302,15 +302,25 @@ def wire():
     LP.AUTO_EOD_HOOK = AF.on_eod
 
 
-def run_signal(st, hh=9, mm=3, ss=30, ms=100):
+def _sig_time(ms=100):
+    """訊號時刻（LP.SIGNAL_SEC）＋ ms 毫秒的 datetime.time。
+    ⛔ 測試不准寫死 09:03:30 —— 2026-09-14 改成 09:03:00 時，寫死的時鐘讓整條送單路徑被判 late、連帶整段紅。"""
+    t = LP.SIGNAL_SEC * 1000 + ms
+    return datetime.time(t // 3600000, t // 60000 % 60, t // 1000 % 60, t % 1000 * 1000)
+
+
+def run_signal(st, hh=None, mm=None, ss=None, ms=100):
     """
-    走**完整的一條路**：4Hz 主迴圈跨過 09:03:30 → `_auto_tick` → 掛勾 → 佇列 → 送單。
+    走**完整的一條路**：4Hz 主迴圈跨過 SIGNAL_AT（預設晚 100ms）→ `_auto_tick` → 掛勾 → 佇列 → 送單。
 
     ⚠️ 佇列在這裡是同步排掉的（測試要可重現）；`start()` 那條真的執行緒另有一節在驗。
     """
     LP.AUTO["started"] = True
     LP.AUTO.update({"day": DAY, "done": False, "settled": True, "gaps": 0.0})
-    now = datetime.datetime.combine(TODAY, datetime.time(hh, mm, ss, ms * 1000))
+    if hh is None:
+        now = datetime.datetime.combine(TODAY, _sig_time(ms))
+    else:
+        now = datetime.datetime.combine(TODAY, datetime.time(hh, mm, ss, ms * 1000))
     LP._auto_tick(st, now, "day")
     while not AF._Q.empty():
         AF._fire(*AF._Q.get())
@@ -461,14 +471,15 @@ chk("  停利方向 Sell（做多的反向）", o[1]["action"], "Action.Sell")
 chk("  停利是限價 LMT", o[1]["price_type"], "FuturesPriceType.LMT")
 chk("  停利是 ROD", o[1]["order_type"], "OrderType.ROD")
 chk("  停利是平倉 Cover", o[1]["octype"], "FuturesOCType.Cover")
-chk("  ⛔ 停利價 = **實際成交價** 12013 +100 = 12113（不是參考價 12010+100）",
-    o[1]["price"], 12113.0)
+chk(f"  ⛔ 停利價 = **實際成交價** 12013 +{LP.TP_POINTS:g} = {12013 + LP.TP_POINTS:g}"
+    f"（不是參考價 12010+{LP.TP_POINTS:g}）",
+    o[1]["price"], 12013.0 + LP.TP_POINTS)
 chk("  停利口數 1", o[1]["qty"], 1)
 r = merged()
 chk("  紀錄：做法＝開盤起", r.get("method"), "B")
 chk("  紀錄：方向＝做多", r.get("dir"), "long")
 chk("  紀錄：進場價＝實際成交價", r.get("entry"), 12013.0)
-chk("  紀錄：停利價", r.get("tp"), 12113.0)
+chk("  紀錄：停利價", r.get("tp"), 12013.0 + LP.TP_POINTS)
 chk("  紀錄：滑價＝成交 − 09:03:30 的價", r.get("slip"), 3.0)
 chk("  紀錄：這是真單", r.get("live"), True)
 chk("  紀錄：停利真的掛上去了", r.get("has_target"), True)
@@ -492,14 +503,15 @@ chk("  進場 IOC", o[0]["order_type"], "OrderType.IOC")
 chk("  進場 New", o[0]["octype"], "FuturesOCType.New")
 chk("  ⛔ 停利方向 Buy（做空的反向）—— 送 Sell 等於再加一口空單",
     o[1]["action"], "Action.Buy")
-chk("  ⛔ 停利價 = 實際成交價 11987 −100 = 11887", o[1]["price"], 11887.0)
+chk(f"  ⛔ 停利價 = 實際成交價 11987 −{LP.TP_POINTS:g} = {11987 - LP.TP_POINTS:g}",
+    o[1]["price"], 11987.0 - LP.TP_POINTS)
 chk("  停利是 LMT / ROD / Cover",
     (o[1]["price_type"], o[1]["order_type"], o[1]["octype"]),
     ("FuturesPriceType.LMT", "OrderType.ROD", "FuturesOCType.Cover"))
 r = merged()
 chk("  紀錄：方向＝做空", r.get("dir"), "short")
 chk("  紀錄：進場價＝實際成交價", r.get("entry"), 11987.0)
-chk("  紀錄：停利價", r.get("tp"), 11887.0)
+chk("  紀錄：停利價", r.get("tp"), 11987.0 - LP.TP_POINTS)
 chk("  紀錄：滑價（做空，成交比參考價低 3 點＝賺 3 點）", r.get("slip"), 3.0)
 
 print("\n  ── 做法 A（5 分 K）跟做法 B 判出不同方向時，送出去的要跟開關講的一致 ──")
@@ -603,7 +615,7 @@ connect(ExplodeAPI())
 st_late = FakeToday()
 LP.AUTO["started"] = True
 LP.AUTO.update({"day": DAY, "done": False, "settled": True, "gaps": 0.0})
-now = datetime.datetime.combine(TODAY, datetime.time(9, 3, 30, 100000))
+now = datetime.datetime.combine(TODAY, _sig_time(100))
 LP._auto_tick(st_late, now, "day")
 snap, dd, lag, _put_at = AF._Q.get()
 AF._fire(snap, dd, lag, time.time() - 30)       # 排到我的時候已經晚了 30 秒
@@ -1926,13 +1938,24 @@ def _fire_today_pair(t0):
     return said, any(ts >= t0 for ts in fired)
 
 
+def _sig_at(off_ms=0):
+    """週一 2026-09-14 的「訊號時刻 ＋ off_ms 毫秒」。⛔ 不准寫死 09:03:30（2026-09-14 改 09:03:00 時整組失效）"""
+    t = LP.SIGNAL_SEC * 1000 + off_ms
+    return _DT(2026, 9, 14, t // 3600000, t // 60000 % 60, t // 1000 % 60, t % 1000 * 1000)
+
+
+def _sig_lbl(off_ms=0):
+    t = LP.SIGNAL_SEC * 1000 + off_ms
+    return f"{t // 3600000:02d}:{t // 60000 % 60:02d}:{t // 1000 % 60:02d}" + (f".{t % 1000:03d}" if t % 1000 else "")
+
+
 # 週五 2026-09-11／週六 09-12／週日 09-13／週一 09-14（⛔ 寫死的日子，跟今天無關）
 _R2 = [
     ("週一 08:00（開盤前）", _DT(2026, 9, 14, 8, 0, 0)),
     ("週一 08:50（他真的會按的時間）", _DT(2026, 9, 14, 8, 50, 0)),
-    ("週一 09:03:29（差一秒）", _DT(2026, 9, 14, 9, 3, 29)),
-    ("週一 09:03:30（剛好那一秒）", _DT(2026, 9, 14, 9, 3, 30)),
-    ("週一 09:03:31（過了一秒）", _DT(2026, 9, 14, 9, 3, 31)),
+    (f"週一 {_sig_lbl(-1000)}（差一秒）", _sig_at(-1000)),
+    (f"週一 {_sig_lbl(0)}（剛好那一秒）", _sig_at(0)),
+    (f"週一 {_sig_lbl(1000)}（過了一秒）", _sig_at(1000)),
     ("週一 10:30（盤中）", _DT(2026, 9, 14, 10, 30, 0)),
     ("週一 20:00（夜盤）", _DT(2026, 9, 14, 20, 0, 0)),
     ("週五 08:50", _DT(2026, 9, 11, 8, 50, 0)),
@@ -1986,13 +2009,11 @@ def _restart_pair(t0):
 #    （那一秒其餘 999ms 其實是 late ⇒ 反過來又變成另一句假話）。
 #    ⇒ 這一組**刻意跳過那一個瞬間**，並用 `.001` 與 `.999` 把兩邊都夾住。
 _R3 = [
-    ("剛重啟・09:03:30.000（那一刻才起來）", _DT(2026, 9, 14, 9, 3, 30)),
-    ("剛重啟・09:03:31（補送窗口內 lag=1000ms）", _DT(2026, 9, 14, 9, 3, 31)),
-    ("剛重啟・09:03:32.999（窗口的最後一刻 lag=2999ms）",
-     _DT(2026, 9, 14, 9, 3, 32, 999000)),
-    ("剛重啟・09:03:33.001（過了窗口 lag=3001ms ⇒ 記 late 不送）",
-     _DT(2026, 9, 14, 9, 3, 33, 1000)),
-    ("剛重啟・09:03:40（早就過了 ⇒ 記 late 不送）", _DT(2026, 9, 14, 9, 3, 40)),
+    (f"剛重啟・{_sig_lbl(0)}.000（那一刻才起來）", _sig_at(0)),
+    (f"剛重啟・{_sig_lbl(1000)}（補送窗口內 lag=1000ms）", _sig_at(1000)),
+    (f"剛重啟・{_sig_lbl(2999)}（窗口的最後一刻 lag=2999ms）", _sig_at(2999)),
+    (f"剛重啟・{_sig_lbl(3001)}（過了窗口 lag=3001ms ⇒ 記 late 不送）", _sig_at(3001)),
+    (f"剛重啟・{_sig_lbl(10000)}（早就過了 ⇒ 記 late 不送）", _sig_at(10000)),
 ]
 _r3_true = 0
 for _name, _t in _R3:

@@ -213,8 +213,10 @@ say("open(\"a\"" in seg("_auto_append"), "⛔ 落地一定是 append 不是覆�
 
 # ══ ② 天花板與帶寬（§15-7、§7.1）══════════════════════════════════════
 print("\n=== ② 天花板：算出來的，不是寫死的 ===")
-chk("天花板(505) 對得上 PM 的 12.1", LP.auto_ceiling(505), 12.0)
-chk("天花板(20)", LP.auto_ceiling(20), 60.5)
+# ⚠️ 錨點刻意寫數字、不寫公式（寫公式＝自己跟自己比，永遠綠）。
+#    2026-09-14 規則改 09:03:00 ＋ ±130，σ 由 ⑦ 重量為 119.27 ⇒ 錨點改成 14.9／74.7（原本 ±100 時代是 12.0／60.5）
+chk("天花板(505) 對得上重量後的 14.9", LP.auto_ceiling(505), 14.9)
+chk("天花板(20)", LP.auto_ceiling(20), 74.7)
 chk("天花板(0)＝算不出來", LP.auto_ceiling(0), None)
 say(LP.auto_ceiling(20) > LP.auto_ceiling(120), "筆數越多門檻越低",
     f"{LP.auto_ceiling(20)} > {LP.auto_ceiling(120)}")
@@ -300,12 +302,14 @@ chk("算不出訊號回 None，不是 0", LP.auto_dirs(None, None),
 # ══ ⑤ ±100 的結算（§3.2）══════════════════════════════════════════════
 print("\n=== ⑤ ±100 觸價 ===")
 B = lambda t, h, l: {"t": t, "o": 12000.0, "h": h, "l": l, "c": 12000.0}   # noqa: E731
-chk("做多摸到 +100 ⇒ tp", LP._auto_run([B("09:10", 12101.0, 11990.0)], 12000.0, 1)["why"], "tp")
-chk("做多摸到 −100 ⇒ sl", LP._auto_run([B("09:10", 12010.0, 11899.0)], 12000.0, 1)["why"], "sl")
-chk("做空摸到 −100 ⇒ tp", LP._auto_run([B("09:10", 12010.0, 11899.0)], 12000.0, -1)["why"], "tp")
-chk("做空摸到 +100 ⇒ sl", LP._auto_run([B("09:10", 12101.0, 11990.0)], 12000.0, -1)["why"], "sl")
-r = LP._auto_run([B("09:10", 12101.0, 11899.0)], 12000.0, 1)
-chk("⛔ 同一根雙觸 ⇒ 保守算停損", (r["why"], r["pts"]), ("sl", -100.0))
+# ⛔ 高低點一律從 AUTO_TP／AUTO_SL 推（2026-09-14 從 ±100 改成 ±130 時，寫死的 12101／11899 碰不到新框、整段變 eod）
+_UP, _DN = 12000.0 + LP.AUTO_TP + 1, 12000.0 - LP.AUTO_SL - 1
+chk(f"做多摸到 +{LP.AUTO_TP:g} ⇒ tp", LP._auto_run([B("09:10", _UP, 11990.0)], 12000.0, 1)["why"], "tp")
+chk(f"做多摸到 −{LP.AUTO_SL:g} ⇒ sl", LP._auto_run([B("09:10", 12010.0, _DN)], 12000.0, 1)["why"], "sl")
+chk(f"做空摸到 −{LP.AUTO_TP:g} ⇒ tp", LP._auto_run([B("09:10", 12010.0, _DN)], 12000.0, -1)["why"], "tp")
+chk(f"做空摸到 +{LP.AUTO_SL:g} ⇒ sl", LP._auto_run([B("09:10", _UP, 11990.0)], 12000.0, -1)["why"], "sl")
+r = LP._auto_run([B("09:10", _UP, _DN)], 12000.0, 1)
+chk("⛔ 同一根雙觸 ⇒ 保守算停損", (r["why"], r["pts"]), ("sl", -LP.AUTO_SL))
 chk("⛔ 同一根雙觸要標 both（畫面上要數得出來）", r["both"], True)
 e = LP._auto_run([B("09:10", 12010.0, 11990.0), {"t": "13:44", "o": 12000.0, "h": 12005.0,
                                                  "l": 11995.0, "c": 12031.0}], 12000.0, 1)
@@ -343,16 +347,21 @@ LP.AUTO_CACHE.clear()
 LP._auto_settle(_d5)
 LP._auto_run = _orig_run5
 _lab5 = _seen5.get("labels") or []
-chk("⛔ settle 用到的第一根標籤 ＝ 09:04", _lab5[0] if _lab5 else None, "09:04")
-chk("  09:03 那根有被排掉（它含 09:03:30 進場前的價）", "09:03" in _lab5, False)
-chk("  09:04 那根有被收進去（整根都在進場之後）", "09:04" in _lab5, True)
-say([b["t"] for b in _bars5 if b["t"] > LP.AUTO_SETTLE_FROM][0] == "09:05",
-    "  自證：舊寫法（`>`）第一根會是 09:05 ⇒ 這把尺分得出來（不是恆真）")
+# ⛔ 標籤一律從常數推（2026-09-14 訊號從 09:03:30 改成 09:03:00、結算起點 09:04 → 09:03）
+_sf_min = int(LP.AUTO_SETTLE_FROM[:2]) * 60 + int(LP.AUTO_SETTLE_FROM[3:])
+_sf_prev = f"{(_sf_min - 1) // 60:02d}:{(_sf_min - 1) % 60:02d}"
+_sf_next = f"{(_sf_min + 1) // 60:02d}:{(_sf_min + 1) % 60:02d}"
+chk(f"⛔ settle 用到的第一根標籤 ＝ {LP.AUTO_SETTLE_FROM}", _lab5[0] if _lab5 else None, LP.AUTO_SETTLE_FROM)
+chk(f"  {_sf_prev} 那根有被排掉（它含進場前的價）", _sf_prev in _lab5, False)
+chk(f"  {LP.AUTO_SETTLE_FROM} 那根有被收進去（整根都在進場之後）", LP.AUTO_SETTLE_FROM in _lab5, True)
+say([b["t"] for b in _bars5 if b["t"] > LP.AUTO_SETTLE_FROM][0] == _sf_next,
+    f"  自證：舊寫法（`>`）第一根會是 {_sf_next} ⇒ 這把尺分得出來（不是恆真）")
 LP.AUTO_CACHE.clear()
 _rows5, _ = LP._auto_read()
 chk("  寫進 settle 那一列的 settle_from 跟真的用到的第一根一致（副標才不會是假話）",
     (_rows5.get(_d5) or {}).get("settle_from"), _lab5[0] if _lab5 else None)
-chk("  AUTO_SETTLE_FROM 常數本身還是 09:04", LP.AUTO_SETTLE_FROM, "09:04")
+chk("  AUTO_SETTLE_FROM 常數本身 ＝ 訊號時刻之後第一根整根在進場之後的 K",
+    LP.AUTO_SETTLE_FROM, f"{-(-LP.SIGNAL_SEC // 60) // 60:02d}:{-(-LP.SIGNAL_SEC // 60) % 60:02d}")
 LP.one_min_bars = _OLD_1MIN
 LP.AUTO_CACHE.clear()
 
@@ -379,9 +388,10 @@ def _bar(t, h, l, c):
 # 他今天那一列的形狀：只有兩根，而且都沒摸到 ±100
 BARS_SHORT = [_bar("09:04", 12030.0, 11970.0, 11990.0),
               _bar("09:05", 12010.0, 11933.0, 11933.0)]
-# 同樣只有兩根，但第二根摸到了 −100（＝A/B/C 做空停利、D 做多停損）
+# 同樣只有兩根，但第二根摸到了 −SL（＝A/B/C 做空停利、D 做多停損）
+# ⛔ 從常數推（2026-09-14 ±100 → ±130 時，寫死的 11890 碰不到新框）
 BARS_HIT = [_bar("09:04", 12030.0, 11970.0, 11990.0),
-            _bar("09:05", 12010.0, 11890.0, 11905.0)]
+            _bar("09:05", 12010.0, 12000.0 - LP.AUTO_SL - 10, 12000.0 - LP.AUTO_SL + 5)]
 # 完整的一天：一路到標籤 13:44，都沒摸到 ±100
 BARS_FULL = BARS_SHORT + [_bar("%02d:%02d" % ((545 + i) // 60, (545 + i) % 60),
                                12030.0, 11970.0, 11985.0) for i in range(300)
@@ -483,9 +493,9 @@ _n0 = _lines(_TODAY)
 LP._auto_settle(_TODAY)
 _row = _settled(_TODAY)
 chk("⛔ 摸到 ±100 ⇒ 不管幾點都立刻結算", _lines(_TODAY), _n0 + 1)
-chk("  做空那三條是停利 +100", [_row["runs"][k]["why"] for k in "ABC"], ["tp"] * 3)
-chk("  做多那條是停損 −100", (_row["runs"]["D"]["why"], _row["runs"]["D"]["pts"]),
-    ("sl", -100.0))
+chk(f"  做空那三條是停利 +{LP.AUTO_TP:g}", [_row["runs"][k]["why"] for k in "ABC"], ["tp"] * 3)
+chk(f"  做多那條是停損 −{LP.AUTO_SL:g}", (_row["runs"]["D"]["why"], _row["runs"]["D"]["pts"]),
+    ("sl", -LP.AUTO_SL))
 chk("  ⛔ 標成 final（之後不再重算）", _row.get("final"), True)
 chk("  畫面上不再是持倉中", (LP.auto_day(_TODAY) or {}).get("holding"), False)
 _n1 = _lines(_TODAY)
@@ -1009,6 +1019,13 @@ class FakeToday:
                            if (minute_bar and p900 is not None) else {})
 
 
+def _sig_now(off_ms=0):
+    """今天的「訊號時刻 ＋ off_ms 毫秒」。⛔ 不准寫死 09:03:30（2026-09-14 改成 09:03:00 時 lag 全變 30 秒、整段 miss）"""
+    t = LP.SIGNAL_SEC * 1000 + off_ms
+    return datetime.now().replace(hour=t // 3600000, minute=t // 60000 % 60,
+                                  second=t // 1000 % 60, microsecond=t % 1000 * 1000)
+
+
 def record(st, when=None):
     """
     ⚠️ 例外要接住並轉成一項具名的 FAIL —— 讓探針**當場掛掉**雖然也是紅，
@@ -1017,8 +1034,7 @@ def record(st, when=None):
     LP.AUTO_CACHE.clear()
     for p in D3.glob("*.jsonl"):
         p.unlink()
-    snap = LP._auto_snap(st, when or datetime.now().replace(hour=9, minute=3, second=30,
-                                                            microsecond=120000))
+    snap = LP._auto_snap(st, when or _sig_now(120))
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):
@@ -1060,8 +1076,7 @@ LP.AUTO_CACHE.clear()
 n_before = len((D3 / f"{today[:7]}.jsonl").read_text(encoding="utf-8").splitlines())
 buf = io.StringIO()
 with redirect_stdout(buf):
-    LP._auto_record(LP._auto_snap(FakeToday(), datetime.now().replace(
-        hour=9, minute=3, second=30, microsecond=0)))
+    LP._auto_record(LP._auto_snap(FakeToday(), _sig_now(0)))
 n_after = len((D3 / f"{today[:7]}.jsonl").read_text(encoding="utf-8").splitlines())
 chk("⛔ 同一天不准寫第二列（看門狗重啟會重跑一次判斷）", n_after, n_before)
 
@@ -1081,7 +1096,7 @@ while not LP._AUTO_Q.empty():
 chk("  只排一件事，而且是 miss", q, ["warm", "miss"])
 LP.AUTO.update({"day": None, "done": False, "settled": False, "gaps": 0.0})
 LP.AUTO["queued"] = set()
-ontime = datetime.now().replace(hour=9, minute=3, second=31, microsecond=0)
+ontime = _sig_now(1000)
 LP._auto_tick(FakeToday(), ontime, "day")
 q = []
 while not LP._AUTO_Q.empty():
@@ -1163,9 +1178,11 @@ chk("SIGNAL_SEC 就是 SIGNAL_AT（⛔ 只有一個地方定義，不准兩邊�
     LP.SIGNAL_SEC, _hms(LP.SIGNAL_AT))
 # ⛔⛔ 結算窗口必須跟訊號時刻綁在一起：訊號改成 09:10:30 卻忘了改 AUTO_SETTLE_FROM，
 #    窗口就會含進場**前**的 K 棒 ⇒ 把「進場前就摸到」算成觸價，而畫面上完全看不出來。
-chk("⛔ AUTO_SETTLE_FROM ＝ 訊號時刻的下一分鐘（標籤是起始時間）",
+# ⚠️ 2026-09-14 改：原本寫「訊號時刻的下一分鐘」，那是按 09:03:30（分鐘中間）想的；
+#    訊號剛好落在整分鐘（09:03:00）時，那一分鐘那根整根就在進場之後 ⇒ 正解是「向上取整到分鐘」。
+chk("⛔ AUTO_SETTLE_FROM ＝ 起點不早於訊號時刻的第一根 1 分 K（標籤是起始時間）",
     LP.AUTO_SETTLE_FROM,
-    f"{(LP.SIGNAL_SEC // 60 + 1) // 60:02d}:{(LP.SIGNAL_SEC // 60 + 1) % 60:02d}")
+    f"{-(-LP.SIGNAL_SEC // 60) // 60:02d}:{-(-LP.SIGNAL_SEC // 60) % 60:02d}")
 say(_hms(LP.AUTO_SETTLE_FROM) >= LP.SIGNAL_SEC,
     "  自證：結算窗口的第一根不早於進場時刻")
 chk("⛔ ±100 用的是他真的在用的那組常數（不另開一份）",
@@ -1181,7 +1198,7 @@ say(0 < LP.AUTO_GAP_S <= 60, "斷線判定門檻是個合理的數", f"{LP.AUTO_
 say(LP.C_THRESH > 0, "C 的門檻是正數（名字自己帶著它）", LP.C_THRESH)
 # 天花板的錨點與進度尺的分母**必須是同一個數**（畫面上那句「約兩年」靠它）
 chk("進度尺的分母 track_n ＝ CEIL_REF_N", LP.auto_stats(0, "live")["track_n"], LP.CEIL_REF_N)
-near("  而天花板(CEIL_REF_N) 就是畫面上那個 12.0", LP.auto_ceiling(LP.CEIL_REF_N), 12.0, 0.05)
+near("  而天花板(CEIL_REF_N) 就是畫面上那個 14.9", LP.auto_ceiling(LP.CEIL_REF_N), 14.9, 0.05)
 # 端點端出去的門檻要跟常數一致（前端的名字與門檻掃描都靠它）
 _st15 = LP.auto_stats(0, "live")
 chk("  端點端出去的 thresh／rate_min_n／cum_min_n ＝ 常數",

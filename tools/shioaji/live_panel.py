@@ -78,8 +78,17 @@ TRADE_DIR = HERE / "practice_trades"     # 模擬練習的交易紀錄
 REPLAY_DIR = HERE / "replay_log"
 REVIEW_CACHE = HERE / "review_cache.json"
 
-TP_POINTS = 100.0        # Benson 固定 ±100
-SL_POINTS = 100.0
+# 2026-09-14 Benson 從 ±100 改成 ±130（逐筆回測候選 1：09:03:00 ＋ ±130，202 天 54.5%／每筆 +7.5，**還沒過 2026 年驗證**）。
+# ⛔ 這一組是全面板共用的：自動下單送出的停利單、真單停損監控、練習下單、【自動下單（模擬）】結算、
+#    前端的停利停損預覽與線（PAGE 定義完會把這兩個數字注入前端，前端不准自己寫死）。
+TP_POINTS = 130.0
+SL_POINTS = 130.0
+# 以前用過的下單規則值（2026-09-14 以前的公開規格，git 歷史裡看得到，不是他的個人資料）。
+# ⛔ 留著是給 tools/probe/leak-scan.py 讀的：它把「等於產品常數的值」當成公開資訊。
+#    規則一改，repo 裡大量寫著 09:03:30／±100 的註解與測試就會被誤判成他的真實紀錄（實測 651 處）。
+# ⛔ 這裡**只准放「曾經真的是產品常數」的值**，不准拿來替任何其他數字開後門。
+PAST_SIGNAL_AT = "09:03:30"
+PAST_TP_POINTS = 100.0
 FEE_POINTS = 5.0         # 來回 NT$50 ÷ 每點 NT$10
 PORT = 8770
 
@@ -1970,8 +1979,10 @@ def tick_day(d, frm=None):
 AUTO_DIR = HERE / "autotest"            # ⛔ 一定要 gitignore（含進場價與時間）
 AUTO_REAL_DIR = HERE / "real_trades"    # ⛔ **唯讀**：他自己那一欄的來源
 
-SIGNAL_AT = "09:03:30"                  # ⛔ 只有這一個地方定義，不要散在程式各處
-SIGNAL_SEC = 9 * 3600 + 3 * 60 + 30
+# ⛔ 只有這一個地方定義，不要散在程式各處（前端也是從這裡注入）。
+# 2026-09-14 Benson 從 09:03:30 改成 09:03:00（同上，候選 1）。這個之前的模擬／真單紀錄都是 09:03:30 進場。
+SIGNAL_AT = "09:03:00"
+SIGNAL_SEC = 9 * 3600 + 3 * 60
 
 # ⛔⛔ 【自動下單】的收盤平倉時刻。**正本只有這裡**，auto_fire 靠 configure() 接過去。
 #   為什麼是 13:43:30 而不是 13:45：
@@ -2007,14 +2018,20 @@ CEIL_REF_N = 505                        # 進度尺的分母＝天花板的錨�
 #      實測 σ = **96.61**（510 天全樣本是 96.65），tp 231 / sl 239 / eod 40、both 0。
 #      ⇒ 天花板(505) = 2.80×96.6/√505 = **12.04 點**（PM 那個 12.1 對得起來）、
 #         天花板(20) = 60.5 點（規格推的 60.8 也對得起來）。
-CEIL_SIGMA = 96.6
+# ⚠️ 2026-09-14 規則改成 09:03:00 ＋ ±130 之後，用同一套量法（autotest-backend.py ⑦：tmf_1min.csv 最後 505 天、
+#    一律做多、進場用訊號時刻那根 K 的收盤代理、不扣費）重量：σ = **119.27** ⇒ 天花板(505)=14.9、(20)=74.7。
+#    上面 96.61 那一段是 ±100／09:03:30 時代的數字，留著當歷史。
+CEIL_SIGMA = 119.3
 CEIL_Z = 2.80                           # 1.96（不是雜訊）＋ 0.84（八成機率被抓到）
 
 AUTO_TP = TP_POINTS                     # ⛔ 跟他真的在用的規則同一組常數，不另開一份
 AUTO_SL = SL_POINTS
-# 結算從**標籤 09:04 那根（含）**開始 —— 標籤是起始時間，那根涵蓋 09:04~09:05。
-# ⛔ 比較一定要用 `>=`（見 _auto_settle 的說明；用 `>` 會從 09:05 才算起，盲區變 90 秒）。
-AUTO_SETTLE_FROM = "09:04"
+# 結算從**第一根整根都在進場之後的 1 分 K（含）**開始 —— 標籤是起始時間。
+#   進場 09:03:30 時是標籤 09:04（09:03 那根含進場前的價）；
+#   ⚠️ 2026-09-14 改成 09:03:00 進場 ⇒ 標籤 09:03 那根（09:03~09:04）整根都在進場之後 ⇒ 從 09:03 算，
+#      不改的話 09:03:00~09:04:00 這一分鐘的觸價會整段看不到。⛔ 這個要跟 SIGNAL_AT 一起改。
+# ⛔ 比較一定要用 `>=`（見 _auto_settle 的說明；用 `>` 會少掉第一根）。
+AUTO_SETTLE_FROM = "09:03"
 DAY_END_SEC = DAY_END.hour * 3600 + DAY_END.minute * 60
 AUTO_LATE_MS = 3000                     # 晚超過這麼久就**不記**（⛔ 不可以拿晚到的價冒充）
 AUTO_GAP_S = 5.0                        # 多久沒收到報價算「這一秒是斷的」
@@ -5484,6 +5501,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 <div class="foot">只顯示已經發生的客觀數字，不做預測、不給買賣訊號。<br>練習下單與【自動下單（模擬）】都是模擬，不會送單到永豐。</div>
 </div>
 <script>
+// ⛔ 下單規則的數字只在 Python 定義一次（TP_POINTS／SL_POINTS／SIGNAL_AT），PAGE 定義完就替換進來。前端不准自己寫死。
+const RULE_TP=__RULE_TP__, RULE_SL=__RULE_SL__, RULE_SIGNAL_AT='__RULE_SIGNAL_AT__';
 var WIN=7;
 // 真實成績的分段窗口。⚠️ 跟練習的 WIN 分開 —— 共用的話在一邊按會讓另一邊也跳，
 // 而且兩邊的筆數差很多（真實只有個位數），可選的窗口本來就不一樣。
@@ -5690,7 +5709,7 @@ function paintBadge(R){
 function simZone(){
   return '<div class="n-zone z-sim">'+
     '<div class="n-hd"><div class="grow"><div class="t">練習下單</div>'+
-    '<div class="s">微台 TMF・1 口・固定 &plusmn;100 點</div></div>'+
+    '<div class="s">微台 TMF・1 口・固定 &plusmn;'+RULE_TP+' 點</div></div>'+
     '<span class="n-chip c-sim">模擬・不會送單</span></div>'+
     '<div class="n-sep"></div><div class="n-bd" id="simbody"></div>'+
     '<div id="simtr"></div><div id="simstats"></div></div>';
@@ -5757,7 +5776,7 @@ function realZone(R){
               : '<span class="n-chip c-sim">演練模式・不送出</span>');
   return '<div class="n-zone z-real">'+
     '<div class="n-hd"><div class="grow"><div class="t">真實下單</div>'+
-    '<div class="s">微台 TMF・1 口・固定 &plusmn;100 點</div></div>'+
+    '<div class="s">微台 TMF・1 口・固定 &plusmn;'+RULE_TP+' 點</div></div>'+
     chip+'<div class="sw'+(REAL_ON?' on':'')+'" data-rt="1"><i></i></div></div>'+
     // ⛔ 【有部位就一定要看得到，開關關著也一樣】
     //    `REAL_ON` 只是「要不要露出下單按鈕」的保險蓋，不是「有沒有部位」。
@@ -5839,7 +5858,7 @@ function realBody(s){
    .sub 平常 opacity:0，按住時才浮出來，同時把標籤換成「放開取消」。 */
 function fireBtn(dir,px,dis){
   const long=dir==='long';
-  const tp=px==null?null:(long?px+100:px-100), sl=px==null?null:(long?px-100:px+100);
+  const tp=px==null?null:(long?px+RULE_TP:px-RULE_TP), sl=px==null?null:(long?px-RULE_SL:px+RULE_SL);
   return '<button class="n-fb '+(long?'b':'s')+'"'+(dis?' disabled':'')+
     ' data-rdir="'+dir+'"><span class="txt">'+
     '<span class="lb">'+(long?'買進 做多':'賣出 做空')+'</span>'+
@@ -7263,7 +7282,7 @@ var RP={date:null,state:'idle',rev:0,speed:1,timer:null,end:null,
 var TALLY={n:0,tp:0,sl:0,same:0};
 const SPEEDS=[[0.5,1200],[1,600],[2,300],[4,150]];
 const FUT=10;                // 重播時右邊固定留幾格空白
-const RFEE=5, RTP=100;       // 跟練習下單同一把尺：±100 點、來回 5 點成本
+const RFEE=5, RTP=RULE_TP;   // 跟練習下單同一把尺：±TP_POINTS 點（從 Python 注入）、來回 5 點成本
 const REASON={tp:'停利',sl:'停損',manual:'手動',close:'收盤'};
 /* 進場動畫只在開站後的頭 1.1 秒有效。過了就把 class 拿掉 ——
    不然之後每次卡片內容變動（下單、成績更新）都會整張再飛一次。 */
@@ -8772,7 +8791,7 @@ function tkDrawTrades(ctx,xOf,yOf,v,PW,H,A,priceH){
  const s=tkSel();
  if(TK.ov.stop&&s&&tkN(s.entry)!=null){
    const d=(s.dir==='short')?-1:1, e=tkN(s.entry);
-   [[e+d*100,'#EE5A54','停利 +100'],[e-d*100,'#34B37E','停損 −100']].forEach(z=>{
+   [[e+d*RULE_TP,'#EE5A54','停利 +'+RULE_TP],[e-d*RULE_SL,'#34B37E','停損 −'+RULE_SL]].forEach(z=>{
      const y=yOf(z[0]);
      if(y>=TKTOP+8&&y<=TKTOP+priceH-4){
        ctx.save(); ctx.setLineDash([5,4]); ctx.strokeStyle=z[1]; ctx.globalAlpha=.75;
@@ -9241,10 +9260,10 @@ function atSettleWord(o){
  const done=o.runs?true:(o.done===true);
  return done?'已結算':(o.holding?'持倉中':'結算中');
 }
-const ATWHY={no_quote:'09:03:30 收不到報價（斷線、休市或國定假日）',
-  quote_stale:'09:03:30 那一刻的報價太舊，沒有拿它記（拿舊價記＝假成績）',
+const ATWHY={no_quote:RULE_SIGNAL_AT+' 收不到報價（斷線、休市或國定假日）',
+  quote_stale:RULE_SIGNAL_AT+' 那一刻的報價太舊，沒有拿它記（拿舊價記＝假成績）',
   mid_only:'那一刻只有買賣價、還沒有成交價，沒有拿中價頂替',
-  late:'09:03:30 的時候面板沒開著（或剛重啟），那一刻的價已經過去了',
+  late:RULE_SIGNAL_AT+' 的時候面板沒開著（或剛重啟），那一刻的價已經過去了',
   unknown:'原因沒有記下來'};
 /* AT.date（想看哪天）與 AT.data.date（手上這份是哪天）**必須是兩個欄位** ——
    換日到新資料回來之間那一秒，只有一個欄位的話會把昨天的資料掛在今天的日期底下。 */
@@ -9371,7 +9390,7 @@ function atPagerHTML(){
  else if(loading) r2='<span>載入中…</span>';
  else if(AT.err) r2='<span class="warn">讀不出來</span>';
  else if(!D||D.px==null) r2='<span>這天沒有記錄</span>';
- else r2='<span>'+(D.at||'09:03:30')+' 進場 '+atN(D.px).toFixed(1)+'</span>'+
+ else r2='<span>'+(D.at||RULE_SIGNAL_AT)+' 進場 '+atN(D.px).toFixed(1)+'</span>'+
    /* ⛔ 「持倉中」與「結算中」是兩件事，不可以寫同一句（2026-09-08）：
       前者＝還沒摸到 ±100、日盤也還沒收，那是正常的等待；
       後者＝該算了卻還沒算出來。⛔ 持倉中**不給浮動損益**（規格 §16-3）——
@@ -9442,7 +9461,7 @@ function atSubHTML(){
  const D=(!atLoading()&&AT.data)?AT.data:null;
  if(atLoading()) return '<span>載入中…</span>';
  if(AT.err) return '<span class="warn">'+AT.err+'</span>';
- if(!D||D.px==null) return '<span>這天沒有 09:03:30 的記錄</span>';
+ if(!D||D.px==null) return '<span>這天沒有 '+RULE_SIGNAL_AT+' 的記錄</span>';
  const bits=['四條共用同一個進場價 '+atN(D.px).toFixed(1)];
  /* ⚠️ 這句話必須跟 _auto_settle 真的用到的第一根一致（2026-09-07 lab-qa 退件 R2：
     舊版比較用 `>`，實際上是從 09:05 那根才開始算，這句話是**假話**）。
@@ -9471,7 +9490,7 @@ function atTodayHTML(){
  const D=AT.data;
  if(atLoading()||!D) return '';
  if(!atSigPassed())
-   return '<div class="wait"><div class="t">今天 '+(D.signal_at||'09:03:30')+' 還沒到</div>'+
+   return '<div class="wait"><div class="t">今天 '+(D.signal_at||RULE_SIGNAL_AT)+' 還沒到</div>'+
      '<div class="d" title="時刻還沒到就顯示「等一下會判斷什麼方向」，那是預測 —— '+
      '而且是最像建議的一種形狀。這一頁不做那件事。">時刻到了才會記下方向。</div></div>';
  if(D.px==null){
@@ -9858,7 +9877,7 @@ function atDrawDay(){
    atDrawMine(ctx,D,xOf,yOf,A,PW,pH);            // ②：夾在 ◆ 與金籤之間
    // ⚠️ y 要夾住：進場價貼近價格軸上緣時，籤會跑到畫布外面（看不到就等於沒畫）
    atChip(ctx,Math.max(2,Math.min(ex+10,PW-190)),Math.max(ATTOP+1,ey-28),
-     '09:03:30 模擬進場 '+px.toFixed(1),ATCOL.gold);
+     RULE_SIGNAL_AT+' 模擬進場 '+px.toFixed(1),ATCOL.gold);
    /* ±100 兩條線。⛔ **不准標「停利／停損」** —— 同一條線對做多是停利、
       對做空是停損，標了一定有一邊是錯的。 */
    const tp=(atN(D.tp)||100), sl=(atN(D.sl)||100);
@@ -10138,7 +10157,7 @@ function atMsgHTML(){
      '<button class="tk-back" style="position:static;margin-top:6px" data-atact="retry">重試</button></div>';
  if(!AT.date||!(AT.days||[]).length&&!AT.today)
    return '<div class="at-blank"><div class="t">還沒有任何一天的模擬紀錄</div>'+
-     '<div class="d">明天早上 09:03:30 會自動記下第一筆。不用做任何事，也不會有單送出去。</div></div>';
+     '<div class="d">明天早上 '+RULE_SIGNAL_AT+' 會自動記下第一筆。不用做任何事，也不會有單送出去。</div></div>';
  if(!(AT.data&&(AT.data.bars||[]).length))
    return '<div class="at-blank"><div class="t">這天沒有 1 分 K 可以畫</div>'+
      '<div class="d">休市日，或當天的 K 棒還沒拿到。</div></div>';
@@ -10707,6 +10726,14 @@ function alNotesHTML(D,days){
 
 tick(); setInterval(tick,500);
 </script></body></html>"""
+
+# 下單規則的數字注入前端（⛔ 前端不准自己寫死 ±100／09:03:30 —— 2026-09-14 改規則時就是散在 4 個地方）。
+# 在模組層級替換 ⇒ 治具／測試直接拿 live_panel.PAGE 也是替換過的版本。
+PAGE = (PAGE.replace("__RULE_TP__", f"{TP_POINTS:g}")
+            .replace("__RULE_SL__", f"{SL_POINTS:g}")
+            .replace("__RULE_SIGNAL_AT__", SIGNAL_AT))
+# ⛔ 漏替換的話前端整段腳本在第一行就炸（ReferenceError）⇒ 寧可面板啟動失敗，也不要畫面空白卻看不出原因
+assert "__RULE_" not in PAGE, "PAGE 裡還有沒替換到的下單規則佔位"
 
 
 class Handler(BaseHTTPRequestHandler):
