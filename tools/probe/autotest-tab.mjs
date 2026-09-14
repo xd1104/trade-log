@@ -1241,8 +1241,9 @@ say(!GONE_LEDGER.some(w => notesNow.includes(w)),
 await ev(`(()=>{window.__both=AT.stats.rows.A.both; AT.stats.rows.A.both=2;
   atPaintStats(); return 1;})()`);
 const notesBoth = await ev(`document.getElementById('atnotes').textContent`);
-say(notesBoth.includes("同一根同時摸到 ±100") && notesBoth.includes("保守算停損"),
-  "  ⛔ 真的有「同一根同時摸到 ±100」時**照樣寫在畫面上**（保守算停損是對他不利的假設）",
+// ⚠️ 點數不寫死：規則常數會變（2026-09-14 ±100 → ±130），畫面上那一句是拿 RULE_TP 組的
+say(/同一根同時摸到 ±\d+/.test(notesBoth) && notesBoth.includes("保守算停損"),
+  "  ⛔ 真的有「同一根同時摸到 ±N」時**照樣寫在畫面上**（保守算停損是對他不利的假設）",
   (notesBoth.match(/[^·]*同一根[^·]*/) || [""])[0].trim());
 await ev(`(()=>{AT.stats.rows.A.both=window.__both; atPaintStats(); return 1;})()`);
 say(!(await ev(`document.getElementById('atnotes').textContent`)).includes("同一根同時摸到"),

@@ -8957,7 +8957,7 @@ function tkToolsHTML(){
    '<span class="gap"></span>'+
    chip('trade',TK.ov.trade,'我的單',!trades.length,
         trades.length?'':'這天沒有下單')+
-   chip('stop',TK.ov.stop,'±100',!trades.length,
+   chip('stop',TK.ov.stop,'±'+RULE_TP,!trades.length,
         trades.length?'畫的是那一單的停利停損位置':'這天沒有下單')+
    /* ⛔ 取樣檔沒有單筆成交量 ⇒ 停用 ＋ **寫出原因**（跟「加權」那顆同一套處理）。
       ⛔⛔ 絕不可以拿 vol_ratio（累積量 ÷ 歷史中位）之類的東西湊一根假的量柱。 */
@@ -9474,7 +9474,7 @@ function atToolsHTML(){
  /* ⛔ 預設畫**整個日盤**：±100 大多數日子在 09:30 之前根本摸不到，
     只畫 08:45~09:30 的話四條泳道全部跑出畫面右邊（demo 第一版實測）。 */
  return '<button class="at-chip'+(AT.zoom?' on':'')+'" data-atzoom="1"'+
-   ' title="放大到他自己的下單時段。⚠ ±100 常常要到中午才摸到，出場會落在畫面外">'+
+   ' title="放大到他自己的下單時段。⚠ ±'+RULE_TP+' 常常要到中午才摸到，出場會落在畫面外">'+
    '只看 08:45~09:30</button>'+
    '<span class="lab">'+(AT.zoom?'08:45~09:30':'08:45~13:45')+'　1 分 K</span>';
 }
@@ -9494,7 +9494,7 @@ function atSubHTML(){
     標籤是起始時間 ⇒ 09:04 那根涵蓋 09:04~09:05，「含」這個字不可以省。 */
  if(D.settle_from) bits.push('出場從 '+D.settle_from+' 那根 1 分 K（含）開始算');
  /* ⛔ 持倉中只講狀態，⛔ 不算「現在賺賠多少」（規格 §16-3）。 */
- if(D.holding) bits.push('還沒摸到 ±100，日盤還沒收 ⇒ 持倉中');
+ if(D.holding) bits.push('還沒摸到 ±'+RULE_TP+'，日盤還沒收 ⇒ 持倉中');
  /* ⚠️ 這句講的是**圖上那幾張「真 ▲ 多」籤**（他當天真的下的單畫在 K 線上），
     跟被拿掉的成績表那兩列不是同一件事 ⇒ 保留。
     ⛔ 但用字改成「真實單」跟圖上的籤一致 —— 「你自己」這四個字已經是
@@ -9661,7 +9661,7 @@ function atNotesHTML(){
  const N=S.notes||{}, bits=[];
  /* ⛔ 「同一根同時摸到 ±100」是**我們替他做了一個對他不利的假設**（保守算停損），
     真的發生時一定要講出來（CLAUDE.md）；沒發生就不用佔他一行字。 */
- if(both) bits.push('<span class="warn">同一根同時摸到 ±100（保守算停損）'+both+' 筆</span>');
+ if(both) bits.push('<span class="warn">同一根同時摸到 ±'+RULE_TP+'（保守算停損）'+both+' 筆</span>');
  if(pend) bits.push('<span class="warn">還沒結算 '+pend+' 筆</span>');
  if(N.missing) bits.push('<span class="warn">沒有記錄 '+N.missing+' 天</span>');
  if(N.backfill) bits.push('<span class="warn">歷史回填 '+N.backfill+
