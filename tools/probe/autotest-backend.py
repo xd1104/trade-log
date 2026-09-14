@@ -177,7 +177,10 @@ for fn in AUTO_FUNCS:
         hits.append((fn, w))
 chk("後端 auto_* / _auto_* 一個下單字眼都沒有", hits, [])
 
-# 前端：#tab-auto 那一段（HTML）＋ at* 的 JS。同理，⚠️ 註解要先剝掉。
+# 前端：研究頁那一段（HTML）＋它的 JS。同理，⚠️ 註解要先剝掉。
+# ⚠️ 2026-09-14【自動下單（模擬）】的**畫面**換成【策略實驗室】（#tab-lab ＋ lb* 的 JS），
+#    後端（這支測的東西）一個字都沒改。這把尺改量新的研究頁：同一條紅線「研究頁一行都不碰下單路徑」。
+#    （新分頁自己的完整守衛在 tools/shioaji/test_strategy_lab.py ⑥）
 import re as _re
 
 
@@ -191,16 +194,19 @@ def strip_html(s):
 
 
 page = SRC[SRC.index("PAGE = r\"\"\""):]
-tab_html = strip_html(page[page.index('<div id="tab-auto"'):page.index('<!-- 【回顧】')])
-# ⚠️ 切點要落在那個區塊註解的 `/*` **上面**，不然 strip_js 配不成對、
-#    整段開頭的說明（裡面就寫著「不碰 /api/enter」）會被當成程式碼（第一版就這樣紅的）。
-_js0 = page.index("【程式下單】分頁：四種方向判斷的模擬對照（Canvas）")
-js_at = strip_js(page[page.rindex("/*", 0, _js0):page.index("\nrvBind();")])
-fe_hits = [w for w in ["/api/enter", "/api/real/", "data-act=", "data-rdir=", "REAL_ON"]
+tab_html = strip_html(page[page.index('<div id="tab-lab"'):page.index('<!-- 【回顧】')])
+# ⚠️ 切點要落在那個區塊註解的 `/*` **上**，不然 strip_js 配不成對、
+#    整段開頭的說明會被當成程式碼（第一版就這樣紅的）。
+_js0 = page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測")
+js_at = strip_js(page[_js0:page.index("\nrvBind();", _js0)])
+say("function lbRun" in js_at and len(tab_html) > 2000, "  切出來的真的是研究頁（不是空字串）")
+# ⚠️ /api/fire/state 允許（唯讀 GET，用來標「現在真單用的」是哪個做法）；會改狀態的 on／off 不准
+fe_hits = [w for w in ["/api/enter", "/api/real/", "/api/fire/on", "/api/fire/off", "data-act=", "data-rdir=",
+                       "REAL_ON", "token"]
            if w in tab_html or w in js_at]
-chk("前端 #tab-auto ＋ at* 的 JS 沒有任何下單端點／按鈕", fe_hits, [])
-say("data-rdir" in strip_html(page[:page.index('<div id="tab-auto"')]) or
-    "data-rdir" in strip_js(page[:page.index('<div id="tab-auto"')]),
+chk("前端 #tab-lab ＋ lb* 的 JS 沒有任何下單端點／按鈕", fe_hits, [])
+say("data-rdir" in strip_html(page[:page.index('<div id="tab-lab"')]) or
+    "data-rdir" in strip_js(page[:page.index('<div id="tab-lab"')]),
     "  負控組：同一把尺在真實下單那半抓得到 data-rdir")
 
 # 【尺的自證】同一把尺掃 _real_enter 必須抓得到 broker ⇒ 證明尺是活的

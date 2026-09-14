@@ -402,6 +402,13 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_GET(self):
+        # 【策略實驗室】走產品**真正的** handler（LP.Handler._lab_get：守衛＋白名單＋429 互斥），
+        #   ⛔ 不另寫一份假的。它只讀 tools/shioaji/tick_hist/（歷史行情，不是他的交易紀錄）；
+        #   ⚠️ 快取缺了會在 tick_hist/cache/ 補建（那是這一頁自己的快取，已 gitignore）。
+        #   ⛔ 每日補抓的背景執行緒只在 live_panel.main() 起，治具走不到 ⇒ 不會去連永豐。
+        if self.path.partition("?")[0] in ("/api/lab/meta", "/api/lab/run"):
+            self._json = lambda code, obj: self._send(code, json.dumps(obj, ensure_ascii=False))
+            return LP.Handler._lab_get(self)
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")
         if self.path.startswith("/api/tick/days"):
             return self._send(200, json.dumps(LP.tick_days(), ensure_ascii=False))

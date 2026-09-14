@@ -977,7 +977,12 @@ say("html" in _ct2.lower(),
 say('"/api/fire/state"' not in LPSRC.split("def do_POST")[1].split("def do_GET")[0],
     "  ⛔ do_POST 裡沒有這個端點（畫面上按不到開關）")
 page = LPSRC[LPSRC.index('PAGE = r"""'):]
-fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-auto"')]
+# ⚠️ 2026-09-14 隔壁那一頁從 #tab-auto 換成 #tab-lab（【策略實驗室】），切點跟著改；量的東西不變。
+fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
+# ⛔ 尺的自證：切出來的區段不是空的，而且真的是【自動下單】那一頁
+#    （之前切點落在一段註解上 ⇒ 切到空字串，底下六條「沒有 X」恆真）
+say(len(fire_html) > 500 and 'id="alstate"' in fire_html and 'id="tab-lab"' not in fire_html,
+    "  尺的自證：切出來的【自動下單】那一段不是空的（有 #alstate、不含隔壁頁）", f"{len(fire_html)} 字")
 import re as _re
 fire_html_nc = _re.sub(r"<!--.*?-->", " ", fire_html, flags=_re.S)
 for tag in ("<button", "<form", "<input", "data-act", "data-rdir", "type=submit"):

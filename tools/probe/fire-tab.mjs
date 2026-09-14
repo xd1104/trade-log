@@ -161,10 +161,11 @@ console.log("=== ① 分頁 ===");
 chk("TAB", await ev("TAB"), "fire");
 chk("⛔ 分頁名是「自動下單」（沒有括號）",
   await ev(`document.querySelector('[data-tab="fire"]').textContent`), "自動下單");
-chk("隔壁那顆是「自動下單（模擬）」",
-  await ev(`document.querySelector('[data-tab="auto"]').textContent`), "自動下單（模擬）");
+// 2026-09-14 隔壁那顆從「自動下單（模擬）」換成【策略實驗室】（#tab-lab，只算歷史、不送單）
+chk("隔壁那顆是「策略實驗室」",
+  await ev(`document.querySelector('[data-tab="lab"]').textContent`), "策略實驗室");
 chk("其他分頁都藏起來了",
-  await ev(`['tab-live','tab-tick','tab-review','tab-auto']
+  await ev(`['tab-live','tab-tick','tab-review','tab-lab']
     .map(i=>document.getElementById(i).hidden)`), [true, true, true, true]);
 chk("這一頁真的顯示出來了", await ev(`document.getElementById('tab-fire').hidden`), false);
 

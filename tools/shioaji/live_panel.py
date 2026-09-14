@@ -49,7 +49,7 @@ from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pandas as pd
@@ -57,6 +57,15 @@ import pandas as pd
 import broker            # 真實下單。預設 dry run，見那個檔開頭的說明
 import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
+# 【策略實驗室】歷史逐筆回測（唯讀）。⛔ 不 import broker、不碰任何下單路徑。
+# ⛔⛔ 一定要包 try（2026-09-14 lab-qa 退件 R1）：這是研究功能，它載入失敗（少一個套件、
+#    檔案壞掉）絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
+#    看門狗無限重開、**停損沒人盯**。失敗時 strategy_lab=None：/api/lab/* 回 503，其他照跑。
+try:
+    import strategy_lab
+except Exception as _lab_err:          # noqa: BLE001  ⛔ 刻意接住所有例外
+    strategy_lab = None
+    print(f"⚠️ 【策略實驗室】載入失敗，這一頁先停用（其他功能不受影響）：{str(_lab_err)[:160]}")
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -1954,7 +1963,9 @@ def tick_day(d, frm=None):
 # 其他（時刻、口數、±100、出場規則）全部一樣，然後把成績並排。
 #
 # ⛔⛔ 鐵律一：**永遠只是模擬，一張單都不會送出去。這不是自動下單，也不是它的前置作業。**
-#    這一段（以及 PAGE 裡 #tab-auto 那一段）**一行都不准** import broker、呼叫 broker.*、
+#    ⚠️ 2026-09-14 前端那一頁換成【策略實驗室】（#tab-lab），**這一段後端照樣在跑**
+#      （【自動下單】每一筆的「模擬那邊」讀的就是 autotest/），紅線一條都沒放寬。
+#    這一段（以及 PAGE 裡 #tab-lab 那一段）**一行都不准** import broker、呼叫 broker.*、
 #    打 /api/enter、/api/real/*，也不准寫進 practice_trades/ real_trades/
 #    sim_orders/ real_orders/。它有自己的資料夾 autotest/。
 #    ⚠️ 他自己那一欄是**直接讀** real_trades/*.jsonl（唯讀，一個位元組都不寫），
@@ -5275,6 +5286,122 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
      ⛔ 不可以改成壓縮泳道，也不可以縮寫名字（規格 §9.3）。 */
   .at-wrap{aspect-ratio:520/620}
 }
+/* ══ 【策略實驗室】分頁：歷史逐筆回測（版面照 lab-ux 定案 demo test/ux-demo/strategy-lab.html）══
+   ⛔ class 一律 lb- 開頭：這個面板的 .tag／.hero／.sum／.step 早就被別頁用掉了，共用名字會互相污染。
+   ⛔ 紅漲綠跌：.up／.down 沿用全站的變數，這一頁不另立顏色。 */
+#tab-lab .card{margin-bottom:0}
+.lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
+@media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
+.lb-mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.lb-cond{padding:16px 18px 18px}
+.lb-sh{font-size:11.5px; color:var(--dim); letter-spacing:1.6px; font-weight:650; margin-bottom:12px;
+  display:flex; justify-content:space-between; align-items:baseline; gap:8px}
+.lb-sh .lb-to{font-size:11px; color:var(--faint); letter-spacing:0; font-weight:500; white-space:nowrap}
+.lb-sh .lb-to b{font-family:var(--font-mono); font-weight:650; color:var(--dim)}
+.lb-f{margin-bottom:15px}
+.lb-f>.lb-k{font-size:12px; color:var(--dim); margin-bottom:6px; display:flex; justify-content:space-between; align-items:baseline}
+.lb-f>.lb-k em{font-style:normal; font-size:11px; color:var(--faint)}
+.lb-inp{width:100%; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text);
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:15px; font-weight:600; padding:7px 10px; outline:none}
+.lb-inp:focus{border-color:var(--gold-line)}
+.lb-inp.bad{border-color:var(--up-line)}
+.lb-inp::placeholder{color:var(--faint); font-weight:500; font-family:var(--font-sans); font-size:13px}
+.lb-timebox{display:flex; gap:6px}
+.lb-timebox .lb-inp{flex:1 1 auto; text-align:center; letter-spacing:1px; min-width:0}
+.lb-step{flex:0 0 auto; border:1px solid var(--line); background:transparent; color:var(--dim); border-radius:var(--r-sm);
+  font-size:12px; padding:0 9px; font-family:var(--font-sans); cursor:pointer}
+.lb-step:hover{color:var(--text); border-color:var(--ghost)}
+.lb-hint{font-size:11px; color:var(--gold); margin-top:5px}
+.lb-dirs{display:grid; grid-template-columns:1fr 1fr; gap:5px; background:var(--surface-2); border:1px solid var(--line-soft);
+  border-radius:10px; padding:3px}
+.lb-dirs button{border:0; background:transparent; color:var(--dim); font-family:var(--font-sans); font-size:12.5px; font-weight:600;
+  padding:7px 4px; border-radius:8px; cursor:pointer; line-height:1.3}
+.lb-dirs button small{display:block; font-size:10.5px; font-weight:500; color:var(--faint)}
+.lb-dirs button.on{background:var(--gold-soft); color:var(--gold)}
+.lb-dirs button.on small{color:rgba(227,169,81,.7)}
+.lb-pair{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+.lb-unit{position:relative}
+.lb-unit .lb-inp{padding-right:30px}
+.lb-unit span{position:absolute; right:10px; top:50%; transform:translateY(-50%); font-size:11px; color:var(--faint); pointer-events:none}
+.lb-subk{font-size:11px; color:var(--faint); margin-bottom:4px}
+.lb-grp{border-top:1px solid var(--line-soft); padding-top:13px; margin-top:2px}
+.lb-wd{display:flex; gap:4px}
+.lb-wd button{flex:1 1 0; border:1px solid var(--line); background:transparent; color:var(--dim); border-radius:8px;
+  font-family:var(--font-sans); font-size:12.5px; padding:5px 0; cursor:pointer}
+.lb-wd button.on{background:var(--surface-2); color:var(--faint); border-color:var(--line-soft); text-decoration:line-through}
+.lb-tog{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12.5px; color:var(--text);
+  cursor:pointer; user-select:none; padding:3px 0}
+.lb-tog small{display:block; font-size:11px; color:var(--faint)}
+.lb-sw{flex:0 0 auto; width:34px; height:20px; border-radius:10px; background:var(--ghost); position:relative; transition:background .15s}
+.lb-sw::after{content:""; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:var(--dim);
+  transition:transform .15s,background .15s}
+.lb-tog.on .lb-sw{background:var(--gold-soft); box-shadow:inset 0 0 0 1px var(--gold-line)}
+.lb-tog.on .lb-sw::after{transform:translateX(14px); background:var(--gold)}
+.lb-run{width:100%; margin-top:16px; border:1px solid var(--gold-line); background:var(--gold-soft); color:var(--gold);
+  border-radius:var(--r-md); font-family:var(--font-sans); font-size:14.5px; font-weight:700; letter-spacing:2px; padding:11px; cursor:pointer}
+.lb-run:hover{background:rgba(227,169,81,.2)}
+.lb-run.stale{background:var(--gold); color:#1a1408}
+.lb-run:disabled{opacity:.5; cursor:default}
+.lb-approx{font-size:10.5px; color:var(--faint); margin-top:10px; line-height:1.55}
+.lb-approx.err{color:var(--gold)}
+
+.lb-rhead{display:flex; align-items:center; justify-content:space-between; gap:14px; margin:2px 2px 10px; min-height:28px}
+.lb-sum{font-size:12px; color:var(--dim); display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+.lb-sum .sep{color:var(--ghost)}
+.lb-tries{font-size:11.5px; color:var(--faint); border:1px solid var(--line); border-radius:999px; padding:3px 11px; white-space:nowrap}
+.lb-tries b{font-family:var(--font-mono); color:var(--dim); font-weight:650}
+.lb-tries.warn{color:var(--gold); border-color:var(--gold-line); background:var(--gold-soft)}
+.lb-tries.warn b{color:var(--gold)}
+.lb-results{transition:opacity .15s}
+.lb-results.stale{opacity:.38}
+.lb-periods{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px}
+.lb-pc{padding:15px 18px 14px; display:flex; flex-direction:column}
+.lb-ph{display:flex; align-items:baseline; gap:10px; margin-bottom:12px}
+.lb-ph .t{font-size:13px; font-weight:750; letter-spacing:1.4px}
+.lb-ph .r{font-size:11.5px; color:var(--faint)}
+.lb-ph .n{margin-left:auto; font-size:11.5px; color:var(--dim)}
+.lb-ph .n b{font-weight:650; color:var(--text)}
+.lb-hero{display:grid; grid-template-columns:1.05fr 1fr 1fr; gap:10px; align-items:end}
+.lb-hero .k{font-size:11px; color:var(--faint); letter-spacing:1.4px; margin-bottom:4px}
+.lb-hero .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-weight:680; line-height:1; letter-spacing:-.8px; white-space:nowrap}
+.lb-hero .v.big{font-size:40px}
+.lb-hero .v.mid{font-size:26px}
+.lb-hero .v small{font-size:13px; color:var(--dim); font-weight:500; margin-left:2px; letter-spacing:0}
+.lb-hero .cash{font-size:11.5px; color:var(--faint); margin-top:5px; white-space:nowrap}
+.lb-hero .v.na{color:var(--ghost)}
+.lb-tag{display:inline-block; font-size:10.5px; font-weight:650; border-radius:5px; padding:1px 6px; margin-top:6px; white-space:nowrap}
+.lb-tag.warn{color:var(--gold); background:var(--gold-soft)}
+.lb-exits{margin-top:14px}
+.lb-xbar{display:flex; height:6px; border-radius:3px; overflow:hidden; gap:2px; background:var(--surface-2)}
+.lb-xbar i{display:block; height:100%; border-radius:3px}
+.lb-xbar .tp{background:var(--up)} .lb-xbar .sl{background:var(--down)} .lb-xbar .eod{background:var(--ghost)}
+.lb-xleg{display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint); margin-top:6px}
+.lb-xleg b{font-family:var(--font-mono); font-weight:650; color:var(--dim); margin-left:4px}
+.lb-guard{margin-top:13px; border-top:1px solid var(--line-soft); padding-top:10px; display:grid; grid-template-columns:auto 1fr auto;
+  column-gap:12px; row-gap:6px; align-items:center; font-size:12px}
+.lb-guard .gk{color:var(--dim)}
+.lb-guard .gv{font-family:var(--font-mono); font-variant-numeric:tabular-nums; color:var(--text); text-align:right}
+.lb-guard .gs{font-size:11px; min-width:74px; text-align:right; color:var(--faint)}
+.lb-guard .gs.warn{color:var(--gold); font-weight:650}
+.lb-pc.empty .lb-hero .v,.lb-pc.empty .gv{color:var(--ghost)}
+.lb-emptymsg{margin-top:12px; border:1px dashed var(--line); border-radius:var(--r-md); padding:12px 14px; font-size:12.5px; color:var(--dim); text-align:center}
+.lb-emptymsg b{color:var(--text); font-weight:650}
+.lb-emptymsg small{display:block; font-size:11px; color:var(--faint); margin-top:2px}
+.lb-verdict{display:flex; align-items:center; gap:10px; font-size:12px; color:var(--dim); margin:-2px 2px 10px}
+.lb-verdict .dot{width:7px; height:7px; border-radius:50%; background:var(--ghost); flex:0 0 auto}
+.lb-verdict.half .dot{background:var(--gold)}
+.lb-verdict b{color:var(--text); font-weight:650}
+.lb-curve{padding:14px 18px 12px; position:relative}
+.lb-ch{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:6px}
+.lb-ch .t{font-size:11.5px; color:var(--dim); letter-spacing:1.6px; font-weight:650}
+.lb-leg{display:flex; gap:14px; font-size:11px; color:var(--faint)}
+.lb-leg i{display:inline-block; width:16px; height:0; border-top:2px solid var(--gold); vertical-align:middle; margin-right:5px}
+.lb-leg i.dash{border-top:2px dashed var(--dim)}
+#lbsvg{display:block; width:100%; height:318px}
+#lbsvg text{font-family:var(--font-mono); font-size:10.5px; fill:var(--faint)}
+.lb-tip{position:absolute; pointer-events:none; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:6px 9px;
+  font-size:11.5px; font-family:var(--font-mono); white-space:nowrap; color:var(--dim); display:none; z-index:5}
+.lb-tip b{color:var(--text)}
 </style></head><body><div class="app">
 <div class="topbar">
   <div class="brand"><div class="mark">&#9702;</div>
@@ -5286,12 +5413,13 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          「早盤細節」四個字塞進來會讓這一格比左右寬約 30px，語意交給卡片標題補。 -->
     <button data-tab="tick">細節</button>
     <button data-tab="review">回顧</button>
-    <!-- 【自動下單（模擬）】放右邊倒數第二：前三顆是「現在 → 更細 → 回頭看自己」的
+    <!-- 【策略實驗室】放右邊倒數第二：前三顆是「現在 → 更細 → 回頭看自己」的
          時間動線，這一頁是研究性質，接在後面。⛔ 不可以插在中間。
-         ⚠️ 2026-09-09 從「程式下單」改名成「自動下單（模擬）」（Benson 指示）——
-            隔壁多了一顆會真的送單的【自動下單】，兩顆的名字必須一眼分得出來，
-            **括號裡那兩個字是唯一的差別，⛔ 不准拿掉**。 -->
-    <button data-tab="auto">自動下單（模擬）</button>
+         ⚠️ 2026-09-14 取代原本的【自動下單（模擬）】（Benson 玩過 lab-ux demo 後拍板）。
+            那一頁的**畫面**拿掉了，但 autotest/ 的模擬紀錄（_auto_tick／_auto_record／
+            _auto_settle、/api/auto/*）照樣在後端跑 —— 【自動下單】每一筆的「模擬那邊」就是讀它。
+         ⛔ 這一頁只顯示**歷史回測結果**：不預測、不建議、不自動找「最好的參數」。 -->
+    <button data-tab="lab">策略實驗室</button>
     <!-- ⛔⛔ 【自動下單】＝**會真的送出委託單**的那一頁，所以放最右（動線的終點）。
          這一頁本身**沒有任何開關**：要用只能自己在硬碟上建 tools/shioaji/AUTO_ORDERS_ON，
          而且照樣受 REAL_ORDERS_ON 管。⛔ 不准在這裡加按鈕。 -->
@@ -5356,18 +5484,6 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  </div>
 </div>
 
-<!-- 【程式下單】：四種方向判斷的模擬對照。
-     ⛔⛔ 這一頁**永遠只是模擬，一張單都不會送出去**，也不是自動下單的前置作業。
-         裡面沒有任何 [data-act] / [data-rdir]（那兩個才是會送單的按鈕）。
-     ⭐ 第一屏只有兩樣東西：**圖＋四條泳道 ／ 成績表**（PM 2026-09-07 裁示三樣，
-        2026-09-08 Benson 把進度尺拿掉之後剩兩樣）。
-        v1 那一牆解釋文字被 Benson 退件（原話：「聽不懂，然後我覺得面板一大堆多餘的文字」）
-        ⇒ 2026-09-08 他連摺疊的〈這一頁在算什麼〉都不要了（原話：「然後這一頁在算甚麼
-        也拿掉，我不需要看這個我也不會看」）⇒ **整個摺疊區已刪掉**。
-        ⛔ 不准把那十條（或任何解釋牆）搬回這一頁 —— 那正是 v1 退件的原因。
-     ⛔ 這一頁已經拿掉四樣東西，⛔ **一樣都不准加回來**（守衛：autotest-tab.mjs ⑤／㉔）：
-        ① 進度尺（#attrack）② 成績表的「你自己」兩列 ③ 帳本那一行
-        ④〈這一頁在算什麼〉摺疊區。 -->
 <!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
      ⛔⛔ **開難、關易**（Benson 2026-09-09 拍板；同日下午他要求「開」也做到畫面上）：
        ・**開**＝ #alon 那兩顆做法鈕 → **第二段確認條** → 「確定，打開」
@@ -5381,8 +5497,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
        ・⛔ 開著的時候**只有**「關閉」那一顆（⛔ 沒有「換做法」——
          換做法牽涉到「今天已經進場了怎麼辦」，這一輪不做；再按一次開的話後端回 409）。
          守衛：fire-tab.mjs ②／⑧c／⑩／⑪。
-     ⛔ 這一段刻意放在 #tab-auto **之前**：autotest-backend.py ① 掃的是
-        `<div id="tab-auto">` 到 `<!-- 【回顧】` 之間那一段（模擬那一頁的紅線
+     ⛔ 這一段刻意放在 #tab-lab **之前**：autotest-backend.py ① 掃的是
+        #tab-lab 那個 div 到【回顧】那段註解之間（研究頁的紅線
         「一行都不碰下單路徑」），放進去會讓那把尺量到不該量的東西。 -->
 <div id="tab-fire" hidden>
 
@@ -5427,66 +5543,87 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  </div>
 </div>
 
-<div id="tab-auto" hidden>
+<!-- ══════════ 【策略實驗室】：歷史逐筆回測（2026-09-14 取代【自動下單（模擬）】的畫面）══════════
+     版面、文案、防騙區（天數／拿掉最賺的 5 天／雜訊範圍／試了幾組／兩段都好才算數）
+     照 lab-ux 定案 demo（test/ux-demo/strategy-lab.html，Benson 玩過說可以）。
+     ⛔⛔ 這一頁**只顯示歷史回測結果**（CLAUDE.md「UI 不得出現預測…」那條照樣適用）：
+        文案一律歷史口吻，⛔ 不預測、不建議、不給勝率預估／期望值／訊號強度，
+        ⛔ 不做「最佳參數」自動搜尋 —— 按一次只算他自己填的那一組。
+     ⛔ 一顆會送單的東西都沒有：沒有 form／submit／[data-act]／[data-rdir]，
+        只打 GET /api/lab/meta 與 GET /api/lab/run（按「回測」才打）。
+     ⚠️ 原本那一頁的**後端**（autotest/ 的模擬紀錄、/api/auto/*）照樣在跑，只是不畫了。 -->
+<div id="tab-lab" hidden>
+ <div class="lb-grid">
+  <!-- ===== 左：條件 ===== -->
+  <div class="card l1 lb-cond" id="lbform">
+   <div class="lb-sh"><span>條件</span><span class="lb-to" id="lbto"></span></div>
 
- <div class="card chart l1">
-  <div class="cheadwrap">
-   <div class="at-head">
-    <div class="at-title">
-     <!-- 裝置一：「模擬 · 不送單」鎖印。**全頁恰好 1 顆**，掛在最容易被截圖的地方。
-          ⛔ 不可以拿掉，也不可以變成兩顆（v1 三處是退件原因之一）。
-          金色在這個面板既有的意思是「這是什麼種類的資料，注意」（＝【細節】的取樣金籤），
-          沿用不是新增意思。⛔ 不可以用紅綠 —— 紅綠只給損益。 -->
-     <div class="h">這一天 <span class="dt" id="atdt"></span>
-       <span class="simlock" title="這一頁的四條算法全部是模擬，不會、也不能送出任何委託單">⚪ 模擬 · 不送單</span></div>
-     <div class="s" id="atsub"></div>
+   <div class="lb-f">
+    <div class="lb-k">進場時間<em>08:46 ～ 13:00</em></div>
+    <div class="lb-timebox">
+     <button type="button" class="lb-step" data-lbdt="-60">−1分</button>
+     <input class="lb-inp" id="lbt" value="" maxlength="8" spellcheck="false">
+     <button type="button" class="lb-step" data-lbdt="60">+1分</button>
     </div>
-    <div id="atpager"></div>
+    <div class="lb-hint" id="lbthint" hidden></div>
    </div>
-   <div class="calpop" id="atpick"></div>
+
+   <div class="lb-f">
+    <div class="lb-k">方向</div>
+    <div class="lb-dirs" id="lbdir">
+     <!-- 「現在真單用的」⛔ 不寫死：lbFire() 讀 /api/fire/state 的 method（A＝5 分 K、B＝開盤起）才標，讀不到就不標 -->
+     <button type="button" data-lbv="bar5" class="on">跟這根 5 分 K 開盤比<small id="lbm-bar5">&nbsp;</small></button>
+     <button type="button" data-lbv="open">跟 08:45 開盤比<small id="lbm-open">&nbsp;</small></button>
+     <button type="button" data-lbv="long">一律做多<small>&nbsp;</small></button>
+     <button type="button" data-lbv="short">一律做空<small>&nbsp;</small></button>
+    </div>
+   </div>
+
+   <div class="lb-f lb-pair">
+    <div><div class="lb-subk">停利</div><div class="lb-unit"><input class="lb-inp" id="lbtp" type="number" min="1" max="2000" step="10" value=""><span>點</span></div></div>
+    <div><div class="lb-subk">停損</div><div class="lb-unit"><input class="lb-inp" id="lbsl" type="number" min="1" max="2000" step="10" value=""><span>點</span></div></div>
+   </div>
+
+   <div class="lb-grp">
+    <div class="lb-f lb-pair">
+     <div><div class="lb-subk">開盤跳空至少</div><div class="lb-unit"><input class="lb-inp" id="lbgap" type="number" min="0" max="2000" step="10" placeholder="不限"><span>點</span></div></div>
+     <div><div class="lb-subk">夜盤震幅至少</div><div class="lb-unit"><input class="lb-inp" id="lbnr" type="number" min="0" max="2000" step="10" placeholder="不限"><span>點</span></div></div>
+    </div>
+    <div class="lb-f">
+     <div class="lb-subk">跳過星期</div>
+     <div class="lb-wd" id="lbwd"><button type="button" data-lbv="1">一</button><button type="button" data-lbv="2">二</button><button type="button" data-lbv="3">三</button><button type="button" data-lbv="4">四</button><button type="button" data-lbv="5">五</button></div>
+    </div>
+    <div class="lb-tog" id="lbexpw" role="switch" aria-checked="false"><span>避開結算週<small>每月第三個週三那一週</small></span><i class="lb-sw"></i></div>
+   </div>
+
+   <div class="lb-grp" style="margin-top:12px">
+    <div class="lb-tog on" id="lbcost" role="switch" aria-checked="true"><span>算進成本<small>手續費 5 點＋買賣價進出</small></span><i class="lb-sw"></i></div>
+   </div>
+
+   <button type="button" class="lb-run" id="lbrun">回測</button>
+   <div class="lb-approx" id="lbapprox">逐筆成交回測：進場用當時的買賣價，停損用碰到的那一筆成交價</div>
   </div>
-  <div class="at-tools" id="attools"></div>
-  <div class="at-wrap" id="atwrap"><canvas id="atday"></canvas>
-   <div id="atmsg"></div></div>
-  <!-- 四格讀數＝泳道的圖例，也是「四種算法各記一筆，他要看結果和數字」那句話的落點。
-       ⛔ 方向一律中性色（.dir）：這是全站唯一「程式說了什麼方向」的地方，
-          染紅會讓它看起來像一個令人興奮的訊號。紅綠只給點數。 -->
-  <div class="at-today" id="attoday"></div>
+
+  <!-- ===== 右：結果 ===== -->
+  <div>
+   <div class="lb-rhead">
+    <div class="lb-sum lb-mono" id="lbsum"></div>
+    <div class="lb-tries" id="lbtries" hidden></div>
+   </div>
+   <div class="lb-results" id="lbresults">
+    <div class="lb-verdict half" id="lbverdict"><i class="dot"></i><span><b>兩段都好才算數</b>　按「回測」看這組條件在歷史上的結果</span></div>
+    <div class="lb-periods">
+     <div class="card lb-pc empty" id="lbpdesign"></div>
+     <div class="card lb-pc empty" id="lbpvalid"></div>
+    </div>
+    <div class="card lb-curve">
+     <div class="lb-ch"><span class="t">累積點數</span><span class="lb-leg"><span><i></i>這組條件</span><span><i class="dash"></i>拿掉最賺的 5 天</span></span></div>
+     <svg id="lbsvg" viewBox="0 0 1000 318"></svg>
+     <div class="lb-tip" id="lbtip"></div>
+    </div>
+   </div>
+  </div>
  </div>
-
- <div class="card at-score">
-  <div class="sec-head"><h2>成績</h2><span class="count" id="atcount"></span></div>
-  <div class="seg at-seg" id="atwin"></div>
-  <!-- 免責只講一次（2026-09-14 搬到表頭底下）：不算勝率／每筆要差幾點才分得出高下／目前有沒有超過。
-       「勝率」那一欄只有算得出 %（≥ RATE_MIN_N 筆）才會出現；「證得出來嗎」那一欄拿掉，資訊在這一行。
-       ⛔ 同上：title 的數字是算出來寫進去的，⛔ 不要寫死。 -->
-  <div class="at-ceil" id="atceil"></div>
-  <div class="at-tblwrap"><table class="at-tbl" id="attbl"></table></div>
-  <div class="at-notes" id="atnotes"></div>
- </div>
-
- <div class="card at-cum">
-  <div class="sec-head"><h2>累計點數</h2><span class="count" id="atcumn"></span></div>
-  <div class="at-cwrap" id="atcwrap"><canvas id="atcum"></canvas>
-   <div class="at-empty" id="atcumempty"></div></div>
- </div>
-
- <!-- 配對對照：PM 2026-09-07 裁示「收進摺疊區，不要刪掉、也不放第一屏」。 -->
- <details class="at-fold at-pair" id="atpair"><summary>結果不一樣的那幾天</summary>
-  <div id="atpairbody"></div></details>
-
- <details class="at-fold at-adv" id="atadv"><summary>換一個門檻看看</summary>
-  <div id="atadvbody"></div></details>
-
- <!-- ⛔⛔ 〈這一頁在算什麼〉那個摺疊區（十條）已於 2026-09-08 依 Benson 指示**整個刪掉**
-      （原話：「然後這一頁在算甚麼也拿掉，我不需要看這個我也不會看」）。
-      ⛔ 不要再加回來，也不要改成別的名字重開一個解釋牆。
-      ⚠️ 那十條裡有兩條原本是別的守衛的落點，已經改掛在別處、**沒有跟著失效**：
-        ・「09:03:30 沒有被證明比 09:04:30 好」是畫面上唯一的第二個時分秒 ⇒
-          它走了之後，㉓⑤ 的規則從「只准出現在那一條裡」**收緊成**
-          「畫面上除了後端的 signal_at，一個時分秒都不准有」。
-        ・少樣本／不預告／不做多數決那幾條的**行為**本來就各自有守衛（⑥／⑪／⑧），
-          刪的只是說明文字，紅線一條都沒有放寬。 -->
 </div>
 
 <!-- 【回顧】：容器只建這一次，之後只換裡面的內容（重繪不打斷縮放／拖曳、也不閃） -->
@@ -8017,15 +8154,15 @@ function setTab(t){
  document.getElementById('tab-live').hidden=(t!=='live');
  document.getElementById('tab-tick').hidden=(t!=='tick');
  document.getElementById('tab-review').hidden=(t!=='review');
- document.getElementById('tab-auto').hidden=(t!=='auto');
+ document.getElementById('tab-lab').hidden=(t!=='lab');
  document.getElementById('tab-fire').hidden=(t!=='fire');
  document.querySelectorAll('.tabs button').forEach(b=>
    b.classList.toggle('on',b.getAttribute('data-tab')===t));
  if(t==='review'){ lastPane=''; if(!RV) rvFetch(); else rvRender(); }
  else if(t==='tick'){ tkEnter(); }
- // 【程式下單】的資料不掛在 500ms 的 tick 上，只在切進來／換天／按窗口時抓。
- // 後端的即時報價、持倉監控、±100 自動停利停損全程都在跑，切分頁完全不影響那一條路。
- else if(t==='auto'){ atEnter(); }
+ // 【策略實驗室】不掛在 500ms 的 tick 上：切進來問一次資料範圍，按「回測」才算。
+ // 後端的即時報價、持倉監控、自動停利停損全程都在跑，切分頁完全不影響那一條路。
+ else if(t==='lab'){ lbEnter(); }
  // 【自動下單】同樣不掛在 500ms 的 tick 上：後端的送單、持倉監控、±100 停利停損
  // 全程都在跑，切不切進這一頁完全不影響。
  else if(t==='fire'){ alEnter(); }
@@ -9219,1044 +9356,278 @@ document.addEventListener('keydown',function(e){
 });
 tkBind();
 
-/* ══════════════ 【程式下單】分頁：四種方向判斷的模擬對照（Canvas）══════════════
+/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測 ══════════════
 
-   這一頁回答一個問題，而且只有這一個：**「判斷方向」到底有沒有加分？**
-   四種算法唯一的差別是方向怎麼決定，時刻／口數／±100／出場規則全部一樣。
-
-   ⛔⛔ **永遠只是模擬，一張單都不會送出去。** 這一段一行都不碰 /api/enter、
-        /api/real/*，也不產生任何 [data-act] / [data-rdir]。
-   ⛔ 紅線比別頁嚴格：
-      ・不做跨算法的綜合／多數決／共識／「四個裡有幾個看多」——那就是訊號強度。
-      ・不排四格的優劣、不把「目前成績最好的那個」標起來。
-      ・09:03:30 之前不顯示方向（不預告）。
-      ・不到 30 筆不給勝率 %；不到 10 筆不畫累計線。
-      ・**顏色只給損益**：方向、訊號值、筆數、門檻、天數一律中性色。
-   ⚠️ 這一頁的資料**不掛在 500ms 的 tick 上**，只在切進來／換天／按窗口時抓。
+   照 lab-ux 定案 demo 的版面與文案；差別只有「算」搬到後端（逐筆口徑，/api/lab/run）。
+   ⛔⛔ 只顯示**歷史回測結果**。不預測、不建議、不自動找參數（按一次只算畫面上那一組）。
+   ⛔ 這一段只打 GET /api/lab/meta 與 GET /api/lab/run，一個 POST 都沒有、一顆會送單的鈕都沒有。
+   ⚠️ 資料不掛在 500ms 的 tick 上：切進來問一次 meta，按「回測」才算。
+   ⚠️ 預設值從注入的 RULE_SIGNAL_AT／RULE_TP／RULE_SL 來，⛔ 不寫死。
 */
-const ATSEC0=8*3600+45*60;          // 08:45:00（x 的原點）
-const ATEND=13*3600+45*60;          // 13:45:00 日盤收盤＝模擬單的強制平倉（PM 拍板）
-const ATSIG=9*3600+3*60+30;         // 09:03:30
-const ATWATCH=9*3600+30*60;         // 09:30 他自己收手（**不是**模擬單的出場條件）
-const ATSPAN=ATEND-ATSEC0;          // 18,000 秒
-const ATR=64, ATTOP=12, ATBOT=26;   // 右側價格軸寬／上下留白（沿用面板）
-const ATLANEH=22, ATLANEG=12;       // 一條泳道的高度／價格區與泳道之間的間隙
-const ATZ=2.80, ATSIGMA=96.6;       // 後端沒回時的退路，正本在 live_panel.py 的常數
-/* ⛔ ATKEYS 是**資料層**的 key（jsonl 的欄位、後端 rows 的鍵），⛔ 一個都不准上畫面 ——
-   要顯示一律走 atName()（見下面 AT_NAME）。這裡的順序就是 AT_ORDER。 */
-const ATKEYS=['A','B','C','D'];
-const ATCOL={text:'#E9ECF1',dim:'#8D95A3',faint:'#5C6472',ghost:'#39414F',
-             line:'#242C38',gold:'#E3A951',up:'#EE5A54',down:'#34B37E',bg:'#0E1116'};
-const ATFONT='11px ui-monospace,"Microsoft JhengHei",monospace';
-/* 泳道名字用 sans、600、⛔ 不准比 11px 更小（規格 §9.3：11px 是名字的下限，
-   v2 那個 10px mono 是**代號**才擠得下的字級）。 */
-const ATFONTN='600 11px "Microsoft JhengHei",ui-sans-serif,system-ui,sans-serif';
-const ATLANEH2=30;                  // 堆疊排法（窄視窗）的列高：名字一列＋色帶一列
-var ATLN={L:0,nw:0,laneH:ATLANEH,stacked:false};   // 最後一次量出來的泳道版面（探針會讀）
-/* ⛔⛔ 名字（規格 §2.0，這一節優先於規格其他所有措辭；v2 被 Benson 退件過一次，
-   他的原話：「我要從哪裡知道現在我看的是哪個做法？」）：
-   **畫面上不准出現 A／B／C／D**，代號只活在資料層（jsonl 的 key、後端 rows 的 key）。
-   ⛔ 不准自己改字、不准加「法／策略／模式」後綴、⛔ 不准為了塞得下而縮寫
-      （「開盤・30」「開30」都不行 —— 放不下就改版面，見 atLaneNameW()）。
-   ⛔ 不准在畫面任何地方留「A＝5 分 K」這種對照說明：需要那行字就代表命名失敗了。
-   ⚠️ C 的名字**自帶門檻值**（門檻改 80 就變「開盤起・要 80 點」）⇒ 一定要走 atName()，
-      ⛔ 不准把字串散在各處硬寫（否則改一次門檻要改七個地方）。
-   ⚠️ 門檻的正本是後端常數 C_THRESH（隨 /api/auto/day 與 /api/auto/stats 送過來）；
-      「換一個門檻看看」那支滑桿⛔ 不准改動任何地方的名字（它只試算，真正在跑的還是 C_THRESH）。 */
-const AT_NAME={A:'5 分 K',B:'開盤起',C:'',D:'不判斷'};
-const AT_SUB ={A:'09:00 起算',B:'08:45 起算',C:'08:45 起算・不夠就不做',D:'一律做多（基準）'};
-const AT_ORDER=ATKEYS;                 // ⛔ 四處（今天卡／成績表／泳道／累計圖）一律同序
-function atThr(){
- const v=atN((AT.stats||{}).thresh); if(v!=null) return v;
- const w=atN((AT.data||{}).thresh); if(w!=null) return w;
- return AT.thr;
-}
-function atName(k){ return k==='C'?('開盤起・要 '+atThr()+' 點'):(AT_NAME[k]||k); }
-function atSub(k){ return AT_SUB[k]||''; }
-const ATEXIT={tp:'停利',sl:'停損',eod:'收盤平'};
-/* ⛔⛔ 沒有結算的日子有**兩種**，畫面上一定要分得出來（2026-09-08 修）：
-   ・持倉中 ＝ 還沒摸到 ±100，而且那天的日盤還沒收 —— 正常的等待，不是異常。
-   ・結算中 ＝ 日盤收了（或那是過去的日子），該算了卻還沒算出來 —— 該注意。
-   以前只有「結算中」，而後端會拿**盤中最後一根 K 棒的收盤價**硬算出一個 eod ⇒
-   畫面上是一個看起來很正常的假成績（他 2026-09-08 早上真的看到四條「09:05 收盤平」）。
-   ⛔ 持倉中**只寫「持倉中」＋進場價，不算浮動損益**（規格 §16-3 拍板：
-      會跳的模擬損益是這一頁最容易讓他開始盯盤的東西，而且沒有任何用途）。 */
-function atSettleWord(o){
- if(!o) return '結算中';
- const done=o.runs?true:(o.done===true);
- return done?'已結算':(o.holding?'持倉中':'結算中');
-}
-const ATWHY={no_quote:RULE_SIGNAL_AT+' 收不到報價（斷線、休市或國定假日）',
-  quote_stale:RULE_SIGNAL_AT+' 那一刻的報價太舊，沒有拿它記（拿舊價記＝假成績）',
-  mid_only:'那一刻只有買賣價、還沒有成交價，沒有拿中價頂替',
-  late:RULE_SIGNAL_AT+' 的時候面板沒開著（或剛重啟），那一刻的價已經過去了',
-  unknown:'原因沒有記下來'};
-/* AT.date（想看哪天）與 AT.data.date（手上這份是哪天）**必須是兩個欄位** ——
-   換日到新資料回來之間那一秒，只有一個欄位的話會把昨天的資料掛在今天的日期底下。 */
-var AT={date:'',data:null,days:[],missing:[],today:'',now:'',nowAt:0,trackN:505,
-        seq:0,sseq:0,pending:false,err:'',stats:null,swin:20,zoom:false,pick:false,
-        booted:false,cache:{},adv:30,drawn:0,
-        /* thr＝C 的門檻（名字自己帶著它）。⛔ 後端常數 C_THRESH 才是正本，
-           這裡的 30 只是還沒拿到回應時的退路；serr／tickErr 是主迴圈那道 try
-           攔下來的錯，⛔ 一定要畫在畫面上（不可以安靜地吞）。 */
-        thr:30,serr:'',tickErr:0};
-var ATC={W:0,H:0,DPR:0}, ATCC={W:0,H:0,DPR:0};
+const LBVALID='2026-01-01';          // 顯示用的退路；正本是後端回的 valid_from
+const LBMIN=30, LBPOINT=10;          // 少於 30 天不給勝率（後端也是）；微台 1 點 NT$10
+const LBDIR={bar5:'跟 5 分 K 開盤比',open:'跟 08:45 開盤比',long:'一律做多',short:'一律做空'};
+const LBSKIP={gap:'跳空不夠',night:'夜盤震幅不夠',wd:'跳過的星期',expw:'結算週',nodir:'沒有方向可比',nodata:'那天沒有資料'};
+const LBWHY={tp:'停利',sl:'停損',eod:'收盤平倉'};
+var LB={boot:false,meta:null,busy:false,seq:0,shown:null,last:null,err:'',tried:new Set()};
 
-const atN=x=>(typeof x==='number'&&isFinite(x))?x:null;
-function atSecOf(hm){
- if(typeof hm!=='string'||hm.length<5||hm[2]!==':') return null;
- const h=parseInt(hm.slice(0,2),10), m=parseInt(hm.slice(3,5),10);
- const s=(hm.length>=8&&hm[5]===':')?parseInt(hm.slice(6,8),10):0;
- if(!isFinite(h)||!isFinite(m)||!isFinite(s)) return null;
- return h*3600+m*60+s;
+const lbSec=(h,m,s)=>h*3600+m*60+s;
+const LBTMIN=lbSec(8,46,0), LBTMAX=lbSec(13,0,0);
+function lbHMS(s){ return [s/3600|0,(s%3600)/60|0,s%60].map(x=>String(x).padStart(2,'0')).join(':'); }
+function lbFmt(v,dp){ dp=dp==null?1:dp;
+  return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp}); }
+function lbCls(v){ return v>0?'up':v<0?'down':''; }
+function lbEl(id){ return document.getElementById(id); }
+
+function lbParams(){
+  const m=/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(lbEl('lbt').value.trim());
+  let tsec=null;
+  if(m&&+m[2]<60&&+(m[3]||0)<60){ const s=lbSec(+m[1],+m[2],+(m[3]||0)); if(s>=LBTMIN&&s<=LBTMAX) tsec=s; }
+  const pts=(id,opt)=>{ const v=lbEl(id).value.trim();
+    if(v==='') return opt?0:null;
+    if(!/^\d{1,4}$/.test(v)) return null;
+    const n=+v; if(opt&&n===0) return 0;
+    return (n>=1&&n<=2000)?n:null; };
+  return {tsec, dir:(document.querySelector('#lbdir .on')||{dataset:{lbv:'bar5'}}).dataset.lbv,
+    tp:pts('lbtp',false), sl:pts('lbsl',false), gap:pts('lbgap',true), nr:pts('lbnr',true),
+    skip:[...document.querySelectorAll('#lbwd .on')].map(b=>+b.dataset.lbv),
+    noexp:lbEl('lbexpw').classList.contains('on')?1:0, cost:lbEl('lbcost').classList.contains('on')?1:0};
 }
-function atHM(sec){
- const t=Math.round(sec)+ATSEC0;
- return String(Math.floor(t/3600)).padStart(2,'0')+':'+
-        String(Math.floor(t/60)%60).padStart(2,'0');
-}
-/* ⛔ 判斷「時刻到了沒」一律用**後端時鐘**當基準（跨午夜時瀏覽器與後端會不同一天，
-   面板已經為這件事踩過一次）。瀏覽器的時鐘只用來算「從拿到那一刻起過了幾秒」。 */
-function atNowSec(){
- const b=atSecOf(AT.now);
- if(b==null) return null;
- return b+Math.max(0,(Date.now()-AT.nowAt)/1000);
-}
-/* 天花板 ＝「這批資料至少要差多少，才有八成機率被抓到」＝ z·σ/√n。
-   σ 是 ±100 停利停損規則下單筆點數的標準差，由後端量出來（實測 96.6）。 */
-function atCeiling(n){
- if(!(n>0)) return null;
- const S=AT.stats||{}, s=atN(S.sigma)||ATSIGMA, z=atN(S.z)||ATZ;
- return Math.round(z*s/Math.sqrt(n)*10)/10;
-}
-/* 累計點數的「證不出來帶」半寬 ＝ 天花板(n)×n。**跟 atCeiling 同一個 z 與 σ** ——
-   線還在帶子裡 ⇔ 每筆沒超過天花板，圖跟表講的必須是同一句話。 */
-function atBand(n){
- if(!(n>0)) return 0;
- const S=AT.stats||{}, s=atN(S.sigma)||ATSIGMA, z=atN(S.z)||ATZ;
- return z*s*Math.sqrt(n);
+function lbSig(P){ return JSON.stringify([P.tsec,P.dir,P.tp,P.sl,P.gap,P.nr,P.skip,P.noexp,P.cost]); }
+function lbOk(P){ return P.tsec!==null&&P.tp!==null&&P.sl!==null&&P.gap!==null&&P.nr!==null; }
+function lbQuery(P){
+  const q=['t='+lbHMS(P.tsec),'dir='+P.dir,'tp='+P.tp,'sl='+P.sl];
+  if(P.gap) q.push('gap='+P.gap);
+  if(P.nr) q.push('nr='+P.nr);
+  if(P.skip.length) q.push('skip='+P.skip.join(','));
+  q.push('noexp='+P.noexp,'cost='+P.cost);
+  return q.join('&');
 }
 
-/* ---------------- 取資料 ---------------- */
-function atFetchDays(){
- return fetch('/api/auto/days').then(r=>r.json()).then(x=>{
-   AT.days=(x&&x.days)||[]; AT.missing=(x&&x.missing)||[];
-   AT.today=(x&&x.today)||''; AT.now=(x&&x.now)||''; AT.nowAt=Date.now();
-   AT.trackN=(x&&x.track_n)||505;
-   if(atN(x&&x.thresh)!=null) AT.thr=x.thresh;      // 名字自己帶著門檻，正本在後端
-   /* ⛔ 主迴圈那道 try 攔下來的錯要**上畫面**（2026-09-07 退件 R5）：
-      吞在後端變數裡而畫面上一個字都沒有，跟安靜地吞沒有差別。 */
-   AT.serr=(x&&x.err)||''; AT.tickErr=(x&&x.tick_err)||0;
-   if(!AT.date) AT.date=AT.today||((AT.days[0]||{}).d)||'';
- }).catch(()=>{ if(!AT.days) AT.days=[]; });
+function lbValidate(){
+  const P=lbParams();
+  lbEl('lbt').classList.toggle('bad',P.tsec===null);
+  lbEl('lbtp').classList.toggle('bad',P.tp===null);
+  lbEl('lbsl').classList.toggle('bad',P.sl===null);
+  lbEl('lbgap').classList.toggle('bad',P.gap===null);
+  lbEl('lbnr').classList.toggle('bad',P.nr===null);
+  const h=lbEl('lbthint');
+  if(P.tsec!==null&&P.dir==='bar5'&&P.tsec%300===0){
+    h.textContent='這一刻剛好是 5 分 K 的開頭，沒有東西可以比'; h.hidden=false;
+  } else h.hidden=true;
+  return P;
 }
-function atFetchStats(){
- const my=++AT.sseq;
- return fetch('/api/auto/stats?win='+AT.swin+'&src=live').then(r=>r.json()).then(x=>{
-   if(my!==AT.sseq) return;      // 連按窗口鈕時只認最後一次
-   AT.stats=x;
-   if(atN(x&&x.thresh)!=null) AT.thr=x.thresh;
-   if(x&&('err' in x)) AT.serr=x.err||'';
-   if(x&&('tick_err' in x)) AT.tickErr=x.tick_err||0;
-   atPaintStats();
- }).catch(()=>{});
-}
-function atFetchDay(d){
- /* ⛔ 換日請求要帶流水號，只認最後一次的回應。連按 ◀ 時先送的請求可能後回來，
-    舊那天的資料會蓋回去；而且快取的日期跟當前選擇又剛好對得上 ⇒
-    「載入中」那道守衛判定不出來（面板 2026-08-23 實測過同一個坑）。 */
- const my=++AT.seq;
- AT.pending=true;
- return fetch('/api/auto/day?date='+encodeURIComponent(d))
-  .then(r=>r.json().then(j=>({ok:r.ok,j:j}))).then(res=>{
-   if(my!==AT.seq) return;
-   if(!res.ok){
-     if(d===AT.date){ AT.err=(res.j&&res.j.error)||'讀不出來'; AT.pending=false; AT.data=null; }
-     atPaint(); return;
-   }
-   AT.cache[d]=res.j;
-   const ks=Object.keys(AT.cache);
-   if(ks.length>3){ ks.sort(); for(const k of ks.slice(0,ks.length-3)) if(k!==d) delete AT.cache[k]; }
-   if(d===AT.date){
-     AT.err=''; AT.pending=false; AT.data=res.j;
-     if(res.j.now){ AT.now=res.j.now; AT.nowAt=Date.now(); }
-     if(res.j.today) AT.today=res.j.today;
-   }
-   atPaint();
-  }).catch(()=>{
-   if(my!==AT.seq) return;
-   if(d===AT.date){ AT.pending=false; AT.err='連不上面板'; }
-   atPaint();
-  });
+function lbMark(){
+  const P=lbValidate(), b=lbEl('lbrun');
+  const stale=LB.shown!==null&&lbSig(P)!==LB.shown;
+  lbEl('lbresults').classList.toggle('stale',stale);
+  b.classList.toggle('stale',stale&&!LB.busy);
+  b.disabled=LB.busy||!lbOk(P);
+  b.textContent=LB.busy?'回測中…':stale?'條件改了・重新回測':'回測';
+  const a=lbEl('lbapprox');
+  a.classList.toggle('err',!!LB.err);
+  a.textContent=LB.err||'逐筆成交回測：進場用當時的買賣價，停損用碰到的那一筆成交價';
 }
 
-/* ---------------- 翻頁 ---------------- */
-function atLoading(){ return AT.pending||!AT.data||AT.data.date!==AT.date; }
-function atDayInfo(d){ return (AT.days||[]).find(x=>x.d===d)||null; }
-/* ◀▶ 走的是**清單的索引**，不是「日期減一天」—— 沒有記錄的日子要選不到。
-   今天永遠在清單第一個（就算還沒記錄）：他早上開面板看到的預設就是今天。 */
-function atNavList(){
- const L=(AT.days||[]).map(x=>x.d);
- if(AT.today&&L.indexOf(AT.today)<0) L.unshift(AT.today);
- return L;
-}
-function atStep(dir){
- const L=atNavList(); if(!L.length) return null;
- const i=L.indexOf(AT.date);
- if(i<0) return dir<0?L[0]:null;
- const j=i-dir;                      // 清單是新到舊，往前一天＝索引 +1
- return (j>=0&&j<L.length)?L[j]:null;
-}
-function atPagerHTML(){
- const cur=AT.date, me=atDayInfo(cur), loading=atLoading();
- const D=(!loading&&AT.data)?AT.data:null;
- const back=atStep(-1), fwd=atStep(1);
- let r2;
- if(!cur) r2='<span>還沒有任何一天</span>';
- else if(loading) r2='<span>載入中…</span>';
- else if(AT.err) r2='<span class="warn">讀不出來</span>';
- else if(!D||D.px==null) r2='<span>這天沒有記錄</span>';
- else r2='<span>'+(D.at||RULE_SIGNAL_AT)+' 進場 '+atN(D.px).toFixed(1)+'</span>'+
-   /* ⛔ 「持倉中」與「結算中」是兩件事，不可以寫同一句（2026-09-08）：
-      前者＝還沒摸到 ±100、日盤也還沒收，那是正常的等待；
-      後者＝該算了卻還沒算出來。⛔ 持倉中**不給浮動損益**（規格 §16-3）——
-      這一行只寫進場價，不寫「現在賺賠多少」。 */
-   '<span class="sep">·</span><span>'+atSettleWord(D)+'</span>'+
-   '<span class="sep k">·</span><span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
- return '<div class="pager">'+
-  '<div class="r1">'+
-  '<button class="nav-icon" data-atnav="-1" title="前一個有記錄的日子（←）"'+
-    (back?'':' disabled')+'>◀</button>'+
-  // ⚠️ 日期鈕的寬度不准隨狀態變：載入中只把日期轉灰（.loading），不可以換成「載入中…」
-  //    —— 那會讓按鈕瞬間變寬，靠右對齊的 ◀ 被推出滑鼠底下。
-  '<button class="dstamp'+(AT.pick?' open':'')+(loading?' loading':'')+
-    '" data-atpick="1" title="選日期（Esc 收合）"'+(cur?'':' disabled')+'>'+CAL_ICON+
-    '<span class="num">'+(cur?cur.slice(5):'--/--')+'</span>'+
-    '<span class="wd">'+(me?me.w:'')+'</span><span class="caret">▼</span></button>'+
-  '<button class="nav-icon" data-atnav="1" title="後一個有記錄的日子（→）"'+
-    (fwd?'':' disabled')+'>▶</button>'+
-  ((cur&&cur===AT.today)
-    ?'<span class="livelamp" title="今天"><i></i>今天</span>'
-    :'<button class="jump2" data-atday="'+AT.today+'"'+(AT.today?'':' disabled')+
-     ' title="回到今天（Home）">今天</button>')+
-  '</div><div class="r2">'+r2+'</div></div>';
-}
-function atListHTML(){
- if(!AT.pick) return '';
- const L=atNavList();
- let rows=L.map(d=>{
-   const x=atDayInfo(d);
-   let meta;
-   if(!x) meta='今天　還沒有記錄';
-   else{
-     const dd=x.dirs||{};
-     /* ⛔ 這裡也不准出現代號（規格 §2.0）。清單是 width:max-content ＋ max-width，
-        字長了是整塊橫向捲，不會把某一列撐高。 */
-     const t=AT_ORDER.map(k=>atName(k)+' '+
-       (dd[k]==null?'—':(dd[k]===0?'—':(dd[k]>0?'多':'空')))).join('　');
-     meta=t+'　'+(x.net==null?atSettleWord(x):('當天合計 '+pm(x.net,0)));
-   }
-   return '<button class="row'+(d===AT.date?' on':'')+'" data-atday="'+d+'">'+
-     '<span class="dd">'+d.slice(5)+'</span>'+
-     '<span class="wd">'+(x?x.w:'')+'</span>'+
-     '<span class="meta">'+meta+'</span></button>';
- }).join('');
- if(!rows) rows='<div class="foot">還沒有任何一天的模擬紀錄。</div>';
- /* ⛔ 沒有記錄的日子要看得見、也要看得到原因 ——「我明明有開面板怎麼沒錄到」
-    如果無解，他就會開始不相信這一頁的數字。 */
- const ms=(AT.missing||[]).length
-   ?('<div class="foot">⚠ 有 '+AT.missing.length+' 天沒有記錄：'+
-     AT.missing.slice(0,3).map(m=>m.d.slice(5)+'（'+(ATWHY[m.why]||m.why)+'）').join('、')+
-     ((AT.missing.length>3)?' …':'')+'</div>'):'';
- return '<div class="tk-list">'+rows+ms+'</div>';
-}
-function atToolsHTML(){
- /* ⛔ 預設畫**整個日盤**：±100 大多數日子在 09:30 之前根本摸不到，
-    只畫 08:45~09:30 的話四條泳道全部跑出畫面右邊（demo 第一版實測）。 */
- return '<button class="at-chip'+(AT.zoom?' on':'')+'" data-atzoom="1"'+
-   ' title="放大到他自己的下單時段。⚠ ±'+RULE_TP+' 常常要到中午才摸到，出場會落在畫面外">'+
-   '只看 08:45~09:30</button>'+
-   '<span class="lab">'+(AT.zoom?'08:45~09:30':'08:45~13:45')+'　1 分 K</span>';
-}
-function atDateHTML(){
- const d=AT.date; if(!d) return '';
- const x=atDayInfo(d);
- return d.slice(5)+(x?('（'+x.w+'）'):'')+(d===AT.today?' 今天':'');
-}
-function atSubHTML(){
- const D=(!atLoading()&&AT.data)?AT.data:null;
- if(atLoading()) return '<span>載入中…</span>';
- if(AT.err) return '<span class="warn">'+AT.err+'</span>';
- if(!D||D.px==null) return '<span>這天沒有 '+RULE_SIGNAL_AT+' 的記錄</span>';
- const bits=['四條共用同一個進場價 '+atN(D.px).toFixed(1)];
- /* ⚠️ 這句話必須跟 _auto_settle 真的用到的第一根一致（2026-09-07 lab-qa 退件 R2：
-    舊版比較用 `>`，實際上是從 09:05 那根才開始算，這句話是**假話**）。
-    標籤是起始時間 ⇒ 09:04 那根涵蓋 09:04~09:05，「含」這個字不可以省。 */
- if(D.settle_from) bits.push('出場從 '+D.settle_from+' 那根 1 分 K（含）開始算');
- /* ⛔ 持倉中只講狀態，⛔ 不算「現在賺賠多少」（規格 §16-3）。 */
- if(D.holding) bits.push('還沒摸到 ±'+RULE_TP+'，日盤還沒收 ⇒ 持倉中');
- /* ⚠️ 這句講的是**圖上那幾張「真 ▲ 多」籤**（他當天真的下的單畫在 K 線上），
-    跟被拿掉的成績表那兩列不是同一件事 ⇒ 保留。
-    ⛔ 但用字改成「真實單」跟圖上的籤一致 —— 「你自己」這四個字已經是
-    「成績表那兩列」的專屬字樣，畫面上留著會讓守衛（㉔ 零命中）分不出來。 */
- if((D.mine||[]).length) bits.push('真實單 '+D.mine.length+' 筆');
- return bits.map(b=>'<span>'+b+'</span>').join('<span class="sep">·</span>');
+function lbCard(el,title,range,S,empty,idle){
+  el.classList.toggle('empty',!!empty);
+  if(empty){
+    el.innerHTML='<div class="lb-ph"><span class="t">'+title+'</span><span class="r lb-mono">'+range+'</span><span class="n">—</span></div>'+
+      '<div class="lb-hero"><div><div class="k">勝率</div><div class="v big na">—</div></div>'+
+      '<div><div class="k">每筆平均</div><div class="v mid na">—</div></div>'+
+      '<div><div class="k">總點數</div><div class="v mid na">—</div></div></div>'+
+      (idle?'':'<div class="lb-emptymsg"><b>資料補齊中</b><small>2026 年的資料陸續補進來中</small></div>');
+    return;
+  }
+  const few=S.n<LBMIN;
+  const inNoise=S.noise!=null&&S.avg!=null&&Math.abs(S.avg)<=S.noise;
+  const sk=Object.entries(S.skip_by||{}).map(([k,v])=>(LBSKIP[k]||k)+' '+v).join('、');
+  const dep=S.no5!=null&&S.no5<=0&&S.avg>0;
+  let h='<div class="lb-ph"><span class="t">'+title+'</span><span class="r lb-mono">'+range+'</span>'+
+    '<span class="n" title="'+sk+'">做了 <b class="lb-mono">'+S.n+'</b> 天・過濾掉 <b class="lb-mono">'+S.skipped+'</b> 天</span></div>';
+  if(S.n===0){ el.innerHTML=h+'<div class="lb-emptymsg"><b>這組條件一天都沒做到</b><small>'+sk+'</small></div>'; return; }
+  h+='<div class="lb-hero"><div><div class="k">勝率</div>'+
+    (few||S.rate==null?'<div class="v big na">—</div><span class="lb-tag warn">只有 '+S.n+' 天，不算勝率</span>'
+                      :'<div class="v big">'+S.rate.toFixed(1)+'<small>%</small></div>')+'</div>'+
+    '<div><div class="k">每筆平均</div><div class="v mid '+lbCls(S.avg)+'">'+lbFmt(S.avg)+'<small>點</small></div>'+
+      '<div class="cash lb-mono">NT$ '+lbFmt(S.avg*LBPOINT,0)+'</div></div>'+
+    '<div><div class="k">總點數</div><div class="v mid '+lbCls(S.total)+'">'+lbFmt(S.total,0)+'</div>'+
+      '<div class="cash lb-mono">NT$ '+lbFmt(S.total*LBPOINT,0)+'</div></div></div>'+
+    '<div class="lb-exits"><div class="lb-xbar"><i class="tp" style="flex:'+S.tp+'"></i><i class="sl" style="flex:'+S.sl+'"></i><i class="eod" style="flex:'+S.eod+'"></i></div>'+
+    '<div class="lb-xleg"><span>停利<b>'+S.tp+'</b></span><span>停損<b>'+S.sl+'</b></span><span>收盤平倉<b>'+S.eod+'</b></span></div></div>'+
+    '<div class="lb-guard">'+
+      '<span class="gk">天數</span><span class="gv">'+S.n+' 天</span><span class="gs '+(few?'warn':'')+'">'+(few?'太少':'夠')+'</span>'+
+      '<span class="gk">拿掉最賺的 5 天</span><span class="gv '+(S.no5==null?'':lbCls(S.no5))+'">'+(S.no5==null?'—':lbFmt(S.no5)+' 點／筆')+'</span>'+
+        '<span class="gs '+(dep?'warn':'')+'">'+(dep?'靠那 5 天':'')+'</span>'+
+      '<span class="gk">雜訊範圍</span><span class="gv">'+(S.noise==null?'—':'±'+S.noise.toFixed(1)+' 點／筆')+'</span>'+
+        '<span class="gs '+(inNoise?'warn':'')+'">'+(S.noise==null?'':inNoise?'在雜訊裡':'超出雜訊')+'</span>'+
+    '</div>';
+  el.innerHTML=h;
 }
 
-/* ---------------- 時態鎖：⛔ 時刻過了才顯示方向，不預告 ---------------- */
-function atSigPassed(){
- /* 過去的日子當然過了；今天要看**後端時鐘**。
-    ⛔ 09:03:30 之前不可以顯示「目前 A 會判斷做多」「還有 2 分 30 秒」這類東西 ——
-       那是預測，而且是最像「建議」的一種形狀。 */
- if(AT.date!==AT.today) return true;
- const s=atNowSec();
- return s==null?false:(s>=ATSIG);
-}
-function atTodayHTML(){
- const D=AT.data;
- if(atLoading()||!D) return '';
- if(!atSigPassed())
-   return '<div class="wait"><div class="t">今天 '+(D.signal_at||RULE_SIGNAL_AT)+' 還沒到</div>'+
-     '<div class="d" title="時刻還沒到就顯示「等一下會判斷什麼方向」，那是預測 —— '+
-     '而且是最像建議的一種形狀。這一頁不做那件事。">時刻到了才會記下方向。</div></div>';
- if(D.px==null){
-   const why=D.miss?(ATWHY[D.why]||D.why||ATWHY.unknown)
-     :'還沒寫進紀錄（或那時候面板沒開著）';
-   return '<div class="wait"><div class="t">'+(D.date===AT.today?'今天':'這天')+'沒有記錄</div>'+
-     '<div class="d">'+why+'</div></div>';
- }
- return AT_ORDER.map(k=>{
-   const dr=D.dirs?D.dirs[k]:null;
-   const run=(D.runs||{})[k];
-   /* ⛔ 方向一律中性色（.dir）。這是全站唯一「程式現在說了什麼方向」的地方，
-      染成紅綠會讓它看起來像一個令人興奮的訊號。紅綠只給點數。 */
-   let dtxt='—', cls='';
-   if(dr==null){ dtxt='算不出訊號'; cls=' off'; }
-   else if(dr===0){ dtxt='這天不做'; cls=' off'; }
-   else dtxt=(dr>0?'做多':'做空');
-   /* ⚠️ C 這裡**不再重複寫門檻** —— 名字裡已經寫著「要 N 點」了（規格 §9.3 同一條）。
-      ⛔ 2026-09-14：「訊號 +145.0 點」那一行拿掉 —— 那是訊號強度（CLAUDE.md：UI 不得出現
-         預測／勝率預估／期望值／買賣建議／訊號強度）。畫面上只留方向與已發生的進出場價；
-         訊號數值照樣記在檔案裡（後端 `sig` 一個字都沒改）。D 那格的「不判斷方向」是說明不是數值，留著。 */
-   const sgt=(k==='D')?'不判斷方向':'';
-   let rs;
-   /* ⛔ 還沒摸到 ±100、日盤也還沒收 ⇒ 「持倉中」，⛔ 不可以是一個假的點數
-      （2026-09-08：舊版拿盤中最後一根 K 棒的收盤價算出「09:05 收盤平 ±67」）。 */
-   /* ⚠️ 還沒結算的時候也要分得出「這天根本沒下單」：C 沒超過門檻的日子寫「持倉中」
-      是假話（它沒有部位）。方向那一欄已經有 dirs，不必等 settle 才知道。 */
-   if(!run) rs=(dr===0?'沒超過門檻，這天不下單'
-              :(dr==null?'—':(D.holding?'持倉中':'結算中')));
-   else if(run.dir===0) rs='沒超過門檻，這天不下單';
-   else if(run.dir==null) rs='—';
-   else rs=(run.exit_at||'—')+' '+(ATEXIT[run.why]||'—')+
-     ' <span class="'+sgn(run.pts)+'">'+pm(run.pts,0)+'</span> 點';
-   return '<div class="c"><div class="k"><b>'+atName(k)+'</b>'+atSub(k)+'</div>'+
-     '<div class="dir'+cls+'">'+dtxt+'</div>'+
-     (sgt?('<div class="sg">'+sgt+'</div>'):'')+'<div class="rs">'+rs+'</div></div>';
- }).join('');
-}
-
-/* ---------------- 成績表 ---------------- */
-function atCountHTML(){
- const S=AT.stats; if(!S) return '';
- return S.n+' 個交易日'+(S.since?('　'+S.since.slice(5)+'~'+(S.until||'').slice(5)):'');
-}
-function atWinHTML(){
- /* ⚠️ 按筆數去重，只剩一個就整條不畫（沿用真實區 realWindows() 的做法）——
-    上線第一個月四顆會是同一批資料，按了畫面完全不動比沒有這排按鈕更糟。 */
- const S=AT.stats;
- const tot=(S&&S.notes&&S.notes.days_total)||(AT.days||[]).length;
- const seen={}, out=[];
- for(const it of [[10,'近10'],[20,'近20'],[60,'近60'],[0,'全部']]){
-   const eff=it[0]?Math.min(it[0],tot):tot;
-   if(seen[eff]) continue;
-   seen[eff]=1; out.push(it);
- }
- if(out.length<2) return '';
- return out.map(it=>'<button class="'+(AT.swin===it[0]?'on':'')+
-   '" data-atwin="'+it[0]+'">'+it[1]+'</button>').join('');
-}
-function atRateCell(r){
- /* ⛔ **樣本少的時候不給百分比。** 3 筆 2 勝顯示「67%」看起來像一個測量結果，
-    其實是三次擲銅板 —— 一個看起來可信卻無效的數字，比明顯沒用的更危險。
-    30 這個門檻不是統計上的魔法數字，是「一眼看得出是運氣」與「人會開始相信」的分界。 */
- const min=(AT.stats&&AT.stats.rate_min_n)||30;
- if(!r.n||r.n<min) return '<td class="rate na">不到 '+min+' 筆，不算 %</td>';
- return '<td class="rate">'+r.rate+'%</td>';
-}
-/* ⛔ 2026-09-14「這批資料證得出來嗎」那一欄拿掉（atProveCell）：四格全寫同一句
-   「在雜訊裡（<149.4 點）」＝同一件事講四次。天花板與「目前有沒有一條超過」
-   仍然在 atCeilHTML 那一行（現在放表頭底下），資訊沒有少。 */
-function atRow(k,name,sub,r,extra,cls,showRate){
- const pts=r.pts||0;
- return '<tr'+(cls?(' class="'+cls+'"'):'')+'>'+
-  '<td class="nm">'+name+'<i>'+sub+'</i></td>'+
-  '<td>'+(r.n||0)+(extra||'')+'</td>'+
-  '<td>'+(r.w||0)+'–'+(r.l||0)+'</td>'+
-  (showRate?atRateCell(r):'')+
-  '<td class="pts '+sgn(pts)+'">'+pm(pts,0)+'</td>'+
-  '<td class="avg '+sgn(r.avg||0)+'">'+(r.avg==null?'—':pm(r.avg,1))+'</td></tr>';
-}
-function atTblHTML(){
- const S=AT.stats;
- if(!S||!S.rows) return '';
- /* 「勝率」那一欄只有**算得出 %** 的時候才出現（後端 rate 在 n < RATE_MIN_N 時回 null）——
-    樣本不夠時四格全寫「不到 30 筆，不算 %」是同一句講四次（2026-09-14 減字），
-    那句改講一次、放在表頭底下那一行（atCeilHTML）。⛔ 門檻仍然是後端的，前端不自己算。 */
- const showRate=AT_ORDER.some(k=>S.rows[k]&&S.rows[k].rate!=null);
- /* ⚠️ 對 Benson 一律叫「做法」，⛔ 不叫「算法／策略／模型」（規格 §2 的用字規矩）。 */
- let html='<tr><th>做法</th><th>筆數</th><th>勝–敗</th>'+(showRate?'<th>勝率</th>':'')+
-   '<th>累計點數</th><th>每筆</th></tr>';
- for(const k of AT_ORDER){
-   const r=S.rows[k];
-   /* ⛔ C 那一列的筆數要寫成「3（+17 天沒做）」，只寫 3 會讓人以為只累積了 3 天。 */
-   const extra=(k==='C'&&r.skip)?(' <span class="sub">(+'+r.skip+' 天沒做)</span>'):'';
-   /* ⛔ 第一欄是**名字**不是代號，底下那行小字是 AT_SUB（規格 §2.0 的名字表）。
-      ⚠️ 那行小字有守衛在盯（autotest-tab.mjs ㉑）—— lab-qa 把它清空過，134/134 全綠。 */
-   html+=atRow(k,atName(k),atSub(k),r,extra,'',showRate);
- }
- /* ⛔⛔ 「你自己（全部）」與「你自己（同口徑）」那兩列、連同上面那條
-    「▼ 你自己真的做的（口徑不同…）」分隔，已於 2026-09-08 依 Benson 指示拿掉
-    （原話：「然後我自己的這邊都拿掉」）。⛔ 不要再加回來。
-    ⚠️ 後端 S.mine 照算、`_auto_mine_day`／`_auto_mine_rows` 與它們的
-       「只讀不寫」守衛（autotest-backend.py ⑧c）**一行都不准刪** —— 他之後可能會
-       想加回來，而那道守衛擋的是「這一頁會不會寫到他的真實紀錄」，跟畫不畫無關。
-    守衛：autotest-tab.mjs ㉔ —— 成績表只有四列、DOM ＋ 兩張 canvas 上「你自己」零命中。 */
- return html;
-}
-function atCeilHTML(){
- const S=AT.stats; if(!S) return '';
- const n=S.n||0, c=atCeiling(n);
- if(!n||c==null)
-   return '<span class="dot">●</span><span>0 筆 ⇒ 什麼都測不出來。</span>';
- // ⛔ 這一行也不准出現代號（規格 §2.0 ⑥「目前『X』超過這條線」）
- const over=AT_ORDER.filter(k=>S.rows&&S.rows[k]&&S.rows[k].over).map(k=>'「'+atName(k)+'」');
- /* 2026-09-14 免責講一次（lab-ux 定案 C 的文案）：
-      「只有 5 筆：不算勝率；每筆要差 149.4 點以上才分得出高下，目前四條都沒有。」
-    「不算勝率」那半只在 n < RATE_MIN_N 時講（門檻是後端的 rate_min_n）；
-    超過門檻之後表格會自己長出「勝率」欄，這裡就只講天花板。 */
- const min=atN(S.rate_min_n)||30;
- return '<span class="dot">●</span>'+
-  '<span>'+(n<min?('只有 '+n+' 筆：不算勝率；'):(n+' 筆：'))+
-  '每筆要差 <b>'+c+'</b> 點以上才分得出高下，'+
-  (over.length
-    ?('<span class="hit">目前 '+over.join('、')+' 超過（一次超過不等於證明）</span>')
-    :'目前四條都沒有')+'。</span>';
-}
-function atNotesHTML(){
- /* ⛔⛔ 2026-09-08 Benson：「下面這個我根本看不懂是在幹嘛的」⇒ **帳本那一行拿掉**
-    （`同一根同時摸到 ±100 … 檔案 N 列＝訊號＋結算＋沒錄到＋重複＋讀不出來`）。
-    ⚠️ 但**不可以整條刪掉**：這個專案明令禁止「安靜地少」，而
-       `sig+settle+miss+dup+bad ＝ 總列數` 那條不變式與它的守衛都還在後端照算。
-    ⇒ 拆成兩種：
-       ・**常態統計**（帳本五項總和／收盤平幾筆／持倉中幾筆）＝ 他看不懂也不需要
-         ⇒ ⛔ 不畫。日期清單、泳道、今天卡本來就一天一天寫得清清楚楚。
-       ・**異常**（讀不出來／重複／沒有記錄的天／歷史回填／保守算停損／還沒結算／出錯）
-         ⇒ **只在 > 0 的時候出現**。正常情況下這一整行是空的（.at-notes:empty 隱藏），
-         他看不到任何東西；真的少了什麼的時候它會自己冒出來。
-    ⛔ 不要把它改回「無論如何都印一行」，那就是被退件的那一行。 */
- const S=AT.stats; if(!S||!S.rows) return '';
- const both=ATKEYS.reduce((a,k)=>a+(S.rows[k].both||0),0);
- const pend=ATKEYS.reduce((a,k)=>a+(S.rows[k].pending||0),0);
- const N=S.notes||{}, bits=[];
- /* ⛔ 「同一根同時摸到 ±100」是**我們替他做了一個對他不利的假設**（保守算停損），
-    真的發生時一定要講出來（CLAUDE.md）；沒發生就不用佔他一行字。 */
- if(both) bits.push('<span class="warn">同一根同時摸到 ±'+RULE_TP+'（保守算停損）'+both+' 筆</span>');
- if(pend) bits.push('<span class="warn">還沒結算 '+pend+' 筆</span>');
- if(N.missing) bits.push('<span class="warn">沒有記錄 '+N.missing+' 天</span>');
- if(N.backfill) bits.push('<span class="warn">歷史回填 '+N.backfill+
-   ' 筆（⛔ 不併入上面）</span>');
- /* ⛔ 檔案裡讀不出來／重複的列數是「有沒有東西被安靜吃掉」唯一看得見的出口 ——
-    ⛔ 這兩個不可以跟著帳本一起拿掉，只是改成「有才寫」。 */
- const led=S.ledger||{};
- if(led.bad) bits.push('<span class="warn">檔案有 '+led.bad+' 列讀不出來（已排除）</span>');
- if(led.dup) bits.push('<span class="warn">檔案有 '+led.dup+' 列重複（已排除）</span>');
- /* ⛔⛔ 主迴圈那道 try 攔下來的錯**一定要在這裡看得見**（2026-09-07 lab-qa 退件 R5）：
-    後端一直有在數（AUTO["tick_err"]）也有 console 警告，但 console 只印前 3 次、
-    而他不會去看主控台 ⇒ 對「使用畫面的人」來說那還是安靜地吞掉了。
-    ⛔ 出錯不是 0 的時候不可以只寫次數就算了，最後一個錯誤的原文也要寫出來。 */
- const te=atN(AT.tickErr)||0;
- if(te) bits.push('<span class="warn">程式下單那一段出錯 '+te+
-   ' 次（⚠ 停損不受影響，主迴圈沒有中斷）</span>');
- if(AT.serr) bits.push('<span class="warn">最後一個錯誤：'+esc(AT.serr)+'</span>');
- return bits.map(b=>'<span>'+b+'</span>').join('<span class="sep">·</span>');
-}
-function atCumN(){
- const S=AT.stats; if(!S||!S.rows) return 0;
- let m=0;
- /* ⚠️ 2026-09-08 起不再把他自己那條算進來（那條線已經不畫了）—— 只數四個做法。 */
- for(const k of ATKEYS) m=Math.max(m,(S.rows[k].cum||[]).length);
- return m;
-}
-function atCumNHTML(){
- const n=atCumN();
- return n?(n+' 筆　灰帶＝這批資料證不出來的範圍'):'';
-}
-function atCumEmptyHTML(){
- const min=(AT.stats&&AT.stats.cum_min_n)||10, n=atCumN();
- return '<div class="t">只有 '+n+' 筆，還不畫線</div>'+
-   '<div class="d" title="三、四個點連起來看起來就像一條趨勢，但那只是三、四個點">滿 '+
-   min+' 筆才開始畫</div>';
+function lbCurve(){
+  const svg=lbEl('lbsvg'), R=LB.last&&LB.last.res;
+  const padL=46,padR=10,padT=12,padB=24;
+  const W=Math.round(svg.getBoundingClientRect().width)||1000, H=Math.round(svg.getBoundingClientRect().height)||300;
+  svg.setAttribute('viewBox','0 0 '+W+' '+H);
+  if(!R){ svg.innerHTML=''; svg.onmousemove=null; return; }
+  const dS=R.design.series||[], vS=R.valid.series||[];
+  const x1=padL+(W-padL-padR)*0.7;                          // 驗證期留 30% 寬（demo 定案）
+  const vx0=x1+8, vx1=W-padR;
+  const pts=[];                                              // {x, cum, cum5, row}
+  let c=0,c5=0;
+  const top5d=new Set(R.design.top5||[]), top5v=new Set(R.valid.top5||[]);
+  dS.forEach((r,i)=>{ if(r[1]!=null){ c+=r[1]; if(!top5d.has(r[0])) c5+=r[1]; }
+    pts.push({x:padL+(x1-padL)*(dS.length>1?i/(dS.length-1):0),cum:c,cum5:c5,r,v:false}); });
+  vS.forEach((r,i)=>{ if(r[1]!=null){ c+=r[1]; if(!top5v.has(r[0])) c5+=r[1]; }
+    pts.push({x:vx0+(vx1-vx0)*(vS.length>1?i/(vS.length-1):0),cum:c,cum5:c5,r,v:true}); });
+  const all=pts.flatMap(p=>[p.cum,p.cum5]);
+  let lo=Math.min(0,...all), hi=Math.max(0,...all);
+  if(hi-lo<100){ hi+=50; lo-=50; }
+  const span=hi-lo; hi+=span*.06; lo-=span*.06;
+  const Y=v=>padT+(H-padT-padB)*(1-(v-lo)/(hi-lo));
+  const step=[100,200,500,1000,2000,5000].find(s=>(hi-lo)/s<=5)||10000;
+  let g='';
+  for(let v=Math.ceil(lo/step)*step; v<=hi; v+=step){
+    g+='<line x1="'+padL+'" x2="'+(W-padR)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="'+(v===0?'#39414F':'#1E2530')+'" stroke-width="1"/>';
+    g+='<text x="'+(padL-6)+'" y="'+(Y(v)+3.5)+'" text-anchor="end">'+(v>0?'+':'')+v+'</text>';
+  }
+  let lastM='';
+  pts.forEach((p,i)=>{ const m=p.r[0].slice(0,7);
+    if(m!==lastM&&(+m.slice(5)%3===1||i===0||(p.v&&!pts[i-1].v))){
+      g+='<text x="'+p.x+'" y="'+(H-7)+'" text-anchor="'+(i===0?'start':'middle')+'">'+m.replace('-','/')+'</text>'; }
+    lastM=m; });
+  const path=(arr,key)=>arr.map((p,i)=>(i?'L':'M')+p.x.toFixed(1)+','+Y(p[key]).toFixed(1)).join('');
+  const dp=pts.filter(p=>!p.v), vp=pts.filter(p=>p.v);
+  const vFrom=(R.valid_from||LBVALID).slice(0,4);
+  if(!vp.length){
+    g+='<rect x="'+vx0+'" y="'+padT+'" width="'+(vx1-vx0)+'" height="'+(H-padT-padB)+'" fill="rgba(255,255,255,.015)" stroke="#242C38" stroke-dasharray="4 4"/>';
+    g+='<text x="'+((vx0+vx1)/2)+'" y="'+((H-padB+padT)/2)+'" text-anchor="middle" style="font-family:var(--font-sans);font-size:12px;fill:#5C6472">驗證期 '+vFrom+'・資料補齊中</text>';
+  } else {
+    g+='<line x1="'+(x1+4)+'" x2="'+(x1+4)+'" y1="'+padT+'" y2="'+(H-padB)+'" stroke="#242C38" stroke-dasharray="4 4"/>';
+    g+='<text x="'+(vx0+4)+'" y="'+(padT+11)+'" text-anchor="start" style="font-family:var(--font-sans);font-size:11px;fill:#5C6472">驗證期</text>';
+  }
+  [dp,vp].forEach(seg=>{ if(!seg.length) return;
+    g+='<path d="'+path(seg,'cum5')+'" fill="none" stroke="#8D95A3" stroke-width="1.3" stroke-dasharray="5 4" opacity=".8"/>';
+    g+='<path d="'+path(seg,'cum')+'L'+seg[seg.length-1].x.toFixed(1)+','+Y(0)+'L'+seg[0].x.toFixed(1)+','+Y(0)+'Z" fill="rgba(227,169,81,.07)"/>';
+    g+='<path d="'+path(seg,'cum')+'" fill="none" stroke="#E3A951" stroke-width="2"/>'; });
+  g+='<line id="lbhov" x1="0" x2="0" y1="'+padT+'" y2="'+(H-padB)+'" stroke="#5C6472" stroke-width="1" visibility="hidden"/>';
+  svg.innerHTML=g;
+  svg.onmousemove=ev=>{
+    const rc=svg.getBoundingClientRect(), vx=(ev.clientX-rc.left)/rc.width*W;
+    const tip=lbEl('lbtip'), hov=lbEl('lbhov');
+    if(!pts.length||vx<padL-4||vx>W-padR+4){ tip.style.display='none'; hov.setAttribute('visibility','hidden'); return; }
+    let best=0; pts.forEach((p,i)=>{ if(Math.abs(p.x-vx)<Math.abs(pts[best].x-vx)) best=i; });
+    const p=pts[best], r=p.r;
+    hov.setAttribute('x1',p.x); hov.setAttribute('x2',p.x); hov.setAttribute('visibility','visible');
+    tip.innerHTML=r[0]+'　'+(r[1]==null?'<span>沒做（'+(LBSKIP[r[2]]||r[2])+'）</span>'
+      :'當天 <b class="'+lbCls(r[1])+'">'+lbFmt(r[1])+'</b>・'+(LBWHY[r[2]]||r[2]))+'　累積 <b>'+lbFmt(p.cum,0)+'</b>';
+    tip.style.display='block';
+    const cw=svg.parentNode.getBoundingClientRect();
+    const left=ev.clientX-cw.left+14;
+    tip.style.left=Math.max(4,Math.min(left,cw.width-tip.offsetWidth-4))+'px';
+    tip.style.top=(ev.clientY-cw.top+18)+'px';
+  };
+  svg.onmouseleave=()=>{ lbEl('lbtip').style.display='none'; const h=lbEl('lbhov'); if(h) h.setAttribute('visibility','hidden'); };
 }
 
-/* ---------------- 配對對照（摺疊）---------------- */
-function atPairHTML(){
- const S=AT.stats; if(!S||!S.pairs) return '';
- // ⛔ 標題與內文都用名字（規格 §2.0 ⑤：`5 分 K vs 不判斷`），⛔ 不准出現代號
- const base=atName('D');
- const cards=AT_ORDER.filter(k=>k!=='D').map(k=>{
-   const p=S.pairs[k]||{m:0,w:0,l:0,diff:0,need:null,dots:[]};
-   const dots=(p.dots||[]).map(v=>'<i class="'+(v>0?'w':(v<0?'l':''))+'"></i>').join('');
-   return '<div class="at-pc"><div class="h">'+atName(k)+' vs '+base+'</div>'+
-     '<div class="m">結果不一樣的只有 '+p.m+' 天 / '+S.n+' 天</div>'+
-     '<div class="v">'+atName(k)+' 贏 '+p.w+' · '+base+' 贏 '+p.l+' · 差 '+
-       '<span class="'+sgn(p.diff)+'">'+pm(p.diff,1)+'</span> 點</div>'+
-     '<div class="at-dots">'+dots+'</div>'+
-     '<div class="need">'+(p.need==null?'還沒有可以比的日子'
-       :(p.need>p.m?('這 '+p.m+' 天全贏也還不算數')
-                   :('贏 '+p.w+' 次 · 要 '+p.need+' 次才算數')))+'</div></div>';
- }).join('');
- return '<div class="at-pairs" title="四個做法大多數日子方向一樣，方向一樣的那幾天兩邊結果完全相同、'+
-   '差值是 0。所以能拿來比的樣本數不是總天數，是「結果不一樣的那幾天」。'+
-   '那幾天等於擲同樣次數的銅板 —— 要算數，得贏到 need 那個次數。">'+cards+'</div>';
+function lbPaint(){
+  const M=LB.meta;
+  lbEl('lbto').innerHTML=M&&M.last?'資料到 <b>'+M.last+'</b>・共 '+M.n_days+' 天':(M?'還沒有歷史資料':'');
+  const R=LB.last&&LB.last.res, P=LB.last&&LB.last.P;
+  if(!R){
+    lbCard(lbEl('lbpdesign'),'設計期',M&&M.first?M.first+' ～ '+(M.design_to||''):'',null,true,true);
+    lbCard(lbEl('lbpvalid'),'驗證期',(M&&M.valid_from||LBVALID).slice(0,4),null,true,!(M&&M.n_valid===0));
+    lbCurve(); lbMark(); return;
+  }
+  const D=R.design, V=R.valid;
+  lbCard(lbEl('lbpdesign'),'設計期',D.days?D.from+' ～ '+D.to:'',D,!D.days,false);
+  lbCard(lbEl('lbpvalid'),'驗證期',V.days?V.from+' ～ '+V.to:(R.valid_from||LBVALID).slice(0,4),V,!V.days,false);
+  const vb=lbEl('lbverdict');
+  vb.querySelector('span').innerHTML=!V.days
+    ?'<b>兩段都好才算數</b>　驗證期還沒有資料，這組結果目前只看得到一半'
+    :(D.n&&V.n&&D.avg>0&&V.avg>0)?'<b>兩段都好才算數</b>　兩段每筆平均都是正的'
+    :'<b>兩段都好才算數</b>　兩段結果不一致';
+  vb.classList.toggle('half',!V.days);
+  const sep='<span class="sep">·</span>';
+  lbEl('lbsum').innerHTML=[lbHMS(P.tsec),LBDIR[P.dir],'停利 '+P.tp+'／停損 '+P.sl,
+    P.gap?'跳空 ≥ '+P.gap:'',P.nr?'夜盤 ≥ '+P.nr:'',
+    P.skip.length?'跳過週'+P.skip.map(w=>'一二三四五'[w-1]).join(''):'',P.noexp?'避開結算週':'',
+    P.cost?'含成本':'不含成本'].filter(Boolean).join(sep);
+  const k=LB.tried.size, tr=lbEl('lbtries');
+  tr.hidden=k<2;
+  tr.classList.toggle('warn',k>=10);
+  tr.innerHTML=k>=10?'這次試了 <b>'+k+'</b> 組・試越多組，越容易碰到運氣好的那組':'這次試了 <b>'+k+'</b> 組';
+  lbCurve(); lbMark();
 }
 
-/* ---------------- 門檻掃描（摺疊）----------------
-   這是「⛔ 記數值，不只記方向」那條規矩的兌現：想試「要超過 50 點才做」，
-   用同一批資料就算得出來，不用再等二十天。
-   ⛔ 不顯示「最好的那一列」、⛔ 不畫門檻對報酬的曲線 —— 那種圖會讓人一眼挑峰值，
-      而峰值幾乎一定是雜訊。 */
-function atScanRow(o,cur){
- return '<tr'+(cur?' class="cur"':'')+'><td>'+o.t+' 點</td><td>'+o.n+'</td>'+
-  '<td>'+o.w+'–'+o.l+'</td>'+
-  '<td class="'+sgn(o.pts||0)+'">'+pm(o.pts||0,0)+'</td>'+
-  '<td class="'+sgn(o.avg||0)+'">'+(o.avg==null?'—':pm(o.avg,1))+'</td>'+
-  '<td>'+(o.ceiling==null?'—':(o.over?('超過 '+o.ceiling):('在雜訊裡（&lt;'+o.ceiling+'）')))+'</td></tr>';
-}
-function atLocalScan(t){
- const S=AT.stats, bs=(S&&S.bseries)||[];
- const pts=bs.filter(x=>Math.abs(x[0])>t).map(x=>x[1]);
- const w=pts.filter(p=>p>0).length, sum=pts.reduce((a,b)=>a+b,0);
- const avg=pts.length?Math.round(sum/pts.length*10)/10:null;
- const c=atCeiling(pts.length);
- return {t:t,n:pts.length,w:w,l:pts.length-w,pts:Math.round(sum*10)/10,avg:avg,
-         ceiling:c,over:!!(c!=null&&avg!=null&&Math.abs(avg)>c)};
-}
-function atAdvHTML(){
- const S=AT.stats; if(!S) return '';
- const rows=(S.scan||[]).map(o=>atScanRow(o,false)).join('')+atScanRow(atLocalScan(AT.adv),true);
- return '<div class="at-advrow"><span>門檻</span>'+
-  '<input type="range" id="atslider" min="0" max="200" step="5" value="'+AT.adv+'">'+
-  '<b>'+AT.adv+' 點</b></div>'+
-  '<table class="at-scan"><tr><th>門檻</th><th>筆數</th><th>勝–敗</th>'+
-  '<th>累計點數</th><th>每筆</th><th>證得出來嗎</th></tr>'+rows+'</table>'+
-  '<div class="note" title="門檻拉到 80 點只剩幾筆的時候，那一列的數字幾乎沒有意義">'+
-  '門檻越高 ⇒ 筆數越少 ⇒ 那條線越高</div>'+
-  '<div class="note" title="同一批資料被問越多次，挑到最好看的那個門檻通常只是挑到雜訊">'+
-  '不是在找最好的門檻（刻意不標任何一列）</div>'+
-  /* ⛔ 這裡也不准出現代號；而且滑桿⛔ 不准改動 atName('C')（規格 §2.0 最後一條）——
-     它只是「用同一批資料試算另一個門檻」，真正在跑的永遠是後端常數 C_THRESH。 */
-  '<div class="note">拉這個滑桿<b> 不會 </b>改變真正在跑的「'+atName('C')+
-  '」（門檻寫在程式裡，只有改程式才會變）。</div>';
+function lbRun(){
+  const P=lbValidate();
+  if(LB.busy||!lbOk(P)) return;
+  const my=++LB.seq;
+  LB.busy=true; LB.err=''; lbMark();
+  fetch('/api/lab/run?'+lbQuery(P),{cache:'no-store'})
+    .then(r=>r.json().catch(()=>({})).then(j=>({s:r.status,j})))
+    .then(({s,j})=>{
+      if(my!==LB.seq) return;
+      LB.busy=false;
+      if(s!==200||!j||!j.ok){
+        LB.err=s===429?'還在算上一組，等一下再按一次':((j&&j.msg)||('回測失敗（'+s+'）'));
+        lbMark(); return; }
+      LB.last={P,res:j}; LB.shown=lbSig(P); LB.tried.add(LB.shown);
+      lbPaint();
+    })
+    .catch(()=>{ if(my!==LB.seq) return; LB.busy=false; LB.err='連不到面板，回測沒有跑'; lbMark(); });
 }
 
-/* ---------------- canvas：這一天的圖 ＋ 四條泳道 ---------------- */
-function atFit(){
- const cv=document.getElementById('atday'); if(!cv) return null;
- const box=cv.getBoundingClientRect();
- const w=Math.max(320,Math.round(box.width)), h=Math.max(180,Math.round(box.height));
- const dpr=Math.min(2,window.devicePixelRatio||1);
- /* ⛔ 這道 early-return 不准拿掉。寫 canvas.width（**就算寫同一個值**）會重新配置
-    整張後備緩衝區並清空 —— demo 實測一次 draw 從 2ms 變 129ms。它在熱路徑上。 */
- if(w===ATC.W&&h===ATC.H&&dpr===ATC.DPR&&cv.width) return cv;
- ATC={W:w,H:h,DPR:dpr};
- cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
- cv.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
- return cv;
-}
-function atNiceStep(raw){
- if(!(raw>0)) return 1;
- const e=Math.pow(10,Math.floor(Math.log10(raw))), r=raw/e;
- return (r<=1?1:r<=2?2:r<=2.5?2.5:r<=5?5:10)*e;
-}
-function atView(){ return AT.zoom?{t0:0,t1:ATWATCH-ATSEC0}:{t0:0,t1:ATSPAN}; }
-/* 泳道左邊那一欄的寬度**是量出來的，不是猜的**（規格 §9.3）：
-   對四個名字各跑一次 measureText，取最大值 NW，欄寬 L = ceil(NW) + 18。
-   ⛔ 不准寫死一個 px 值 —— 門檻改成三位數（開盤起・要 200 點）名字就會變寬。
-   ⛔⛔ 放不下不是縮寫的理由，是**重新排版**的理由（這一條被 Benson 退件過）：
-      L 超過繪圖區 1/4 就切成堆疊排法（名字自己一列、色帶在下一列，列高 22→30），
-      ⛔ 不准縮寫、不准截字、不准改小字級、也不可以改成壓縮泳道。 */
-function atLaneLayout(ctx,PW){
- ctx.save(); ctx.font=ATFONTN;
- let nw=0;
- for(const k of AT_ORDER) nw=Math.max(nw,ctx.measureText(atName(k)).width);
- ctx.restore();
- const L=Math.ceil(nw)+18, stacked=(L>PW*0.25);
- ATLN={L:stacked?0:L,nw:nw,laneH:stacked?ATLANEH2:ATLANEH,stacked:stacked};
- return ATLN;
-}
-function atBars(){
- const D=AT.data, out=[];
- for(const b of ((D&&D.bars)||[])){
-   const s=atSecOf(b[0]); if(s==null) continue;
-   const o=atN(b[1]), h=atN(b[2]), l=atN(b[3]), c=atN(b[4]);
-   if(o==null||h==null||l==null||c==null) continue;   // 一列壞資料只丟那一列
-   out.push({t:s-ATSEC0,o:o,h:h,l:l,c:c});
- }
- return out;
-}
-function atAxis(bars,v){
- /* 價格軸：niceStep 貼齊（必抄）。
-    ⚠️ **刻意沒有遲滯**：這張圖的視窗只有兩種固定值、資料只增不減 ⇒ 遲滯的
-       early-return 結構上進不去（跟【細節】同一個坑，TICK-TAB-SPEC §4.1 有更正）。
-       留一段不承重的程式，下一個人會以為它在守。
-    ⛔ ±100 與交易標記**都不准撐大價格軸**：那 45 分鐘的真實振幅常常只有 30~60 點，
-       硬把 ±200 塞進來會把唯一要看的波動壓成一條直線。畫不到就掛邊緣籤。
-    ⚠️ 也因此完全不必碰真實單的 exit（它可能是 null，Math.min(lo,entry,exit) 會把它
-       當成 0、價格軸整個掉到 0 —— 2026-09-02 踩過）。 */
- let hi=-1e18, lo=1e18;
- for(const b of bars){
-   if(b.t+60<v.t0||b.t>v.t1) continue;
-   if(b.h>hi)hi=b.h; if(b.l<lo)lo=b.l;
- }
- if(!(hi>lo)){ const m=(hi>-1e17?hi:12000); hi=m+5; lo=m-5; }
- const pad=Math.max(1,(hi-lo)*0.06);
- let aHi=hi+pad, aLo=lo-pad;
- const step=atNiceStep((aHi-aLo)/6);
- return {hi:Math.ceil(aHi/step)*step, lo:Math.floor(aLo/step)*step, step:step};
-}
-function atChip(ctx,x,y,txt,col){
- ctx.save(); ctx.font=ATFONT;
- const w=ctx.measureText(txt).width+14;
- ctx.fillStyle=ATCOL.bg; ctx.globalAlpha=.9;
- ctx.beginPath(); ctx.roundRect(x,y,w,17,4); ctx.fill(); ctx.globalAlpha=1;
- ctx.strokeStyle=col; ctx.globalAlpha=.5; ctx.lineWidth=1; ctx.stroke(); ctx.globalAlpha=1;
- ctx.fillStyle=col; ctx.fillText(txt,x+7,y+12); ctx.restore();
-}
-function atDrawDay(){
- const cv=atFit(); if(!cv) return 0;
- const D=AT.data; if(!D) return 0;
- const bars=atBars(); if(!bars.length) return 0;
- const ctx=cv.getContext('2d'), W=ATC.W, H=ATC.H;
- ctx.clearRect(0,0,W,H);
- const v=atView(), PW=W-ATR;
- /* ⛔ K 棒與泳道**必須共用同一個 xOf()**（規格 §9.3）——否則泳道的色帶跟上面的
-    K 棒對不到同一個時刻。名字欄與 K 線圖因此共用同一條左界 LN.L。 */
- const LN=atLaneLayout(ctx,PW);
- const laneTop=H-ATBOT-AT_ORDER.length*LN.laneH;
- const pH=Math.max(60,laneTop-ATTOP-ATLANEG);
- const A=atAxis(bars,v);
- const gx=LN.L+4, gw=Math.max(20,PW-LN.L-8);
- const xOf=t=>gx+(t-v.t0)/(v.t1-v.t0)*gw;
- const yOf=p=>ATTOP+(A.hi-p)/(A.hi-A.lo)*pH;
- ctx.font=ATFONT; ctx.textBaseline='alphabetic';
-
- // 08:45~09:30 鋪淡金底（沿用面板「下單時段」的語言）
- const wx0=xOf(0), wx1=xOf(ATWATCH-ATSEC0);
- ctx.fillStyle='rgba(227,169,81,.035)';
- ctx.fillRect(Math.max(gx,wx0),ATTOP,Math.min(PW,wx1)-Math.max(gx,wx0),pH);
-
- // 價格軸（刻度從 lo 往上取第一個 step 整數倍開始畫）
- ctx.strokeStyle=ATCOL.line; ctx.lineWidth=1; ctx.fillStyle=ATCOL.faint;
- for(let p=Math.ceil(A.lo/A.step)*A.step;p<=A.hi+1e-9;p+=A.step){
-   const y=Math.round(yOf(p))+.5;
-   ctx.beginPath(); ctx.moveTo(gx,y); ctx.lineTo(PW,y); ctx.stroke();
-   ctx.fillText(p.toFixed(0),PW+7,y+4);
- }
- // 時間軸：⛔ 印 HH:MM（印到秒是【細節】的事，這一頁印秒會讓人以為在看秒級圖）
- const tickEvery=(v.t1-v.t0)>7200?1800:600;
- for(let t=0;t<=v.t1;t+=tickEvery){
-   const x=Math.round(xOf(t))+.5;
-   if(x<gx-1||x>PW) continue;
-   ctx.strokeStyle='rgba(36,44,56,.7)';
-   ctx.beginPath(); ctx.moveTo(x,ATTOP); ctx.lineTo(x,ATTOP+pH); ctx.stroke();
-   /* ⚠️ 第一格要夾住：`x-16` 在 x=0 時是 -16 ⇒ 08:45 那個標籤被切成「45」
-      （截圖才看得出來，掃字串是掃不到的 —— 送進 canvas 的字串本身是對的）。 */
-   ctx.fillStyle=ATCOL.faint; ctx.fillText(atHM(t),Math.max(2,Math.min(PW-34,x-16)),H-8);
- }
-
- // 1 分 K（台股慣例：紅漲綠跌）
- const bw=Math.max(1,Math.min(9,(60/(v.t1-v.t0))*PW-1));
- for(const b of bars){
-   if(b.t+60<v.t0||b.t>v.t1) continue;
-   const x=xOf(b.t+30), up=b.c>=b.o;
-   ctx.strokeStyle=up?ATCOL.up:ATCOL.down; ctx.fillStyle=ctx.strokeStyle;
-   ctx.lineWidth=1;
-   ctx.beginPath(); ctx.moveTo(Math.round(x)+.5,yOf(b.h));
-   ctx.lineTo(Math.round(x)+.5,yOf(b.l)); ctx.stroke();
-   const y0=yOf(Math.max(b.o,b.c)), y1=yOf(Math.min(b.o,b.c));
-   ctx.fillRect(x-bw/2,y0,bw,Math.max(1,y1-y0));
- }
-
- /* ⚠️ 疊放順序是**三層**，而且是截圖才看出來的（掃字串與「有沒有畫到畫布外」都抓不到）：
-      ① 進場的金線與 ◆（最底）── 他自己那一單的 ▲ 常常就疊在同一個位置
-      ② 他自己那幾張籤
-      ③ 「09:03:30 模擬進場 12010.3」那張金籤（最上）
-    理由：他的進場時刻本來就落在 09:03:30 附近、價也差不多。反過來排的話
-    那個 ▲ 會蓋掉金籤上的一個字，而這一頁的主角就是那一筆。 */
- const px=atN(D.px);
- if(px!=null){
-   const ex=xOf(ATSIG-ATSEC0);
-   // 09:03:30 的金色垂直虛線 ＋ **一個**進場標記。
-   // ⛔ 四條事實上就是同一個時刻同一個價，畫四個進場點是**假的**。
-   ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle=ATCOL.gold; ctx.lineWidth=1;
-   ctx.beginPath(); ctx.moveTo(ex+.5,ATTOP); ctx.lineTo(ex+.5,H-ATBOT); ctx.stroke();
-   ctx.restore();
-   const ey=yOf(px);
-   ctx.save(); ctx.fillStyle=ATCOL.gold;
-   ctx.beginPath(); ctx.moveTo(ex,ey-6); ctx.lineTo(ex+6,ey); ctx.lineTo(ex,ey+6);
-   ctx.lineTo(ex-6,ey); ctx.closePath(); ctx.fill(); ctx.restore();
-   atDrawMine(ctx,D,xOf,yOf,A,PW,pH);            // ②：夾在 ◆ 與金籤之間
-   // ⚠️ y 要夾住：進場價貼近價格軸上緣時，籤會跑到畫布外面（看不到就等於沒畫）
-   atChip(ctx,Math.max(2,Math.min(ex+10,PW-190)),Math.max(ATTOP+1,ey-28),
-     RULE_SIGNAL_AT+' 模擬進場 '+px.toFixed(1),ATCOL.gold);
-   /* ±100 兩條線。⛔ **不准標「停利／停損」** —— 同一條線對做多是停利、
-      對做空是停損，標了一定有一邊是錯的。 */
-   const tp=(atN(D.tp)||100), sl=(atN(D.sl)||100);
-   // ⚠️ 負號用 ASCII 的 '-'，跟 pm() 印出來的點數一致 —— 同一張圖上兩種減號很難看
-   [[px+tp,'進場價 +'+tp,1],[px-sl,'進場價 -'+sl,-1]].forEach(function(it){
-     const p=it[0];
-     if(p<=A.hi&&p>=A.lo){
-       const y=Math.round(yOf(p))+.5;
-       ctx.save(); ctx.setLineDash([3,4]); ctx.strokeStyle=ATCOL.line; ctx.lineWidth=1;
-       ctx.beginPath(); ctx.moveTo(gx,y); ctx.lineTo(PW,y); ctx.stroke(); ctx.restore();
-       /* ⚠️ 這兩張籤搬進左邊的名字欄（右對齊 L−8，規格 §9.3）——
-          順便解掉 v2「進場價 +100 壓在 K 棒上」那個問題。沒有名字欄（堆疊排法）
-          時退回畫在線的左上角。 */
-       ctx.fillStyle=ATCOL.faint;
-       if(LN.L>0){ ctx.textAlign='right'; ctx.fillText(it[1],LN.L-8,y+4); ctx.textAlign='left'; }
-       else ctx.fillText(it[1],gx+4,y-3);
-     }else{
-       // ⛔ 畫不到就掛邊緣籤，不可以把線黏在邊緣假裝畫得出來
-       const away=Math.round(it[2]>0?(p-A.hi):(A.lo-p));
-       atChip(ctx,4,it[2]>0?(ATTOP+2):(ATTOP+pH-19),
-         (it[2]>0?'↑ ':'↓ ')+it[1]+' 在畫面'+(it[2]>0?'上':'下')+'方 '+away+' 點',
-         ATCOL.faint);
-     }
-   });
- }else{
-   atDrawMine(ctx,D,xOf,yOf,A,PW,pH);          // 那天沒有記錄，但他自己的單照樣要畫
- }
- // 09:30：**他自己收手的時間**，不是模擬單的出場條件 —— 兩件事不要混
- const wx=xOf(ATWATCH-ATSEC0);
- if(wx>gx&&wx<PW){
-   ctx.save(); ctx.setLineDash([2,4]); ctx.strokeStyle=ATCOL.line; ctx.lineWidth=1;
-   ctx.beginPath(); ctx.moveTo(wx+.5,ATTOP); ctx.lineTo(wx+.5,ATTOP+pH); ctx.stroke();
-   ctx.restore();
-   ctx.fillStyle=ATCOL.ghost; ctx.fillText('09:30 你收手',wx+5,ATTOP+pH-5);
- }
- atDrawLanes(ctx,D,xOf,laneTop,PW,v,LN);
- AT.drawn++;
- return 1;
-}
-/* 他自己那一單（沿用即時分頁與【細節】的標記語言：▲ 多 ／ ▼ 空 ／「真」） */
-function atDrawMine(ctx,D,xOf,yOf,A,PW,pH){
- /* ⚠️ 他一天 0~3 筆，而且**全部落在 08:45~09:30 那 45 分鐘裡** ——
-    在整個日盤的橫軸上那是最左邊很窄的一段，三張籤的 x 幾乎一樣、
-    價又都在進場價附近 ⇒ 不錯開就互相壓住（截圖才看見的，掃字串掃不到）。
-    所以每一張往下錯開一列，並且夾在繪圖區裡面。 */
- let i=0;
- for(const t of ((D&&D.mine)||[])){
-   const s=atSecOf(t.entry_time); if(s==null) continue;
-   const p=atN(t.entry); if(p==null) continue;
-   if(p>A.hi||p<A.lo) continue;               // ⛔ 不准為了畫它去撐大價格軸
-   const x=xOf(s-ATSEC0);
-   if(x<0||x>PW) continue;
-   const short=(t.dir==='short'), y=yOf(p);
-   ctx.save(); ctx.fillStyle=short?ATCOL.down:ATCOL.up; ctx.beginPath();
-   if(short){ ctx.moveTo(x,y+9); ctx.lineTo(x-7,y-3); ctx.lineTo(x+7,y-3); }
-   else{ ctx.moveTo(x,y-9); ctx.lineTo(x-7,y+3); ctx.lineTo(x+7,y+3); }
-   ctx.closePath(); ctx.fill(); ctx.restore();
-   const cy=Math.max(ATTOP+1,Math.min(ATTOP+pH-18,y+12+i*19));
-   atChip(ctx,Math.max(2,Math.min(x+10,PW-150)),cy,
-     '真 '+(short?'▼ 空 ':'▲ 多 ')+(t.entry_time||'').slice(0,5),
-     short?ATCOL.down:ATCOL.up);
-   i++;
- }
-}
-/* 四條泳道。
-   【為什麼要泳道】四條在**同一時刻、同一個價**進場 ⇒ 四個進場標記完全重疊；
-   出場價又只有三種可能（+100／−100／收盤價）⇒ 出場標記的 y 也重疊。
-   解法是價格區只放一個，四條的身分全部下放到泳道。
-   ⛔ D 跟 A/B 同向的日子泳道就是長得一樣 —— 那是事實不是 bug，**不要合併它們**，
-      合併掉的話「今天判斷有沒有加分」正好看不見。
-   ⛔ C 不做的日子畫成空的虛線 ＋「這天不做」＋ 訊號值，**不可以整條消失**。 */
-function atDrawLanes(ctx,D,xOf,laneTop,PW,v,LN){
- const ex=xOf(ATSIG-ATSEC0);
- ctx.textBaseline='alphabetic';
- AT_ORDER.forEach(function(k,i){
-   const y=laneTop+i*LN.laneH;
-   /* ⛔⛔ 泳道左邊放的是**名字**不是代號（規格 §9.3，這一條被 Benson 退件過：
-      「我要從哪裡知道現在我看的是哪個做法？」）。名字欄寬度是量出來的（atLaneLayout）。 */
-   ctx.font=ATFONTN; ctx.fillStyle=ATCOL.dim;
-   let mid, bx;                       // 色帶中線的 y、色帶的左界
-   if(LN.stacked){
-     ctx.fillText(atName(k),2,y+11);  // 窄視窗：名字自己一列（⛔ 仍然不縮寫）
-     mid=y+LN.laneH-8; bx=0;
-   }else{
-     ctx.textAlign='right'; ctx.fillText(atName(k),LN.L-8,y+LN.laneH/2+4);
-     ctx.textAlign='left';
-     mid=y+LN.laneH/2; bx=LN.L;
-   }
-   ctx.font=ATFONT;
-   const run=(D.runs||{})[k];
-   const sg=(k==='A')?atN((D.sig||{}).A):(k==='D'?null:atN((D.sig||{}).B));
-   const dr0=run?run.dir:((D.dirs||{})[k]);   /* 還沒結算時方向要看 dirs（C 沒下單就別寫持倉中） */
-   if(D.px==null||!run||run.dir===0||run.dir==null){
-     /* ⛔ 沒做／算不出來／還沒結算的日子畫成空的虛線 ＋ 一句話，**不可以整條消失**
-        （消失＝壞掉，跟「休市日要選不到」是同一類處置）。
-        ⚠️ 虛線要**從文字後面才開始畫**（規格 §9.3）—— 整條穿過文字會把字糊掉。
-        ⚠️ 「這天不做」⛔ 不要再重複寫「沒超過 30」：名字裡已經寫著「要 30 點」了。 */
-     /* ⛔ 這裡也要分「持倉中」與「結算中」（2026-09-08）：他早上盯的是**圖**，
-        canvas 上的字掃字串掃不到，之前就為了同一件事退件過（【細節】M2）。 */
-     const txt=(D.px==null)?'這天沒有記錄'
-       :(dr0===0?('這天不做（訊號 '+(sg==null?'—':pm(sg,1))+' 點，不夠）')
-       :(dr0==null?'這天算不出訊號'
-       :(D.holding?'持倉中':'結算中')));
-     const tx=Math.max(bx+8,ex+8);
-     ctx.fillStyle=ATCOL.faint; ctx.fillText(txt,tx,mid+4);
-     const ls=tx+ctx.measureText(txt).width+8;
-     if(ls<PW){
-       ctx.save(); ctx.setLineDash([3,4]); ctx.strokeStyle=ATCOL.ghost; ctx.lineWidth=1;
-       ctx.beginPath(); ctx.moveTo(ls,mid+.5); ctx.lineTo(PW,mid+.5); ctx.stroke();
-       ctx.restore();
-     }
-     return;
-   }
-   const out=atSecOf(run.exit_at);
-   const ox=(out==null)?PW:xOf(out-ATSEC0);
-   const off=(ox>PW);                     // 出場落在畫面外（切到 08:45~09:30 時很常見）
-   const x1=Math.min(PW,Math.max(ex+2,ox));
-   const win=(atN(run.pts)||0)>0;
-   const col=win?ATCOL.up:ATCOL.down;     // 泳道顏色＝賺賠，這是損益，可以用紅綠
-   ctx.save(); ctx.globalAlpha=.30; ctx.fillStyle=col;
-   ctx.fillRect(ex,mid-6,Math.max(2,x1-ex),11); ctx.restore();
-   ctx.strokeStyle=col; ctx.lineWidth=1.4;
-   ctx.beginPath(); ctx.moveTo(ex+.5,mid-7); ctx.lineTo(ex+.5,mid+6); ctx.stroke();
-   if(!off){ ctx.beginPath(); ctx.moveTo(x1-.5,mid-7); ctx.lineTo(x1-.5,mid+6); ctx.stroke(); }
-   const txt=(run.dir>0?'多':'空')+' · '+(off?'畫面外 ':'')+(run.exit_at||'—')+' '+
-     (ATEXIT[run.why]||'')+' '+pm(run.pts,0);
-   const tw=ctx.measureText(txt).width;
-   /* ⚠️ 放得下就用色帶顏色放在色帶右邊；放不下疊在色帶上時**改用 --text** ——
-      同色字疊在 30% 透明的同色帶上讀不清楚（demo 第一版踩到，截圖才看見）。 */
-   if(x1+8+tw<PW){ ctx.fillStyle=col; ctx.fillText((off?'▶ ':'')+txt,x1+8,mid+4); }
-   else{ ctx.fillStyle=ATCOL.text; ctx.fillText((off?'▶ ':'')+txt,ex+8,mid+4); }
- });
+// 「現在真單用的」標籤：唯讀 GET /api/fire/state（⛔ 不帶、也不取 token，⛔ 不打任何會改狀態的端點）。
+// 只有開關開著、method 是 A／B 才標；讀不到、關著、看不懂 ⇒ 兩格都留白。
+function lbFire(){
+  fetch('/api/fire/state',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(x=>{
+    const m=x&&x.armed===true?x.method:null;
+    const txt=x&&x.live?'現在真單用的':'自動下單現在用的';
+    [['A','lbm-bar5'],['B','lbm-open']].forEach(([k,id])=>{ const e=lbEl(id); if(e) e.innerHTML=(m===k)?txt:'&nbsp;'; });
+  }).catch(()=>{});
 }
 
-/* ---------------- canvas：累計點數 ＋ 證不出來帶 ---------------- */
-function atFitCum(){
- const cv=document.getElementById('atcum'); if(!cv) return null;
- const box=cv.getBoundingClientRect();
- const w=Math.max(320,Math.round(box.width)), h=Math.max(120,Math.round(box.height));
- const dpr=Math.min(2,window.devicePixelRatio||1);
- if(w===ATCC.W&&h===ATCC.H&&dpr===ATCC.DPR&&cv.width) return cv;   // ⛔ 同上，不准拿掉
- ATCC={W:w,H:h,DPR:dpr};
- cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
- cv.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
- return cv;
-}
-/* ⛔ 顏色不編碼好壞（紅綠只給損益數字）。四條靠亮度與線型分，**線尾標名字**
-   （⛔ 不是字母 —— 規格 §2.0 ④，代號不准上畫面）。
-   ⛔「不判斷」不可以被畫成次要的：506 天的驗證裡它是目前的冠軍，所以它是最粗的那條。 */
-/* ⛔ 2026-09-08：他自己那條金線（key `你`）跟著成績表那兩列一起從畫面上拿掉
-   （「然後我自己的這邊都拿掉」）。⛔ 不要再加回來 —— 後端 S.mine 照算，只是不畫。 */
-const ATLINES=[['D',ATCOL.text,2.4,false],['A',ATCOL.text,1.1,false],
-               ['B',ATCOL.dim,1.4,false],['C',ATCOL.dim,1.4,true]];
-/* 累計圖的線尾標籤一律走 atName()（⛔ 代號不准上畫面，規格 §2.0 ④）。 */
-function atCumName(k){ return atName(k); }
-function atCumSeries(){
- const S=AT.stats; if(!S||!S.rows) return {};
- return {D:S.rows.D.cum||[],A:S.rows.A.cum||[],B:S.rows.B.cum||[],C:S.rows.C.cum||[]};
-}
-function atDrawCum(){
- const cv=atFitCum(); if(!cv) return 0;
- const ctx=cv.getContext('2d'), W=ATCC.W, H=ATCC.H;
- ctx.clearRect(0,0,W,H);
- const ser=atCumSeries(), n=atCumN();
- /* ⛔ 不到 CUM_MIN_N 筆就**一條線都不畫**（連軸都不畫）——
-    三、四個點連起來看起來就像一條趨勢，但那只是三、四個點。 */
- const min=(AT.stats&&AT.stats.cum_min_n)||10;
- if(n<min) return 0;
- const PW=W-ATR, pH=H-ATTOP-ATBOT;
- let hi=0, lo=0;
- for(const k in ser) for(const y of ser[k]){ if(y>hi)hi=y; if(y<lo)lo=y; }
- const band=atBand(n);
- hi=Math.max(hi,band*1.05); lo=Math.min(lo,-band*1.05);
- const step=atNiceStep((hi-lo)/5);
- hi=Math.ceil(hi/step)*step; lo=Math.floor(lo/step)*step;
- const xOf=i=>(i)/Math.max(1,n-1)*PW;
- const yOf=p=>ATTOP+(hi-p)/(hi-lo)*pH;
- ctx.font=ATFONT;
- /* 證不出來帶：隨 √n 張開的灰色喇叭。**任何一條線只要還在帶子裡面，
-    就代表這份資料證不出它跟 0 有差別。** 把統計功效變成看得見的東西，
-    他不用讀數字，看線有沒有跑出帶子就知道。 */
- ctx.save(); ctx.beginPath();
- for(let i=0;i<n;i++){ const x=xOf(i), b=atBand(i+1);
-   if(i===0) ctx.moveTo(x,yOf(b)); else ctx.lineTo(x,yOf(b)); }
- for(let i=n-1;i>=0;i--){ const x=xOf(i), b=atBand(i+1); ctx.lineTo(x,yOf(-b)); }
- ctx.closePath();
- ctx.fillStyle='rgba(141,149,163,.075)'; ctx.fill();
- ctx.setLineDash([3,4]); ctx.strokeStyle='rgba(141,149,163,.35)'; ctx.lineWidth=1;
- ctx.stroke(); ctx.restore();
- // 0 線與刻度
- ctx.strokeStyle=ATCOL.line; ctx.lineWidth=1; ctx.fillStyle=ATCOL.faint;
- for(let p=Math.ceil(lo/step)*step;p<=hi+1e-9;p+=step){
-   const y=Math.round(yOf(p))+.5;
-   ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(PW,y); ctx.stroke();
-   ctx.fillText((p>0?'+':'')+p.toFixed(0),PW+7,y+4);
- }
- const tags=[];
- for(const L of ATLINES){
-   const arr=ser[L[0]]||[];
-   if(arr.length<2) continue;
-   ctx.save(); ctx.strokeStyle=L[1]; ctx.lineWidth=L[2];
-   if(L[3]) ctx.setLineDash([5,4]);
-   ctx.beginPath();
-   arr.forEach((y,i)=>{ const x=xOf(i); if(i===0) ctx.moveTo(x,yOf(y)); else ctx.lineTo(x,yOf(y)); });
-   ctx.stroke(); ctx.restore();
-   const nm=atCumName(L[0]), tw=ctx.measureText(nm).width;
-   /* ⚠️ 線尾標的是**名字**（規格 §2.0 ④；圖例已經刪掉了，這是唯一分得出誰是誰的地方）。
-      ⛔ x 夾在 PW−4−字寬 以內 —— 名字比字母長很多（「開盤起・要 30 點」約 90px，
-         而右邊價格刻度的留白只有 64px），不夾的話會**壓在刻度上**。 */
-   tags.push({nm:nm,w:tw,col:L[1],
-              x:Math.max(2,Math.min(PW-4-tw,xOf(arr.length-1)+5)),
-              y:yOf(arr[arr.length-1])});
- }
- /* ⚠️ 四條線的終點常常擠在一起（同向的日子成績就是一樣）⇒ 標籤一定要**錯開**，
-    否則兩三個名字疊在同一行、誰都讀不出來。**這件事只有截圖看得出來**，
-    掃字串（字串完全正確）與「有沒有畫到畫布外」都抓不到 ——【細節】與這一頁都栽過。
-    做法：照 y 排序 → 往下推到至少差 15px → 整體夾回畫布裡，字底下鋪一塊底色。 */
- tags.sort((a,b)=>a.y-b.y);
- for(let i=1;i<tags.length;i++)
-   if(tags[i].y-tags[i-1].y<15) tags[i].y=tags[i-1].y+15;
- const spill=tags.length?(tags[tags.length-1].y-(H-ATBOT-4)):0;
- if(spill>0) for(const t of tags) t.y-=spill;
- for(const t of tags){
-   t.y=Math.max(ATTOP+8,Math.min(H-ATBOT-4,t.y));
-   ctx.save(); ctx.fillStyle=ATCOL.bg; ctx.globalAlpha=.85;
-   ctx.fillRect(t.x-3,t.y-7,t.w+6,14); ctx.restore();
-   ctx.fillStyle=t.col; ctx.fillText(t.nm,t.x,t.y+4);
- }
- ctx.fillStyle=ATCOL.faint; ctx.fillText('第 1 筆',2,H-8);
- ctx.fillText('第 '+n+' 筆',Math.max(60,PW-52),H-8);
- return 1;
+function lbEnter(){
+  if(!LB.boot){
+    LB.boot=true;
+    // ⛔ 預設值一律從注入的規則常數來（改規則時不會有第二個地方要記得跟著改）
+    lbEl('lbt').value=RULE_SIGNAL_AT; lbEl('lbtp').value=RULE_TP; lbEl('lbsl').value=RULE_SL;
+    lbBind();
+  }
+  lbPaint();
+  lbFire();
+  fetch('/api/lab/meta',{cache:'no-store'}).then(r=>r.json().catch(()=>({})).then(m=>({s:r.status,m}))).then(({s,m})=>{
+    if(s===503){ LB.err=(m&&m.msg)||'策略實驗室載入失敗'; lbMark(); return; }
+    if(m&&m.n_days!=null){ LB.meta=m; lbPaint(); }
+  }).catch(()=>{});
 }
 
-/* ---------------- 畫面 ---------------- */
-function atPaintStats(){
- if(TAB!=='auto') return;
- setEl('atcount',atCountHTML());
- setEl('atwin',atWinHTML());
- setEl('attbl',atTblHTML());
- setEl('atceil',atCeilHTML());
- setEl('atnotes',atNotesHTML());
- setEl('atcumn',atCumNHTML());
- setEl('atpairbody',atPairHTML());
- setEl('atadvbody',atAdvHTML());
- /* ⛔ 這個 hover 說明裡有數字（「505 筆的時候這條線是 12.0 點」），
-    ⛔ **不可以寫死在 HTML 裡** —— 常數改了 title 就變成假話，而且 hover 才看得到、
-    幾乎不可能被發現（守衛：autotest-tab.mjs ㉓④）。
-    ⚠️ 2026-09-08 進度尺拿掉之後，這是最後一個「數字要算出來」的 title 了 ——
-       ⛔ 不要因為只剩一個就把它改回寫死。 */
- const S0=AT.stats||{}, N0=atN(S0.track_n)||AT.trackN||505, C0=atCeiling(N0);
- const eCeil=document.getElementById('atceil');
- if(eCeil) eCeil.title='比這條線小的差距，跟運氣分不開。'+N0+' 筆的時候這條線是 '+C0+' 點。';
- const min=(AT.stats&&AT.stats.cum_min_n)||10, few=atCumN()<min;
- setEl('atcumempty',few?atCumEmptyHTML():'');
- const cv=document.getElementById('atcum');
- if(cv) cv.style.visibility=few?'hidden':'visible';
- if(!few) atDrawCum();
+function lbBind(){
+  document.querySelectorAll('#lbdir button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#lbdir button').forEach(x=>x.classList.toggle('on',x===b)); lbMark(); });
+  document.querySelectorAll('#lbwd button').forEach(b=>b.onclick=()=>{ b.classList.toggle('on'); lbMark(); });
+  ['lbexpw','lbcost'].forEach(id=>lbEl(id).onclick=()=>{
+    const on=lbEl(id).classList.toggle('on'); lbEl(id).setAttribute('aria-checked',on); lbMark(); });
+  document.querySelectorAll('#tab-lab .lb-step').forEach(b=>b.onclick=()=>{
+    const P=lbParams(), r=RULE_SIGNAL_AT.split(':').map(Number);
+    let s=P.tsec===null?lbSec(r[0],r[1],r[2]||0):P.tsec+(+b.dataset.lbdt);
+    s=Math.max(LBTMIN,Math.min(LBTMAX,s)); lbEl('lbt').value=lbHMS(s); lbMark(); });
+  lbEl('lbt').addEventListener('keydown',e=>{
+    if(e.key!=='ArrowUp'&&e.key!=='ArrowDown') return;
+    e.preventDefault();
+    const P=lbParams(); if(P.tsec===null) return;
+    const s=Math.max(LBTMIN,Math.min(LBTMAX,P.tsec+(e.key==='ArrowUp'?1:-1)*(e.shiftKey?1:60)));
+    lbEl('lbt').value=lbHMS(s); lbMark(); });
+  lbEl('lbt').addEventListener('blur',()=>{ const P=lbParams(); if(P.tsec!==null) lbEl('lbt').value=lbHMS(P.tsec); });
+  document.querySelectorAll('#lbform input').forEach(i=>{
+    i.addEventListener('input',lbMark);
+    i.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); lbRun(); } }); });
+  lbEl('lbrun').onclick=lbRun;
+  window.addEventListener('resize',()=>{ if(TAB==='lab'&&LB.last) lbCurve(); });
 }
-/* ⛔⛔ 進度尺（atTrackHTML）已於 2026-09-08 依 Benson 指示整條刪掉 —— 原話：
-   「程式下單那邊這個欄位不需要」（他紅框圈的就是那條尺）。
-   ⛔ 不要再加回來，也不要換個樣子重做一次（例如「還剩 485 天」的倒數 ——
-      那本來就是被禁止的形狀：那是承諾不是事實）。
-   ⚠️ 後端 `total_n`／`track_n` 兩個欄位**照端不要拿掉**：`track_n` 還在算天花板那個
-      title 的數字（atPaintStats），`total_n` 是「累積幾天 vs 窗口幾天」那組語意的正本。
-   守衛：autotest-tab.mjs ⑤（#attrack 不存在 ＋「這個測試跑到哪裡了」／「/ 505 筆」／
-   「要到這裡才算數」在 DOM ＋ 兩張 canvas 上零命中）。 */
-function atMsgHTML(){
- if(atLoading())
-   return '<div class="at-skel"><i style="height:38%"></i><i style="height:52%"></i>'+
-     '<i style="height:44%"></i><i style="height:61%"></i><i style="height:55%"></i>'+
-     '<i style="height:70%"></i><i style="height:64%"></i><i style="height:48%"></i>'+
-     '<i style="height:57%"></i><i style="height:72%"></i><i style="height:66%"></i>'+
-     '<i style="height:80%"></i></div>';
- if(AT.err)
-   return '<div class="at-blank"><div class="t">'+AT.err+'</div>'+
-     '<div class="d">翻頁列還在，可以換到別天。</div>'+
-     '<button class="tk-back" style="position:static;margin-top:6px" data-atact="retry">重試</button></div>';
- if(!AT.date||!(AT.days||[]).length&&!AT.today)
-   return '<div class="at-blank"><div class="t">還沒有任何一天的模擬紀錄</div>'+
-     '<div class="d">明天早上 '+RULE_SIGNAL_AT+' 會自動記下第一筆。不用做任何事，也不會有單送出去。</div></div>';
- if(!(AT.data&&(AT.data.bars||[]).length))
-   return '<div class="at-blank"><div class="t">這天沒有 1 分 K 可以畫</div>'+
-     '<div class="d">休市日，或當天的 K 棒還沒拿到。</div></div>';
- return '';
-}
-function atPaint(){
- if(TAB!=='auto') return;
- setEl('atdt',atDateHTML());
- setEl('atsub',atSubHTML());
- setEl('atpager',atPagerHTML());
- setEl('atpick',atListHTML());
- setEl('attools',atToolsHTML());
- setEl('attoday',atTodayHTML());
- const msg=atMsgHTML();
- setEl('atmsg',msg);
- const cv=document.getElementById('atday');
- if(cv) cv.style.visibility=msg?'hidden':'visible';
- atPaintStats();
- if(!msg) atDrawDay();
-}
-function atGoDay(d){
- if(!d) { AT.pick=false; atPaint(); return; }
- if(d===AT.date&&!AT.pending){ AT.pick=false; atPaint(); return; }
- AT.pick=false; AT.date=d; AT.err='';
- const c=AT.cache[d];
- if(c){ AT.data=c; AT.pending=false; atPaint(); }
- else { AT.pending=true; AT.data=null; atPaint(); atFetchDay(d); }
-}
-function atEnter(){
- atPaint();
- // ⚠️ 每次進來都重新問一次時鐘與日期清單（09:03:30 可能剛過）
- atFetchDays().then(()=>{ atPaint(); if(AT.date) atFetchDay(AT.date); atFetchStats(); });
- AT.booted=true;
-}
-document.addEventListener('click',function(e){
- if(TAB!=='auto') return;
- const nv=e.target.closest('[data-atnav]');
- if(nv){ atGoDay(atStep(parseInt(nv.getAttribute('data-atnav')))); return; }
- const pk=e.target.closest('[data-atpick]');
- if(pk){ AT.pick=!AT.pick; atPaint(); return; }
- const dy=e.target.closest('[data-atday]');
- if(dy){ atGoDay(dy.getAttribute('data-atday')); return; }
- const zm=e.target.closest('[data-atzoom]');
- if(zm){ AT.zoom=!AT.zoom; atPaint(); return; }
- const wn=e.target.closest('[data-atwin]');
- if(wn){ AT.swin=parseInt(wn.getAttribute('data-atwin')); atPaintStats(); atFetchStats(); return; }
- const ac=e.target.closest('[data-atact]');
- if(ac){ if(ac.getAttribute('data-atact')==='retry'){ AT.err=''; atPaint(); atFetchDay(AT.date); }
-   return; }
- if(AT.pick&&!e.target.closest('.tk-list')){ AT.pick=false; atPaint(); }
-});
-document.addEventListener('input',function(e){
- if(TAB!=='auto'||e.target.id!=='atslider') return;
- AT.adv=parseInt(e.target.value)||0;
- setEl('atadvbody',atAdvHTML());
- const s=document.getElementById('atslider');
- if(s) s.focus();
-});
-document.addEventListener('keydown',function(e){
- if(TAB!=='auto') return;
- if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
- if(e.key==='ArrowLeft'){ e.preventDefault(); atGoDay(atStep(-1)); }
- else if(e.key==='ArrowRight'){ e.preventDefault(); atGoDay(atStep(1)); }
- else if(e.key==='Home'){ e.preventDefault(); if(AT.today) atGoDay(AT.today); }
- else if(e.key==='Escape'&&AT.pick){ AT.pick=false; atPaint(); }
-});
-window.addEventListener('resize',()=>{ if(TAB==='auto') atPaint(); });
 
 rvBind();
 
@@ -11053,7 +10424,40 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._json(404, {"error": "not found"})
 
+    def _lab_get(self):
+        """
+        【策略實驗室】兩個唯讀端點。⛔ 只讀 tick_hist/，不碰 broker／auto_fire／任何寫交易紀錄的路徑。
+        ⛔ 回測就在**這條 HTTP handler 執行緒**上算（不是主迴圈、不是 shioaji 回呼），
+           strategy_lab.run_exclusive 保證同時只有一個查詢在算：第二個回 429。
+        路由是精確比對（⛔ 不用 startswith）。
+        """
+        path, _, qs = self.path.partition("?")
+        # 別的網站的分頁不准叫它（一次回測要吃掉零點幾秒 CPU，不能讓外面拿來一直打）
+        ok, code, msg = fire_get_guard(self.headers)
+        if not ok:
+            return self._json(code, {"ok": False, "msg": msg})
+        if strategy_lab is None:
+            # 模組載入失敗（見檔頭的 try）：這一頁停用，⛔ 面板其他功能照跑
+            return self._json(503, {"ok": False, "msg": "策略實驗室載入失敗"})
+        if path == "/api/lab/meta":
+            try:
+                return self._json(200, strategy_lab.meta())
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": str(e)[:200]})
+        try:
+            P = strategy_lab.parse_params(parse_qs(qs, keep_blank_values=True))
+        except strategy_lab.BadParam as e:
+            return self._json(400, {"ok": False, "msg": str(e)})
+        try:
+            return self._json(200, strategy_lab.run_exclusive(P))
+        except strategy_lab.Busy:
+            return self._json(429, {"ok": False, "msg": "還在算上一組"})
+        except Exception as e:
+            return self._json(500, {"ok": False, "msg": "回測失敗：" + str(e)[:160]})
+
     def do_GET(self):
+        if self.path.partition("?")[0] in ("/api/lab/meta", "/api/lab/run"):
+            return self._lab_get()
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:
@@ -11603,6 +11007,37 @@ def run_replay(hist, day_str):
         time.sleep(3600)
 
 
+def _lab_has_position():
+    """只讀 broker 記憶體裡的部位狀態，⛔ 不呼叫任何會送單／對帳的函式"""
+    return broker._state.get("position") is not None
+
+
+def start_strategy_lab_fetch():
+    """
+    【策略實驗室】收盤後補抓當天日盤逐筆的背景執行緒（main() 呼叫一次）。
+    ⛔ 用面板**現有的**連線（SESSION_REF["api"]），⛔ 不准另外 login（會把面板自己踢下線）。
+    ⛔ 有部位就不抓（問不到＝當成有部位，strategy_lab 那邊處理）。
+    ⛔⛔ 這支**永遠不丟例外**（2026-09-14 lab-qa 退件 R1）：模組沒載入、起執行緒失敗，一律只印警告，
+       呼叫端（main）照樣往下走 —— 研究功能出錯絕不可以擋住主迴圈與停損。
+    ⚠️ 只接在 main()：--replay 與所有治具都走不到這裡 ⇒ 測試不會去連永豐。
+    回傳是否真的起來了。
+    """
+    try:
+        if strategy_lab is None:
+            print("⚠️ 【策略實驗室】沒有載入，不補抓每日成交")
+            return False
+        threading.Thread(target=strategy_lab.fetch_loop,
+                         args=(lambda: SESSION_REF.get("api"), _lab_has_position),
+                         daemon=True, name="strategy-lab-fetch").start()
+        return True
+    except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
+        try:
+            print(f"⚠️ 【策略實驗室】每日補抓起不來（其他功能不受影響）：{str(e)[:160]}")
+        except Exception:
+            pass
+        return False
+
+
 def main():
     # ⛔ 09:03:30 的掛勾只有這裡會接（接上去就會真的送單，見 auto_fire.py）。
     #    13:43:30 的收盤平倉掛勾同理（接上去就會真的送出平倉單）。
@@ -11846,6 +11281,9 @@ def main():
                       "period": hist.period, "n_days_total": hist.n_days})
     threading.Thread(target=poll_index, daemon=True).start()
     threading.Thread(target=poll_phone, daemon=True).start()
+
+    # 【策略實驗室】收盤後補抓當天日盤逐筆。⛔ 起不來只印警告（見 start_strategy_lab_fetch）。
+    start_strategy_lab_fetch()
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     last_retry = 0.0
