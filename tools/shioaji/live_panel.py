@@ -66,6 +66,13 @@ try:
 except Exception as _lab_err:          # noqa: BLE001  ⛔ 刻意接住所有例外
     strategy_lab = None
     print(f"⚠️ 【策略實驗室】載入失敗，這一頁先停用（其他功能不受影響）：{str(_lab_err)[:160]}")
+# 【策略實驗室】最上面那張「模擬（不會下單）」（2026-09-15 晚上加）。⛔ 模擬：不 import broker／auto_fire，
+#    規則函式由 start_sim_lanes() 注入。⛔ 同樣一定要包 try：它壞掉 ⇒ sim_lanes=None、/api/sim/state 回 503，其他照跑。
+try:
+    import sim_lanes
+except Exception as _sim_err:          # noqa: BLE001  ⛔ 刻意接住所有例外
+    sim_lanes = None
+    print(f"⚠️ 【模擬】載入失敗，這張卡先停用（其他功能不受影響）：{str(_sim_err)[:160]}")
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -3599,6 +3606,19 @@ def fire_post_guard(headers):
     return True, 200, ""
 
 
+def _fire_wait_open(d):
+    """
+    今天帳本有 `rec:"wait"`（09:03:30 判成不快、等回馬槍）而且**還沒有定論**（沒有 fire／result／skip）。
+    ⛔ 條件照抄 `auto_fire._rev()`（它就是看這兩件事決定 09:15 要不要往下走）。讀不到 ⇒ False。
+    """
+    try:
+        rows = auto_fire._rows_of(d)
+    except Exception:
+        return False
+    return (any(o.get("rec") == "wait" for o in rows)
+            and not any(o.get("rec") in ("fire", "result", "skip") for o in rows))
+
+
 def fire_fires_today(now=None):
     """
     ⭐⭐ **「按下去之後，第一次真的送單是今天還是下一個交易日？」**
@@ -3623,6 +3643,20 @@ def fire_fires_today(now=None):
        （只是沒有報價 ⇒ 記一列「沒送」）。兩邊講的是同一件事。
     """
     now = now or datetime.now()
+    # ⓪ ⭐ 回馬槍還沒判（2026-09-15 晚上 lab-qa 限制②）：09:03:30 判成 wait、還沒有定論，
+    #    而牆上時鐘還沒過 REV_SEC ＋ AUTO_LATE_MS ⇒ `_auto_tick` 跨過 REV_SEC 時照樣會叫
+    #    AUTO_REV_HOOK、`auto_fire._rev()` 讀帳本看到 wait 就會**重新讀開關**然後送 ⇒ 要說「今天」。
+    #    ⛔ 一定要排在 ① 前面：面板一路開著的話 done 早就是 True，① 會先說「下一個交易日」（那是假話）。
+    #    ⛔ 判斷照抄 `_rev()` 看的東西（帳本有 wait、沒有 fire／result／skip）＋ `_auto_tick` 的
+    #       `AUTO["rev"]`（今天已經跨過那一刻 ⇒ 那一件已經丟給工作執行緒了，不是這一句能改的）。
+    #    ⚠️ 帳本讀的是 auto_fire._rows_of（HTTP 執行緒上的磁碟 I/O；這支本來就只在 HTTP 執行緒被叫）。
+    _rev_secs = now.hour * 3600 + now.minute * 60 + now.second
+    if (_rev_secs < REV_SEC + AUTO_LATE_MS / 1000
+            and not (AUTO.get("day") == str(now.date()) and AUTO.get("rev"))
+            and _fire_wait_open(str(now.date()))):
+        rev_dt = datetime.combine(now.date(), dtime(0, 0)) + timedelta(seconds=REV_SEC)
+        if market_session(rev_dt) == "day":
+            return True
     # ① 今天那一刻已經過去了（`_auto_tick` 早就把 done 立起來了）⇒ 只能等下一個交易日
     if AUTO.get("day") == str(now.date()) and AUTO.get("done"):
         return False
@@ -5433,6 +5467,44 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    ⛔ class 一律 lb- 開頭：這個面板的 .tag／.hero／.sum／.step 早就被別頁用掉了，共用名字會互相污染。
    ⛔ 紅漲綠跌：.up／.down 沿用全站的變數，這一頁不另立顏色。 */
 #tab-lab .card{margin-bottom:0}
+/* ── 【策略實驗室】最上面那張「模擬（不會下單）」（class 一律 sm- 開頭，⛔ 不借別頁的名字）
+   ⛔ #tab-lab .card 把 margin 歸零了 ⇒ 這張要自己跟下面的條件／結果隔開（同特異度、排在後面才贏）。 */
+#tab-lab .sm-card{margin-bottom:14px; padding:14px 16px 12px}
+.sm-note{font-size:11.5px; color:var(--faint); margin:-2px 2px 10px}
+.sm-lanes{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px}
+@media(max-width:1180px){ .sm-lanes{grid-template-columns:minmax(0,1fr)} }
+.sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:12px 14px; min-width:0}
+.sm-lt{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.sm-lt b{font-size:15px; color:var(--text); font-weight:650}
+.sm-lt small{font-size:11px; color:var(--faint)}
+.sm-rule{font-size:12px; color:var(--dim); line-height:1.55; margin:4px 0 2px}
+.sm-today{font-size:12px; color:var(--dim); margin:6px 0 10px}
+.sm-today em{font-style:normal; color:var(--faint)}
+.sm-body{display:grid; grid-template-columns:150px minmax(0,1fr); gap:12px; align-items:start}
+@media(max-width:620px){ .sm-body{grid-template-columns:minmax(0,1fr)} }
+.sm-months{display:flex; flex-direction:column; gap:2px}
+.sm-months>*{flex:none}
+.sm-mh,.sm-lh{font-size:10.5px; color:var(--faint); letter-spacing:1px; margin-bottom:4px}
+.sm-m{display:flex; justify-content:space-between; gap:8px; font-size:12.5px; padding:3px 6px; border-radius:var(--r-sm)}
+.sm-m.this{background:var(--surface-2)}
+.sm-m span{color:var(--dim)} .sm-m.this span{color:var(--gold)}
+.sm-m i{font-style:normal; font-size:10.5px; color:var(--faint); margin-left:4px}
+/* ⚠️ max-height 壓在 300：這張卡在回測條件上面（規格要求最上面），清單 420 時 1536×816 實測整張 693px、改 300 後 573px。
+      ⚠️ 就算 573px，「回測」鈕還是在第一屏下面（實測 top 1265），要往下捲 —— 這是「放最上面」的代價，不是 bug。 */
+.sm-list{display:flex; flex-direction:column; max-height:300px; overflow-y:auto}
+.sm-list>*{flex:none}
+.sm-r{display:grid; grid-template-columns:78px 40px minmax(0,1fr) 62px; gap:8px; align-items:baseline;
+ font-size:12.5px; padding:5px 2px; border-bottom:1px solid var(--line-soft)}
+.sm-r:last-child{border-bottom:none}
+.sm-r .d{color:var(--dim)}
+.sm-r .k{font-weight:650} .sm-r .k.none{color:var(--faint); font-weight:500}
+.sm-r .x{color:var(--dim); overflow-wrap:anywhere}
+.sm-r .x small{display:block; color:var(--faint); font-size:11px}
+.sm-r .p{text-align:right}
+.sm-pend{font-size:11.5px; color:var(--faint); margin-top:8px; line-height:1.6}
+.sm-empty{font-size:12px; color:var(--faint); padding:6px 2px}
+.sm-foot{font-size:11px; color:var(--faint); margin-top:8px}
+.sm-foot.bad{color:var(--down)}
 .lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
 @media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
 .lb-mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
@@ -5698,6 +5770,19 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         只打 GET /api/lab/meta 與 GET /api/lab/run（按「回測」才打）。
      ⚠️ 原本那一頁的**後端**（autotest/ 的模擬紀錄、/api/auto/*）照樣在跑，只是不畫了。 -->
 <div id="tab-lab" hidden>
+ <!-- ⭐ 模擬（不會下單）：兩條策略每天事後照規則算一次（2026-09-15 晚上加，後端 sim_lanes.py，唯讀端點 GET /api/sim/state）。
+      ⛔ 跟【自動下單】的真單紀錄完全分開：不同的檔、不同的端點、不同的卡，⛔ 不准混進同一個清單。
+      ⛔ 只放空容器：規則句、月合計、清單全部從後端來（前端不寫死時刻與點數）；一顆按鈕都沒有。
+      ⛔ 只列歷史模擬結果：不放勝率估計、不放預估、不給進場提示。 -->
+ <div class="card sm-card" id="smcard">
+  <div class="sec-head"><h2>模擬（不會下單）</h2><span class="count" id="smcount"></span></div>
+  <div class="sm-note" id="smnote"></div>
+  <div class="sm-lanes">
+   <div class="sm-lane" id="sm-fast"></div>
+   <div class="sm-lane" id="sm-night"></div>
+  </div>
+  <div class="sm-foot" id="smfoot"></div>
+ </div>
  <div class="lb-grid">
   <!-- ===== 左：條件 ===== -->
   <div class="card l1 lb-cond" id="lbform">
@@ -8317,7 +8402,8 @@ function setTab(t){
  else if(t==='tick'){ tkEnter(); }
  // 【策略實驗室】不掛在 500ms 的 tick 上：切進來問一次資料範圍，按「回測」才算。
  // 後端的即時報價、持倉監控、自動停利停損全程都在跑，切分頁完全不影響那一條路。
- else if(t==='lab'){ lbEnter(); }
+ // 「模擬（不會下單）」那張卡同樣：切進來問一次，停在這一頁時每 60 秒再問（smEnter 自己會在離開後停）。
+ else if(t==='lab'){ lbEnter(); smEnter(); }
  // 【自動下單】同樣不掛在 500ms 的 tick 上：後端的送單、持倉監控、±100 停利停損
  // 全程都在跑，切不切進這一頁完全不影響。
  else if(t==='fire'){ alEnter(); }
@@ -9510,6 +9596,84 @@ document.addEventListener('keydown',function(e){
  else if(e.key==='Escape'&&TK.pick){ TK.pick=false; tkPaint(); }
 });
 tkBind();
+
+/* ══════════════ 【策略實驗室】最上面那張「模擬（不會下單）」══════════════
+
+   ⛔ 只打 GET /api/sim/state（唯讀）。一顆按鈕、一個 POST 都沒有。
+   ⛔ 規則句、月合計、清單、今天狀態全部從後端來（⛔ 前端不寫死任何時刻／點數／百分比）。
+   ⛔ 跟【自動下單】的真單紀錄完全分開（不讀 /api/fire/*、不共用 AL 的清單）。
+   ⚠️ 不掛在 500ms 的 tick 上：切進這一頁問一次，停在這一頁時每 60 秒再問一次（離開就停）。
+   ⚠️ 「沒變就別動 DOM」用節點上快取的字串比（⛔ 不讀回 innerHTML 比，見 CLAUDE.md）。
+   ⚠️ 請求帶流水號，只認最後一次的回應。
+*/
+var SM={seq:0,timer:null,err:''};
+const SMWD=['日','一','二','三','四','五','六'];
+function smSet(id,html){ const e=document.getElementById(id); if(!e) return; if(e._smh!==html){ e._smh=html; e.innerHTML=html; } }
+function smPts(v){ if(v==null) return '—'; return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:1}); }
+function smCls(v){ return v>0?'up':v<0?'down':''; }
+function smPx(v){ return v==null?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:1}); }
+function smDay(s){ const p=String(s||'').split('-').map(Number); if(p.length<3) return esc(s);
+  return esc(s.slice(5))+'（'+SMWD[new Date(p[0],p[1]-1,p[2]).getDay()]+'）'; }
+function smRow(r){
+  const trade=r.decision==='做多'||r.decision==='做空';
+  const x=trade
+    ? smPx(r.entry)+' → '+smPx(r.exit)+'（'+esc(r.exit_reason||'')+'）<small>'+esc(r.reason||'')+'</small>'
+    : esc(r.reason||'');
+  return '<div class="sm-r"><span class="d">'+smDay(r.date)+'</span>'
+    +'<span class="k '+(trade?(r.decision==='做多'?'up':'down'):'none')+'">'+esc(r.decision)+'</span>'
+    +'<span class="x">'+x+'</span>'
+    +'<span class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</span></div>';
+}
+function smLane(L){
+  if(!L) return '<div class="sm-empty">讀不到</div>';
+  const t=L.today||{};
+  let h='<div class="sm-lt"><b>'+esc(L.name)+'</b><small>資料：'+esc(L.src)+'</small></div>'
+    +'<div class="sm-rule">'+esc(L.rule)+'</div>'
+    +'<div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>　':'')
+    +(t.row?(esc(t.row.decision)+(t.row.points!=null?'　<span class="'+smCls(t.row.points)+'">'+smPts(t.row.points)+' 點</span>':'')):esc(t.msg||''))+'</div>';
+  h+='<div class="sm-body"><div class="sm-months"><div class="sm-mh">每月累計點數</div>';
+  (L.months||[]).forEach(m=>{
+    h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+'<i>'+m.trades+' 筆</i></span>'
+      +'<b class="lb-mono '+smCls(m.points)+'">'+(m.days?smPts(m.points):'—')+'</b></div>';
+  });
+  h+='</div><div><div class="sm-lh">最近 '+(L.recent||[]).length+' 筆</div><div class="sm-list">';
+  h+=(L.recent&&L.recent.length)?L.recent.map(smRow).join(''):'<div class="sm-empty">還沒有算好的日子</div>';
+  h+='</div>';
+  if(L.pending&&L.pending.length){
+    h+='<div class="sm-pend">等資料：'+L.pending.map(p=>smDay(p.date)+' '+esc(p.msg)).join('；')+'</div>';
+  }
+  if(L.fetch&&L.fetch.msg){ h+='<div class="sm-pend">補資料：'+esc(L.fetch.msg)+(L.fetch.at?'（'+esc(L.fetch.at.slice(5,16))+'）':'')+'</div>'; }
+  return h+'</div></div>';
+}
+function smPaint(x){
+  if(!x||!x.lanes){ smSet('sm-fast',''); smSet('sm-night',''); smSet('smfoot','<span>'+esc(SM.err||'讀取中…')+'</span>'); return; }
+  smSet('smnote',esc(x.note||''));
+  smSet('sm-fast',smLane(x.lanes.fast));
+  smSet('sm-night',smLane(x.lanes.night));
+  const f=x.file||{};
+  smSet('smcount',esc('算到 '+(x.last_step_at||'—')));
+  const bad=(x.errors>0)||(f.bad>0)||(f.dup>0)||(f.eq_ok===false)||(x.hist_bad>0)||!x.wired;
+  const foot='紀錄 '+(f.ok||0)+' 列'+(f.bad?'、壞列 '+f.bad:'')+(f.dup?'、重複 '+f.dup:'')
+    +(f.eq_ok===false?'、⚠️ 列數對不上':'')+(x.hist_bad?'、fast_hist 壞列 '+x.hist_bad:'')
+    +(x.wired?'':'、⚠️ 快攻規則沒有接上')
+    +(x.errors?'、背景錯誤 '+x.errors+' 次（最近：'+(x.last_err||'')+'）':'');
+  const e=document.getElementById('smfoot'); if(e) e.classList.toggle('bad',!!bad);
+  smSet('smfoot',esc(foot));
+}
+function smLoad(){
+  const my=++SM.seq;
+  fetch('/api/sim/state',{cache:'no-store'}).then(r=>r.json().catch(()=>({})).then(b=>({s:r.status,b}))).then(({s,b})=>{
+    if(my!==SM.seq) return;
+    if(s!==200){ SM.err=(b&&b.msg)||('模擬讀取失敗（'+s+'）'); smPaint(null); return; }
+    SM.err=''; smPaint(b);
+  }).catch(()=>{ if(my!==SM.seq) return; SM.err='模擬讀取失敗（連不到面板）'; smPaint(null); });
+}
+function smEnter(){
+  smLoad();
+  if(SM.timer) clearTimeout(SM.timer);
+  const again=()=>{ SM.timer=null; if(TAB!=='lab') return; smLoad(); SM.timer=setTimeout(again,60000); };
+  SM.timer=setTimeout(again,60000);
+}
 
 /* ══════════════ 【策略實驗室】分頁：歷史逐筆回測 ══════════════
 
@@ -10708,9 +10872,26 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._json(500, {"ok": False, "msg": "回測失敗：" + str(e)[:160]})
 
+    def _sim_get(self):
+        """
+        【策略實驗室】「模擬（不會下單）」唯讀端點 GET /api/sim/state。
+        ⛔ 只讀 sim_lanes/ 與 sim_lanes 的記憶體狀態：不抓資料、不寫檔、不碰 broker／auto_fire。
+        """
+        ok, code, msg = fire_get_guard(self.headers)
+        if not ok:
+            return self._json(code, {"ok": False, "msg": msg})
+        if sim_lanes is None:
+            return self._json(503, {"ok": False, "msg": "模擬載入失敗"})
+        try:
+            return self._json(200, sim_lanes.state())
+        except Exception as e:
+            return self._json(500, {"ok": False, "msg": "模擬狀態讀取失敗：" + str(e)[:160]})
+
     def do_GET(self):
         if self.path.partition("?")[0] in ("/api/lab/meta", "/api/lab/run"):
             return self._lab_get()
+        if self.path.partition("?")[0] == "/api/sim/state":
+            return self._sim_get()
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:
@@ -11298,6 +11479,56 @@ def start_strategy_lab_fetch():
         return False
 
 
+def _sim_has_position():
+    """
+    【模擬】背景補資料之前問「現在有沒有部位」。⛔⛔ **拿不到確定答案就回 True**（2026-09-15 lab-qa 退件 R1）。
+    ・記憶體有部位 ⇒ True（不用再問）。
+    ・記憶體是 None **不算答案**：看門狗重啟後 reconcile 回 unknown 時記憶體就是 None，但券商那邊部位還在。
+      ⇒ 再跟券商問一次 `broker.broker_position()`（唯讀的 list_positions，⛔ 不對帳、不改 _state 部位、不送單）：
+      只有它明確回 None（券商說沒有）才回 False；"unknown"／有部位／任何例外 ⇒ True。
+    ⚠️ sim_lanes.fetch_gate 只在 13:50~隔天 08:30、真的要抓、沒在「隔 10 分鐘」時才叫這支 ⇒ 不會每分鐘去敲券商。
+    ⚠️ 跟 `_lab_has_position`（strategy_lab 用、只讀記憶體）刻意分開，不動那一條。
+    """
+    try:
+        if broker._state.get("position") is not None:
+            return True
+        return broker.broker_position() is not None
+    except Exception:           # noqa: BLE001  ⛔ 問不到 ⇒ 當成有部位
+        return True
+
+
+def start_sim_lanes():
+    """
+    【策略實驗室】「模擬（不會下單）」那張卡的背景執行緒（main() 呼叫一次，排在 start_strategy_lab_fetch 後面）。
+    ⛔ 模擬：sim_lanes 自己不 import broker／auto_fire —— 門檻那幾支規則函式在**這裡**注入
+       （跟真單同一份正本：auto_fire.fast_verdict／move_pct／tpsl_points／hist_read、FAST_PCTL、FAST_RULE），
+       ⛔ 不准在 sim_lanes 裡另寫一份。
+    ⛔ 有部位就不抓資料：注入 `_sim_has_position`（沒有確定答案就回 True，見那支；2026-09-15 lab-qa 退件 R1）。
+    ⛔ 規則函式一律用**關鍵字**注入（lab-qa R4：位置參數對調 move_pct／tpsl_points 不會報錯、只會算錯）。
+    ⛔⛔ 這支**永遠不丟例外**：模組沒載入、起執行緒失敗，一律只印警告，main 照樣往下走。
+    ⚠️ 只接在 main()：--replay 與所有治具都走不到這裡 ⇒ 測試不會去連永豐。回傳是否真的起來了。
+    """
+    try:
+        if sim_lanes is None:
+            print("⚠️ 【模擬】沒有載入，不算模擬")
+            return False
+        ok = sim_lanes.configure(verdict_fn=auto_fire.fast_verdict, move_fn=auto_fire.move_pct,
+                                 tpsl_fn=auto_fire.tpsl_points, hist_read_fn=auto_fire.hist_read,
+                                 pctl=FAST_PCTL, rule=auto_fire.FAST_RULE)
+        if not ok:
+            print("⚠️ 【模擬】規則函式接不上（早盤快攻那條會顯示「沒有接上」）")
+        threading.Thread(target=sim_lanes.loop,
+                         args=(lambda: SESSION_REF.get("api"), _sim_has_position),
+                         daemon=True, name="sim-lanes").start()
+        return True
+    except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
+        try:
+            print(f"⚠️ 【模擬】背景計算起不來（其他功能不受影響）：{str(e)[:160]}")
+        except Exception:
+            pass
+        return False
+
+
 def main():
     # ⛔ 09:03:30 的掛勾只有這裡會接（接上去就會真的送單，見 auto_fire.py）。
     #    13:43:30 的收盤平倉掛勾同理（接上去就會真的送出平倉單）。
@@ -11556,6 +11787,8 @@ def main():
 
     # 【策略實驗室】收盤後補抓當天日盤逐筆。⛔ 起不來只印警告（見 start_strategy_lab_fetch）。
     start_strategy_lab_fetch()
+    # 【策略實驗室】最上面那張「模擬（不會下單）」的背景計算。⛔ 起不來只印警告（見 start_sim_lanes）。
+    start_sim_lanes()
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     last_retry = 0.0

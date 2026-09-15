@@ -1,0 +1,977 @@
+# -*- coding: utf-8 -*-
+"""
+【策略實驗室】「模擬（不會下單）」離線測試（2026-09-15 晚上，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
+
+  ① 早盤快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
+     13:43:30 收盤平／結算日 13:30／沒有逐筆＝資料缺（不是定論）
+  ② 美股開盤順勢：夏令 21:30／冬令 22:30（含換季邊界）／同一根兩邊碰算停損／04:58 收盤平／停利／d=0 不做／沒到齊＝資料缺
+  ③ 落地：同一（lane,date）不重寫／資料缺之後補到會補算（兩條各一次）／壞列計數＋等式
+  ④ 抓資料的防護：08:30~09:35 不抓／有部位不抓（問不到也算有）／流量高不抓／失敗隔 10 分鐘／問過沒有今天不重抓／正控組
+  ⑤ 背景例外不外丟（step 與 loop 各驗）＋計數
+  ⑥ 端點 GET /api/sim/state：200、唯讀（前後雜湊一樣）、跨站 403、POST 不接、模組是 None ⇒ 503；
+     sim_lanes 載入失敗時 import live_panel 照樣成功
+  ⑦ 前端：卡在 #tab-lab 最上面、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑧ AST：sim_lanes 不 import／引用 broker、auto_fire；主迴圈那幾支跟固定基準 a71087e 一模一樣（沒有基準 ⇒ 記「未驗」）
+  ④b 面板注入的 _sim_has_position（沒有確定答案就回 True）＋關鍵字注入各就各位
+  ④c 休市不佔「每輪補一天」名額、落地成「休市」、今天回空不記休市、fast_hist 有那天就不記休市
+  ⑨ fire_fires_today：今天帳本有 wait、沒定論、早於 REV_SEC＋AUTO_LATE_MS ⇒「今天」
+  ⑩ 收尾：全程沒有指回真的資料夾、真的 AUTO_ORDERS_ON 不存在
+
+⛔ 價格一律用 12000 附近的合成資料（不撞他的真實紀錄）。
+跑法（在 tools\\shioaji 底下）：  ..\\..\\.venv\\Scripts\\python.exe test_sim_lanes.py
+"""
+# ⛔ 崩潰也要有具名 FAIL＋總結（2026-09-15 lab-qa 退件 R6）：整份測試包一層 try 跑（把自己當成 body exec 一次），
+#    例外 ⇒ 印 traceback＋「FAIL 測試本身崩潰」＋總結、exit 1。body 自己跑完會 sys.exit，照原樣往外傳。
+if __name__ == "__main__" and not globals().get("_SIM_TEST_BODY"):
+    import sys as _sys
+    import traceback as _tb
+    _g = {"__name__": "__main__", "__file__": __file__, "__builtins__": __builtins__, "_SIM_TEST_BODY": True}
+    try:
+        with open(__file__, encoding="utf-8") as _f:
+            _code = compile(_f.read(), __file__, "exec")
+        exec(_code, _g)
+    except SystemExit:
+        raise
+    except BaseException as _e:          # noqa: BLE001  ⛔ 刻意接住所有例外（含 KeyboardInterrupt）
+        try:
+            _sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+        _tb.print_exc(file=_sys.stdout)
+        print(f"  FAIL 測試本身崩潰（{type(_e).__name__}: {str(_e)[:200]}）—— 崩潰點之後的項目都沒跑到")
+        try:
+            if _g.get("TMP") is not None:
+                import shutil as _sh
+                _sh.rmtree(_g["TMP"], ignore_errors=True)
+        except Exception:
+            pass
+        print("\n總結:", f"{int(_g.get('FAIL', 0) or 0) + 1} 項失敗（含測試崩潰）")
+        _sys.exit(1)
+    _sys.exit(0)
+import ast
+import gzip
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+import threading
+import urllib.error
+import urllib.request
+from datetime import date, datetime, timedelta
+from http.server import ThreadingHTTPServer
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import numpy as np
+import pandas as pd
+
+import auto_fire as AF
+import live_panel as LP
+import sim_lanes as S
+import strategy_lab as SL
+
+FAIL = 0
+UNVERIFIED = []      # 驗不到的項目（⛔ 不當成通過；總結會寫「其餘通過；未驗 N 項」）
+
+
+def chk(name, got, want):
+    global FAIL
+    ok = got == want
+    FAIL += not ok
+    print(("  OK   " if ok else "  FAIL ") + name + ("" if ok else f"  (得到 {got!r}，期待 {want!r})"))
+
+
+def say(ok, name, extra=""):
+    global FAIL
+    FAIL += not ok
+    print(("  OK   " if ok else "  FAIL ") + name + (f"  {extra}" if extra else ""))
+
+
+def fhash(p):
+    p = pathlib.Path(p)
+    if not p.exists():
+        return None
+    if p.is_file():
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    h = hashlib.sha256()
+    for f in sorted(x for x in p.rglob("*") if x.is_file()):
+        h.update(str(f.relative_to(p)).encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+# ══ 導走所有寫檔出口（⛔ 先確認有幾個：sim_lanes 的 SIM_DIR、借用的 tick_hist、fire 帳本）════════════
+REAL = {"S.SIM_DIR": S.SIM_DIR, "S.FAST_HIST": S.FAST_HIST, "S.MIN1_CSV": S.MIN1_CSV,
+        "SL.LAB_DIR": SL.LAB_DIR, "SL.MIN1_CSV": SL.MIN1_CSV, "AF.FIRE_DIR": AF.FIRE_DIR,
+        "AF.ARM_FLAG": AF.ARM_FLAG, "AF.FAST_HIST": AF.FAST_HIST}
+REAL_HASH = {k: fhash(v) for k, v in REAL.items() if k in ("S.SIM_DIR", "S.FAST_HIST", "AF.FIRE_DIR")}
+say(not REAL["AF.ARM_FLAG"].exists(), "  開跑前：真的 AUTO_ORDERS_ON 不存在（存在就不跑，⛔ 不准碰它）")
+if REAL["AF.ARM_FLAG"].exists():
+    sys.exit(2)
+TMP = pathlib.Path(tempfile.mkdtemp(prefix="simlanes_"))
+S.SIM_DIR = TMP / "sim_lanes"
+S.FAST_HIST = TMP / "fast_hist.jsonl"
+S.MIN1_CSV = TMP / "tmf_1min.csv"
+SL.LAB_DIR = TMP / "tick_hist"
+SL.MIN1_CSV = TMP / "tmf_1min_lab.csv"
+AF.FIRE_DIR = TMP / "autofire"
+AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"
+AF.FAST_HIST = TMP / "af_fast_hist.jsonl"
+say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE),
+    "  configure 接上 auto_fire 的規則正本")
+
+
+def reset_state():
+    S._FAIL_AT.update(ticks=None, kbars=None)
+    S._TRIED.clear()
+    S._NIGHT_API.clear()
+    S.STATE["errors"] = 0
+    S.STATE["last_err"] = None
+    S.STATE["pending"] = {"fast": {}, "night": {}}
+
+
+def ms(h, m, s=0, x=0):
+    return (h * 3600 + m * 60 + s) * 1000 + x
+
+
+def mkD(ticks):
+    """ticks：[(毫秒, 成交, 買, 賣)] ⇒ load_day 的形狀"""
+    ticks = sorted(ticks)
+    return {"t": np.array([x[0] for x in ticks], np.int64), "p": np.array([x[1] for x in ticks], float),
+            "bid": np.array([x[2] for x in ticks], float), "ask": np.array([x[3] for x in ticks], float)}
+
+
+def hist_rows(day, n, mv=0.2, spread=0.1):
+    """day 以前 n 個平日的 move_pct（0.2~0.3 之間）"""
+    out, d, k = [], date.fromisoformat(day), 0
+    while len(out) < n:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            out.append({"date": str(d), "move_pct": mv + spread * ((k % 10) / 10.0)})
+            k += 1
+    return sorted(out, key=lambda r: r["date"])
+
+
+def base_day(ref=12000.0, px=12060.0, bid=None, ask=None, extra=()):
+    """08:45 開、08:59:59 ref、09:03:29 px，之後照 extra"""
+    t = [(ms(8, 45, 0, 100), 11990.0, 11989.0, 11991.0), (ms(8, 59, 59), ref, ref - 1, ref + 1),
+         (ms(9, 1), (ref + px) / 2, (ref + px) / 2 - 1, (ref + px) / 2 + 1),
+         (ms(9, 3, 29), px, px - 1 if bid is None else bid, px + 1 if ask is None else ask)]
+    t += list(extra)
+    t.append((ms(13, 44, 59), px, px - 1, px + 1))
+    return mkD(t)
+
+
+# ══ ① 早盤快攻 ══════════════════════════════════════════════════════
+print("=== ① 早盤快攻 ===")
+DAY = "2026-10-13"          # 週二、不是結算日
+say(not SL.is_expiry(date.fromisoformat(DAY)), "  治具自證：%s 不是結算日" % DAY)
+H40 = hist_rows(DAY, 40)
+thr = AF.fast_threshold([r["move_pct"] for r in H40], LP.FAST_PCTL)[0]
+say(thr is not None and thr < 0.5, "  治具自證：門檻 %.3f%% 小於 0.5%%" % (thr or -1))
+
+# 快做多停利：px 12060（走 0.5%），賣價 12061 進場，停利 round(12061×0.5%)=60 ⇒ 12121
+D = base_day(12000, 12060, extra=[(ms(10, 0), 12100.0, 12099, 12101), (ms(10, 30), 12121.0, 12120, 12122)])
+r = S.fast_eval(DAY, D, H40)
+chk("  快做多：決定／進場用賣價／停利", (r.get("decision"), r.get("entry"), r.get("exit_reason")), ("做多", 12061.0, "停利"))
+chk("  快做多：點數＝60−5、出場 12121", (r.get("points"), r.get("exit"), r.get("tpsl_points")), (55.0, 12121.0, 60))
+
+# 快做空停損：px 11940，買價 11939 進場，停損 60 ⇒ 11999；觸發那筆成交 12010（跳過去）⇒ −71−5
+D = base_day(12000, 11940, extra=[(ms(9, 30), 11990.0, 11989, 11991), (ms(9, 40), 12010.0, 12009, 12011)])
+r = S.fast_eval(DAY, D, H40)
+chk("  快做空：決定／進場用買價／停損", (r.get("decision"), r.get("entry"), r.get("exit_reason")), ("做空", 11939.0, "停損"))
+chk("  快做空停損：用觸發那一筆的成交價 12010（不是 11999）⇒ −76", (r.get("exit"), r.get("points")), (12010.0, -76.0))
+
+# 不快不做
+r = S.fast_eval(DAY, base_day(12000, 12006), H40)
+chk("  不快（走 0.05%）⇒ 不做／not_fast", (r.get("decision"), r.get("why"), r.get("points")), ("不做", "not_fast", None))
+say("不快，不做" in (r.get("reason") or ""), "  原因寫「不快，不做」", r.get("reason"))
+
+# 邊界：剛好 09:00:00.000 那筆算 ref、剛好 09:03:30.000 那筆算 px（含），09:03:30.001 那筆不算
+D = base_day(12000, 12060, extra=[(ms(9, 0, 0), 12010.0, 12009, 12011), (ms(9, 3, 30), 12070.0, 12069, 12071),
+                                  (ms(9, 3, 30, 1), 12500.0, 12499, 12501)])
+r = S.fast_eval(DAY, D, H40)
+chk("  邊界：ref＝09:00:00.000 那筆、px＝09:03:30.000 那筆、進場用它的賣價", (r.get("ref"), r.get("px"), r.get("entry")),
+    (12010.0, 12070.0, 12071.0))
+
+# 歷史不夠：19 天 ⇒ 歷史不夠；20 天 ⇒ 有判定
+r19 = S.fast_eval(DAY, base_day(12000, 12060), hist_rows(DAY, 19))
+r20 = S.fast_eval(DAY, base_day(12000, 12060), hist_rows(DAY, 20))
+chk("  19 天 ⇒ 不做／no_hist", (r19.get("decision"), r19.get("why")), ("不做", "no_hist"))
+say("歷史不夠" in (r19.get("reason") or ""), "  原因寫「歷史不夠」", r19.get("reason"))
+chk("  20 天 ⇒ 有判定（做多）", r20.get("decision"), "做多")
+
+# 門檻只用這天以前的列：這天（含）以後放 30 列超大的走幅 ⇒ 結果必須跟沒有它們一模一樣
+fut = [{"date": str(date.fromisoformat(DAY) + timedelta(days=i)), "move_pct": 5.0} for i in range(0, 30)]
+old = [{"date": "2025-0%d-1%d" % (1 + i // 10, i % 10), "move_pct": 9.0} for i in range(30)]
+rA = S.fast_eval(DAY, base_day(12000, 12060, extra=[(ms(10, 30), 12121.0, 12120, 12122)]), H40)
+rB = S.fast_eval(DAY, base_day(12000, 12060, extra=[(ms(10, 30), 12121.0, 12120, 12122)]),
+                 sorted(old + H40 + fut, key=lambda x: x["date"]))
+chk("  這天以後的列（含當天）不影響門檻；40 天以前的舊列也不算", (rB.get("decision"), rB.get("thr_pct"), rB.get("n_hist")),
+    (rA.get("decision"), rA.get("thr_pct"), 40))
+say(rB.get("thr_pct") is not None and rB["thr_pct"] < 1.0, "  自證：門檻沒有被 5%／9% 的列拉上去", str(rB.get("thr_pct")))
+
+# 收盤平：13:43:30 前沒碰到 ⇒ 最後一筆買價（做多）平；13:43:31 那筆碰到停利不算
+D = base_day(12000, 12060, extra=[(ms(11, 0), 12080.0, 12079, 12081), (ms(13, 43, 30), 12090.0, 12088, 12092),
+                                  (ms(13, 43, 31), 12200.0, 12199, 12201)])
+r = S.fast_eval(DAY, D, H40)
+chk("  13:43:30 前沒碰到 ⇒ 收盤、用 13:43:30 那筆的買價 12088", (r.get("exit_reason"), r.get("exit"), r.get("points")),
+    ("收盤", 12088.0, 12088.0 - 12061.0 - 5))
+
+# 結算日 13:30：13:35 才碰到停利 ⇒ 結算日算收盤（13:29 那筆買價）；平常日同一份資料 ⇒ 停利
+EXP = "2026-10-21"
+say(SL.is_expiry(date.fromisoformat(EXP)), "  治具自證：%s 是結算日" % EXP)
+ext = [(ms(13, 29), 12070.0, 12069, 12071), (ms(13, 35), 12130.0, 12129, 12131)]
+rE = S.fast_eval(EXP, base_day(12000, 12060, extra=ext), hist_rows(EXP, 40))
+rN = S.fast_eval("2026-10-22", base_day(12000, 12060, extra=ext), hist_rows("2026-10-22", 40))
+chk("  結算日：13:30 收盤、出場 12069", (rE.get("exit_reason"), rE.get("exit"), rE.get("cutoff")), ("收盤", 12069.0, "13:30:00"))
+chk("  對照組（平常日同一份資料）：停利", (rN.get("exit_reason"), rN.get("cutoff")), ("停利", "13:43:30"))
+
+# 資料缺
+chk("  沒有逐筆 ⇒ 資料缺（pending），不是定論", (S.fast_eval(DAY, None, H40).get("pending"), S.fast_eval(DAY, None, H40).get("msg")),
+    (True, "沒有當天逐筆"))
+chk("  讀不到歷史檔 ⇒ 資料缺", S.fast_eval(DAY, base_day(), None).get("why"), "no_hist_file")
+_saved_cfg = dict(S._CFG)
+S._CFG["verdict"] = None
+chk("  沒接上規則函式 ⇒ 資料缺（⛔ 不猜）", S.fast_eval(DAY, base_day(), H40).get("why"), "not_wired")
+S._CFG.update(_saved_cfg)
+
+
+# ══ ② 美股開盤順勢 ══════════════════════════════════════════════════
+print("\n=== ② 美股開盤順勢 ===")
+chk("  夏令換算：2026-03-07（週六，換季前）22:30、03-08（第二個週日）21:30",
+    (S._hm(S.us_open_min(date(2026, 3, 7))), S._hm(S.us_open_min(date(2026, 3, 8)))), ("22:30", "21:30"))
+chk("  冬令換算：2026-10-31 21:30、11-01（第一個週日）22:30",
+    (S._hm(S.us_open_min(date(2026, 10, 31))), S._hm(S.us_open_min(date(2026, 11, 1)))), ("21:30", "22:30"))
+chk("  2027：03-13 22:30、03-14 21:30、11-06 21:30、11-07 22:30",
+    [S._hm(S.us_open_min(date(2027, 3, 13))), S._hm(S.us_open_min(date(2027, 3, 14))),
+     S._hm(S.us_open_min(date(2027, 11, 6))), S._hm(S.us_open_min(date(2027, 11, 7)))], ["22:30", "21:30", "21:30", "22:30"])
+
+
+def night(E, over=None, base=12000.0, tail=True):
+    """E 15:01 ~ E+1 05:00 每分鐘一根（標籤＝結束時間），收盤都是 base；over：{"HH:MM": (H, L, C)}"""
+    over = over or {}
+    rows = []
+    t = datetime.combine(E, datetime.min.time()) + timedelta(hours=15, minutes=1)
+    end = datetime.combine(E + timedelta(days=1), datetime.min.time()) + timedelta(hours=5 if tail else 4, minutes=0 if tail else 50)
+    while t <= end:
+        k = t.strftime("%H:%M")
+        h, l, c = over.get(k, (base + 2, base - 2, base))
+        rows.append({"ts": t, "High": h, "Low": l, "Close": c})
+        t += timedelta(minutes=1)
+    return pd.DataFrame(rows)
+
+
+def ramp(c0, lab0, n, step):
+    """從 lab0 開始 n 根，收盤每根 +step（高低 ±1）"""
+    out, t = {}, datetime.strptime(lab0, "%H:%M")
+    for i in range(n):
+        c = c0 + step * i
+        out[(t + timedelta(minutes=i)).strftime("%H:%M")] = (c + 1, c - 1, c)
+    return out
+
+
+SUM = date(2026, 7, 1)      # 週三、夏令
+WIN = date(2026, 12, 2)     # 週三、冬令
+# 夏令：21:31~21:35 漲到 12060（T=21:30 ⇒ 做多）；冬令同一份 K 棒、22:31~22:35 跌 ⇒ 看的是 22:30
+ov = dict(ramp(12012, "21:31", 5, 12))           # 21:35 收 12060
+ov.update(ramp(11988, "22:31", 5, -12))          # 22:35 收 11940
+for k in list(ov):
+    pass
+rS = S.night_eval(SUM, night(SUM, ov))
+rW = S.night_eval(WIN, night(WIN, ov))
+chk("  夏令看 21:30→21:35：做多、ref 12000、c 12060", (rS.get("decision"), rS.get("ref"), rS.get("c"), rS.get("us_open")),
+    ("做多", 12000.0, 12060.0, "21:30"))
+chk("  冬令看 22:30→22:35：做空、c 11940", (rW.get("decision"), rW.get("c"), rW.get("us_open"), rW.get("c_label")),
+    ("做空", 11940.0, "22:30", "22:35"))
+
+# 同一根兩邊都碰到 ⇒ 停損：做多 c=12060、±120.6；23:00 那根 H 12200／L 11900
+ov2 = dict(ramp(12012, "21:31", 5, 12))
+ov2["23:00"] = (12200.0, 11900.0, 12050.0)
+r = S.night_eval(SUM, night(SUM, ov2))
+chk("  同一根兩邊都碰 ⇒ 停損、點數 −120.6−7", (r.get("exit_reason"), r.get("points"), r.get("exit_label")),
+    ("停損", round(-120.6 - 7, 1), "23:00"))
+ov2b = dict(ramp(12012, "21:31", 5, 12))
+ov2b["23:00"] = (12200.0, 12040.0, 12180.0)
+r = S.night_eval(SUM, night(SUM, ov2b))
+chk("  對照組：只碰停利那邊 ⇒ 停利 +120.6−7", (r.get("exit_reason"), r.get("points")), ("停利", round(120.6 - 7, 1)))
+
+# 都沒碰到 ⇒ 標籤 04:58 那根收盤平（04:59／05:00 的收盤不算）
+ov3 = dict(ramp(12012, "21:31", 5, 12))
+ov3["04:58"] = (12091.0, 12089.0, 12090.0)
+ov3["04:59"] = (12151.0, 12149.0, 12150.0)
+ov3["05:00"] = (12001.0, 11999.0, 12000.0)
+r = S.night_eval(SUM, night(SUM, ov3, base=12050.0))
+chk("  沒碰到 ⇒ 收盤、用 04:58 那根 12090", (r.get("exit_reason"), r.get("exit"), r.get("exit_label"), r.get("points")),
+    ("收盤", 12090.0, "04:58", 12090.0 - 12060.0 - 7))
+
+# d=0 不做
+ov4 = {"21:30": (12001, 11999, 12000.0), "21:35": (12001, 11999, 12000.0)}
+r = S.night_eval(SUM, night(SUM, ov4))
+chk("  21:35 跟 21:30 一樣價 ⇒ 不做／flat", (r.get("decision"), r.get("why"), r.get("points")), ("不做", "flat", None))
+
+# 沒到齊（最後一根 04:50）⇒ 資料缺，⛔ 不是「不做」
+r = S.night_eval(SUM, night(SUM, ov, tail=False))
+chk("  沒到 04:58 ⇒ 資料缺（incomplete）", (r.get("pending"), r.get("why")), (True, "incomplete"))
+chk("  沒有 K 棒 ⇒ 資料缺", S.night_eval(SUM, None).get("why"), "no_bars")
+# 標籤一定是結束時間：把整份往前挪一分鐘（＝誤用起始時間標籤）⇒ 21:35 那根變 21:34 ⇒ c 不同
+shift = night(SUM, ov)
+shift["ts"] = shift["ts"] - timedelta(minutes=1)
+r = S.night_eval(SUM, shift)
+say(r.get("c") != 12060.0, "  自證：同一份 K 棒改用起始時間標籤會算出不同的 c（這把尺分得出兩種標籤）", str(r.get("c")))
+
+
+# ══ ③ 落地 ═══════════════════════════════════════════════════════════
+print("\n=== ③ 落地 ===")
+row = {"lane": "fast", "date": "2026-10-13", "decision": "不做", "why": "not_fast", "reason": "x", "entry": None,
+       "exit": None, "exit_reason": None, "points": None, "src": "逐筆"}
+chk("  第一次寫 ⇒ True", S.append_row(row), True)
+chk("  同一（lane,date）第二次 ⇒ False（不重寫）", S.append_row(dict(row, reason="改過")), False)
+chk("  另一條同一天 ⇒ 可以寫", S.append_row(dict(row, lane="night")), True)
+rows, st = S.read_rows()
+chk("  檔裡 2 列、第一列原文沒被改", (st["lines"], rows[("fast", "2026-10-13")]["reason"]), (2, "x"))
+say(all(isinstance(json.loads(l).get("wrote_at"), str) for l in (S.SIM_DIR / "2026-10.jsonl").read_text(encoding="utf-8").splitlines()),
+    "  每列都有 wrote_at")
+try:
+    S.append_row({"lane": "fast", "date": "2026-10-13"})
+    say(False, "  格式不對的列應該拒絕寫")
+except ValueError:
+    say(True, "  格式不對的列拒絕寫（不會寫出壞列）")
+
+# 壞列計數＋等式
+with (S.SIM_DIR / "2026-10.jsonl").open("a", encoding="utf-8") as f:
+    f.write("{壞掉的 json\n")
+    f.write("\n")
+    f.write(json.dumps(dict(row, decision="亂寫")) + "\n")
+    f.write(json.dumps(dict(row, reason="重複")) + "\n")
+    f.write(json.dumps(dict(row, date="2026-10-14", decision="做多", points=float("nan"), exit_reason="停利")) + "\n")
+(S.SIM_DIR / "notes.txt").write_text("不是月份檔", encoding="utf-8")
+rows, st = S.read_rows()
+chk("  計數：7 列＝ok 2＋bad 3＋dup 1＋blank 1", (st["lines"], st["ok"], st["bad"], st["dup"], st["blank"]), (7, 2, 3, 1, 1))
+chk("  等式成立", st["lines"], st["ok"] + st["bad"] + st["dup"] + st["blank"])
+chk("  重複那列只認第一列", rows[("fast", "2026-10-13")]["reason"], "x")
+stt = LP.sim_lanes.state(datetime(2026, 10, 23, 20, 0))
+chk("  state() 把計數與等式端出去", (stt["file"]["bad"], stt["file"]["dup"], stt["file"]["eq_ok"]), (3, 1, True))
+import shutil
+shutil.rmtree(S.SIM_DIR)
+
+# 資料缺之後補到會補算（step，⛔ 不連永豐：get_api 回 None）
+NOW = datetime(2026, 10, 23, 20, 0)      # 週五晚上
+reset_state()
+FD = "2026-10-20"
+S.FAST_HIST.write_text("".join(json.dumps(r) + "\n" for r in hist_rows(FD, 40)), encoding="utf-8")
+S.step(lambda: None, lambda: False, NOW)
+rows, st = S.read_rows()
+chk("  快攻：沒有逐筆 ⇒ 一列都沒寫、pending 有那天＋原因", (st["ok"], S.STATE["pending"]["fast"].get(FD, {}).get("msg")),
+    (0, "沒有當天逐筆"))
+chk("  快攻：沒連線 ⇒ 抓取狀態 no_api（不是安靜地少）", S.STATE["fetch"]["ticks"]["status"], "no_api")
+
+
+def write_ticks(day, ticks):
+    SL._ticks_dir().mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame({"ts": [f"{day} {x[0] // 3600000:02d}:{x[0] // 60000 % 60:02d}:{x[0] // 1000 % 60:02d}.{x[0] % 1000:03d}" for x in ticks],
+                       "close": [x[1] for x in ticks], "volume": 1, "bid_price": [x[2] for x in ticks],
+                       "bid_volume": 1, "ask_price": [x[3] for x in ticks], "ask_volume": 1, "tick_type": 1})
+    df.to_csv(SL._ticks_dir() / f"{day}.csv.gz", index=False, compression="gzip")
+
+
+Dx = base_day(12000, 12060, extra=[(ms(10, 30), 12121.0, 12120, 12122)])
+write_ticks(FD, list(zip(Dx["t"].tolist(), Dx["p"].tolist(), Dx["bid"].tolist(), Dx["ask"].tolist())))
+S.step(lambda: None, lambda: False, NOW)
+rows, st = S.read_rows()
+chk("  快攻：逐筆補到之後下一輪就補算、寫進檔", (rows.get(("fast", FD), {}).get("decision"), rows.get(("fast", FD), {}).get("points")),
+    ("做多", 55.0))
+say(FD not in S.STATE["pending"]["fast"], "  快攻：補算之後 pending 裡沒有那天了")
+n_before = st["lines"]
+S.step(lambda: None, lambda: False, NOW)
+chk("  再跑一輪 ⇒ 檔案列數不變（有定論就不重寫）", S.read_rows()[1]["lines"], n_before)
+
+NE = date(2026, 10, 21)
+S.step(lambda: None, lambda: False, NOW)
+chk("  夜盤：沒有 1 分 K ⇒ 沒寫、pending 有", (("night", str(NE)) in S.read_rows()[0], str(NE) in S.STATE["pending"]["night"]), (False, True))
+bars = pd.concat([night(NE, dict(ramp(12012, "21:31", 5, 12)))], ignore_index=True)
+bars.assign(Open=bars["Close"], Volume=1, Amount=1)[["ts", "Open", "High", "Low", "Close", "Volume", "Amount"]].to_csv(S.MIN1_CSV, index=False)
+S.step(lambda: None, lambda: False, NOW)
+rows, _st = S.read_rows()
+chk("  夜盤：1 分 K 補到之後補算（做多）", rows.get(("night", str(NE)), {}).get("decision"), "做多")
+chk("  夜盤：窗口只到 E+1 05:10 已經過的晚上（週四 10-22 那晚要等週五 05:10，現在週五 20:00 ⇒ 在窗口裡）",
+    date(2026, 10, 22) in S.night_evenings(NOW), True)
+chk("  夜盤：週五 05:09 還不算週四那晚", date(2026, 10, 22) in S.night_evenings(datetime(2026, 10, 23, 5, 9)), False)
+chk("  窗口 10 個", (len(S.fast_days(NOW)), len(S.night_evenings(NOW))), (10, 10))
+
+
+# ══ ④ 抓資料的防護 ═══════════════════════════════════════════════════
+print("\n=== ④ 抓資料的防護 ===")
+
+
+class U:
+    def __init__(self, used, lim):
+        self.bytes, self.limit_bytes = used, lim
+
+
+class FakeApi:
+    def __init__(self, used=10, lim=100, ticks=None, kbars=None, boom=False):
+        self.calls = []
+        self.used, self.lim, self._ticks, self._kbars, self.boom = used, lim, ticks, kbars, boom
+
+        class F:
+            TMF = {"TMFR1": "TMFR1"}
+
+        class C:
+            Futures = F
+        self.Contracts = C
+
+    def usage(self, timeout=None):
+        self.calls.append("usage")
+        return U(self.used, self.lim)
+
+    def ticks(self, **kw):
+        self.calls.append(("ticks", kw.get("date")))
+        if self.boom:
+            raise RuntimeError("永豐炸了")
+        return self._ticks(kw["date"]) if self._ticks else {"ts": []}
+
+    def kbars(self, contract, start, end):
+        self.calls.append(("kbars", start))
+        if self.boom:
+            raise RuntimeError("永豐炸了")
+        return self._kbars(start) if self._kbars else {"ts": []}
+
+
+PAST = date(2026, 10, 19)
+
+
+def full_ticks(day):
+    t = [f"{day} 08:45:00.1", f"{day} 09:00:00.0", f"{day} 13:44:30.0"]
+    return {"ts": t, "close": [12000.0] * 3, "volume": [1] * 3, "bid_price": [11999.0] * 3,
+            "bid_volume": [1] * 3, "ask_price": [12001.0] * 3, "ask_volume": [1] * 3, "tick_type": [1] * 3}
+
+
+for label, now, pos, api_kw, want in (
+        ("08:30 整 ⇒ 不抓", datetime(2026, 10, 23, 8, 30), False, {}, "quiet"),
+        ("09:34:59 ⇒ 不抓", datetime(2026, 10, 23, 9, 34, 59), False, {}, "quiet"),
+        ("11:00 ⇒ 不抓（日盤中，真單部位可能還開著）", datetime(2026, 10, 23, 11, 0), False, {}, "quiet"),
+        ("13:49:59 ⇒ 不抓", datetime(2026, 10, 23, 13, 49, 59), False, {}, "quiet"),
+        ("有部位 ⇒ 不抓", datetime(2026, 10, 23, 20, 0), True, {}, "position"),
+        ("部位回 None（沒有確定答案）⇒ 不抓", datetime(2026, 10, 23, 20, 0), None, {}, "position"),
+        ("部位回 \"unknown\" ⇒ 不抓", datetime(2026, 10, 23, 20, 0), "unknown", {}, "position"),
+        ("流量 86% ⇒ 不抓", datetime(2026, 10, 23, 20, 0), False, {"used": 86, "lim": 100}, "usage_high"),
+        ("讀不到流量上限 ⇒ 不抓", datetime(2026, 10, 23, 20, 0), False, {"used": 1, "lim": 0}, "usage_high")):
+    reset_state()
+    api = FakeApi(ticks=full_ticks, kbars=lambda s: {"ts": []}, **api_kw)
+    st1 = S.fetch_ticks_day(api, lambda p=pos: p, PAST, now, qt="RT")
+    st2 = S.fetch_night(api, lambda p=pos: p, PAST, None, now)
+    fetched = [c for c in api.calls if c != "usage"]
+    chk(f"  {label}：逐筆與 1 分 K 都回 {want}、一次都沒跟永豐要資料", (st1, st2, fetched), (want, want, []))
+reset_state()
+api = FakeApi(ticks=full_ticks)
+chk("  問部位丟例外 ⇒ 當成有部位", S.fetch_ticks_day(api, lambda: 1 / 0, PAST, datetime(2026, 10, 23, 20, 0), qt="RT"), "position")
+chk("  13:50 整 ⇒ 可以抓（正控組：真的去要了）", (S.fetch_ticks_day(api, lambda: False, PAST, datetime(2026, 10, 23, 13, 50), qt="RT"),
+                                          ("ticks", str(PAST)) in api.calls), ("saved", True))
+say((SL._ticks_dir() / f"{PAST}.csv.gz").exists(), "  正控組：存進（暫存區的）tick_hist/ticks/")
+chk("  檔案已經在 ⇒ 不再抓", S.fetch_ticks_day(api, lambda: False, PAST, datetime(2026, 10, 23, 20, 0), qt="RT"), "exists")
+reset_state()
+api = FakeApi(ticks=full_ticks)
+chk("  今天 15:00 以前不補（那是 strategy_lab.fetch_today 的班）",
+    (S.fetch_ticks_day(api, lambda: False, date(2026, 10, 23), datetime(2026, 10, 23, 14, 0), qt="RT"), api.calls), ("too_early", []))
+# 失敗隔 10 分鐘
+reset_state()
+api = FakeApi(boom=True)
+try:
+    S.fetch_ticks_day(api, lambda: False, date(2026, 10, 16), datetime(2026, 10, 23, 20, 0), qt="RT")
+    say(False, "  抓取失敗應該丟給 step 吞")
+except RuntimeError:
+    say(True, "  抓取失敗 ⇒ 例外交給 step（step 會吞＋計數）")
+try:
+    _r9 = S.fetch_ticks_day(api, lambda: False, date(2026, 10, 16), datetime(2026, 10, 23, 20, 9), qt="RT")
+except RuntimeError as e:
+    _r9 = "又去問了而且炸了：" + str(e)
+chk("  失敗後 9 分鐘 ⇒ 不再問（連流量都不問）", (_r9, len(api.calls)), ("retry_wait", 2))
+api.boom = False
+api._ticks = full_ticks
+chk("  失敗後 10 分鐘 ⇒ 再試", S.fetch_ticks_day(api, lambda: False, date(2026, 10, 16), datetime(2026, 10, 23, 20, 10), qt="RT"), "saved")
+# 問過沒有 ⇒ 今天不重抓
+reset_state()
+api = FakeApi(ticks=lambda d: {"ts": []})
+chk("  沒有成交 ⇒ empty", S.fetch_ticks_day(api, lambda: False, date(2026, 10, 15), datetime(2026, 10, 23, 20, 0), qt="RT"), "empty")
+chk("  同一天再問 ⇒ tried、沒打永豐", (S.fetch_ticks_day(api, lambda: False, date(2026, 10, 15), datetime(2026, 10, 23, 20, 30), qt="RT"),
+                               len(api.calls)), ("tried", 2))
+# 夜盤正控組：一天一天要、合併、到齊才收
+reset_state()
+kb = night(date(2026, 10, 14), dict(ramp(12012, "21:31", 5, 12)))
+
+
+def kb_of(day):
+    g = kb[kb["ts"].dt.date == date.fromisoformat(day)]
+    return {"ts": [str(x) for x in g["ts"]], "Open": g["Close"].tolist(), "High": g["High"].tolist(),
+            "Low": g["Low"].tolist(), "Close": g["Close"].tolist(), "Volume": [1] * len(g), "Amount": [1] * len(g)}
+
+
+api = FakeApi(kbars=kb_of)
+got = S.fetch_night(api, lambda: False, date(2026, 10, 14), None, datetime(2026, 10, 23, 20, 0))
+chk("  夜盤正控組：E 與 E+1 各要一次、合併後到齊", (isinstance(got, pd.DataFrame), [c for c in api.calls if c != "usage"]),
+    (True, [("kbars", "2026-10-14"), ("kbars", "2026-10-15")]))
+chk("  夜盤：合併後算得出來", S.night_eval(date(2026, 10, 14), got).get("decision"), "做多")
+
+
+# ══ ④b 面板注入的部位判斷＋接線（lab-qa R1②／R4）══════════════════════════
+print("\n=== ④b 面板注入：_sim_has_position（沒有確定答案就回 True）＋關鍵字注入 ===")
+_B = LP.broker
+_saved_pos, _saved_bp = _B._state.get("position"), _B.broker_position
+_asked = []
+
+
+def _bp(ret):
+    def f():
+        _asked.append(1)
+        if isinstance(ret, BaseException):
+            raise ret
+        return ret
+    return f
+
+
+try:
+    _B._state["position"] = None
+    _B.broker_position = _bp("unknown")
+    chk("  記憶體 None（重啟後）＋券商回 unknown ⇒ True（當成有部位）", LP._sim_has_position(), True)
+    _B.broker_position = _bp(RuntimeError("list_positions 炸了"))
+    chk("  記憶體 None＋問券商丟例外 ⇒ True", LP._sim_has_position(), True)
+    _B.broker_position = _bp({"dir": "long", "qty": 1, "entry": 12000.0})
+    chk("  記憶體 None＋券商說有部位（撿回來之前）⇒ True", LP._sim_has_position(), True)
+    _B.broker_position = _bp(None)
+    chk("  記憶體 None＋券商明確說沒有 ⇒ False（正控組：唯一會放行的情況）", LP._sim_has_position(), False)
+    _asked.clear()
+    _B._state["position"] = {"dir": "short", "entry": 12000.0}
+    chk("  記憶體有部位 ⇒ True、而且不用再問券商", (LP._sim_has_position(), len(_asked)), (True, 0))
+finally:
+    _B._state["position"] = _saved_pos
+    _B.broker_position = _saved_bp
+
+
+class _FakeThread:
+    made = []
+
+    def __init__(self, target=None, args=(), **kw):
+        _FakeThread.made.append((target, args))
+
+    def start(self):
+        pass
+
+
+_thr = LP.threading.Thread
+_cfg0 = dict(S._CFG)
+S._CFG.update(verdict=None, move_pct=None, tpsl=None, hist_read=None, pctl=None, rule=None)
+LP.threading.Thread = _FakeThread
+try:
+    _ok = LP.start_sim_lanes()
+finally:
+    LP.threading.Thread = _thr
+chk("  start_sim_lanes（不真的起執行緒）⇒ True、target＝sim_lanes.loop", (_ok, _FakeThread.made[-1][0] if _FakeThread.made else None),
+    (True, S.loop))
+say(bool(_FakeThread.made) and _FakeThread.made[-1][1][1] is LP._sim_has_position,
+    "  注入的部位判斷是 _sim_has_position（不是只讀記憶體的 _lab_has_position）")
+chk("  注入的規則函式各就各位（move_pct／tpsl_points 沒對調）",
+    (S._CFG["verdict"] is AF.fast_verdict, S._CFG["move_pct"] is AF.move_pct, S._CFG["tpsl"] is AF.tpsl_points,
+     S._CFG["hist_read"] is AF.hist_read, S._CFG["pctl"] == LP.FAST_PCTL, S._CFG["rule"] is AF.FAST_RULE),
+    (True, True, True, True, True, True))
+chk("  注入後實算：走幅(12060, 12000)＝0.5%、停利停損(12061)＝60 點",
+    (round(S._CFG["move_pct"](12060.0, 12000.0), 3), S._CFG["tpsl"](12061.0)), (0.5, 60))
+S._CFG.clear()
+S._CFG.update(_cfg0)
+
+
+# ══ ④c 休市不佔補抓名額、落地成定論（lab-qa R3）═══════════════════════════
+print("\n=== ④c 休市：不佔「每輪補一天」的名額、落地成「休市」、不再重問 ===")
+_paths0 = (SL.LAB_DIR, S.SIM_DIR, S.FAST_HIST, S.MIN1_CSV)
+NOW3 = datetime(2026, 10, 23, 20, 0)          # 週五晚上
+EMPTY_DAYS = ("2026-10-23", "2026-10-22", "2026-10-21")
+kb21 = night(date(2026, 10, 21), dict(ramp(12012, "21:31", 5, 12)))
+
+
+def kb21_of(day):
+    g = kb21[kb21["ts"].dt.date == date.fromisoformat(day)]
+    return {"ts": [str(x) for x in g["ts"]], "Open": g["Close"].tolist(), "High": g["High"].tolist(),
+            "Low": g["Low"].tolist(), "Close": g["Close"].tolist(), "Volume": [1] * len(g), "Amount": [1] * len(g)}
+
+
+def r3_setup(tag, hist_excl):
+    SL.LAB_DIR = TMP / tag / "tick_hist"
+    S.SIM_DIR = TMP / tag / "sim_lanes"
+    S.FAST_HIST = TMP / tag / "fast_hist.jsonl"
+    S.MIN1_CSV = TMP / tag / "no_such_1min.csv"
+    S.FAST_HIST.parent.mkdir(parents=True, exist_ok=True)
+    S.FAST_HIST.write_text("".join(json.dumps(r) + "\n" for r in hist_rows("2026-10-23", 40) if r["date"] not in hist_excl),
+                           encoding="utf-8")
+    reset_state()
+    kn = {"n": 0}
+
+    def kbars(day):
+        kn["n"] += 1
+        return {"ts": []} if kn["n"] <= 2 else kb21_of(day)       # 前兩次（E＝10-22 那晚的兩天）空的
+    return FakeApi(ticks=lambda d: {"ts": []} if d in EMPTY_DAYS else full_ticks(d), kbars=kbars)
+
+
+try:
+    api = r3_setup("r3a", ("2026-10-22", "2026-10-21"))
+    S.step(lambda: api, lambda: False, NOW3)
+    rows, _st = S.read_rows()
+    tk = [c[1] for c in api.calls if isinstance(c, tuple) and c[0] == "ticks"]
+    chk("  快攻：今天回空、10-22／10-21 回空（休市）都不佔名額 ⇒ 同一輪繼續補到 10-20，10-19 留給下一輪",
+        tk, ["2026-10-23", "2026-10-22", "2026-10-21", "2026-10-20"])
+    chk("  快攻：10-22、10-21 落地成「休市」定論",
+        [(rows.get(("fast", d), {}).get("why"), rows.get(("fast", d), {}).get("reason")) for d in ("2026-10-22", "2026-10-21")],
+        [("holiday", "休市（永豐那天沒有日盤成交）")] * 2)
+    chk("  快攻：10-20 補到之後當輪就算出定論", ("fast", "2026-10-20") in rows, True)
+    chk("  快攻：今天（10-23）回空 ⇒ ⛔ 不記休市（今天的可能只是還沒好），留在資料缺", (("fast", "2026-10-23") in rows,
+        "2026-10-23" in S.STATE["pending"]["fast"]), (False, True))
+    kb = [c[1] for c in api.calls if isinstance(c, tuple) and c[0] == "kbars"]
+    chk("  夜盤：10-22 那晚兩天都空（休市）不佔名額 ⇒ 同一輪繼續要 10-21 那晚",
+        kb, ["2026-10-22", "2026-10-23", "2026-10-21", "2026-10-22"])
+    chk("  夜盤：10-22 落地「休市」、10-21 算出定論",
+        (rows.get(("night", "2026-10-22"), {}).get("why"), rows.get(("night", "2026-10-21"), {}).get("decision")), ("holiday", "做多"))
+    n_calls = len(api.calls)
+    S.step(lambda: api, lambda: False, NOW3)
+    tk2 = [c[1] for c in api.calls[n_calls:] if isinstance(c, tuple) and c[0] == "ticks"]
+    chk("  下一輪：休市那兩天、今天都不再問，只補 10-19", tk2, ["2026-10-19"])
+
+    api = r3_setup("r3b", ())
+    S.step(lambda: api, lambda: False, NOW3)
+    rows, _st = S.read_rows()
+    tk = [c[1] for c in api.calls if isinstance(c, tuple) and c[0] == "ticks"]
+    chk("  對照組：fast_hist 裡有 10-22、10-21（那兩天一定開過盤）⇒ 永豐回空也 ⛔ 不記休市、留在資料缺",
+        ([rows.get(("fast", d), {}).get("why") for d in ("2026-10-22", "2026-10-21")],
+         all(d in S.STATE["pending"]["fast"] for d in ("2026-10-22", "2026-10-21"))), ([None, None], True))
+    chk("  對照組：回空照樣不佔名額 ⇒ 同一輪補到 10-20", tk, ["2026-10-23", "2026-10-22", "2026-10-21", "2026-10-20"])
+finally:
+    SL.LAB_DIR, S.SIM_DIR, S.FAST_HIST, S.MIN1_CSV = _paths0
+    S._CSV.update(key=None, df=None)
+    reset_state()
+
+
+# ══ ⑤ 背景例外不外丟 ═════════════════════════════════════════════════
+print("\n=== ⑤ 背景例外不外丟 ===")
+reset_state()
+shutil.rmtree(S.SIM_DIR, ignore_errors=True)
+_ld = SL.load_day
+SL.load_day = lambda d: (_ for _ in ()).throw(RuntimeError("逐筆讀壞了"))
+try:
+    ok = S.step(lambda: (_ for _ in ()).throw(RuntimeError("拿 api 就炸")), lambda: 1 / 0, NOW)
+    say(True, "  step：load_day／get_api／問部位都丟例外 ⇒ 沒有衝出來", "回 %r" % ok)
+except BaseException as e:
+    say(False, "  step 讓例外衝出來了", repr(e))
+finally:
+    SL.load_day = _ld
+say(S.STATE["errors"] >= 3 and bool(S.STATE["last_err"]), "  有計數、有最近一次錯誤", "%s %s" % (S.STATE["errors"], S.STATE["last_err"]))
+chk("  那天在 pending 裡寫「計算出錯」", S.STATE["pending"]["fast"].get(FD, {}).get("why"), "error")
+stt = S.state(NOW)
+chk("  端點端得出錯誤計數", stt["errors"], S.STATE["errors"])
+_rr = S.read_rows
+S.read_rows = lambda: (_ for _ in ()).throw(OSError("磁碟壞了"))
+try:
+    chk("  step：連讀檔都炸 ⇒ 回 False、不外丟", S.step(lambda: None, lambda: False, NOW), False)
+except BaseException as e:
+    say(False, "  step 讀檔炸掉時衝出來了", repr(e))
+finally:
+    S.read_rows = _rr
+
+
+class StopLoop(BaseException):
+    pass
+
+
+_sleep = S.time.sleep
+loops = {"n": 0}
+
+
+def fake_sleep(s):
+    loops["n"] += 1
+    if loops["n"] >= 3:
+        raise StopLoop()
+
+
+S.time.sleep = fake_sleep
+_st = S.step
+S.step = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("step 自己炸"))
+e0 = S.STATE["errors"]
+try:
+    S.loop(lambda: None, lambda: False, every=0)
+    say(False, "  loop 應該被 StopLoop 停下來")
+except StopLoop:
+    say(S.STATE["errors"] - e0 >= 3, "  loop：step 每圈都炸，照樣轉了 3 圈、每圈都計數", "計數 +%d" % (S.STATE["errors"] - e0))
+except BaseException as e:
+    say(False, "  loop 讓例外衝出來了", repr(e))
+finally:
+    S.time.sleep = _sleep
+    S.step = _st
+
+
+# ══ ⑥ 端點 ═══════════════════════════════════════════════════════════
+print("\n=== ⑥ 端點 /api/sim/state ===")
+reset_state()
+S.step(lambda: None, lambda: False, NOW)
+srv = ThreadingHTTPServer(("127.0.0.1", 0), LP.Handler)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+BASE = f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def req(path, headers=None, method="GET", timeout=20):
+    rq = urllib.request.Request(BASE + path, headers=headers or {}, method=method,
+                                data=b"{}" if method == "POST" else None)
+    try:
+        with urllib.request.urlopen(rq, timeout=timeout) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except Exception:
+            return e.code, {}
+    except (TimeoutError, OSError) as e:
+        return "timeout", {"msg": repr(e)[:80]}
+
+
+h0 = (fhash(S.SIM_DIR), fhash(SL.LAB_DIR), fhash(S.MIN1_CSV), fhash(S.FAST_HIST))
+st_code, body = req("/api/sim/state")
+chk("  GET ⇒ 200", st_code, 200)
+say(set(body.get("lanes", {})) == {"fast", "night"} and body["lanes"]["fast"]["name"] == "早盤快攻"
+    and body["lanes"]["night"]["name"] == "美股開盤順勢", "  兩條都在、名字對")
+L = body.get("lanes", {}).get("fast", {})
+say(len(L.get("months", [])) == 6 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 6 個月、第一個標「本月」")
+say(all(k in L for k in ("recent", "today", "pending", "rule", "fetch")) and "errors" in body and "file" in body,
+    "  有最近清單、今天狀態、資料缺原因、錯誤計數、檔案計數")
+chk("  note 寫「成本已扣；夜盤用 1 分 K 近似」", body.get("note"), "成本已扣；夜盤用 1 分 K 近似")
+for _ in range(3):
+    req("/api/sim/state")
+chk("  唯讀：打 4 次之後 sim_lanes／tick_hist／1 分 K／fast_hist 雜湊都沒變",
+    (fhash(S.SIM_DIR), fhash(SL.LAB_DIR), fhash(S.MIN1_CSV), fhash(S.FAST_HIST)), h0)
+chk("  別的網站的分頁叫它 ⇒ 403", req("/api/sim/state", {"Sec-Fetch-Site": "cross-site"})[0], 403)
+say(req("/api/sim/state", {"Content-Type": "application/json"}, method="POST")[0] not in (200, "timeout"), "  POST 不接")
+_sv = LP.sim_lanes
+LP.sim_lanes = None
+try:
+    chk("  sim_lanes 是 None ⇒ 503「模擬載入失敗」", req("/api/sim/state")[0:1] + (req("/api/sim/state")[1].get("msg"),), (503, "模擬載入失敗"))
+    chk("  start_sim_lanes() 模組沒載入 ⇒ 回 False、不丟", LP.start_sim_lanes(), False)
+finally:
+    LP.sim_lanes = _sv
+srv.shutdown()
+
+
+class _Boom:
+    def __getattr__(self, n):
+        raise RuntimeError("拿不到")
+
+
+LP.sim_lanes = _Boom()
+try:
+    chk("  start_sim_lanes() 起不來 ⇒ 回 False、不丟", LP.start_sim_lanes(), False)
+except BaseException as e:
+    say(False, "  start_sim_lanes 例外衝出來了", repr(e))
+finally:
+    LP.sim_lanes = _sv
+_code = ("import sys; sys.modules['sim_lanes']=None\n"
+         "import live_panel as LP\n"
+         "assert LP.sim_lanes is None\n"
+         "print('IMPORTED', LP.start_sim_lanes())\n")
+pr = subprocess.run([sys.executable, "-c", _code], cwd=str(HERE), capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=240, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+say(pr.returncode == 0 and "IMPORTED False" in pr.stdout and "【模擬】載入失敗" in pr.stdout,
+    "  sim_lanes 載入失敗 ⇒ import live_panel 照樣成功、有印警告", (pr.stdout[-160:] + pr.stderr[-300:]).replace("\n", " "))
+
+
+# ══ ⑦ 前端 ═══════════════════════════════════════════════════════════
+print("\n=== ⑦ 前端 ===")
+import re as _re
+page = LP.PAGE
+tab = page[page.index('<div id="tab-lab"'):page.index("<!-- 【回顧】")]
+tab_code = _re.sub(r"<!--.*?-->", " ", tab, flags=_re.S)
+say(tab_code.index('id="smcard"') < tab_code.index('class="lb-grid"') and
+    _re.match(r'\s*<div id="tab-lab" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
+    "  卡是 #tab-lab 的第一個子元素（最上面）")
+card = tab_code[tab_code.index('id="smcard"'):tab_code.index('class="lb-grid"')]
+say("模擬（不會下單）" in card and 'id="sm-fast"' in card and 'id="sm-night"' in card, "  卡的標題與兩條並排的容器")
+_j0 = page.index("/* ══════════════ 【策略實驗室】最上面那張「模擬（不會下單）」")
+sjs = page[_j0:page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測", _j0)]
+say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬卡那一段 JS（不多不少）")
+sjs_code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", " ", sjs, flags=_re.S).splitlines())
+fetches = sorted(set(x.split("'")[1].split("?")[0] for x in sjs.split("fetch(")[1:]))
+chk("  只打 GET /api/sim/state", fetches, ["/api/sim/state"])
+for w in ("broker", "place_order", "/api/enter", "/api/real/", "/api/fire", "method:", "POST", "pfetch(", "data-act",
+          "data-rdir", "<form", "submit", "token", "PTOK", "<button", "altbl", "AL."):
+    chk(f"  模擬卡 HTML／JS 沒有 {w}", w in card + sjs_code, False)
+for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
+    chk(f"  模擬卡畫面文字沒有「{w}」", w in card + sjs_code, False)
+state_txt = json.dumps(S.state(NOW), ensure_ascii=False) + S._rule_text("fast") + S._rule_text("night")
+for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
+    chk(f"  後端端出去的文字沒有「{w}」", w in state_txt, False)
+chk("  卡的 HTML 沒寫死時刻／點數（09:03、130、21:30、0.5%）",
+    [w for w in ("09:03", "130", "21:30", "22:30", "0.5%", "1%") if w in card + sjs_code], [])
+say("else if(t==='lab'){ lbEnter(); smEnter(); }" in page, "  切進【策略實驗室】才問（不掛 500ms tick）")
+say("if(TAB!=='lab') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
+say("e._smh!==html" in sjs and "innerHTML===" not in sjs, "  沒變就別動 DOM：比的是節點上快取的字串（不讀回 innerHTML）")
+say("my!==SM.seq" in sjs, "  請求帶流水號，只認最後一次")
+fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
+chk("  【自動下單】那一頁沒有模擬卡的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
+
+
+# ══ ⑧ AST ════════════════════════════════════════════════════════════
+print("\n=== ⑧ AST：不 import broker、主迴圈沒被改 ===")
+tree = ast.parse((HERE / "sim_lanes.py").read_text(encoding="utf-8"))
+bad = set()
+for n in ast.walk(tree):
+    if isinstance(n, ast.Import):
+        bad |= {a.name for a in n.names if a.name.split(".")[0] in ("broker", "auto_fire", "live_panel")}
+    elif isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] in ("broker", "auto_fire", "live_panel"):
+        bad.add(n.module)
+    elif isinstance(n, ast.Name) and n.id in ("broker", "auto_fire", "live_panel"):
+        bad.add("name:" + n.id)
+    elif isinstance(n, ast.Constant) and isinstance(n.value, str) and _re.search(r"place_order|/api/enter|/api/real|/api/fire", n.value):
+        bad.add("str:" + n.value[:30])
+chk("  sim_lanes.py 沒有 import／引用 broker、auto_fire、live_panel，也沒有下單端點字串", sorted(bad), [])
+say(any(isinstance(n, ast.Import) and any(a.name == "numpy" for a in n.names) for n in ast.walk(tree)),
+    "  負控組：同一把尺看得到 sim_lanes 的 import numpy（尺是活的）")
+_sl = ast.parse((HERE / "strategy_lab.py").read_text(encoding="utf-8"))
+chk("  sim_lanes 借用的 strategy_lab 也沒有 import broker／auto_fire",
+    sorted({a.name for n in ast.walk(_sl) if isinstance(n, ast.Import) for a in n.names} & {"broker", "auto_fire"}), [])
+src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+lp_tree = ast.parse(src)
+fn = {n.name: n for n in ast.walk(lp_tree) if isinstance(n, ast.FunctionDef)}
+chk("  Handler._sim_get 裡沒有 broker／auto_fire",
+    sorted({n.id for n in ast.walk(fn["_sim_get"]) if isinstance(n, ast.Name) and n.id in ("broker", "auto_fire")}), [])
+chk("  start_sim_lanes 只拿 auto_fire 的規則函式（沒有 enter／arm／on_*）",
+    sorted({n.attr for n in ast.walk(fn["start_sim_lanes"]) if isinstance(n, ast.Attribute)
+            and getattr(n.value, "id", None) == "auto_fire"}), ["FAST_RULE", "fast_verdict", "hist_read", "move_pct", "tpsl_points"])
+MAIN_LOOP = ("_auto_tick", "_auto_tick_guarded", "check_real_position", "on_tick", "_auto_snap", "_auto_put", "main")
+# ⛔ 基準固定在 a71087e（模擬這一包動工前的 main），⛔ 不用 HEAD —— commit 之後 HEAD 就是自己，比了等於沒比
+#    （2026-09-15 lab-qa 退件 R2）。沒有 git（突變測試的暫存複本）⇒ 吃 SIM_BASELINE_LIVE_PANEL 指的檔；
+#    兩個都拿不到 ⇒ 明確記「未驗」、總結寫出來，⛔ 不當成通過。
+BASELINE_COMMIT = "a71087e"
+head, head_src = "", ""
+try:
+    root = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(HERE), capture_output=True, text=True, timeout=30).stdout.strip()
+    if root:
+        _g = subprocess.run(["git", "show", f"{BASELINE_COMMIT}:tools/shioaji/live_panel.py"], cwd=root, capture_output=True, timeout=60)
+        if _g.returncode == 0:
+            head, head_src = _g.stdout.decode("utf-8"), f"git {BASELINE_COMMIT}"
+except Exception:
+    head = ""
+if not head and os.environ.get("SIM_BASELINE_LIVE_PANEL"):
+    try:
+        head = pathlib.Path(os.environ["SIM_BASELINE_LIVE_PANEL"]).read_text(encoding="utf-8")
+        head_src = "SIM_BASELINE_LIVE_PANEL"
+    except Exception:
+        head = ""
+if head:
+    print(f"  （主迴圈比對基準：{head_src}）")
+    hfn = {}
+    for n in ast.walk(ast.parse(head)):
+        if isinstance(n, ast.FunctionDef):
+            hfn.setdefault(n.name, n)
+    cur = {}
+    for n in ast.walk(lp_tree):
+        if isinstance(n, ast.FunctionDef):
+            cur.setdefault(n.name, n)
+    for name in MAIN_LOOP:
+        if name not in hfn:
+            say(False, f"  基準裡找不到 {name}（名單或基準錯了，⛔ 不准安靜跳過）")
+            continue
+        a, b = ast.dump(hfn[name]), ast.dump(cur.get(name)) if name in cur else None
+        if name == "main":
+            # main() 只准多一行 start_sim_lanes()：把那一行拿掉之後要跟基準一模一樣
+            m = cur["main"]
+            body = [s for s in ast.walk(m)]
+            calls = [s for s in m.body if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call)
+                     and getattr(s.value.func, "id", None) == "start_sim_lanes"]
+            chk("  main() 多了恰好一行 start_sim_lanes()", len(calls), 1)
+            m2 = ast.parse(ast.unparse(m))
+            m2.body[0].body = [s for s in m2.body[0].body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Call)
+                                                                 and getattr(s.value.func, "id", None) == "start_sim_lanes")]
+            chk(f"  main() 拿掉那一行之後跟基準 {BASELINE_COMMIT} 一模一樣", ast.dump(m2.body[0]), ast.dump(ast.parse(ast.unparse(hfn["main"])).body[0]))
+        else:
+            chk(f"  {name} 跟基準 {BASELINE_COMMIT} 一模一樣（AST）", a == b, True)
+    say("on_tick" in hfn or "check_real_position" in hfn, "  自證：基準裡真的找得到主迴圈那幾支")
+else:
+    UNVERIFIED.append(f"主迴圈跟 {BASELINE_COMMIT} 比對（沒有 git 也沒有 SIM_BASELINE_LIVE_PANEL）")
+    print(f"  未驗  主迴圈跟 {BASELINE_COMMIT} 比對：拿不到基準（沒有 git、也沒設 SIM_BASELINE_LIVE_PANEL）")
+# 接線本身（不靠 git 也驗得到）：主迴圈那幾支一個字都不提 sim_lanes／start_sim_lanes
+_lp_fn = {}
+for n in ast.walk(lp_tree):
+    if isinstance(n, ast.FunctionDef):
+        _lp_fn.setdefault(n.name, n)
+chk("  主迴圈那幾支（main 以外）沒有引用 sim_lanes／start_sim_lanes",
+    sorted({nm for nm in MAIN_LOOP if nm != "main" and nm in _lp_fn
+            for x in ast.walk(_lp_fn[nm]) if (isinstance(x, ast.Name) and x.id in ("sim_lanes", "start_sim_lanes"))}), [])
+say(all(nm in _lp_fn for nm in MAIN_LOOP), "  自證：主迴圈那幾支在現在的 live_panel.py 裡都找得到")
+
+
+# ══ ⑨ fire_fires_today：回馬槍還沒判 ═══════════════════════════════════
+print("\n=== ⑨ fire_fires_today：今天帳本有 wait 還沒定論 ⇒「今天」===")
+TD = datetime(2026, 10, 20)      # 週二
+d_s = str(TD.date())
+_auto = dict(LP.AUTO)
+
+
+def at(h, m, s=0, us=0):
+    return TD.replace(hour=h, minute=m, second=s, microsecond=us)
+
+
+def wait_row():
+    return {"rec": "wait", "date": d_s, "why": "wait_rev", "px": 12000.0, "d": 1, "dir_0903": "long", "rev_at": LP.REV_AT}
+
+
+shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)
+try:
+    LP.AUTO.update({"day": d_s, "done": True, "rev": False})
+    chk("  對照組：沒有 wait、09:10、done ⇒ 下一個交易日", LP.fire_fires_today(at(9, 10)), False)
+    AF._append(wait_row())
+    chk("  有 wait、沒定論、09:10（面板一路開著 done=True）⇒ 今天", LP.fire_fires_today(at(9, 10)), True)
+    chk("  09:15:02 ⇒ 今天（還在 REV_SEC＋AUTO_LATE_MS 裡）", LP.fire_fires_today(at(9, 15, 2)), True)
+    chk("  09:15:03 ⇒ 下一個交易日", LP.fire_fires_today(at(9, 15, 3)), False)
+    LP.AUTO["rev"] = True
+    chk("  今天已經跨過 REV_SEC（AUTO rev=True）⇒ 下一個交易日", LP.fire_fires_today(at(9, 15, 1)), False)
+    LP.AUTO.update({"day": "2026-10-19", "rev": True, "done": True})
+    chk("  AUTO 是昨天的（看門狗剛重啟）⇒ 今天", LP.fire_fires_today(at(9, 12)), True)
+    LP.AUTO.update({"day": d_s, "done": True, "rev": False})
+    AF._append({"rec": "skip", "date": d_s, "why": "no_reversal"})
+    chk("  wait 之後已經有定論（skip）⇒ 下一個交易日", LP.fire_fires_today(at(9, 10)), False)
+    shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)
+    AF._append(dict(wait_row(), date="2026-10-24"))
+    LP.AUTO.update({"day": "2026-10-24", "done": True, "rev": False})
+    chk("  週六帳本有 wait（不該發生）⇒ market_session 說不是日盤 ⇒ 下一個交易日",
+        LP.fire_fires_today(datetime(2026, 10, 24, 9, 10)), False)
+    LP.AUTO.update({"day": d_s, "done": False, "rev": False})
+    shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)
+    chk("  沒有 wait 時照舊：08:50 ⇒ 今天（09:03:30 那一件）", LP.fire_fires_today(at(8, 50)), True)
+    AF._append(wait_row())
+    LP.AUTO.update({"day": d_s, "done": True, "rev": False})
+    chk("  fire_arm_confirm 跟著說「今天」", LP.fire_arm_confirm(False, at(9, 10))["when"].startswith("今天"), True)
+finally:
+    LP.AUTO.clear()
+    LP.AUTO.update(_auto)
+    shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)
+
+
+# ══ ⑩ 收尾 ═══════════════════════════════════════════════════════════
+print("\n=== ⑩ 收尾 ===")
+cur = {"S.SIM_DIR": S.SIM_DIR, "S.FAST_HIST": S.FAST_HIST, "S.MIN1_CSV": S.MIN1_CSV, "SL.LAB_DIR": SL.LAB_DIR,
+       "SL.MIN1_CSV": SL.MIN1_CSV, "AF.FIRE_DIR": AF.FIRE_DIR, "AF.ARM_FLAG": AF.ARM_FLAG, "AF.FAST_HIST": AF.FAST_HIST}
+chk("  全程所有寫檔出口都在暫存區", [k for k, v in cur.items() if not str(v).startswith(str(TMP))], [])
+chk("  真的 sim_lanes/、fast_hist.jsonl、autofire/ 一個位元組都沒被動過",
+    {k: fhash(REAL[k]) for k in REAL_HASH}, REAL_HASH)
+chk("  真的 AUTO_ORDERS_ON 不存在", REAL["AF.ARM_FLAG"].exists(), False)
+chk("  暫存區也沒有建出 AUTO_ORDERS_ON", AF.ARM_FLAG.exists(), False)
+for k, v in REAL.items():
+    mod, attr = k.split(".")
+    setattr({"S": S, "SL": SL, "AF": AF}[mod], attr, v)
+shutil.rmtree(TMP, ignore_errors=True)
+
+_unv = ("；未驗 %d 項：%s" % (len(UNVERIFIED), "、".join(UNVERIFIED))) if UNVERIFIED else ""
+print("\n總結:", ("全部通過" if not UNVERIFIED else "其餘通過") if not FAIL else f"{FAIL} 項失敗", _unv)
+sys.exit(1 if FAIL else 0)

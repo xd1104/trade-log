@@ -1367,8 +1367,12 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   09-07 慢 −92 不做／09-08 快攻做空／09-09 慢 +94 不做／09-10 慢 −43 不做／09-11 慢 −85 回馬槍做空／09-14 快攻做多／
   09-15 慢 +98 回馬槍做多 —— 跟 PM 的研究表 11 天全部一致；面板方向（09:00 那一分鐘第一筆）與研究的 d（09:00 以前最後一筆）這 11 天沒有一天不同。
 - **突變**：`tools/probe/fire-mutate.py --rev` 只跑回馬槍那兩組（auto_fire 19 個＋live_panel 8 個）。
-- ⚠️ 已知限制：確認條的「今天／下一個交易日」（`fire_fires_today`）只看 09:03:30 —— 09:03:30 判成 wait、他 09:03:30~09:15 之間
-  關掉又重開，確認條會寫「下一個交易日」，但 09:15 反轉仍會送。
+- ~~⚠️ 已知限制：確認條的「今天／下一個交易日」（`fire_fires_today`）只看 09:03:30~~ ⇒ **2026-09-15 晚上修掉**（lab-qa 限制②）：
+  `fire_fires_today` 多一道 ⓪（排在 ① `AUTO["done"]` **前面**）：今天帳本有 `wait`、沒有 fire／result／skip（`_fire_wait_open`，
+  條件照抄 `auto_fire._rev()`）、今天還沒跨過 REV_SEC（`AUTO["rev"]`，要是今天的 AUTO）、牆上時鐘 `< REV_SEC + AUTO_LATE_MS/1000`、
+  `market_session(REV_SEC 那一刻)=="day"` ⇒ 回「今天」。守衛 `test_sim_lanes.py` ⑨（10 項）＋突變 L6~L10 全紅。
+  ⚠️ 剩下的小瑕疵（刻意沒動）：`fire_arm_confirm` 那句話的時刻仍寫 `SIGNAL_AT`（「今天 09:03:30 看開盤快不快…不夠快就等 09:15:00」），
+  09:03:30~09:15 之間按下去，真正會送的是 09:15 那一口 —— 文案沒錯但沒講「09:03:30 已經過了」。
 
 **⛔⛔ 交付狀態＝關著**：`tools/shioaji/AUTO_ORDERS_ON` **不存在**（已 gitignore）。
 Benson 2026-09-09：「我還沒有要用，我只是叫你先開發跟測試。」
@@ -2384,6 +2388,61 @@ tools/probe/fire_harness.py        ⛔ 不 start()、⛔ 不動 AUTO_SIG_HOOK／
 - ⚠️ 測試裡 **`auto_fire` 與 broker 的每一個路徑都要導到暫存區**（`ARM_FLAG`／`FIRE_DIR`／
   `ORDER_DIR`／`TRADE_DIR`／`REAL_FLAG`／`AUTO_DIR`／`AUTO_REAL_DIR`，收尾有一節在斷言），
   而且 ⛔ **斷言真的 `AUTO_ORDERS_ON` 不存在**。價格一律 12000 附近。
+
+### 模擬（策略實驗室最上面那張卡）— 2026-09-15 晚上加，⛔ 不會下單
+
+Benson 要在面板上**模擬**兩條策略、跟真單（快攻回馬槍）分開觀察。後端 `tools/shioaji/sim_lanes.py`、唯讀端點 `GET /api/sim/state`、
+畫面是【策略實驗室】分頁**第一張卡**「模擬（不會下單）」，兩條並排（寬度 < 1180px 疊成一欄）。
+
+| 條（lane） | 資料 | 規則（口徑＝研究） |
+|---|---|---|
+| `fast`「早盤快攻」＝真單的前半 | `tick_hist/ticks/YYYY-MM-DD.csv.gz`（strategy_lab 13:50~15:00 抓；缺的背景補抓） | ref＝09:00:00.000（含）以前最後一筆、px＝09:03:30.000（含）以前最後一筆；門檻＝`fast_hist.jsonl` **這一天以前**最近 40 列的 `numpy.percentile(…,80)`（少於 20 ⇒ 歷史不夠）；快 ⇒ sign(px−ref)，進場＝px 那筆賣價（多）／買價（空）；停利停損 `tpsl_points(進場價)`；停損用觸發那筆成交價；13:43:30（結算日 13:30）前沒碰到 ⇒ 最後一筆對手價平（`strategy_lab.run_bracket`，cost=True）；−5 |
+| `night`「美股開盤順勢」 | 夜盤 1 分 K（**標籤＝結束時間**，本機 `tmf_1min.csv` 優先、缺的跟永豐 kbars 一天一天要） | T＝美股開盤（E 在美國夏令 ⇒ 21:30，否則 22:30；夏令＝3 月第二個週日起到 11 月第一個週日前）；ref＝標籤 ≤T 最後一根收盤、c＝標籤 (T,T+5] 最後一根收盤（少於 4 根 ⇒ 不做）；d=0 不做；±1%×c，看標籤 (T+5, 04:58] 每根高低，**同一根兩邊都碰算停損**；沒碰到 ⇒ 標籤 ≤04:58 最後一根收盤平；−(5+2) |
+
+- ⛔⛔ **`sim_lanes.py` 一行都不 import broker／auto_fire／live_panel**（`test_sim_lanes.py` ⑧ 用 AST 守，含負控組）。
+  規則函式（`auto_fire.fast_verdict`／`move_pct`／`tpsl_points`／`hist_read`、`FAST_PCTL`、`FAST_RULE`）由 `live_panel.start_sim_lanes()`
+  用 `sim_lanes.configure()` **注入** —— 真單與模擬是同一份正本，⛔ 不准在 sim_lanes 另寫一份「>= 門檻」或「× 0.005」。沒接上 ⇒ 快攻那條記「沒接上」、不猜。
+- ⛔ 門檻「只用這天以前的列」靠 `fast_verdict(day, …)` 自己的 `date < day`，sim_lanes 傳的是**那一天**（突變 M1：傳 9999-12-31 ⇒ ① 紅）。
+  ⚠️ fast_hist 那一天的 move_pct 是真單 09:03:30 用 `minute_close` 記的；模擬的 move_pct 是逐筆重算的 —— 門檻一樣、當天走幅可能差一點點。
+- **落地 `tools/shioaji/sim_lanes/YYYY-MM.jsonl`**（⛔ gitignore）：一列＝一個（lane, date）的**定論**，只 append；寫之前在鎖裡重讀，
+  已有定論 ⇒ 不重寫。**「資料缺」不是定論、⛔ 不寫檔**（只在 `STATE["pending"]`，畫面「等資料：…」看得到原因），補到資料下一輪（60 秒）就補算。
+  讀檔等式 **`lines ＝ ok ＋ bad ＋ dup ＋ blank`**（`/api/sim/state` 的 `file.eq_ok`；壞列／重複畫在卡的最後一行、主控台數字變了才再講）。
+  「不做」也是定論（不快／歷史不夠／d=0／休市）。⚠️ `fast_hist.jsonl` 不存在 ⇒ **資料缺**（不是歷史不夠，免得部署前沒放種子就把 10 天永久記成不夠）。
+- **窗口**：快攻＝最近 10 個平日（今天要 13:50 之後）；夜盤＝E+1 05:10 已經過的最近 10 個平日晚上。⚠️ 沒有假日表，休市靠問出來（見下）。
+- **休市落地成定論**（2026-09-15 lab-qa 退件 R3）：快攻＝永豐說那天沒有日盤成交、那天**早於今天**、而且 `fast_hist.jsonl` **沒有**那天
+  （有的話那天一定開過盤 ⇒ 回空只是暫時的，⛔ 不記）；夜盤＝永豐 E 與 E+1 兩天都沒有 1 分 K、本機 csv 也沒有 E 的日盤；
+  或本機 csv 前後都有、E 那天卻沒有日盤。⇒ 寫一列 `why:"holiday"`「休市（…）」，之後不再問。
+  ⚠️ 休市／已問過／不該抓 ⛔ **不佔「每輪補一天」的名額**，同一輪繼續往更舊的缺資料日補。
+- **背景補資料**（`loop` daemon 執行緒，每 60 秒一輪；⛔ 不碰主迴圈）：共用 `fetch_gate()`，順序＝
+  ⛔ **08:30~13:50 不抓**（整個日盤；2026-09-15 lab-qa 退件 R1 從 09:35 延到 13:50）→ 沒連線 → 失敗隔 10 分鐘 →
+  ⛔ 有部位不抓（`has_position()` 只有**明確回 False** 才放行；None／"unknown"／例外 ⇒ 當成有）→ ⛔ 流量 > 85% 不抓；問過沒有（休市？）今天不重抓；
+  一輪最多補一天逐筆＋一晚 1 分 K。
+  ⛔⛔ 面板注入的是 **`live_panel._sim_has_position`**（不是只讀記憶體的 `_lab_has_position`）：記憶體有部位 ⇒ True；
+  記憶體 None **不算答案**（看門狗重啟後 reconcile 回 unknown 時記憶體就是 None）⇒ 再問 `broker.broker_position()`（唯讀 list_positions，
+  不改 `_state`、不送單），只有它明確回 None 才 False，其他一律 True。⚠️ `_lab_has_position`（strategy_lab 那條）刻意沒動，它仍只讀記憶體。
+  規則函式一律用**關鍵字**注入（R4：位置參數對調 move_pct／tpsl_points 不會報錯只會算錯；`test_sim_lanes.py` ④b 驗「各就各位＋實算」）。逐筆補回來存進 strategy_lab 的 `tick_hist/ticks/`（兩邊共用，strategy_lab 的 fetch_loop 會把它併進摘要）；
+  ⛔ 今天 15:00 以前不補今天（13:50~15:00 是 `strategy_lab.fetch_today` 的班）。1 分 K 補回來只放記憶體（`_NIGHT_API`），⛔ 不寫 tmf_1min.csv。
+- 例外一律吞在 `step()`／`loop()` 裡：`STATE["errors"]`＋`last_err`＋主控台（前 5 次、之後每 50 次）＋卡的最後一行紅字。
+- ⛔ `import sim_lanes` 包 try（壞掉 ⇒ `sim_lanes=None`、`/api/sim/state` 回 503、面板照跑）；`start_sim_lanes()` 永遠不丟例外，排在 `start_strategy_lab_fetch()` 後面。
+- **畫面**：每條＝標題（早盤快攻／美股開盤順勢）＋規則句（**後端 `_rule_text()` 給**，前端不寫死時刻與點數）＋今天狀態＋
+  **第一欄每月累計點數（6 個月，本月標「本月」）**＋最近 15 筆（日期、做多／做空／不做＋原因、進→出（停利／停損／收盤）、點數）。
+  卡頂一句「成本已扣；夜盤用 1 分 K 近似」。⛔ 跟【自動下單】的真單紀錄完全分開（不讀 /api/fire/*、不共用清單）；
+  ⛔ 模擬卡的 JS 刻意放在「歷史逐筆回測」那段 JS **外面**（`test_strategy_lab.py` ⑥ 斷言 lab 那段只打三個端點）；
+  ⛔ 卡的 HTML 在 `#tab-lab` 裡，所以**不准出現** `09:03`、`130`、`broker`、`token`、建議口吻（同一把尺在掃）。切進分頁問一次、停在那頁每 60 秒再問。
+- **對照研究（2026-09-15 晚上 `tools/probe/sim-lanes-replay.py` 實跑，唯讀 tick-research＋trade-log 的 fast_hist.jsonl）**：
+  快攻 09-01~09-14 只有 **09-08 做空（停利 +232）**、**09-14 做多（停利 +223）**，其他 8 天不快 —— 跟研究答案一致（09-15 研究只有到 10:02 的半天檔，沒跑）。
+  夜盤用面板同一份 `tmf_1min.csv`（`--min1`；檔案只到 09-02 ⇒ E＝08-19~09-01 共 10 晚，全部 21:30）：
+  08-19 空 停利 +443.9／08-20 多 +138／08-21 空 +172／08-24 空 +46／08-25 多 +93／08-26 多 −14／08-27 空 −205／08-28 空 停利 +456.8／08-31 多 −183／09-01 空 +77
+  （沒寫的都是 04:58 收盤平；合計 +1024.7）。
+  另一種來源 `--nights`（`nights/ticks` 逐筆合成 1 分 K，上一棒跑的 E＝09-01~09-11）：空 +77／多 +120／空 停損 −465.3／多 +276／空 −16／多 −25／多 −14／空 +51／空 −127 —— 重疊的 09-01 兩種來源都是空 +77。
+  跑法：`sim-lanes-replay.py --ticks <tick-research>\ticks2026\ticks --hist tools\shioaji\fast_hist.jsonl --min1 tools\shioaji\tmf_1min.csv --night-from 2026-08-19 --night-to 2026-09-01`
+- **守衛**：`test_sim_lanes.py`（離線，189 項，含 09:00:00.000／09:03:30.000 邊界、④b 注入、④c 休市）；
+  整份包一層 try（R6）：崩潰 ⇒ traceback＋「FAIL 測試本身崩潰」＋總結、exit 1。
+  ⑧ 主迴圈比對基準**固定 `a71087e`**（R2；⛔ 不用 HEAD —— commit 之後比自己等於沒比）；沒有 git ⇒ 吃環境變數 `SIM_BASELINE_LIVE_PANEL` 指的檔；
+  兩個都沒有 ⇒ 印「未驗」、總結寫「其餘通過；未驗 N 項」（⛔ 不寫全部通過）。另有不靠 git 的接線檢查（主迴圈那幾支不引用 sim_lanes）。
+  ⚠️ 之後若**刻意**改主迴圈，基準要跟著換 commit 並在這裡留紀錄。
+  突變 `tools/probe/sim-mutate.py`（59 個全紅；在暫存複本上改、跑完還原並驗 SHA-256；先抽 a71087e 的 live_panel.py 給複本當基準；
+  **先跑一次不改的對照組，不是乾淨的綠（或有未驗）就停**；總結分得出「沒跑」與「紅」）。
 
 ## 桌面 App（panel_app.pyw）
 

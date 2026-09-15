@@ -55,3 +55,7 @@ tools/shioaji/autofire/
 # ⚠️ 上面那條 *.csv 擋不到 .jsonl；`*.jsonl.*` 擋種子腳本測試時的暫存檔名。
 tools/shioaji/fast_hist.jsonl
 tools/shioaji/fast_hist.jsonl.*
+
+# 【策略實驗室】「模擬（不會下單）」的每日模擬結果（含進出場價，repo 是公開的；2026-09-15 晚上加）
+# ⚠️ 上面那條 *.csv 擋不到 .jsonl，一定要整個資料夾擋。
+tools/shioaji/sim_lanes/
