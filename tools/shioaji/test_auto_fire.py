@@ -2984,6 +2984,18 @@ chk("  configure 接過去的 rev_at／rev_sec ＝ 正本", (AF._CFG["rev_at"], 
     (LP.REV_AT, LP.REV_SEC))
 chk("  ⛔ 名字改成「快攻回馬槍」（前後端同一組字）", AF.METHOD_NAME["A"], "快攻回馬槍")
 say("const ALWAY={A:{n:'快攻回馬槍'" in LPSRC, "    前端 ALWAY 同一個名字")
+# ⛔⛔ 2026-09-15 晚上 Benson 回報：舊紀錄（09-10～09-15 用的是 ±100／±130 舊規則）被標成「快攻回馬槍」。
+#    紀錄清單的名字要看「那一天當時的規則」⇒ 清單一律走 alRecName(D,r)，⛔ 不准再直接 alName(r.method)。
+import re as _re_hist
+say("function alRecName(D,r)" in LPSRC and "const AL_HMQ_FROM='2026-09-16'" in LPSRC,
+    "  ⛔ 前端有 alRecName（沒有 leg 且早於 09-16 的紀錄 ⇒ 寫舊規則，不套現在的名字）")
+_rn = LPSRC[LPSRC.index("function alRecName(D,r)"):]
+_rn = _rn[:_rn.index("\n}") + 2]
+say("alName(r.method)" not in LPSRC.replace(_rn, ""),
+    "  ⛔ 除了 alRecName 自己，紀錄清單沒有任何一處直接用 alName(r.method)（會把舊規則的日子標成現在的名字）")
+say(len(_re_hist.findall(r"esc\(alRecName\(D,r\)", LPSRC)) >= 5, "  紀錄清單 5 處都改走 alRecName(D,r)")
+say("'舊規則'" in _rn and "r.tp_points" in _rn and "r.at" in _rn and "r.leg" in _rn,
+    "  alRecName 用帳本的 leg／at／tp_points 判斷（不看現在的常數）")
 say(len(set(AF.REV_MSG.values())) == len(AF.REV_MSG)
     and not (set(AF.REV_MSG.values()) & set(AF.WHY.values())),
     "  ⛔ 回馬槍那幾句互不相同、也不跟 WHY 任何一句相同（09:15 不准講成 09:03:30）")

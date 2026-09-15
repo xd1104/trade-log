@@ -9986,6 +9986,18 @@ const ALWAY={A:{n:'快攻回馬槍',s:'09:00 起算'}};
 /* 帳本那一天是哪一段送的（快攻／回馬槍）。⛔ 名字從後端 D.leg_names（auto_fire.LEG_NAME），這裡只是退路。 */
 function alLeg(D,r){ const k=r&&r.leg, T=(D&&D.leg_names)||{}; return k?(T[k]||''):''; }
 function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
+/* ⛔⛔ 2026-09-15 晚上 Benson 回報：紀錄清單把 09-10～09-15 標成「快攻回馬槍」，但那幾天用的是舊規則
+   （09-10／11／14 是 09:03:30 ±100、09-15 是 09:03:00 ±130）。alName() 只看做法代號 A，
+   而 A 這個代號從頭到尾沒換過、規則卻換了三次 ⇒ **一筆紀錄叫什麼名字，要看那一天當時的規則，不是現在的**。
+   判準：帳本有 leg（快攻回馬槍才會落地）或日期在上線那天之後 ⇒ 現在的名字；
+   否則照帳本那一天的送單時刻（at）與停利點數（tp_points）寫出當時的規則，⛔ 不准套現在的名字。 */
+const AL_HMQ_FROM='2026-09-16';
+function alRecName(D,r){
+  if(!r) return '';
+  if(r.leg||String(r.date||'')>=AL_HMQ_FROM) return alName(r.method);
+  const at=String(r.at||'').slice(0,8), tp=alN(r.tp_points);
+  return '舊規則'+(at?(' '+at):'')+(tp!=null?(' ±'+tp.toFixed(0)+'點'):'');
+}
 function alSub(k){ const w=ALWAY[k]; return w?w.s:''; }
 function alN(v){ return (typeof v==='number'&&isFinite(v))?v:null; }
 /* ⭐ 2026-09-15【自動下單】的規則那一句（一個地方組，三個地方用：標題小字／確認前說明／每天送那格）。
@@ -10361,7 +10373,7 @@ function alTodayHTML(D,r){
    const head=done?('已出場（'+esc(rwhy({reason:R.why}))+'）'):esc(live_word(r));
    /* ⭐ 2026-09-15 晚上：看得出是「快攻」（09:03:30）還是「回馬槍」（09:15）送的 */
    const leg=alLeg(D,r);
-   return '<div class="t">'+head+'：'+esc(alName(r.method)||'')+(leg?'・'+esc(leg):'')+' → '+esc(dir)+
+   return '<div class="t">'+head+'：'+esc(alRecName(D,r)||'')+(leg?'・'+esc(leg):'')+' → '+esc(dir)+
      '　1 口</div><div class="d">進場 <b>'+esc(alF(r.entry))+'</b>'+
      (done?('　出場 <b>'+esc(alF(R.exit))+'</b>'+
             (R.exit_time?('（'+esc(String(R.exit_time).slice(0,8))+'）'):'')+
@@ -10518,16 +10530,16 @@ function alCard(D,r,isToday){
     ⚠️ lab-ux demo 這一行還有「（signal_at 的價 X）」：實測塞進去會超過 .al-meta 的 609px
        （670px，被 ellipsis 吃掉尾巴的「13:43:30 不會再平倉」），而那個價 ＝ 進場價 − 滑價、
        兩個都在這張卡上 ⇒ 拿掉它，不拿掉收盤那句。⛔ 不准折行（卡片要跟其他列一樣高）。 */
- else if(done&&isToday) meta=esc(alName(r.method)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+' · '+(et?(et+' 進'):'—')+
+ else if(done&&isToday) meta=esc(alRecName(D,r)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+' · '+(et?(et+' 進'):'—')+
    (xt?(' → '+xt+' 出'):'')+
    ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r))+
    (D.eod_at?(' · '+esc(D.eod_at)+' 不會再平倉'):'')+
    (r.warn?(' · <span style="color:var(--gold)">'+esc(r.warn)+'</span>'):'');
- else if(done) meta=esc(alName(r.method)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+' · '+(et?(et+(xt?' → '+xt:'')):'—')+
+ else if(done) meta=esc(alRecName(D,r)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+' · '+(et?(et+(xt?' → '+xt:'')):'—')+
    ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r));
- else if(st==='none'||st==='many') meta=esc(alName(r.method)||'—')+
+ else if(st==='none'||st==='many') meta=esc(alRecName(D,r)||'—')+
    (et?(' · '+et+' 送出'):'')+' · 對不到那一趟來回的紀錄，出場請到大戶投看';
- else meta=esc(alName(r.method)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+(et?(' · '+et+' 送出'):'')+
+ else meta=esc(alRecName(D,r)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+(et?(' · '+et+' 送出'):'')+
    ' · 停利掛 '+esc(alF(r.tp,0))+' · 滑價 '+esc(alSigned(r.slip))+
    ' · '+esc(alSimTxt(D,r));
  /* 今天版：金框、日期欄寫「今天」、點數旁掛「已出場」標（⛔ 標掛在 .tr-res 前面，
