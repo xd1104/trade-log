@@ -66,7 +66,9 @@ LP.AUTO_REAL_DIR = TMP / "real_trades"
 AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC, late_ms=LP.AUTO_LATE_MS,
              gap_s=LP.AUTO_GAP_S,
              sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT,
-             pctl=LP.FAST_PCTL)
+             pctl=LP.FAST_PCTL, rev_at=LP.REV_AT, rev_sec=LP.REV_SEC)
+# ⚠️ 2026-09-15 晚上：再加 rev_at／rev_sec（快攻回馬槍的 09:15，正本 LP.REV_AT／REV_SEC）；
+#    沒傳 ⇒ wired=False（治具畫面會變成「沒有接起來」）。
 # ⚠️ 2026-09-15：configure 不再吃 tp_points（自動下單 ±0.5%，正本 auto_fire.FAST_RULE），
 #    改吃 pctl（「開盤快才做」門檻百分位，正本 LP.FAST_PCTL）。舊寫法會 TypeError、整個治具起不來。
 

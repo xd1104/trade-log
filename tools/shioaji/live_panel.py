@@ -2062,6 +2062,15 @@ AUTO_REAL_DIR = HERE / "real_trades"    # ⛔ **唯讀**：他自己那一欄的
 SIGNAL_AT = "09:03:30"
 SIGNAL_SEC = 9 * 3600 + 3 * 60 + 30
 
+# ⭐⭐ 【自動下單】「快攻回馬槍」的回馬槍那一刻（2026-09-15 晚上 Benson 決定隔天起用）。
+#    **正本只有這裡**，auto_fire 靠 configure(rev_at=REV_AT, rev_sec=REV_SEC) 接過去。
+#    09:03:30 不夠快的日子，主迴圈跨過這一刻時快照（同一支 _auto_snap），順勢方向反轉了才做 1 口。
+#    研究：tick-research/scripts/defs_research.py（09:10／09:15／09:20 × 7 種定義，「09:15 方向相反就算」）。
+#    ⛔ 只管自動下單；【自動下單（模擬）】那一頁不看這個時刻。
+#    ⛔ 要改就兩個一起改（字串與秒數），test_auto_fire.py ⑰ 斷言兩個對得上。
+REV_AT = "09:15:00"
+REV_SEC = 9 * 3600 + 15 * 60
+
 # ⭐⭐ 【自動下單】「開盤快才做」的門檻百分位。**正本只有這裡**，auto_fire 靠 configure(pctl=…) 接過去
 #    （⛔ auto_fire 裡不准再寫一份；前端從 /api/fire/state 的 rule.pctl 拿，⛔ 不准寫死）。
 #    門檻 ＝ 過去 40 個交易日（不含今天）開盤走幅的 numpy.percentile(…, FAST_PCTL)。
@@ -2145,6 +2154,8 @@ AUTO = {"started": False, "day": None, "done": False, "settled": False,
         # eod ＝ 今天的收盤平倉觸發過了沒（⛔ 記憶體只是防重複觸發，
         #       「這一天到底平了沒」的真相在 autofire/ 那個檔裡）
         "eod": False,
+        # rev ＝ 今天回馬槍那一刻（REV_SEC）觸發過了沒（⛔ 同上，只防重複觸發；真相在 autofire/）
+        "rev": False,
         "gaps": 0.0, "warm": None, "warm_for": None, "queued": set(), "err": None,
         # ⛔ 一定要在這裡就有 0：`AUTO.get("tick_err", 0)` 那種寫法會讓「有沒有真的在數」
         #    變成看不出來的事，而這個計數是「出錯了但沒有安靜地吞」唯一的痕跡。
@@ -2264,10 +2275,12 @@ def auto_pair_need(m):
 
 # ---------------------------------------------------- 09:03:30 那一刻：記下來
 
-def _auto_snap(st, now):
+def _auto_snap(st, now, at_sec=None):
     """
     ⚠️ **這個函式跑在 4Hz 主迴圈上**，所以裡面只准有記憶體讀取 —— 一行 I/O、
        一次 pandas、一個鎖都不准有。真正的組裝與落地在 _auto_worker()。
+    ⭐ `at_sec`（2026-09-15 晚上）：回馬槍那一刻（REV_SEC）也用**這一支**快照
+       （⛔ 不另寫一份價來源），只差 `at_lag_ms` 從哪一刻起算；不給 ＝ SIGNAL_SEC（原行為）。
 
     【09:03:30 那一刻的價從哪來】
       px       Today.price —— **就是停損看的那個價**（on_tick 每筆成交更新的那一個）。
@@ -2310,7 +2323,8 @@ def _auto_snap(st, now):
         "date": str(now.date()),
         "at": now.strftime("%H:%M:%S.") + f"{now.microsecond // 1000:03d}",
         "at_lag_ms": int(round((now.hour * 3600 + now.minute * 60 + now.second
-                                + now.microsecond / 1e6 - SIGNAL_SEC) * 1000)),
+                                + now.microsecond / 1e6
+                                - (SIGNAL_SEC if at_sec is None else at_sec)) * 1000)),
         "px": None if st is None else st.price,
         "bid": None if st is None else st.bid,
         "ask": None if st is None else st.ask,
@@ -2664,6 +2678,18 @@ def _auto_eod_noop(day, lag_ms):
 AUTO_EOD_HOOK = _auto_eod_noop
 
 
+def _auto_rev_noop(snap, day, lag_ms):
+    """預設的回馬槍（09:15）掛勾：**什麼都不做**（跟 `_auto_noop` 同一套規矩）。"""
+    return None
+
+
+# ⛔⛔ 回馬槍那一刻（REV_AT）唯一的對外出口。**預設是 no-op**，只有 main() 會接到 auto_fire.on_reversal。
+#    ⚠️ 這一條**會送出進場單**（反轉的日子）⇒ 規矩跟 AUTO_SIG_HOOK 一模一樣：
+#      ・這一行以外不准有第二個地方指派它（`test_auto_fire.py` ⑧ 在守）
+#      ・掛上去的函式**只准 put_nowait**
+AUTO_REV_HOOK = _auto_rev_noop
+
+
 def _auto_tick(st, now, sess):
     """
     ⚠️⚠️ **這個函式跑在 4Hz 主迴圈上，而那條迴圈就是他的停損。**
@@ -2674,7 +2700,7 @@ def _auto_tick(st, now, sess):
     d = str(now.date())
     if AUTO["day"] != d:
         AUTO.update({"day": d, "done": False, "settled": False, "eod": False,
-                     "gaps": 0.0})
+                     "rev": False, "gaps": 0.0})
         _auto_put("warm", d)
     if sess != "day":
         return
@@ -2699,6 +2725,19 @@ def _auto_tick(st, now, sess):
             _auto_put("record", snap)
             # ⛔ 只准 put_nowait。掛勾預設是 no-op，接上去的是 auto_fire.on_signal。
             AUTO_SIG_HOOK(snap, d, lag)
+    # ⭐⭐ 回馬槍那一刻（REV_SEC，2026-09-15 晚上）。⚠️ 一定要排在 09:03:30 那一段**後面**：
+    #     面板剛好在 09:15 之後才開起來時，同一圈裡 09:03:30 那一件（late）先進佇列，
+    #     工作執行緒 FIFO 先處理它 ⇒ 09:15 那一件讀帳本時看得到那一天已經有定論。
+    #     ⛔ 這裡只有整數比較、_auto_snap（記憶體）與 put_nowait；判斷與送單在 auto_fire 的工作執行緒。
+    #     ⛔ 晚到（lag > AUTO_LATE_MS：面板 09:20 才開、看門狗剛重啟、時鐘往前跳）⇒ 快照給 None
+    #        ⇒ 那邊記 late、**不補單**（跟 09:03:30 同一套）。
+    if not AUTO["rev"] and secs >= REV_SEC:
+        AUTO["rev"] = True
+        lag_r = (secs - REV_SEC) * 1000 + now.microsecond // 1000
+        if lag_r > AUTO_LATE_MS:
+            AUTO_REV_HOOK(None, d, lag_r)
+        else:
+            AUTO_REV_HOOK(_auto_snap(st, now, REV_SEC), d, lag_r)
     # ⛔⛔ 收盤自動平倉。505 天裡有 40 天（≈8%）走完一整天都沒碰到 ±100 ⇒
     #     大約每 12 個交易日就有一天會抱過夜盤，**而他可能不在**。
     #     ⚠️ 這裡只有整數比較與 put_nowait；真正的平倉在 auto_fire 自己的執行緒上。
@@ -3621,9 +3660,12 @@ def fire_arm_confirm(live, now=None):
         # ⚠️ 2026-09-15：自動下單的停利停損是 ±0.5%（auto_fire.FAST_RULE），⛔ 不是 TP_POINTS
         #    （那是手動真單的 ±130）。講錯的話他以為賭的是 130 點，實際一口是 230 點上下。
         return {"live": True, "when": when,
-                "text": ("現在是真實下單模式。打開之後，%s 看開盤快不快，快才會用你的錢"
-                         "真的送單，一天最多一次，停利停損各 ±%g%%（以那一刻的價格算）。"
-                         % (when, auto_fire.FAST_RULE["tpsl_frac"] * 100))}
+                # ⭐ 2026-09-15 晚上「快攻回馬槍」：慢的日子 REV_AT 反轉了也會送 ⇒ 那句話要講出來
+                #    （只寫「快才會送」的話，他以為慢的日子一定不送）。
+                "text": ("現在是真實下單模式。打開之後，%s 看開盤快不快，快就用你的錢"
+                         "真的送單；不夠快就等 %s，方向反轉了才送。一天最多一次，"
+                         "停利停損各 ±%g%%（以送單那一刻的價格算）。"
+                         % (when, REV_AT, auto_fire.FAST_RULE["tpsl_frac"] * 100))}
     return {"live": False, "when": when,
             "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}
 
@@ -9700,7 +9742,9 @@ function lbFire(){
     const m=x&&x.armed===true?x.method:null;
     /* ⚠️ 2026-09-15：自動下單換成「開盤快才做」＋ ±0.5% —— 方向跟這顆同一套，但**不是每天做、停利停損也不是這頁的點數**。
        標籤只寫「方向同這個」，⛔ 不可以寫成「現在真單用的」（那會讓他以為這頁回測的就是自動下單）。 */
-    const txt=(x&&x.live?'真單':'自動下單')+'的方向同這個（另加開盤快才做）';
+    /* ⚠️ 2026-09-15 晚上「快攻回馬槍」：回馬槍那一口的方向是 09:15 反轉後的方向，**不一定同這個** ⇒
+       只能說「快攻那一口」方向同這個（⛔ 寫「方向同這個」在反轉的日子是一句假話）。 */
+    const txt=(x&&x.live?'真單':'自動下單')+'快攻那一口的方向同這個（另有開盤快慢與回馬槍）';
     [['A','lbm-bar5'],['B','lbm-open']].forEach(([k,id])=>{ const e=lbEl(id); if(e) e.innerHTML=(m===k)?esc(txt):'&nbsp;'; });
   }).catch(()=>{});
 }
@@ -9773,7 +9817,10 @@ var AL={data:null,err:'',pending:false,seq:0,timer:null};
 var ALON={step:'idle',mode:null,busy:false,err:''};
 /* ⚠️ 2026-09-15 自動下單只剩 A，名字改成「開盤快才做」（跟後端 auto_fire.METHOD_NAME 同一組字）。
    B 從這張表拿掉 ⇒ 舊紀錄裡 method:"B" 的那幾天，alName() 回空字串、畫面照舊印「—」。 */
-const ALWAY={A:{n:'開盤快才做',s:'09:00 起算'}};
+/* ⭐ 2026-09-15 晚上再改成「快攻回馬槍」（慢的日子 09:15 反轉也會做；跟後端 METHOD_NAME 同一組字）。 */
+const ALWAY={A:{n:'快攻回馬槍',s:'09:00 起算'}};
+/* 帳本那一天是哪一段送的（快攻／回馬槍）。⛔ 名字從後端 D.leg_names（auto_fire.LEG_NAME），這裡只是退路。 */
+function alLeg(D,r){ const k=r&&r.leg, T=(D&&D.leg_names)||{}; return k?(T[k]||''):''; }
 function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
 function alSub(k){ const w=ALWAY[k]; return w?w.s:''; }
 function alN(v){ return (typeof v==='number'&&isFinite(v))?v:null; }
@@ -9795,11 +9842,13 @@ function alPctlTxt(D){
  if(w==null||q==null) return '';
  return '比過去 '+w+' 天裡'+(q%10===0?(' '+(q/10)+' 成的日子'):('第 '+q+' 百分位'))+'快';
 }
+/* ⭐ 2026-09-15 晚上「快攻回馬槍」：規則句照 PM 規格逐字組（⛔ 回馬槍時刻從後端 D.rev_at，不寫死）。 */
 function alRuleTxt(D){
- const p=alPct(D), t=alPtsToday(D), c=alPctlTxt(D);
- return (D.signal_at||'')+' 看開盤快不快，'+(c?c+'才':'快才')+'順勢做 '+String(D.qty||1)+' 口，'+
+ const p=alPct(D), t=alPtsToday(D), c=alPctlTxt(D), q=String(D.qty||1);
+ return '快攻回馬槍：'+(D.signal_at||'')+' 開盤'+(c||'夠快')+'就順勢做 '+q+' 口；'+
+   '不夠快就等 '+(D.rev_at||'—')+'，方向反轉了才順新方向做 '+q+' 口；'+
    '停利停損 ±'+(p==null?'—':p)+'%'+
-   (t?('（今天約 '+t.v+' 點'+(t.est?'，照現價估':'')+'）'):'');
+   (t?('（今天約 '+t.v+' 點'+(t.est?'，照現價估':'')+'）'):'')+'；一天最多 '+q+' 口';
 }
 /* 今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 D.fast 來（fast_verdict 那一支），
    ⛔ 09:03:30 之前不預告（verdict 是 null 時只講門檻）。 */
@@ -9814,8 +9863,9 @@ function alFastHTML(D){
  else if(F.verdict==='fast')
    h='<b>快</b> —— 今天走 '+pct(F.move_pct)+pts(F.move_pts)+'，門檻 '+pct(F.thr_pct)+pts(F.thr_pts)+'（'+how+'）';
  else if(F.verdict==='slow')
+   /* ⚠️ 2026-09-15 晚上：不夠快 ⛔ 不再是「今天不做」—— 要等回馬槍那一刻（D.rev_at）看反轉 */
    h='<b>不夠快</b> —— 今天走 '+pct(F.move_pct)+pts(F.move_pts)+'，門檻 '+pct(F.thr_pct)+pts(F.thr_pts)+
-     '（'+how+'）—— 照規則今天不做';
+     '（'+how+'）—— 等 '+esc(D.rev_at||'—')+' 看有沒有反轉';
  else
    h='今天的門檻 '+pct(F.thr_pct)+'（'+how+'，用了 '+esc(String(alN(F.n)||0))+' 天）· '+
      esc(D.signal_at||'')+' 才判定快不快';
@@ -9939,7 +9989,8 @@ function alPaint(){
        esc(live?'開著 · 會真的送出去':'關著 · 只會演練')+'</div></div>'+
    /* ⚠️ 2026-09-15：「每天送」→「快才送」—— 規則換成開盤快才做，寫「每天送」就是一句假話。
       停利停損是 ±%（後端 D.rule），⛔ 不是手動真單那個 ±RULE_TP。 */
-   '<div class="c"><div class="k">快才送</div>'+
+   /* ⚠️ 2026-09-15 晚上：「快才送」→「怎麼送」—— 慢的日子反轉也會送，寫「快才送」是假話。 */
+   '<div class="c"><div class="k">怎麼送</div>'+
      '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利停損 &plusmn;'+
        esc(alPct(D)==null?'—':String(alPct(D)))+'% · 一天最多 1 次</div></div>');
  /* 今天的門檻與判定（快／不快／歷史不夠）—— 掛在開關區，今天那張卡收起來時也看得到。 */
@@ -9967,7 +10018,8 @@ function alPaint(){
        /* ⚠️ 2026-09-15：「每個交易日都會送」改成「都會看、夠快就送」—— 規則換成開盤快才做之後，
           寫「都會送」是一句假話（慢的日子不送）；但「沒有有效期」那半一字不動。 */
        '<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
-         '<b>每個交易日都會看，開盤夠快就送</b>，直到你自己按下面那顆關掉。</span></p>'+
+         '<b>每個交易日都會看，開盤夠快就送、不夠快就等 '+esc(D.rev_at||'—')+' 看反轉</b>，'+
+         '直到你自己按下面那顆關掉。</span></p>'+
      '</div>'
    : '');
 
@@ -10035,7 +10087,8 @@ function alOnHTML(D){
      '<div class="q">'+(C.live?'⚠️ ':'')+esc(C.text)+'<br>要用「<b>'+
        esc(alName(m))+'</b>」（'+esc(alSub(m))+'）開始嗎？'+
        /* 2026-09-15：「都會送」→「都會看、夠快就送」（慢的日子不送，寫「都會送」是假話） */
-       '<br>打開之後<b>每個交易日都會看，開盤夠快就送，直到你自己關掉</b>。</div>'+
+       '<br>打開之後<b>每個交易日都會看，開盤夠快就送、不夠快就等 '+esc(D.rev_at||'—')+
+       ' 看反轉，直到你自己關掉</b>。</div>'+
      '<div class="btns2">'+
        '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
          (ALON.busy?'打開中…':'確定，打開')+'</button>'+
@@ -10060,8 +10113,9 @@ function alOnHTML(D){
       ⛔ 數字全部從後端（D.rule），⛔ 不寫死。 */
    '<div class="n">每個交易日 '+esc(D.signal_at||'')+' 看開盤快不快：09:00 以前最後一筆到 '+
      esc(D.signal_at||'')+' 走了多少 %，<b>不低於過去 '+esc(String((D.rule||{}).window||'—'))+
-     ' 個交易日的第 '+esc(String((D.rule||{}).pctl||'—'))+' 百分位才做</b>（慢的日子不做）。'+
-     '做的話送 '+esc(String(D.qty||1))+' 口：'+esc(D.signal_at||'')+' 的價比 09:00 高或持平做多、低做空，'+
+     ' 個交易日的第 '+esc(String((D.rule||{}).pctl||'—'))+' 百分位就做</b>（快攻）；'+
+     '<b>不夠快就等 '+esc(D.rev_at||'—')+'</b>：那一刻的價跟 '+esc(D.signal_at||'')+' 比，方向反轉了才順新方向做（回馬槍），'+
+     '沒反轉就不做。快攻送 '+esc(String(D.qty||1))+' 口：'+esc(D.signal_at||'')+' 的價比 09:00 高或持平做多、低做空，'+
      '停利停損 ±'+esc(alPct(D)==null?'—':String(alPct(D)))+'%。'+
      '按下去會<b>再問你一次</b>；打開之後<b>每個交易日都會看，直到你自己關掉</b>。</div>'+
    (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
@@ -10141,7 +10195,9 @@ function alTodayHTML(D,r){
       所以這裡跟紀錄清單一樣，出場那半從唯讀比對 `real_trades/` 的結果拿。 */
    const R=(D.real||{})[r.date]||null, st=R?R.state:null, done=(st==='ok');
    const head=done?('已出場（'+esc(rwhy({reason:R.why}))+'）'):esc(live_word(r));
-   return '<div class="t">'+head+'：'+esc(alName(r.method)||'')+' → '+esc(dir)+
+   /* ⭐ 2026-09-15 晚上：看得出是「快攻」（09:03:30）還是「回馬槍」（09:15）送的 */
+   const leg=alLeg(D,r);
+   return '<div class="t">'+head+'：'+esc(alName(r.method)||'')+(leg?'・'+esc(leg):'')+' → '+esc(dir)+
      '　1 口</div><div class="d">進場 <b>'+esc(alF(r.entry))+'</b>'+
      (done?('　出場 <b>'+esc(alF(R.exit))+'</b>'+
             (R.exit_time?('（'+esc(String(R.exit_time).slice(0,8))+'）'):'')+
@@ -10151,7 +10207,11 @@ function alTodayHTML(D,r){
             /* 2026-09-15：自動下單那一口的停損是 ±0.5%（帳本落地的 sl），不是手動那個 ±RULE_SL */
             (alN(r.sl)!=null?('　停損 <b>'+esc(alF(r.sl))+'</b>'):'')+
             (alN(r.sl_points)!=null?('（各 '+esc(alF(r.sl_points,0))+' 點）'):'')))+
-     '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px))+'</b>'+
+     /* 回馬槍那一口的參考價是 09:15 的價（帳本 p15），⛔ 不可以標成 09:03:30 的價 */
+     (r.leg==='reversal'
+       ? '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px_0903))+'</b>　'+esc(r.rev_at||D.rev_at||'')+
+         ' 的價 <b>'+esc(alF(r.p15))+'</b>'
+       : '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px))+'</b>')+
      '　滑價 <b>'+esc(alSigned(r.slip))+'</b> 點'+
      ((!done&&r.has_target)||done?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>')+
      (r.warn?'<br><span style="color:var(--gold)">'+esc(r.warn)+'</span>':'')+
@@ -10167,6 +10227,18 @@ function alTodayHTML(D,r){
  if(r.rec==='fire')      /* stage 停在 sending ＝ 決定送單之後程式中斷了 */
    return '<div class="t off">不知道下場</div><div class="d">'+
      esc(r.why_msg||alWhy('crashed'))+'</div>';
+ /* ⭐ 2026-09-15 晚上：09:03:30 不夠快 ⇒ wait（還沒有定論）。⛔ 「等 09:15 中」與「09:15 過了卻沒留下紀錄」
+    是兩件事，⛔ 不准寫同一句（後者＝那一刻面板沒開著／佇列滿了，不補單）。 */
+ if(r.rec==='wait'){
+   const revS=alSecs(r.rev_at||D.rev_at), rv=esc(r.rev_at||D.rev_at||'');
+   if(nowS!=null&&revS!=null&&nowS<revS+10)
+     return '<div class="t off">等 '+rv+' 看反轉</div><div class="d">'+
+       esc(r.why_msg||alWhy('wait_rev'))+'</div>';
+   return '<div class="t off">等反轉那一刻沒有留下紀錄</div><div class="d">'+esc(r.why_msg||'')+
+     ' —— 但 '+rv+' 那一刻面板沒有跑到這一段（沒開著、或那時還在啟動）。<b>不補單</b>。</div>';
+ }
+ if(r.why==='no_reversal')
+   return '<div class="t off">沒有反轉</div><div class="d">'+esc(r.why_msg||alWhy(r.why))+'</div>';
  return '<div class="t off">沒有送單</div><div class="d">'+
    esc(r.why_msg||alWhy(r.why))+'</div>';
 }
@@ -10257,7 +10329,8 @@ function alCard(D,r,isToday){
  /* ⛔ 每一種狀態一個 tag，⛔ 一種都不准跟別種寫同一個字
     （「還開著」跟「對不起來」長得像，但一個是正常、一個要他去大戶投看）。 */
  let tag;
- if(!sent) tag=(r.rec==='fire')?'下落不明':'沒送';
+ /* ⭐ 2026-09-15 晚上：「等反轉」（wait，還沒定論）與「沒反轉」（no_reversal 終局）各自一個 tag（≤4 字） */
+ if(!sent) tag=(r.rec==='fire')?'下落不明':(r.rec==='wait'?'等反轉':(r.why==='no_reversal'?'沒反轉':'沒送'));
  else if(done) tag=rwhy({reason:R.why});
  else if(st==='drill') tag='演練';
  else if(st==='open') tag='持有中';
@@ -10281,16 +10354,16 @@ function alCard(D,r,isToday){
     ⚠️ lab-ux demo 這一行還有「（signal_at 的價 X）」：實測塞進去會超過 .al-meta 的 609px
        （670px，被 ellipsis 吃掉尾巴的「13:43:30 不會再平倉」），而那個價 ＝ 進場價 − 滑價、
        兩個都在這張卡上 ⇒ 拿掉它，不拿掉收盤那句。⛔ 不准折行（卡片要跟其他列一樣高）。 */
- else if(done&&isToday) meta=esc(alName(r.method)||'—')+' · '+(et?(et+' 進'):'—')+
+ else if(done&&isToday) meta=esc(alName(r.method)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+' · '+(et?(et+' 進'):'—')+
    (xt?(' → '+xt+' 出'):'')+
    ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r))+
    (D.eod_at?(' · '+esc(D.eod_at)+' 不會再平倉'):'')+
    (r.warn?(' · <span style="color:var(--gold)">'+esc(r.warn)+'</span>'):'');
- else if(done) meta=esc(alName(r.method)||'—')+' · '+(et?(et+(xt?' → '+xt:'')):'—')+
+ else if(done) meta=esc(alName(r.method)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+' · '+(et?(et+(xt?' → '+xt:'')):'—')+
    ' · 滑價 '+esc(alSigned(r.slip))+' · '+esc(alSimTxt(D,r));
  else if(st==='none'||st==='many') meta=esc(alName(r.method)||'—')+
    (et?(' · '+et+' 送出'):'')+' · 對不到那一趟來回的紀錄，出場請到大戶投看';
- else meta=esc(alName(r.method)||'—')+(et?(' · '+et+' 送出'):'')+
+ else meta=esc(alName(r.method)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+(et?(' · '+et+' 送出'):'')+
    ' · 停利掛 '+esc(alF(r.tp,0))+' · 滑價 '+esc(alSigned(r.slip))+
    ' · '+esc(alSimTxt(D,r));
  /* 今天版：金框、日期欄寫「今天」、點數旁掛「已出場」標（⛔ 標掛在 .tr-res 前面，
@@ -10316,9 +10389,9 @@ function alTblHTML(D,days,todayMerged){
    ⛔ 但「異常」一項都不准少 —— 安靜地少是這個專案明令禁止的失敗模式。 */
 function alNotesHTML(D,days){
  const L=D.ledger||{}, out=[];
- /* ⛔ fire + result + skip + eod + bad ＝ 檔案總列數（收盤平倉那一列也要有去處）。 */
+ /* ⛔ fire + result + skip + eod + wait + bad ＝ 檔案總列數（收盤平倉那一列、等 09:15 那一列也要有去處）。 */
  const tot=alN(L.total)||0, sum=(alN(L.fire)||0)+(alN(L.result)||0)+(alN(L.skip)||0)+
-   (alN(L.eod)||0);
+   (alN(L.eod)||0)+(alN(L.wait)||0);
  if(alN(L.bad)) out.push('讀不出來的紀錄 '+L.bad+' 列');
  if(tot&&sum+(alN(L.bad)||0)!==tot) out.push('⚠️ 帳本對不起來：檔案 '+tot+' 列、認得的只有 '+sum+' 列');
  const stuck=days.filter(r=>r&&r.rec==='fire').length;
@@ -11230,6 +11303,9 @@ def main():
     #    13:43:30 的收盤平倉掛勾同理（接上去就會真的送出平倉單）。
     #    沒有 global 的話下面那兩行只會建區域變數 ⇒ 接線靜靜地沒生效。
     global AUTO_SIG_HOOK, AUTO_EOD_HOOK
+    # ⭐ 09:15 回馬槍的掛勾同理（接上去就會在反轉的日子真的送單）。⚠️ 刻意另起一行 global
+    #    （上面那一行是既有突變測試的目標字串，⛔ 不併進去）。
+    global AUTO_REV_HOOK
     if not MATRIX.exists():
         print("找不到 intraday.csv，請先跑 build_intraday.py")
         return
@@ -11444,7 +11520,7 @@ def main():
     auto_fire.configure(signal_at=SIGNAL_AT, signal_sec=SIGNAL_SEC,
                         late_ms=AUTO_LATE_MS, gap_s=AUTO_GAP_S,
                         sig_fn=auto_sig, dirs_fn=auto_dirs, eod_at=EOD_CLOSE_AT,
-                        pctl=FAST_PCTL)
+                        pctl=FAST_PCTL, rev_at=REV_AT, rev_sec=REV_SEC)
     # ⛔⛔ 重啟撿回部位時補「自動下單那一口自己的停損點數」（沒補就掉回 SL_POINTS ⇒ 提早被洗掉）。
     #    **只有 main() 會接**（治具與 --replay 不接 ⇒ 撿回來的部位照舊用 SL_POINTS）。
     #    掛上去的 recover_meta 只讀記憶體（它在主迴圈的 reconcile 裡被叫）。
@@ -11454,6 +11530,8 @@ def main():
     # ⛔⛔ 收盤自動平倉：**只平自動下單自己開的那一口**（auto_fire._looks_ours）。
     #    他自己手動進場的部位絕對不碰。
     AUTO_EOD_HOOK = auto_fire.on_eod
+    # ⭐⭐ 快攻回馬槍：09:03:30 不夠快的日子，REV_AT 那一刻反轉了才送（auto_fire._rev 讀帳本判斷）。
+    AUTO_REV_HOOK = auto_fire.on_reversal
     _arm = auto_fire.arm()
     print("【自動下單】" + ("已開啟：" + _arm["msg"] +
                            ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")

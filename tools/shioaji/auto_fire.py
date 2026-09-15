@@ -39,7 +39,7 @@
    與 UTF-16 都當**主流程**處理（CLAUDE.md：第一次一定會失敗的路徑要當成主流程做）。
 
 - **檔案不存在** ⇒ 完全不送，畫面上寫「關閉中」。這是出貨狀態。
-- **內容是 `A`** ⇒ 用「開盤快才做」（見下面〈2026-09-15 規則〉）。
+- **內容是 `A`** ⇒ 用「快攻回馬槍」（見下面〈2026-09-15 規則〉與〈2026-09-15 晚上〉）。
 - ⛔ **`B` 已經不支援**（2026-09-15 Benson 決定自動下單只剩 A）：寫 B ⇒ 拒絕下單，
   而且那句話要講清楚「B 已經不支援」，⛔ 不可以只說「看不懂」。
 - **其他任何內容**（空的、`C`、`D`、`A B`、亂碼…）⇒ **拒絕下單並把讀到什麼講出來**。
@@ -72,6 +72,29 @@
   4. 歷史檔 `fast_hist.jsonl`（⛔ gitignore）：一天一列，**不管開關開不開、送不送**都寫，
      由工作執行緒寫（⛔ 不是主迴圈）；同一天不重寫（看檔案）。
      種子由 `build_fast_hist.py` 從研究的逐筆資料建。
+
+================================================================
+⭐⭐ 2026-09-15 晚上：「快攻回馬槍」＝ 上面的快攻 ＋ 慢的日子等 09:15 反轉
+================================================================
+研究在 tick-research/scripts/defs_research.py（「09:15 方向相反就算」那一列）與
+retest/FINAL_REPORT.md。Benson 決定隔天起自動下單換這一套（⛔ 開關檔內容仍然是 A）。
+  1. 09:03:30：**快** ⇒ 跟上面一模一樣（順勢送、帳本記 `leg:"fast"`）。
+     開關關著／報價不能用／算不出訊號（no_signal）／歷史不夠（no_hist）⇒ 跟以前一樣記原因、
+     **當天結束，⛔ 不進回馬槍**。
+  2. 09:03:30 判定**不快** ⇒ ⛔ 不再寫終局的 `not_fast`，改落地一列 `rec:"wait"`：
+     **一定帶 09:03:30 的 px（`px`）與方向 `d`（+1／−1）**——看門狗在 09:03:30~09:15 之間
+     重啟是常態，09:15 那一刻**只准從檔案讀回來判斷**（⛔ 不靠記憶體）。
+  3. 09:15:00（`live_panel.REV_AT`／`REV_SEC`，經 configure 接進 `_CFG["rev_at"]`／`["rev_sec"]`）：
+     主迴圈跨過那一刻時用**同一支 `_auto_snap`** 快照，`on_reversal()` 只 put_nowait；
+     晚超過 `AUTO_LATE_MS` ⇒ 快照給 None ⇒ 這裡記 `late`、⛔ 不補單。
+  4. 工作執行緒（`_rev()`）：今天帳本**沒有 wait** ⇒ 什麼都不做；**已經有 fire／result／skip**
+     （快攻送過、或那天早就有定論）⇒ 什麼都不做（一天只准一筆）。
+     `d2 = sign(p15 − px_0903)`；**`d2 != 0` 且 `d2 != d` ＝反轉** ⇒ 順 d2 送 1 口，
+     `pts = round(p15 × 0.005)`、sl_points 同值，走同一條 can_enter／enter（先落地 sending 再送），
+     帳本記 `leg:"reversal"`、`p15`、`px_0903`。
+     沒反轉（同方向或一樣價）⇒ 終局 skip `no_reversal`，那句話寫出兩個價。
+     ⛔ 09:15 會**重新讀 arm()**：09:03:30 之後被關掉 ⇒ 不送（off）。
+  ⛔ 判斷只准走 `reversal_dir()`（送單與 `tools/probe/fast-rule-replay.py` 同一支）。
 
 ⛔ **同時受 `REAL_ORDERS_ON` 管**：這個檔**不自己判斷要不要真的送出去**，
    一律走 `broker.enter()` ⇒ `broker._send()` ⇒ `broker.is_live()`。
@@ -171,7 +194,11 @@ METHODS = ("A",)
 # 畫面上的名字。⛔ 代號不准上畫面（他退件過一次：「我要從哪裡知道現在我看的是哪個做法？」）。
 #    ⚠️ 名字從「5 分 K」改成「開盤快才做」：方向的算法沒變（仍是 09:00 那根起算），
 #       但「今天做不做」多了一道快不快 —— 名字只寫方向的話，他會以為每天都送。
-METHOD_NAME = {"A": "開盤快才做"}
+#    ⚠️ 2026-09-15 晚上再改成「快攻回馬槍」：慢的日子也可能在 09:15 送（反轉才送），
+#       名字還寫「開盤快才做」就是一句假話。
+METHOD_NAME = {"A": "快攻回馬槍"}
+# 帳本那一列是哪一段送的（畫面要看得出來）。⛔ 代號不上畫面，一律走這張表。
+LEG_NAME = {"fast": "快攻", "reversal": "回馬槍"}
 METHOD_SUB = {"A": "09:00 起算"}
 
 # ⭐ 「開盤快才做」的規則數字（前端從 state()["rule"] 拿，⛔ 不准寫死）。
@@ -187,7 +214,7 @@ METHOD_SUB = {"A": "09:00 起算"}
 #    收成 dict ⇒ leak-scan 讀不到 ⇒ 掃描維持嚴格（安全的那一邊）。
 FAST_RULE = {"window": 40, "min_n": 20, "tpsl_frac": 0.005}
 # 開關檔寫 B（或面板上有人送 mode=B）時的那句話。⛔ 正本只有這一份（arm() 與 fire_arm_on 共用）。
-MSG_ONLY_A = "B 已經不支援，自動下單現在只有 A（開盤快才做）"
+MSG_ONLY_A = "B 已經不支援，自動下單現在只有 A（快攻回馬槍）"
 
 ARM_MAX_BYTES = 64          # 開關檔只讀這麼多 —— 有人不小心指到大檔也不會卡住
 ARM_SHOW = 24               # 內容看不懂時，畫面上顯示前幾個字
@@ -239,7 +266,12 @@ WHY = {
     "no_signal": "拿不到 09:00 的參考價，算不出方向與開盤走幅",
     "no_trade": "這個做法今天判定不下單",
     # ── 2026-09-15「開盤快才做」的兩種不送（⛔ 跟上面每一句都不一樣）───────
+    # ⚠️ 2026-09-15 晚上起 09:03:30 不快**不再寫 not_fast**（改寫 wait）；這一句留給舊帳本那幾天。
     "not_fast": "今天開盤不夠快 —— 照規則今天不做",
+    # ── 2026-09-15 晚上「快攻回馬槍」（⛔ 跟上面每一句都不一樣）───────────
+    "wait_rev": "今天開盤不夠快 —— 等回馬槍那一刻看有沒有反轉（還沒有定論）",
+    "no_reversal": "回馬槍那一刻的價跟 09:03:30 比沒有反轉 —— 今天不做",
+    "wait_bad": "「等反轉」那一列讀不出 09:03:30 的價或方向 —— 不猜，今天不做",
     "no_hist": "過去的開盤走幅紀錄不夠多天，算不出「快」的門檻 —— 照規則不做",
     "cant_enter": "券商那一關擋下來了",
     "order_failed": "單送出去了，但沒有成交或被拒絕",
@@ -267,6 +299,17 @@ WHY = {
 EOD_ALARM = ("eod_failed", "eod_unknown", "eod_unsure", "eod_crashed",
              "eod_not_ours", "eod_queue_full", "eod_cant_tell")
 
+# ⭐ 回馬槍那一刻（09:15）的「沒送」。⛔ 理由代號沿用上面那幾個（late／no_quote／quote_stale／
+#    mid_only），但**那句話不可以沿用** —— WHY 裡寫的是「09:03:30 收不到成交價」，
+#    拿去講 09:15 那一刻就是一句假話。`%s` 填 `_CFG["rev_at"]`（⛔ 不寫死 09:15）。
+#    測試斷言這幾句互不相同、也不跟 WHY 任何一句相同。
+REV_MSG = {
+    "late": "面板在回馬槍那一刻（%s）沒開著、或剛啟動 —— 那一刻跳過，不補單",
+    "no_quote": "回馬槍那一刻（%s）收不到成交價 —— 今天不做",
+    "quote_stale": "回馬槍那一刻（%s）的報價太舊（斷線中），不能用舊價下單 —— 今天不做",
+    "mid_only": "回馬槍那一刻（%s）只有中價、還沒有成交，不能拿它當進場價 —— 今天不做",
+}
+
 # 這個模組自己的狀態。⛔ 任何「只存在記憶體」的東西都不可以是唯一真相 ——
 # 看門狗會重啟（CLAUDE.md 踩過三次），所以「今天送了沒」一律回去讀檔（_has）。
 _ST = {
@@ -293,8 +336,11 @@ _ST = {
 #    留著一個沒人用的 `tp` 會讓人以為自動下單還是 ±130。
 # ⭐ `pctl`（2026-09-15 加）：「開盤快才做」門檻的百分位，正本 live_panel.FAST_PCTL（80）。
 #    沒接（None）⇒ wired=False ⇒ 不送；fast_threshold() 拿不到也**不猜一個預設值**（丟例外）。
+# ⭐ `rev_at`／`rev_sec`（2026-09-15 晚上）：回馬槍那一刻，正本 `live_panel.REV_AT`／`REV_SEC`。
+#    沒接 ⇒ wired=False ⇒ 09:03:30 與 09:15 都不送（⛔ 不猜一個 09:15）。
 _CFG = {"signal_at": None, "signal_sec": None, "late_ms": None, "gap_s": None,
-        "sig_fn": None, "dirs_fn": None, "eod_at": None, "pctl": None}
+        "sig_fn": None, "dirs_fn": None, "eod_at": None, "pctl": None,
+        "rev_at": None, "rev_sec": None}
 
 # 今天帳本裡「自動下單開出來的那一口」的記憶體副本（重啟撿回部位時補 sl_points 用）。
 #   date  這份是哪一天的（⛔ 不是今天就不准拿來用 ⇒ 交給工作執行緒去讀檔）
@@ -561,6 +607,26 @@ def tpsl_points(px):
     return int(round(px * FAST_RULE["tpsl_frac"]))
 
 
+def reversal_dir(px_0903, d, p15):
+    """
+    ⭐ 「09:15 有沒有反轉」唯一的判斷（送單 `_rev()` 與離線對照 fast-rule-replay.py 同一支）。
+      px_0903  09:03:30 那一刻的價（wait 那一列落地的 `px`）
+      d        09:03:30 那一刻的方向（+1／−1，wait 那一列的 `d`）
+      p15      09:15 那一刻的價
+    回 **d2（+1／−1）＝反轉了、要順 d2 做**；沒反轉（同方向／一樣價）或拿不到 ⇒ None。
+    ⛔ `d2 = sign(p15 − px_0903)`；**`d2 != 0` 且 `d2 != d`** 才算（研究 defs_research.py：
+       `opp = -d * (p2 - px)`，`opp <= 0` 不做 —— 一樣價就是 opp = 0 ⇒ 不做）。
+    ⛔ d 不是 ±1 ⇒ None（⛔ 不猜方向）。
+    """
+    a, b = _num(px_0903), _num(p15)
+    if a is None or b is None or isinstance(d, bool) or d not in (1, -1):
+        return None
+    d2 = (b > a) - (b < a)
+    if d2 != 0 and d2 != d:
+        return d2
+    return None
+
+
 def fast_verdict(day, mv, hist_rows, pctl=None):
     """
     ⭐ 「今天快不快」唯一的判斷。`hist_rows` 是 `hist_read()` 的 rows（舊到新）。
@@ -697,12 +763,17 @@ def _quote_why(snap):
     return None
 
 
-def _fire(snap, day, lag_ms, put_at):
+def _fire(snap, day, lag_ms, put_at, leg="fast"):
     """
     ⚠️ **跑在自己的 daemon 執行緒上**（⛔ 不是主迴圈）：這裡會呼叫券商 API、
        會等成交（最多 `broker.FILL_WAIT` 秒）、會寫檔 —— 任何一項放進 4Hz 主迴圈
        都等於**把他的停損塞住幾秒**。
+    ⭐ `leg="reversal"`（09:15 那一件，`on_reversal()` 丟進來的）⇒ 交給 `_rev()`。
+       ⚠️ 刻意**共用同一條佇列與同一個入口**：09:03:30 那一件一定排在 09:15 前面處理完
+       （FIFO），09:15 讀帳本時一定看得到 09:03:30 寫的那一列。
     """
+    if leg == "reversal":
+        return _rev(snap, day, lag_ms, put_at)
     d = day
     if _has(d):
         return None                      # 一天一次。⛔ 這道在最前面
@@ -772,21 +843,47 @@ def _fire(snap, day, lag_ms, put_at):
                      "過去的開盤走幅只有 %d 天（至少要 %d 天才算得出門檻）—— 照規則今天不做"
                      % (v["n"], FAST_RULE["min_n"]))
     if v["verdict"] != "fast":
-        return _skip(d, "not_fast", base,
-                     "今天開盤不夠快：走 %.2f%%（約 %s 點），門檻 %.2f%%（約 %s 點）—— 照規則今天不做"
-                     % (mv, fast["move_pts"], v["thr_pct"], fast["thr_pts"]))
+        # ⭐⭐ 2026-09-15 晚上「快攻回馬槍」：不快 ⇒ ⛔ 不是終局，落地一列 wait，等 09:15 看反轉。
+        #    ⛔⛔ **px 與 d 一定要落地**：看門狗在 09:03:30~09:15 之間重啟是常態，
+        #       09:15 那一刻只准從檔案讀回來判斷（`_rev()`），⛔ 不靠記憶體。
+        #    ⚠️ 刻意不帶 `dir`：wait 那一列**不是部位**（`_auto_entry` 只認 result ok），
+        #       留一個 dir 會讓合併後沒反轉的那一天看起來像有方向。方向記在 `d`／`dir_0903`。
+        wait = dict(base)
+        wait.pop("dir", None)
+        wait.update({"rec": "wait", "date": d, "why": "wait_rev",
+                     "why_msg": "今天開盤不夠快（走 %.2f%%／門檻 %.2f%%）—— 等 %s 看有沒有反轉"
+                                % (mv, v["thr_pct"], _CFG["rev_at"]),
+                     "d": dv, "dir_0903": direction, "px": px,
+                     "rev_at": _CFG["rev_at"], "live": broker.is_live(),
+                     "wrote_at": datetime.now().isoformat(timespec="seconds")})
+        _ST["last"] = wait
+        print("[%s] 自動下單：%s" % (d, wait["why_msg"]), flush=True)
+        return _append(wait)
+    base["leg"] = "fast"
     # ⭐ 停利停損 ±0.5% of 09:03:30 的價（⛔ 不是成交價：送單之前就要定下來、落地）
     pts = tpsl_points(px)
     base["tp_points"] = pts
     base["sl_points"] = pts
+    return _send(d, base, a, direction, px, pts, lag_ms, put_at, snap,
+                 "走 %.2f%% ≥ 門檻 %.2f%%" % (mv, v["thr_pct"]))
 
+
+def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how):
+    """
+    ⚠️ **工作執行緒**：遲到檢查 → 先落地 sending → can_enter → enter(sl_points) → result。
+    快攻（09:03:30）與回馬槍（09:15）**共用這一段**（⛔ 不准各寫一份送單流程 —— 兩把尺）。
+    `lag_ms` 是主迴圈跨過**那一刻**的延遲（快攻＝09:03:30、回馬槍＝09:15）。
+    """
     # 【第二道遲到檢查】上面那道是主迴圈跨過 09:03:30 的延遲；這一道是
     # 「排隊 ＋ 排到我開始做」的延遲。市價單晚幾秒送出去，成交價就不是那一刻的價了。
     late = (lag_ms or 0) + (time.time() - put_at) * 1000.0
     if late > LATE_MS:
         base["late_ms"] = int(late)
+        # ⛔ 回馬槍那一刻晚到，那句話要講 09:15（WHY["late"] 寫的是 09:03:30）
+        head = (REV_MSG["late"] % _CFG["rev_at"]) if base.get("leg") == "reversal" \
+            else WHY["late"]
         return _skip(d, "late", base,
-                     WHY["late"] + "（實際晚了 %.1f 秒）" % (late / 1000.0))
+                     head + "（實際晚了 %.1f 秒）" % (late / 1000.0))
 
     # ⛔⛔ **先落地再送單**。送到一半當掉的話，重啟後 _has() 讀得到這一列
     #     ⇒ 那天不會再送第二張。⛔ 寧可漏記結果，不可以重送。
@@ -808,14 +905,16 @@ def _fire(snap, day, lag_ms, put_at):
         #    ⛔ 症狀跟原因看起來毫無關係的時候一定要把原因寫出來。
         hint = ("　（面板是不是 %s 前後才開起來？永豐 SDK 登入要幾十秒，"
                 "那段時間進不了場 —— 這是**開太晚**，不是程式壞了。"
-                "要用自動下單就讓面板一直開著。）" % (_CFG["signal_at"] or "09:03:30")
+                "要用自動下單就讓面板一直開著。）" % (
+                    (_CFG["rev_at"] if base.get("leg") == "reversal" else _CFG["signal_at"])
+                    or "09:03:30")
                 ) if "還沒連上永豐" in why else ""
         return _result(d, base, False, "cant_enter",
                        WHY["cant_enter"] + "：" + why + hint)
 
-    print("[%s] 自動下單：用「%s」判定 %s（走 %.2f%% ≥ 門檻 %.2f%%），送出 1 口，停利停損各 %d 點（%s）" %
-          (d, METHOD_NAME[a["method"]], "做多" if direction == "long" else "做空",
-           mv, v["thr_pct"], pts,
+    print("[%s] 自動下單：用「%s」的%s判定 %s（%s），送出 1 口，停利停損各 %d 點（%s）" %
+          (d, METHOD_NAME[a["method"]], LEG_NAME.get(base.get("leg"), ""),
+           "做多" if direction == "long" else "做空", how, pts,
            "真單" if broker.is_live() else "演練，不會真的送出去"), flush=True)
     # ⛔⛔ sl_points 一定要帶：停損活在面板迴圈（check_real_position），它讀的是
     #     **這一口部位自己的** sl_points；沒帶就掉回手動真單的 SL_POINTS（130）⇒ 提早被洗掉。
@@ -838,6 +937,72 @@ def _fire(snap, day, lag_ms, put_at):
                   # ⛔ 停利掛失敗不可以吞掉：broker 會回 ok=True ＋ 一句警告
                   "warn": err or None})
     return _result(d, extra, True, None, None)
+
+
+def _fmt_px(x):
+    """價格給那句話用：整數價不帶小數（23456），不是整數才寫一位。"""
+    x = _num(x)
+    if x is None:
+        return "—"
+    return ("%.0f" % x) if x == int(x) else ("%.1f" % x)
+
+
+def _rev(snap, day, lag_ms, put_at):
+    """
+    ⭐⭐ 回馬槍（09:15）。⚠️ **工作執行緒**（⛔ 不是主迴圈）。
+    ⛔⛔ 「今天要不要做」**只看檔案**：看門狗在 09:03:30~09:15 之間重啟是常態，
+       記憶體裡什麼都沒有也要判得出來 ⇒ 09:03:30 的 px 與方向一律從 wait 那一列讀。
+    """
+    d = day
+    rows = _rows_of(d)
+    wait = None
+    for o in rows:
+        if o.get("rec") == "wait":
+            wait = o
+    if wait is None:
+        return None     # 今天 09:03:30 沒有判成「不快」（快攻送了／關著／沒訊號…）⇒ 回馬槍沒有事
+    if any(o.get("rec") in ("fire", "result", "skip") for o in rows):
+        return None     # ⛔ 一天只准一筆：已經送過、或 09:15 那一件已經有定論（看門狗重啟）
+    rev_at = _CFG["rev_at"]
+    px0, d0 = _num(wait.get("px")), wait.get("d")
+    base = {"leg": "reversal", "method": wait.get("method"),
+            "px_0903": px0, "d_0903": d0, "rev_at": rev_at, "at_lag_ms": lag_ms,
+            "fast": wait.get("fast")}
+    if not _ST["wired"]:
+        return _skip(d, "not_wired", base)
+    if snap is None:
+        # 主迴圈說「跨過 09:15 了，但已經晚太多」⇒ ⛔ 不補單
+        return _skip(d, "late", base, REV_MSG["late"] % rev_at)
+    p15 = _num(snap.get("px"))
+    base.update({"at": snap.get("at"), "at_lag_ms": snap.get("at_lag_ms"),
+                 "p15": p15, "px": p15, "quote_age_ms": snap.get("quote_age_ms"),
+                 "bid": _num(snap.get("bid")), "ask": _num(snap.get("ask"))})
+    # ⛔ 09:15 **重新讀開關**：09:03:30 之後他按了「關閉」⇒ 不送
+    a = arm()
+    base["arm_raw"] = a["raw"]
+    if not a["on"]:
+        return _skip(d, a["why"], base, a["msg"])
+    base["method"] = a["method"]
+    q = _quote_why(snap)
+    if q:
+        return _skip(d, q, base, REV_MSG[q] % rev_at)
+    if px0 is None or isinstance(d0, bool) or d0 not in (1, -1):
+        return _skip(d, "wait_bad", base)
+    d2 = reversal_dir(px0, d0, p15)
+    base["d2"] = d2
+    if d2 is None:
+        return _skip(d, "no_reversal", base,
+                     "%s 價 %s、%s 價 %s，沒有反轉 —— 今天不做" % (
+                         _CFG["signal_at"], _fmt_px(px0), rev_at, _fmt_px(p15)))
+    direction = "long" if d2 > 0 else "short"
+    base["dir"] = direction
+    # ⭐ 停利停損 ±0.5% of **09:15 的價**（⛔ 不是 09:03:30 的價、不是成交價）
+    pts = tpsl_points(p15)
+    base["tp_points"] = pts
+    base["sl_points"] = pts
+    return _send(d, base, a, direction, p15, pts, lag_ms, put_at, snap,
+                 "%s 價 %s → %s 價 %s，反轉" % (_CFG["signal_at"], _fmt_px(px0),
+                                              rev_at, _fmt_px(p15)))
 
 
 def _result(d, extra, ok, why, msg):
@@ -865,7 +1030,9 @@ def _day_rows(d):
     fire, eod = None, None
     for o in _rows_of(d):
         rec = o.get("rec")
-        if rec in ("fire", "result", "skip"):
+        # ⚠️ wait（等 09:15 反轉）也併進「送單那一件」：它是那一件的中間狀態，⛔ 不是部位
+        #    （`_auto_entry` 只認 result ok ⇒ 只有 wait 的那一天收盤平倉是 eod_no_entry）。
+        if rec in ("fire", "result", "skip", "wait"):
             fire = dict(fire or {})
             fire.update({k: v for k, v in o.items() if k != "rec"})
             fire["rec"] = rec
@@ -1236,7 +1403,8 @@ def _recover_poll():
 
 # ---------------------------------------------------------------- 接線
 
-def configure(signal_at, signal_sec, late_ms, gap_s, sig_fn, dirs_fn, eod_at, pctl):
+def configure(signal_at, signal_sec, late_ms, gap_s, sig_fn, dirs_fn, eod_at, pctl,
+              rev_at=None, rev_sec=None):
     """
     面板啟動時叫一次，把**常數與訊號算式的正本**接過來（正本在 live_panel.py）。
 
@@ -1245,14 +1413,22 @@ def configure(signal_at, signal_sec, late_ms, gap_s, sig_fn, dirs_fn, eod_at, pc
     ⚠️ 停利停損點數（2026-09-15 起 ±0.5%）的正本是這個檔的 FAST_RULE，⛔ 不吃 TP_POINTS。
     ⭐ `pctl`（2026-09-15）：「開盤快才做」門檻的百分位，正本 `live_panel.FAST_PCTL`（80）。
        看不懂（bool／非數字／不在 0~100）⇒ 存 None ⇒ wired=False ⇒ 不送（⛔ 不猜）。
+    ⭐ `rev_at`／`rev_sec`（2026-09-15 晚上）：回馬槍那一刻，正本 `live_panel.REV_AT`／`REV_SEC`。
+       ⚠️ 預設 None 是刻意的：**沒傳 ⇒ wired=False ⇒ 一張都不送**（⛔ 不猜一個 09:15）。
+       rev_sec 要是整數秒、而且晚於 signal_sec（⛔ 反過來就是「先等反轉、再判快不快」）。
     沒有接起來（`wired=False`）時**一律不送**，理由 `not_wired`。
     """
     ok_pctl = (not isinstance(pctl, bool) and isinstance(pctl, (int, float))
                and 0 < pctl <= 100)
+    ok_rev = (isinstance(rev_at, str) and bool(rev_at)
+              and not isinstance(rev_sec, bool) and isinstance(rev_sec, int)
+              and isinstance(signal_sec, int) and rev_sec > signal_sec)
     _CFG.update({"signal_at": signal_at, "signal_sec": signal_sec,
                  "late_ms": late_ms, "gap_s": float(gap_s),
                  "sig_fn": sig_fn, "dirs_fn": dirs_fn, "eod_at": eod_at,
-                 "pctl": pctl if ok_pctl else None})
+                 "pctl": pctl if ok_pctl else None,
+                 "rev_at": rev_at if ok_rev else None,
+                 "rev_sec": rev_sec if ok_rev else None})
     _ST["wired"] = all(_CFG[k] is not None for k in _CFG)
     return _ST["wired"]
 
@@ -1275,6 +1451,25 @@ def on_signal(snap, day, lag_ms):
         _ST["err_n"] += 1
         if _ST["err_n"] <= 3:
             print("⚠️ [自動下單] %s（停損不受影響）" % WHY["queue_full"], flush=True)
+
+
+def on_reversal(snap, day, lag_ms):
+    """
+    ⭐ 回馬槍那一刻（09:15）的掛勾。⚠️⚠️ **跑在 4Hz 主迴圈上，而那條迴圈就是他的停損。**
+    ⛔ 規矩跟 `on_signal` 一模一樣：只准 `put_nowait`，一行 I/O、一次網路、一個鎖都不准有，
+       **永遠不往外丟例外**。
+    `snap is None` ＝ 主迴圈判定「跨過 09:15 但已經晚太多」⇒ 工作執行緒記 late（⛔ 不補單）。
+    ⚠️ 丟進**同一條** `_Q`（第五格 "reversal"）：09:03:30 那一件一定先處理完，
+       09:15 讀帳本時看得到 wait 那一列。
+    """
+    try:
+        _Q.put_nowait((snap, day, lag_ms, time.time(), "reversal"))
+    except Exception as e:
+        _ST["err"] = WHY["queue_full"] + "（回馬槍）" + ("（%s）" % str(e)[:80] if str(e) else "")
+        _ST["err_n"] += 1
+        if _ST["err_n"] <= 3:
+            print("⚠️ [自動下單] %s —— 回馬槍那一件沒有排進去（停損不受影響）"
+                  % WHY["queue_full"], flush=True)
 
 
 def _worker():
@@ -1332,15 +1527,16 @@ def read_all(limit_days=180):
     """
     每一天一列，新到舊。同一天以**後寫的為準**（sending → result）。
 
-    ⛔ 每一列都要有去處：`fire + result + skip + eod + bad ＝ 檔案總列數`
+    ⛔ 每一列都要有去處：`fire + result + skip + eod + wait + bad ＝ 檔案總列數`
        （這條等式是「有沒有東西被安靜吃掉」唯一的機器判準）。
+       ⚠️ 2026-09-15 晚上加 `wait`（等 09:15 反轉那一列）—— 沒加進來的話那一列會被算成 bad。
 
     ⚠️ **`eod`（收盤平倉）那一列不可以用同一套合併規則往上蓋。**
        送單那件事與收盤平倉那件事是同一天的**兩件**事：直接 `update` 的話，
        `rec` 會被蓋成 eod、`why`／`why_msg` 會從「今天送了什麼」變成「收盤平了沒」——
        畫面上那一天就從「已送出委託單」變成別的東西。所以收在 `row["eod"]` 底下。
     """
-    led = {"fire": 0, "result": 0, "skip": 0, "eod": 0, "bad": 0, "total": 0}
+    led = {"fire": 0, "result": 0, "skip": 0, "eod": 0, "wait": 0, "bad": 0, "total": 0}
     days = {}
     if FIRE_DIR.exists():
         for p in sorted(FIRE_DIR.iterdir()):
@@ -1362,7 +1558,7 @@ def read_all(limit_days=180):
                 d = o.get("date") if isinstance(o, dict) else None
                 rec = o.get("rec") if isinstance(o, dict) else None
                 if not isinstance(d, str) or not _DATE_RE.match(d) \
-                        or rec not in ("fire", "result", "skip", "eod"):
+                        or rec not in ("fire", "result", "skip", "eod", "wait"):
                     led["bad"] += 1
                     continue
                 led[rec] += 1
@@ -1488,10 +1684,14 @@ def state():
         "methods": [{"k": k, "name": METHOD_NAME[k], "sub": METHOD_SUB[k]}
                     for k in METHODS],
         "signal_at": _CFG["signal_at"],
+        # ⭐ 回馬槍那一刻（前端 ⛔ 不准寫死 09:15；正本 live_panel.REV_AT）
+        "rev_at": _CFG["rev_at"],
+        "leg_names": dict(LEG_NAME),
         # ⭐ 規則數字（前端 ⛔ 不准寫死 40／80／20／0.5%）
         "rule": {"window": FAST_RULE["window"], "pctl": fast_pctl(),
                  "min_n": FAST_RULE["min_n"],
-                 "tpsl_pct": round(FAST_RULE["tpsl_frac"] * 100, 6)},
+                 "tpsl_pct": round(FAST_RULE["tpsl_frac"] * 100, 6),
+                 "rev_at": _CFG["rev_at"]},
         "fast": fast_today(today, next((r for r in rows if r.get("date") == today), None)),
         "hist_msg": _ST["hist_msg"],
         # 現在那一口部位用的停損點數從哪來（自動下單那一口／手動那一套／撿回來對不上）

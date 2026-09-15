@@ -594,20 +594,104 @@ def sweep(title, muts, src, fname, test, var):
     (TMP / fname).write_text(src, encoding="utf-8")
 
 
-sweep("auto_fire.py", MUT, SRC, "auto_fire.py", TEST, "AF_SRC_DIR")
-# ⛔⛔ 第二組打的是**產品的路由**，只有 test_fire_routes.py（真的起服務打進去）
-#    才抓得到。舊守衛用字串比對 ⇒ 這一組會全部打不紅（那就是退件 M1 的形狀）。
-sweep("live_panel.py 的路由", LP_MUT, LPSRC, "live_panel.py", ROUTE_TEST, "LP_SRC_DIR")
-# ⛔⛔ 第三組打的是 live_panel 的**主迴圈與畫面**（4Hz 那一段、那顆關閉鈕的顯示條件）。
-#    這一組只有 test_auto_fire.py 抓得到 —— 而它以前只吃 AF_SRC_DIR，
-#    所以 lab-qa 打在這裡的 Q11／Q9 整組打不紅。
-sweep("live_panel.py 的主迴圈與畫面", LP2_MUT, LPSRC, "live_panel.py", TEST,
-      "LP_SRC_DIR")
-# ⛔⛔ 第四組打的是「打開自動下單」那顆的**端點與六道防護**（2026-09-09 加）。
-#    ⚠️ 這一組刻意全部打在「別人幫我做的那一側」——
-#    前四輪的固定失敗形狀就是「守衛只蓋到新寫的那一側，端點／文案／接線沒守」。
-sweep("live_panel.py 的「打開」端點與防護", LP3_MUT, LPSRC, "live_panel.py",
-      ROUTE_TEST, "LP_SRC_DIR")
+# ⭐⭐ 2026-09-15 晚上「快攻回馬槍」的守衛（每一條新守衛至少一個突變）。
+#    `--rev` ⇒ 只跑這兩組（全部 128＋ 個要跑很久；晚上交件時先證明新的那一半是承重的）。
+REV_MUT = [
+    ("R1 反轉判斷反過來（d2 != d → d2 == d：同方向才做）",
+     '    if d2 != 0 and d2 != d:', '    if d2 != 0 and d2 == d:'),
+    ("R2 一樣價也算反轉（拿掉 d2 != 0）",
+     '    if d2 != 0 and d2 != d:', '    if d2 != d:'),
+    # ⚠️ 第一版把 pop 插在 wait.update(...) **前面** ⇒ update 又把 px 放回去 ⇒ 等於沒突變（打不紅是尺的問題）。
+    ("R3 wait 那一列不落地 09:03:30 的 px",
+     '        _ST["last"] = wait\n', '        wait.pop("px", None)\n        _ST["last"] = wait\n'),
+    ("R4 wait 那一列不落地方向 d",
+     '"d": dv, "dir_0903": direction,', '"dir_0903": direction,'),
+    ("R5 09:15 不檢查今天已經有 fire／result／skip（一天兩筆）",
+     '    if any(o.get("rec") in ("fire", "result", "skip") for o in rows):',
+     '    if False:'),
+    ("R5b 09:15 只看 skip、不看 fire／result（快攻送過的日子再送一口）",
+     '    if any(o.get("rec") in ("fire", "result", "skip") for o in rows):',
+     '    if any(o.get("rec") in ("skip",) for o in rows):'),
+    ("R6 09:15 不重新讀開關（09:03:30 之後關掉照送）",
+     '    a = arm()\n    base["arm_raw"] = a["raw"]',
+     '    a = {"on": True, "method": "A", "why": None, "raw": "A", "msg": ""}\n    base["arm_raw"] = a["raw"]'),
+    ("R7 09:15 報價不能用照送",
+     '    q = _quote_why(snap)\n    if q:\n        return _skip(d, q, base, REV_MSG[q] % rev_at)',
+     '    q = None'),
+    ("R8 09:15 晚到那句話講成 09:03:30（WHY['late']）",
+     '        return _skip(d, "late", base, REV_MSG["late"] % rev_at)',
+     '        return _skip(d, "late", base, WHY["late"])'),
+    ("R9 pts 用 09:03:30 的價算（不是 09:15）",
+     '    pts = tpsl_points(p15)', '    pts = tpsl_points(px0)'),
+    ("R10 回馬槍送的是 09:03:30 的方向（不是 d2）",
+     '    direction = "long" if d2 > 0 else "short"\n    base["dir"] = direction',
+     '    direction = "long" if d0 > 0 else "short"\n    base["dir"] = direction'),
+    ("R11 回馬槍那幾列不記 leg（帳本／畫面看不出是回馬槍）",
+     '    base = {"leg": "reversal", "method": wait.get("method"),',
+     '    base = {"method": wait.get("method"),'),
+    ("R12 不快又寫回終局 not_fast（回馬槍永遠不會發生）",
+     '        return _append(wait)', '        return _skip(d, "not_fast", base)'),
+    ("R13 _fire 不分派 reversal（09:15 那一件被當成 09:03:30）",
+     '    if leg == "reversal":\n        return _rev(snap, day, lag_ms, put_at)',
+     '    if False:\n        return _rev(snap, day, lag_ms, put_at)'),
+    ("R14 on_reversal 改成阻塞式 put（主迴圈會被卡住）",
+     '        _Q.put_nowait((snap, day, lag_ms, time.time(), "reversal"))',
+     '        _Q.put((snap, day, lag_ms, time.time(), "reversal"))'),
+    ("R15 read_all 不認得 wait（被算成 bad）",
+     '                        or rec not in ("fire", "result", "skip", "eod", "wait"):',
+     '                        or rec not in ("fire", "result", "skip", "eod"):'),
+    ("R16 configure 不驗 rev（沒接 / 早於 09:03:30 也 wired）",
+     '    ok_rev = (isinstance(rev_at, str) and bool(rev_at)',
+     '    ok_rev = True or (isinstance(rev_at, str) and bool(rev_at)'),
+    ("R17 _day_rows 不併 wait",
+     '        if rec in ("fire", "result", "skip", "wait"):',
+     '        if rec in ("fire", "result", "skip"):'),
+    ("R18 排隊太久那句話講成 09:03:30",
+     '        head = (REV_MSG["late"] % _CFG["rev_at"]) if base.get("leg") == "reversal" \\\n            else WHY["late"]',
+     '        head = WHY["late"]'),
+]
+REV_LP_MUT = [
+    ("RL1 主迴圈的回馬槍掛勾拿掉（快照那一邊）",
+     '            AUTO_REV_HOOK(_auto_snap(st, now, REV_SEC), d, lag_r)', '            pass'),
+    ("RL2 AUTO['rev'] = True 拿掉（4Hz 每圈丟一件）",
+     '        AUTO["rev"] = True\n        lag_r', '        lag_r'),
+    ("RL3 快照的 lag 從 09:03:30 起算（_auto_snap 不帶 REV_SEC）",
+     '_auto_snap(st, now, REV_SEC)', '_auto_snap(st, now)'),
+    ("RL4 09:15 晚到也照送快照",
+     '        if lag_r > AUTO_LATE_MS:\n            AUTO_REV_HOOK(None, d, lag_r)',
+     '        if False:\n            AUTO_REV_HOOK(None, d, lag_r)'),
+    ("RL5 main() 的 configure 不傳 REV_SEC",
+     'pctl=FAST_PCTL, rev_at=REV_AT, rev_sec=REV_SEC)', 'pctl=FAST_PCTL, rev_at=REV_AT)'),
+    ("RL6 main() 沒接回馬槍掛勾",
+     '    AUTO_REV_HOOK = auto_fire.on_reversal', '    pass'),
+    ("RL7 規則句寫死 09:15",
+     "'不夠快就等 '+(D.rev_at||'—')+'", "'不夠快就等 09:15'+'"),
+    ("RL8 前端帳本等式不數 wait",
+     "(alN(L.eod)||0)+(alN(L.wait)||0);", "(alN(L.eod)||0);"),
+]
+
+if "--rev" in sys.argv:
+    sweep("auto_fire.py 的回馬槍", REV_MUT, SRC, "auto_fire.py", TEST, "AF_SRC_DIR")
+    sweep("live_panel.py 的回馬槍（主迴圈／接線／畫面）", REV_LP_MUT, LPSRC, "live_panel.py", TEST,
+          "LP_SRC_DIR")
+    MUT, LP_MUT, LP2_MUT, LP3_MUT = REV_MUT, [], REV_LP_MUT, []     # 總結那句話的分項照實寫
+else:
+    MUT = MUT + REV_MUT
+    LP2_MUT = LP2_MUT + REV_LP_MUT
+    sweep("auto_fire.py", MUT, SRC, "auto_fire.py", TEST, "AF_SRC_DIR")
+    # ⛔⛔ 第二組打的是**產品的路由**，只有 test_fire_routes.py（真的起服務打進去）
+    #    才抓得到。舊守衛用字串比對 ⇒ 這一組會全部打不紅（那就是退件 M1 的形狀）。
+    sweep("live_panel.py 的路由", LP_MUT, LPSRC, "live_panel.py", ROUTE_TEST, "LP_SRC_DIR")
+    # ⛔⛔ 第三組打的是 live_panel 的**主迴圈與畫面**（4Hz 那一段、那顆關閉鈕的顯示條件）。
+    #    這一組只有 test_auto_fire.py 抓得到 —— 而它以前只吃 AF_SRC_DIR，
+    #    所以 lab-qa 打在這裡的 Q11／Q9 整組打不紅。
+    sweep("live_panel.py 的主迴圈與畫面", LP2_MUT, LPSRC, "live_panel.py", TEST,
+          "LP_SRC_DIR")
+    # ⛔⛔ 第四組打的是「打開自動下單」那顆的**端點與六道防護**（2026-09-09 加）。
+    #    ⚠️ 這一組刻意全部打在「別人幫我做的那一側」——
+    #    前四輪的固定失敗形狀就是「守衛只蓋到新寫的那一側，端點／文案／接線沒守」。
+    sweep("live_panel.py 的「打開」端點與防護", LP3_MUT, LPSRC, "live_panel.py",
+          ROUTE_TEST, "LP_SRC_DIR")
 
 shutil.rmtree(TMP, ignore_errors=True)
 
