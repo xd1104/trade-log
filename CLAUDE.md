@@ -1286,7 +1286,7 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
 
 **⭐⭐ 2026-09-15 規則改成「開盤快才做」（⛔ 只改自動下單；手動真單／練習／【自動下單（模擬）】維持 ±130）**
 
-> 研究：`tick-research/scripts/benson_rule.py`（事先登記、跑完不改）。
+> 研究：`tick-research/scripts/benson_rule.py`（「快才做」本身，當時是 70 百分位）與 `tick-research/scripts/refine_fast.py`（輸出 `refine_fast_out.txt`：17 個測試裡 80 百分位是唯一標 ★ 的）；兩支都是事先登記、跑完不改。
 > Benson 當天下午拍板門檻用 **80 百分位**（研究 17 組測試裡唯一過多重檢定門檻的那一組；70 那組沒過）。
 > ⛔ 要改回 70 或別的值 ＝ 先重跑研究，⛔ 不是調參。
 
