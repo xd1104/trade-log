@@ -118,9 +118,11 @@ broker.close = lambda *a, **k: (SENT.append(("close",) + a) or (False, "測試�
 
 # 跟 live_panel.main() 一樣的接線（⛔ 常數與算式的正本都在 live_panel）——
 # ⛔ 但**不** start()、⛔ 也不動 AUTO_SIG_HOOK / AUTO_EOD_HOOK ⇒ 這一支永遠不會送單。
+# ⚠️ 2026-09-15：configure 不再吃 tp_points（自動下單的停利停損是 ±0.5%，正本在 FAST_RULE）
 AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC, late_ms=LP.AUTO_LATE_MS,
-             gap_s=LP.AUTO_GAP_S, tp_points=LP.TP_POINTS,
-             sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT)
+             gap_s=LP.AUTO_GAP_S,
+             sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT,
+             pctl=LP.FAST_PCTL)
 
 srv = ThreadingHTTPServer(("127.0.0.1", 0), LP.Handler)
 PORT = srv.server_address[1]
@@ -280,14 +282,16 @@ chk("    內容就是一個 ASCII 大寫字母（⛔ 沒有 BOM、沒有換行�
 chk("    而且 auto_fire 讀得懂（跟讀開關那條路對得上）",
     (AF.arm()["on"], AF.arm()["method"]), (True, "A"))
 # ⛔ 已經開著再按 ⇒ 409，⛔ 不覆蓋、⛔ 不當成換做法
-c, j = post_on("B")
+c, j = post_on("A")
 say(c == 409 and "已經開著" in ((j or {}).get("msg") or ""),
-    "  ⛔ 已經開著再按 ⇒ 409（⛔ 不是換做法）", f"{c} {str(j)[:80]}")
+    "  ⛔ 已經開著再按 ⇒ 409（⛔ 不是重開一次）", f"{c} {str(j)[:80]}")
 chk("    ⛔⛔ 而且原本那個檔一個位元組都沒被動到", AF.ARM_FLAG.read_bytes(), b"A")
 arm_off()
+# ⛔ 2026-09-15（規格改變）：B 不再是可下單的做法 ⇒ 400，⛔ 而且一個檔都沒建
 c, j = post_on("B")
-say(c == 200 and AF.ARM_FLAG.read_bytes() == b"B", "  關掉之後可以改用另一個做法",
-    f"{c} {AF.ARM_FLAG.read_bytes()!r}")
+say(c == 400 and (j or {}).get("msg") == AF.MSG_ONLY_A and not AF.ARM_FLAG.exists(),
+    "  ⛔ mode=B ⇒ 400「B 已經不支援…」，⛔ 開關檔沒有被建出來",
+    f"{c} {str(j)[:80]}")
 arm_off()
 
 # ── ③b-1 ⛔⛔ 四道防護：**每一道單獨拿掉都要有一項在這裡變綠**
@@ -384,9 +388,10 @@ c, ct2, b = _req("/api/fire/on?mode=A", "GET")
 say(c == 405, "    GET /api/fire/on?mode=A ⇒ 405（⛔ 帶查詢字串也不行）", str(c))
 say(not AF.ARM_FLAG.exists(), "      ⇒ ⛔ 開關沒有被建出來")
 
-# ── ③b-3 ⛔ mode 只准 A／B，而且**先驗再寫**
-print("\n  ── ⛔ mode 只准兩種（⛔ 不准寫進檔案再驗）")
-for name, kw in (("C（模擬那一頁才有）", dict(mode="C")),
+# ── ③b-3 ⛔ mode 只准 A（2026-09-15 起），而且**先驗再寫**
+print("\n  ── ⛔ mode 只准 A（⛔ 不准寫進檔案再驗）")
+for name, kw in (("B（2026-09-15 起不支援）", dict(mode="B")),
+                 ("C（模擬那一頁才有）", dict(mode="C")),
                  ("D", dict(mode="D")),
                  ("小寫 a（⛔ 這條路不做寬容解讀）", dict(mode="a")),
                  ("空字串", dict(mode="")),
@@ -414,14 +419,14 @@ def _arm_rows():
 
 _before = AF.read_all()[1]
 _n0 = len(_arm_rows())
-c, j = post_on("B")
+c, j = post_on("A")
 say(c == 200, "    前置：打開", str(c))
 _logs = sorted(AF.FIRE_DIR.glob("arm-*.jsonl"))
 chk("    寫進 autofire/arm-YYYY-MM.jsonl（⛔ 一個檔）", len(_logs), 1)
 _rows = _arm_rows()
 chk("    ⛔ 只多一列（⛔ open(\"a\") append，不是覆寫）", len(_rows) - _n0, 1)
 _r = _rows[-1] if _rows else {}
-say(_r.get("rec") == "arm" and _r.get("method") == "B"
+say(_r.get("rec") == "arm" and _r.get("method") == "A"
     and isinstance(_r.get("at"), str) and _r.get("date") == str(LP.date.today())
     and _r.get("live") is False and _r.get("who"),
     "    那一列講得出「誰、什麼時候、哪個做法、當下是不是真錢」", str(_r)[:140])

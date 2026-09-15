@@ -64,8 +64,11 @@ LP.AUTO_DIR = TMP / "autotest"
 LP.AUTO_REAL_DIR = TMP / "real_trades"
 # 接常數與算式（讓 wired=True），⛔ 但**不** start()、⛔ 也不動 AUTO_SIG_HOOK
 AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC, late_ms=LP.AUTO_LATE_MS,
-             gap_s=LP.AUTO_GAP_S, tp_points=LP.TP_POINTS,
-             sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT)
+             gap_s=LP.AUTO_GAP_S,
+             sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT,
+             pctl=LP.FAST_PCTL)
+# ⚠️ 2026-09-15：configure 不再吃 tp_points（自動下單 ±0.5%，正本 auto_fire.FAST_RULE），
+#    改吃 pctl（「開盤快才做」門檻百分位，正本 LP.FAST_PCTL）。舊寫法會 TypeError、整個治具起不來。
 
 ST = {"arm": "off", "live": False, "rows": "mixed", "clock": "10:30:00",
       # ⭐ R2 用：確認條那句話要講「今天 09:03:30」還是「下一個交易日 09:03:30」，

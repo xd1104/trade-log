@@ -51,3 +51,7 @@ tools/shioaji/tick_hist/
 #    不是刪掉 —— 內容留著他才好再開回去，而那個檔一樣不可以進版控。
 tools/shioaji/AUTO_ORDERS_ON*
 tools/shioaji/autofire/
+# 【自動下單】「開盤快才做」的開盤走幅歷史（每天 09:00 以前最後一筆／09:03:30 的價，2026-09-15 加）。
+# ⚠️ 上面那條 *.csv 擋不到 .jsonl；`*.jsonl.*` 擋種子腳本測試時的暫存檔名。
+tools/shioaji/fast_hist.jsonl
+tools/shioaji/fast_hist.jsonl.*

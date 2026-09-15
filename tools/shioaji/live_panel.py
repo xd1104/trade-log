@@ -88,16 +88,20 @@ REPLAY_DIR = HERE / "replay_log"
 REVIEW_CACHE = HERE / "review_cache.json"
 
 # 2026-09-14 Benson 從 ±100 改成 ±130（逐筆回測候選 1：09:03:00 ＋ ±130，202 天 54.5%／每筆 +7.5，**還沒過 2026 年驗證**）。
-# ⛔ 這一組是全面板共用的：自動下單送出的停利單、真單停損監控、練習下單、【自動下單（模擬）】結算、
+# ⛔ 這一組是：真單停損監控（手動真單那一口）、手動真單的停利單、練習下單、【自動下單（模擬）】結算、
 #    前端的停利停損預覽與線（PAGE 定義完會把這兩個數字注入前端，前端不准自己寫死）。
+# ⚠️⚠️ 2026-09-15 起**自動下單不再用這一組**：它改成「開盤快才做 ＋ ±0.5%」（正本在 auto_fire.FAST_RULE），
+#    每一口部位自己帶 sl_points；check_real_position 只有在部位**沒有** sl_points 時才用 SL_POINTS。
 TP_POINTS = 130.0
 SL_POINTS = 130.0
-# 以前用過的下單規則值（2026-09-14 以前的公開規格，git 歷史裡看得到，不是他的個人資料）。
+# 當過產品常數的下單規則值（公開規格，git 歷史裡看得到，不是他的個人資料）。
 # ⛔ 留著是給 tools/probe/leak-scan.py 讀的：它把「等於產品常數的值」當成公開資訊。
 #    規則一改，repo 裡大量寫著 09:03:30／±100 的註解與測試就會被誤判成他的真實紀錄（實測 651 處）。
 # ⛔ 這裡**只准放「曾經真的是產品常數」的值**，不准拿來替任何其他數字開後門。
-PAST_SIGNAL_AT = "09:03:30"
-PAST_TP_POINTS = 100.0
+#    （2026-09-15 改成 tuple：09:03:30 用到 09-13、09:03:00 用在 09-14、09-15 起又回到 09:03:30；
+#      ±100 用到 09-13、±130 從 09-14 起。leak-scan 只對 `PAST_` 開頭的名字收 tuple。）
+PAST_SIGNAL_AT = ("09:03:30", "09:03:00")
+PAST_TP_POINTS = (100.0, 130.0)
 FEE_POINTS = 5.0         # 來回 NT$50 ÷ 每點 NT$10
 PORT = 8770
 
@@ -522,6 +526,63 @@ def check_position(price):
 REAL_STALE = {"since": None}      # 有真實部位而報價中斷，從何時開始
 
 
+# ⛔⛔ 部位自己帶的點數，上限 ＝ 進場價 × 這個比例（2026-09-15 QA 退件後 PM 升為必修）。
+#    自動下單正常是 ±0.5%（約 230 點）；sl_points 是 inf 或 1e11 這種值時 `entry − d × 點數`
+#    會落在永遠碰不到的地方 ⇒ **停損永遠不觸發**。超過就退回 SL_POINTS 並示警（寧可用手動那一套）。
+POS_POINTS_MAX_FRAC = 0.02
+POS_POINTS_BAD = {"n": 0}          # 看到壞點數的次數（示警每口每個值只印一次，這裡累計給人查）
+
+
+def _pos_points(pos, key, default):
+    """
+    部位自己帶的點數（sl_points／tp_points）。
+      - 部位沒有這個欄位（手動真單）⇒ default，**不示警**（那是正常狀態）
+      - 有但不可信 ⇒ default **並示警**：bool／非數字／NaN／inf／≤0／
+        超過進場價 × POS_POINTS_MAX_FRAC（2%）／進場價本身看不懂（無從檢查上限）
+    示警 ＝ 部位上掛 `sl_warn`（或 `tp_warn`；/api/state 與畫面端得出去）＋ 主控台一次 ＋ 計數。
+    ⛔ 純記憶體（停損迴圈 4Hz 會叫）：只改這個 dict、一行 I/O 都沒有；主控台那行每口只印一次。
+    ⚠️ bool 要另外擋：isinstance(True, int) 是 True。
+    """
+    if not isinstance(pos, dict) or pos.get(key) is None:
+        return default
+    v = pos.get(key)
+    e = pos.get("entry")
+    bad = None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        bad = "看不懂（%r）" % (v,)
+    elif not math.isfinite(v):
+        bad = "不是有限的數（%r）" % (v,)
+    elif v <= 0:
+        bad = "不是正數（%g）" % v
+    elif (isinstance(e, bool) or not isinstance(e, (int, float)) or not math.isfinite(e)
+          or e <= 0):
+        bad = "進場價看不懂（%r），檢查不了上限" % (e,)
+    elif v > e * POS_POINTS_MAX_FRAC:
+        bad = "%g 點超過進場價的 %g%%（%g 點）" % (v, POS_POINTS_MAX_FRAC * 100,
+                                             round(e * POS_POINTS_MAX_FRAC))
+    if bad is None:
+        return float(v)
+    wk = "sl_warn" if key == "sl_points" else "tp_warn"
+    flag = "_bad_" + key
+    if pos.get(flag) != repr(v):
+        pos[flag] = repr(v)
+        POS_POINTS_BAD["n"] += 1
+        pos[wk] = ("這一口帶的%s點數壞掉了：%s —— 改用手動真單那一套 %g 點"
+                   % ("停損" if key == "sl_points" else "停利", bad, default))
+        print("⚠️ [真實] " + pos[wk], flush=True)
+    return default
+
+
+def pos_sl_points(pos):
+    """這一口的停損點數：部位有 sl_points（自動下單）用它，沒有用 SL_POINTS（手動真單）。"""
+    return _pos_points(pos, "sl_points", SL_POINTS)
+
+
+def pos_tp_points(pos):
+    """這一口的停利點數（畫面用；真正的停利單在券商那邊）。沒有就 TP_POINTS。"""
+    return _pos_points(pos, "tp_points", TP_POINTS)
+
+
 def check_real_position(price, age, sess="day"):
     """
     真實部位的停損。**停利不在這裡** —— 那一張是限價單，進場後就掛在券商那邊，
@@ -551,7 +612,9 @@ def check_real_position(price, age, sess="day"):
     if price is None:
         return
     d = 1 if pos["dir"] == "long" else -1
-    sl = pos["entry"] - d * SL_POINTS
+    # ⭐ 2026-09-15：**這一口自己的停損點數**（自動下單那一口帶 ±0.5% 算出來的 sl_points），
+    #    沒有才用 SL_POINTS（手動真單那一口）。⛔ 只讀記憶體（這裡是 4Hz 主迴圈、是他的停損）。
+    sl = pos["entry"] - d * pos_sl_points(pos)
     if d * (float(price) - sl) <= 0:
         ok, err = broker.close("sl")
         print(f"[真實] 觸及停損 {sl:.0f} → 平倉：{'成功' if ok else err}")
@@ -1992,8 +2055,22 @@ AUTO_REAL_DIR = HERE / "real_trades"    # ⛔ **唯讀**：他自己那一欄的
 
 # ⛔ 只有這一個地方定義，不要散在程式各處（前端也是從這裡注入）。
 # 2026-09-14 Benson 從 09:03:30 改成 09:03:00（同上，候選 1）。這個之前的模擬／真單紀錄都是 09:03:30 進場。
-SIGNAL_AT = "09:03:00"
-SIGNAL_SEC = 9 * 3600 + 3 * 60
+# ⭐ 2026-09-15 改回 09:03:30：自動下單換成「開盤快才做」（研究的訊號窗是 09:00→09:03:30）。
+#    ⚠️ 這兩個常數也餵【自動下單（模擬）】的底層記錄 —— **刻意共用同一份快照**（兩把尺原則），
+#       所以模擬記錄的時刻跟著變；⛔ 但模擬的 ±130 結算不動（AUTO_TP／AUTO_SL 仍是 TP_POINTS）。
+#    ⛔ 要改就三個一起改：SIGNAL_AT、SIGNAL_SEC、AUTO_SETTLE_FROM（autotest-backend.py 在守）。
+SIGNAL_AT = "09:03:30"
+SIGNAL_SEC = 9 * 3600 + 3 * 60 + 30
+
+# ⭐⭐ 【自動下單】「開盤快才做」的門檻百分位。**正本只有這裡**，auto_fire 靠 configure(pctl=…) 接過去
+#    （⛔ auto_fire 裡不准再寫一份；前端從 /api/fire/state 的 rule.pctl 拿，⛔ 不准寫死）。
+#    門檻 ＝ 過去 40 個交易日（不含今天）開盤走幅的 numpy.percentile(…, FAST_PCTL)。
+# ⚠️ 2026-09-15 下午 Benson 拍板由 70 改成 80：研究的 17 組測試（tick-research benson_rule／exam25h2）
+#    裡**唯一過多重檢定門檻**的是 80 百分位那一組；70 那一組沒過。⛔ 要改回去先重跑研究，不是調參。
+# ⚠️ leak-scan 會把這個模組層級常數讀成公開值（"80"）⇒ 值剛好是 80 的欄位失去作證資格；
+#    2026-09-15 lab-dev 實測：有／沒有這個常數，拿他的真實紀錄掃全 repo 都是命中 0 處（沒有值剛好是 80 的欄位被放掉）。
+#    ⚠️ 但它確實讓「80」這個值失去作證資格 —— 常數清單變長是 leak-scan 自己要盯的那件事（見 leak-scan.py 檔頭 ①）。
+FAST_PCTL = 80
 
 # ⛔⛔ 【自動下單】的收盤平倉時刻。**正本只有這裡**，auto_fire 靠 configure() 接過去。
 #   為什麼是 13:43:30 而不是 13:45：
@@ -2041,8 +2118,9 @@ AUTO_SL = SL_POINTS
 #   進場 09:03:30 時是標籤 09:04（09:03 那根含進場前的價）；
 #   ⚠️ 2026-09-14 改成 09:03:00 進場 ⇒ 標籤 09:03 那根（09:03~09:04）整根都在進場之後 ⇒ 從 09:03 算，
 #      不改的話 09:03:00~09:04:00 這一分鐘的觸價會整段看不到。⛔ 這個要跟 SIGNAL_AT 一起改。
+#   ⭐ 2026-09-15 SIGNAL_AT 改回 09:03:30 ⇒ 這裡跟著改回 09:04（標籤 09:03 那根含進場前的價，要排掉）。
 # ⛔ 比較一定要用 `>=`（見 _auto_settle 的說明；用 `>` 會少掉第一根）。
-AUTO_SETTLE_FROM = "09:03"
+AUTO_SETTLE_FROM = "09:04"
 DAY_END_SEC = DAY_END.hour * 3600 + DAY_END.minute * 60
 AUTO_LATE_MS = 3000                     # 晚超過這麼久就**不記**（⛔ 不可以拿晚到的價冒充）
 AUTO_GAP_S = 5.0                        # 多久沒收到報價算「這一秒是斷的」
@@ -2214,6 +2292,19 @@ def _auto_snap(st, now):
         p0900, p0900_src = float(mi["o"]), "bar_open"
     elif st is not None and st.minute_close.get(539) is not None:
         p0900, p0900_src = float(st.minute_close[539]), "prev_min_close"
+    # ⭐ 2026-09-15【自動下單】「開盤快不快」的參考價 ref0900 ＝ **09:00 以前最後一筆成交**
+    #    （研究 benson_rule.py 的 `last_before(D, 09:00:00)`）。
+    #    ⚠️ 跟上面 p0900 是**同兩個來源、順序相反**：方向（做法 A）沿用既有的「09:00 那一分鐘第一筆」，
+    #       走幅要的是「09:00 以前最後一筆」—— ⛔ 不要為了少一個欄位把兩個併成一個（那會改到模擬的方向）。
+    #    拿不到 minute_close[539] 才退到 minute_bar[540]["o"]，用了哪一種記在 ref_src。
+    #    ⚠️ 已知：盤中重啟時 minute_close 是 seed_from_bars() 拿 1 分 K 補的（K 棒用**結束時間**標記），
+    #       那時的 [539] 其實是 08:58~08:59 那根的收盤 —— 早了一分鐘。只影響「09:00 之後才重啟、
+    #       又還趕得上 09:03:30」那幾分鐘，跟 p0900 的 prev_min_close 退路是同一個既有性質。
+    ref0900, ref_src = None, None
+    if st is not None and isinstance(st.minute_close.get(539), (int, float)):
+        ref0900, ref_src = float(st.minute_close[539]), "prev_min_close"
+    elif mi is not None and isinstance(mi.get("o"), (int, float)):
+        ref0900, ref_src = float(mi["o"]), "bar_open"
     age = None if (st is None or st.last_recv is None) else (time.time() - st.last_recv)
     return {
         "date": str(now.date()),
@@ -2227,6 +2318,7 @@ def _auto_snap(st, now):
         "quote_age_ms": None if age is None else int(round(age * 1000)),
         "open0845": None if st is None else st.open,
         "p0900": p0900, "p0900_src": p0900_src,
+        "ref0900": ref0900, "ref_src": ref_src,
         "prev_close": None if st is None else st.prev_close,
         "hi": None if st is None else st.high,
         "lo": None if st is None else st.low,
@@ -3526,10 +3618,12 @@ def fire_arm_confirm(live, now=None):
     """
     when = ("今天 " if fire_fires_today(now) else "下一個交易日 ") + SIGNAL_AT
     if live:
+        # ⚠️ 2026-09-15：自動下單的停利停損是 ±0.5%（auto_fire.FAST_RULE），⛔ 不是 TP_POINTS
+        #    （那是手動真單的 ±130）。講錯的話他以為賭的是 130 點，實際一口是 230 點上下。
         return {"live": True, "when": when,
-                "text": ("現在是真實下單模式。打開之後，%s 會用你的錢"
-                         "真的送單，一天一次，%g 點停利／%g 點停損。"
-                         % (when, TP_POINTS, TP_POINTS))}
+                "text": ("現在是真實下單模式。打開之後，%s 看開盤快不快，快才會用你的錢"
+                         "真的送單，一天最多一次，停利停損各 ±%g%%（以那一刻的價格算）。"
+                         % (when, auto_fire.FAST_RULE["tpsl_frac"] * 100))}
     return {"live": False, "when": when,
             "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}
 
@@ -3572,8 +3666,10 @@ def fire_arm_on(mode, who="panel"):
       跟 `auto_fire._decode_flag()` 讀的那條路對齊（那邊 `strip().upper()`）。
     """
     if not isinstance(mode, str) or mode not in auto_fire.METHODS:
-        return 400, {"ok": False, "msg": "只能用「%s」或「%s」這兩個做法" % (
-            auto_fire.METHOD_NAME["A"], auto_fire.METHOD_NAME["B"])}
+        # ⛔ 2026-09-15 起只剩 A。送 B 來的（舊前端／快取住的舊頁面）要講清楚是規則換了。
+        if mode == "B":
+            return 400, {"ok": False, "msg": auto_fire.MSG_ONLY_A}
+        return 400, {"ok": False, "msg": "只能用「%s」這個做法" % auto_fire.METHOD_NAME["A"]}
     flag = auto_fire.ARM_FLAG
     live = broker.is_live()
     try:
@@ -5203,6 +5299,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-gates .v{font-size:14px; font-weight:650; color:var(--text); margin-top:3px;
   line-height:1.3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .al-gates .v.off{color:var(--faint); font-weight:600}
+.al-fast{margin-top:10px; font-size:12px; line-height:1.7; color:var(--dim)}
+.al-fast:empty{display:none}
+.al-fast .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px; margin-right:8px}
+.al-fast b{color:var(--text); font-weight:700}
+.al-fast .warn{color:var(--gold)}
 .al-today{margin-top:2px}
 .al-today .t{font-size:17px; font-weight:700; color:var(--text); line-height:1.35}
 .al-today .t.off{font-size:15px; color:var(--dim); font-weight:650}
@@ -5510,6 +5611,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    </div>
   </div>
   <div class="al-gates" id="algates"></div>
+  <!-- ⭐ 2026-09-15：今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 /api/fire/state 的 fast 來。 -->
+  <div class="al-fast" id="alfast"></div>
   <!-- ⭐⭐ 風險條（2026-09-10）：整段〈怎麼開〉的教學砍掉之後**必須留下來**的那兩句
        （停損活在這台電腦裡／這個開關沒有有效期）。⛔ 一句都不准再刪。
        開著才畫；關著的時候「沒有有效期」那句改掛在他正要按的那顆鈕旁邊。 -->
@@ -5571,7 +5674,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    <div class="lb-f">
     <div class="lb-k">方向</div>
     <div class="lb-dirs" id="lbdir">
-     <!-- 「現在真單用的」⛔ 不寫死：lbFire() 讀 /api/fire/state 的 method（A＝5 分 K、B＝開盤起）才標，讀不到就不標 -->
+     <!-- 「自動下單的方向」⛔ 不寫死：lbFire() 讀 /api/fire/state 的 method（A＝開盤快才做，方向跟這顆同一套）才標，讀不到就不標
+          ⚠️ 2026-09-15：B 不再是自動下單的做法 ⇒ 「跟 08:45 開盤比」那顆永遠不標 -->
      <button type="button" data-lbv="bar5" class="on">跟這根 5 分 K 開盤比<small id="lbm-bar5">&nbsp;</small></button>
      <button type="button" data-lbv="open">跟 08:45 開盤比<small id="lbm-open">&nbsp;</small></button>
      <button type="button" data-lbv="long">一律做多<small>&nbsp;</small></button>
@@ -5985,6 +6089,15 @@ function realBody(s){
           :'方向不明 —— 送出前會再跟券商對帳'))+'</span></button>';
     if(P.recovered) h+='<div class="n-why">這筆是面板重啟後從券商對帳撿回來的，'+
       '停利單的下落請自己到大戶投確認。</div>';
+    /* ⭐ 2026-09-15：這一區的標頭寫的是手動真單的 ±RULE_TP，但【自動下單】那一口是 ±0.5%
+       （部位自己帶 sl_points）⇒ 兩套數字同時在畫面上，要講出「這一口是哪一套」。
+       停損價 R.sl 已經是後端用這一口自己的點數算的（pos_sl_points）。 */
+    if(P.sl_points!=null)
+      h+='<div class="n-why">這一口是<b>【自動下單】</b>開的：停利停損各 <b>'+esc(String(Math.round(P.sl_points)))+
+        ' 點</b>（自動下單的規則：照 '+esc(RULE_SIGNAL_AT)+' 那一刻的價格按比例算），'+
+        '不是上面寫的 &plusmn;'+RULE_TP+' 點。</div>';
+    if(P.sl_warn)
+      h+='<div class="n-why" style="color:var(--gold)">⚠️ '+esc(P.sl_warn)+'（停損 '+f(R.sl)+'）</div>';
   } else {
     const q=quoteState(s), px=livePx(s), ok=R.can_enter&&!firing;
     h+='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(px)+
@@ -9585,8 +9698,10 @@ function lbRun(){
 function lbFire(){
   fetch('/api/fire/state',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(x=>{
     const m=x&&x.armed===true?x.method:null;
-    const txt=x&&x.live?'現在真單用的':'自動下單現在用的';
-    [['A','lbm-bar5'],['B','lbm-open']].forEach(([k,id])=>{ const e=lbEl(id); if(e) e.innerHTML=(m===k)?txt:'&nbsp;'; });
+    /* ⚠️ 2026-09-15：自動下單換成「開盤快才做」＋ ±0.5% —— 方向跟這顆同一套，但**不是每天做、停利停損也不是這頁的點數**。
+       標籤只寫「方向同這個」，⛔ 不可以寫成「現在真單用的」（那會讓他以為這頁回測的就是自動下單）。 */
+    const txt=(x&&x.live?'真單':'自動下單')+'的方向同這個（另加開盤快才做）';
+    [['A','lbm-bar5'],['B','lbm-open']].forEach(([k,id])=>{ const e=lbEl(id); if(e) e.innerHTML=(m===k)?esc(txt):'&nbsp;'; });
   }).catch(()=>{});
 }
 
@@ -9642,7 +9757,7 @@ rvBind();
         畫面上按得到的開關 ＝「會不會亂送單」從「讀一個檔」變成「讀整個前端」。
    ⛔ 顏色沿用這個面板的規矩：**紅綠只給損益**；開／關用金色與中性灰
       （關著是正常狀態，⛔ 不是紅色 —— 跟休市的連線燈同一個道理）。
-   ⛔ 名字只寫「5 分 K」「開盤起」，⛔ 畫面上不准出現 A／B 這種代號
+   ⛔ 名字只寫「開盤快才做」（2026-09-15 起只剩這一個；以前是「5 分 K」「開盤起」），⛔ 畫面上不准出現 A／B 這種代號
       （【模擬】那一頁為這件事被退件過一次：「我要從哪裡知道現在我看的是哪個做法？」）。
    ⚠️ 這一頁不掛在 500ms 的 tick 上，只在切進來時抓 ＋ 停在這一頁時每 5 秒更新一次。
 */
@@ -9656,10 +9771,60 @@ var AL={data:null,err:'',pending:false,seq:0,timer:null};
    ⛔ 而且**不做逾時自動收回**：他可能中途去看別的分頁再回來（那條路由 alEnter 重設），
       在同一頁上等多久都不該讓畫面自己跳掉。 */
 var ALON={step:'idle',mode:null,busy:false,err:''};
-const ALWAY={A:{n:'5 分 K',s:'09:00 起算'},B:{n:'開盤起',s:'08:45 起算'}};
+/* ⚠️ 2026-09-15 自動下單只剩 A，名字改成「開盤快才做」（跟後端 auto_fire.METHOD_NAME 同一組字）。
+   B 從這張表拿掉 ⇒ 舊紀錄裡 method:"B" 的那幾天，alName() 回空字串、畫面照舊印「—」。 */
+const ALWAY={A:{n:'開盤快才做',s:'09:00 起算'}};
 function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
 function alSub(k){ const w=ALWAY[k]; return w?w.s:''; }
 function alN(v){ return (typeof v==='number'&&isFinite(v))?v:null; }
+/* ⭐ 2026-09-15【自動下單】的規則那一句（一個地方組，三個地方用：標題小字／確認前說明／每天送那格）。
+   ⛔ 數字全部從後端：時刻 D.signal_at、±% D.rule.tpsl_pct、今天約幾點 D.fast.pts（09:03:30 判過之後）
+      或 D.pts_est（還沒到時照現價估）。⛔ 前端不准自己乘 0.005 —— 那是第二把尺。
+   ⚠️ 這裡講的是**自動下單**的規則；手動真單／練習仍是 ±RULE_TP（兩套數字同時出現時要看得出是哪一套）。 */
+function alPct(D){ const r=(D&&D.rule)||{}; return alN(r.tpsl_pct); }
+function alPtsToday(D){
+ const F=(D&&D.fast)||{};
+ if(alN(F.pts)!=null) return {v:F.pts,est:false};
+ if(alN(D&&D.pts_est)!=null) return {v:D.pts_est,est:true};
+ return null;
+}
+/* 「比過去 40 天裡 8 成的日子快」—— 天數與百分位從後端 D.rule（正本 live_panel.FAST_PCTL），⛔ 不寫死 40／80。
+   百分位是 10 的倍數就講「N 成」（他看得懂的說法），不是就照實講「第 P 百分位」。 */
+function alPctlTxt(D){
+ const r=(D&&D.rule)||{}, w=alN(r.window), q=alN(r.pctl);
+ if(w==null||q==null) return '';
+ return '比過去 '+w+' 天裡'+(q%10===0?(' '+(q/10)+' 成的日子'):('第 '+q+' 百分位'))+'快';
+}
+function alRuleTxt(D){
+ const p=alPct(D), t=alPtsToday(D), c=alPctlTxt(D);
+ return (D.signal_at||'')+' 看開盤快不快，'+(c?c+'才':'快才')+'順勢做 '+String(D.qty||1)+' 口，'+
+   '停利停損 ±'+(p==null?'—':p)+'%'+
+   (t?('（今天約 '+t.v+' 點'+(t.est?'，照現價估':'')+'）'):'');
+}
+/* 今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 D.fast 來（fast_verdict 那一支），
+   ⛔ 09:03:30 之前不預告（verdict 是 null 時只講門檻）。 */
+function alFastHTML(D){
+ const F=D&&D.fast; if(!F) return '';
+ const r=(D.rule)||{}, pct=v=>(alN(v)==null?'—':v.toFixed(2)+'%'), pts=v=>(alN(v)==null?'':'（約 '+v+' 點）');
+ const how='過去 '+esc(String(r.window||F.window||''))+' 個交易日開盤走幅的第 '+esc(String(r.pctl||F.pctl||''))+' 百分位';
+ let h;
+ if(F.verdict==='no_hist')
+   h='<b>歷史不夠</b> —— 開盤走幅只記到 '+esc(String(alN(F.n)||0))+' 天（至少要 '+esc(String(r.min_n||F.min_n||''))+
+     ' 天），算不出門檻，照規則不做';
+ else if(F.verdict==='fast')
+   h='<b>快</b> —— 今天走 '+pct(F.move_pct)+pts(F.move_pts)+'，門檻 '+pct(F.thr_pct)+pts(F.thr_pts)+'（'+how+'）';
+ else if(F.verdict==='slow')
+   h='<b>不夠快</b> —— 今天走 '+pct(F.move_pct)+pts(F.move_pts)+'，門檻 '+pct(F.thr_pct)+pts(F.thr_pts)+
+     '（'+how+'）—— 照規則今天不做';
+ else
+   h='今天的門檻 '+pct(F.thr_pct)+'（'+how+'，用了 '+esc(String(alN(F.n)||0))+' 天）· '+
+     esc(D.signal_at||'')+' 才判定快不快';
+ if(alN(F.bad)||alN(F.dup)) h+=' · <span class="warn">歷史檔有 '+esc(String(alN(F.bad)||0))+' 列讀不出來、'+
+   esc(String(alN(F.dup)||0))+' 列重複，已跳過</span>';
+ if(F.err) h+=' · <span class="warn">'+esc(F.err)+'</span>';
+ if(D.hist_msg) h+=' · <span class="warn">'+esc(D.hist_msg)+'</span>';
+ return '<span class="k">今天判定</span>'+h;
+}
 function alF(v,d){ const n=alN(v); return n==null?'—':n.toFixed(d==null?1:d); }
 function alSigned(v){ const n=alN(v); return n==null?'—':(n>0?'+':'')+n.toFixed(1); }
 
@@ -9703,7 +9868,7 @@ function alPaint(){
    /* ⛔ 讀不到狀態時那顆「關閉」鈕也要收起來 —— 我們根本不知道開關檔在不在，
       而那顆鈕的說明寫著「按下去就把 X 改名收起來」，留著就是一句沒把握的話。 */
    /* ⛔⛔ 讀不到狀態時「打開」那兩顆更不能留：我們連現在是真錢還是演練都不知道。 */
-   setEl('algates',''); setEl('alrisk',''); setEl('altoday',''); setEl('aloff','');
+   setEl('algates',''); setEl('alfast',''); setEl('alrisk',''); setEl('altoday',''); setEl('aloff','');
    setEl('alon','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
    return;
@@ -9718,10 +9883,11 @@ function alPaint(){
  /* 2026-09-14 一件事只講一次（lab-ux 定案 C）：原本副標那兩句（「09:03:00 一到會自己送 1 口真單
     （你不在也會送）」「13:43:30 會自動平倉（只平自動下單開的那一口）」）併進這一行小字，
     副標只剩條件式的警告（真單關著／出過錯）。⛔ 時刻一律用後端的 signal_at／eod_at。 */
+ /* ⭐ 2026-09-15 規則換成「開盤快才做」：這一行要講出**整條規則**（時刻／快才做／幾口／±0.5%），
+    ⛔ 數字一律從後端來（D.signal_at／D.rule／D.fast.pts／D.pts_est），⛔ 不准寫死 0.5 或 40／70。 */
  if(armed) st='<span class="al-badge on">開啟中</span>'+
-   '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alSub(m))+
-   ' · 差 0 點算做多 · '+esc(D.signal_at||'')+(live?' 自動送 ':' 演練送 ')+
-   esc(String(D.qty||1))+' 口'+(live?'（你不在也會送）':'')+
+   '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alRuleTxt(D))+
+   ' · 差 0 點算做多'+(live?'（你不在也會送）':'')+
    (D.eod_at?(' · '+esc(D.eod_at)+' 自動平那一口，你自己開的單不會碰'):'')+
    '</i></span>';
  else if(D.arm_why==='off') st='<span class="al-badge">關閉中</span>'+
@@ -9733,7 +9899,7 @@ function alPaint(){
  setEl('alstate',st);
  /* ⛔ 真單開關要跟自動開關一起講：他關掉真單就等於連自動也關掉，
     但畫面上如果只寫「開啟中」，他會以為單真的會出去。 */
- /* ⛔ 這一行不要複述上面那個名字（上面已經寫了「5 分 K」＋「09:00 起算」）——
+ /* ⛔ 這一行不要複述上面那個名字（上面已經寫了「開盤快才做」＋「09:00 起算」）——
     這裡要講的是**後果**：09:03:30 一到會發生什麼事。 */
  const sigT=esc(D.signal_at||''), eodT=esc(D.eod_at||'');
  const subs=[];
@@ -9771,9 +9937,13 @@ function alPaint(){
    '<div class="c" title="'+esc(D.live_flag||'')+'"><div class="k">真單</div>'+
      '<div class="v'+(live?'':' off')+'">'+
        esc(live?'開著 · 會真的送出去':'關著 · 只會演練')+'</div></div>'+
-   '<div class="c"><div class="k">每天送</div>'+
-     '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利 &plusmn;'+esc(alF(D.tp,0))+
-       ' 點 · 一天 1 次</div></div>');
+   /* ⚠️ 2026-09-15：「每天送」→「快才送」—— 規則換成開盤快才做，寫「每天送」就是一句假話。
+      停利停損是 ±%（後端 D.rule），⛔ 不是手動真單那個 ±RULE_TP。 */
+   '<div class="c"><div class="k">快才送</div>'+
+     '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利停損 &plusmn;'+
+       esc(alPct(D)==null?'—':String(alPct(D)))+'% · 一天最多 1 次</div></div>');
+ /* 今天的門檻與判定（快／不快／歷史不夠）—— 掛在開關區，今天那張卡收起來時也看得到。 */
+ setEl('alfast',alFastHTML(D));
 
  /* ── ⭐⭐ 風險條（2026-09-10 取代整段〈怎麼開〉）───────────────────
     ⛔ **砍掉的是教學，不是風險。** 拿掉的是：自己建檔的做法、`Set-Content …`、
@@ -9794,8 +9964,10 @@ function alPaint(){
        '<p><i>&#9888;</i><span>停損活在<b>這台電腦的面板迴圈</b>裡 —— '+
          '面板關掉／當掉／電腦睡著就<b>沒有停損</b>'+
          (eodT?('，'+eodT+' 的自動平倉也不會發生'):'')+'。</span></p>'+
+       /* ⚠️ 2026-09-15：「每個交易日都會送」改成「都會看、夠快就送」—— 規則換成開盤快才做之後，
+          寫「都會送」是一句假話（慢的日子不送）；但「沒有有效期」那半一字不動。 */
        '<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
-         '<b>每個交易日都會送</b>，直到你自己按下面那顆關掉。</span></p>'+
+         '<b>每個交易日都會看，開盤夠快就送</b>，直到你自己按下面那顆關掉。</span></p>'+
      '</div>'
    : '');
 
@@ -9862,7 +10034,8 @@ function alOnHTML(D){
         （那句話的職責是「現在是真錢還是演練」，被 `test_auto_fire.py` ⑬b 綁著）。 */
      '<div class="q">'+(C.live?'⚠️ ':'')+esc(C.text)+'<br>要用「<b>'+
        esc(alName(m))+'</b>」（'+esc(alSub(m))+'）開始嗎？'+
-       '<br>打開之後<b>每個交易日都會送，直到你自己關掉</b>。</div>'+
+       /* 2026-09-15：「都會送」→「都會看、夠快就送」（慢的日子不送，寫「都會送」是假話） */
+       '<br>打開之後<b>每個交易日都會看，開盤夠快就送，直到你自己關掉</b>。</div>'+
      '<div class="btns2">'+
        '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
          (ALON.busy?'打開中…':'確定，打開')+'</button>'+
@@ -9872,9 +10045,10 @@ function alOnHTML(D){
  }
  /* 第一段：⛔ 做法直接寫在鈕上（他不必先去別的地方查哪個是哪個），
     名字一律走 alName()／alSub()（⛔ 不准自己發明名字，也不准出現代號）。 */
+ /* ⚠️ 2026-09-15：自動下單只剩一個做法 ⇒ 只剩**一顆**鈕（B 那顆拿掉，⛔ 不是停用留著 ——
+    留一顆按不動的「用開盤起開始」只會讓他以為面板壞了）。後端 fire_arm_on 收到 B 也會回 400。 */
  return '<div class="row">'+
    '<button class="btn" data-alon="A">用「'+esc(alName('A'))+'」開始</button>'+
-   '<button class="btn" data-alon="B">用「'+esc(alName('B'))+'」開始</button>'+
    '</div>'+
    /* ⚠️ 「比它高或持平做多、低做空」這句 ⛔ 不可以跟著〈怎麼開〉一起砍掉 ——
       2026-09-10 之後**整頁只剩這裡在講方向怎麼判**，而「剛好持平（差 0 點）算做多」
@@ -9882,11 +10056,14 @@ function alOnHTML(D){
       ⚠️ 「打開之後每個交易日都會送」那句是**開著時 `.al-risk` 第二條**的同一件事：
       關著的時候他正要按的就是這顆鈕，所以掛在這裡（⛔ 不是兩件事，是同一句話
       在兩種狀態下各掛在他當下看得到的地方）。 */
-   '<div class="n">兩顆都是每個交易日 '+esc(D.signal_at||'')+' 送出 '+
-     esc(String(D.qty||1))+' 口：<b>'+esc(alName('A'))+'</b> 拿 '+esc(alSub('A'))+
-     '的價當參考、<b>'+esc(alName('B'))+'</b> 拿 '+esc(alSub('B'))+'的價當參考，'+
-     esc(D.signal_at||'')+' 的價比它高或持平做多、低做空。'+
-     '按下去會<b>再問你一次</b>；打開之後<b>每個交易日都會送，直到你自己關掉</b>。</div>'+
+   /* ⭐ 規則講完整：快不快怎麼判（走幅 vs 過去 N 天第 P 百分位）、方向怎麼判、慢的日子不做、±%。
+      ⛔ 數字全部從後端（D.rule），⛔ 不寫死。 */
+   '<div class="n">每個交易日 '+esc(D.signal_at||'')+' 看開盤快不快：09:00 以前最後一筆到 '+
+     esc(D.signal_at||'')+' 走了多少 %，<b>不低於過去 '+esc(String((D.rule||{}).window||'—'))+
+     ' 個交易日的第 '+esc(String((D.rule||{}).pctl||'—'))+' 百分位才做</b>（慢的日子不做）。'+
+     '做的話送 '+esc(String(D.qty||1))+' 口：'+esc(D.signal_at||'')+' 的價比 09:00 高或持平做多、低做空，'+
+     '停利停損 ±'+esc(alPct(D)==null?'—':String(alPct(D)))+'%。'+
+     '按下去會<b>再問你一次</b>；打開之後<b>每個交易日都會看，直到你自己關掉</b>。</div>'+
    (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
 }
 
@@ -9897,7 +10074,7 @@ function alOnHTML(D){
 function alArm(){
  if(ALON.busy) return;
  const m=ALON.mode;
- if(m!=='A'&&m!=='B'){ ALON.step='idle'; ALON.mode=null;
+ if(m!=='A'){ ALON.step='idle'; ALON.mode=null;
    ALON.err='沒有選到做法，請再按一次'; alPaint(); return; }
  ALON.busy=true; ALON.err=''; alPaint();
  pfetch('/api/fire/on',JSON.stringify({mode:m}))
@@ -9970,7 +10147,10 @@ function alTodayHTML(D,r){
             (R.exit_time?('（'+esc(String(R.exit_time).slice(0,8))+'）'):'')+
             (alN(R.points)!=null?('　<b>'+esc(alSigned(R.points))+'</b> 點'):
               '　<span style="color:var(--gold)">問不到成交價，點數留白</span>'))
-          :('　停利 <b>'+esc(alF(r.tp))+'</b>'))+
+          :('　停利 <b>'+esc(alF(r.tp))+'</b>'+
+            /* 2026-09-15：自動下單那一口的停損是 ±0.5%（帳本落地的 sl），不是手動那個 ±RULE_SL */
+            (alN(r.sl)!=null?('　停損 <b>'+esc(alF(r.sl))+'</b>'):'')+
+            (alN(r.sl_points)!=null?('（各 '+esc(alF(r.sl_points,0))+' 點）'):'')))+
      '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px))+'</b>'+
      '　滑價 <b>'+esc(alSigned(r.slip))+'</b> 點'+
      ((!done&&r.has_target)||done?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>')+
@@ -10059,7 +10239,7 @@ function alSimTxt(D,r){
  const s=(D.sim||{})[r.date]||null;
  if(!s) return '模擬那邊 —';
  if(s.miss) return '模擬那邊也沒記到';
- const run=(s.runs||{})[r.method||'B']||null;
+ const run=(s.runs||{})[r.method||'A']||null;
  return '模擬那邊 '+(run&&alN(run.pts)!=null?alSigned(run.pts):'—');
 }
 function alCard(D,r,isToday){
@@ -10558,6 +10738,10 @@ class Handler(BaseHTTPRequestHandler):
                 # ⛔ 「現在是真錢還是演練」那句話**在後端算**（前端不准猜），
                 #    而且拿的是 auto_fire 算好的那個 live ⇒ 只有一把尺。
                 out["arm_confirm"] = fire_arm_confirm(out.get("live"))
+                # 「今天約 N 點」：09:03:30 還沒到（帳本／歷史都還沒有今天的價）時，
+                #   拿**現價**照同一支 tpsl_points() 估（⛔ 前端不准自己乘 0.005）。只讀記憶體。
+                _tt = CURRENT_STATE.get("today")
+                out["pts_est"] = auto_fire.tpsl_points(getattr(_tt, "price", None))
                 # 兩段式確認第二段要帶的 token。跨站讀不到這份 JSON ⇒ 拿不到它。
                 out["token"] = FIRE_TOKEN
                 return self._json(200, out)
@@ -10889,8 +11073,11 @@ def real_state(price, quote, age):
             d = 1 if pos["dir"] == "long" else -1
             snap["float_pts"] = (round(d * ((price or pos["entry"]) - pos["entry"]), 1)
                                  if price else None)
-            snap["tp"] = pos["entry"] + d * TP_POINTS
-            snap["sl"] = pos["entry"] - d * SL_POINTS
+            # ⛔ 用**這一口自己的**點數（跟 check_real_position 同一支 pos_sl_points），
+            #    不然自動下單那一口畫面寫停損 −130、實際卻是 −230 ⇒ 畫面那句是假的。
+            snap["tp"] = pos["entry"] + d * pos_tp_points(pos)
+            snap["sl"] = pos["entry"] - d * pos_sl_points(pos)
+            snap["tp_pts"], snap["sl_pts"] = pos_tp_points(pos), pos_sl_points(pos)
         stale = REAL_STALE["since"]
         snap["stale_sec"] = round(time.time() - stale) if stale else None
         ok, why = broker.can_enter(price, quote == "live")
@@ -11252,9 +11439,16 @@ def main():
     #    沒有 tools/shioaji/AUTO_ORDERS_ON 這個檔就完全不送（而且那個檔只有他自己建）；
     #    就算有，也照樣受 REAL_ORDERS_ON 管（broker.enter → broker._send → is_live）。
     #    ⛔ 接線只能在這裡：--replay 與所有治具都走不到 main()，掛勾維持 no-op。
+    # ⚠️ 2026-09-15 不再傳 tp_points：自動下單的停利停損是 ±0.5%（auto_fire.FAST_RULE），
+    #    ⛔ 不是這裡的 TP_POINTS（手動真單／練習／模擬的 ±130）。
     auto_fire.configure(signal_at=SIGNAL_AT, signal_sec=SIGNAL_SEC,
-                        late_ms=AUTO_LATE_MS, gap_s=AUTO_GAP_S, tp_points=TP_POINTS,
-                        sig_fn=auto_sig, dirs_fn=auto_dirs, eod_at=EOD_CLOSE_AT)
+                        late_ms=AUTO_LATE_MS, gap_s=AUTO_GAP_S,
+                        sig_fn=auto_sig, dirs_fn=auto_dirs, eod_at=EOD_CLOSE_AT,
+                        pctl=FAST_PCTL)
+    # ⛔⛔ 重啟撿回部位時補「自動下單那一口自己的停損點數」（沒補就掉回 SL_POINTS ⇒ 提早被洗掉）。
+    #    **只有 main() 會接**（治具與 --replay 不接 ⇒ 撿回來的部位照舊用 SL_POINTS）。
+    #    掛上去的 recover_meta 只讀記憶體（它在主迴圈的 reconcile 裡被叫）。
+    broker.RECOVER_HOOK = auto_fire.recover_meta
     auto_fire.start()
     AUTO_SIG_HOOK = auto_fire.on_signal
     # ⛔⛔ 收盤自動平倉：**只平自動下單自己開的那一口**（auto_fire._looks_ours）。

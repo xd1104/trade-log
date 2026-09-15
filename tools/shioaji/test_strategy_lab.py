@@ -548,7 +548,11 @@ for w in ("token", "PTOK"):
     chk(f"  lab 的程式碼沒有 {w}（讀 fire/state 只拿 method，⛔ 不取 token、不送 POST）", w in lab_code, False)
 chk("  「現在真單用的」沒有寫死在 HTML 上", "現在真單用的" in _re.sub(r"<!--.*?-->", " ", html, flags=_re.S), False)
 say("function lbFire" in js and "x.armed===true?x.method:null" in js and "['A','lbm-bar5'],['B','lbm-open']" in js,
-    "  標籤照 /api/fire/state 的 method 標（A＝5 分 K、B＝開盤起；沒開就不標）")
+    "  標籤照 /api/fire/state 的 method 標（A＝開盤快才做、方向同 5 分 K 那顆；B 已不支援、永遠不標；沒開就不標）")
+# ⚠️ 2026-09-15（規格改變）：自動下單換成「開盤快才做」＋ ±0.5% ⇒ 這頁的回測**不等於**自動下單，
+#    標籤 ⛔ 不准再寫「現在真單用的」（會讓他以為這頁回測出來的就是自動下單的成績）。
+chk("  ⛔ lab 的程式碼不再寫「現在真單用的」（方向同、規則不同）", "現在真單用的" in lab_code, False)
+say("另加開盤快才做" in lab_code, "  標籤講得出「方向同這個，另加開盤快才做」")
 chk("  文案不暗示會自動補齊過去的日子", ("自己長出來" in lab_code, "陸續補進來中" in lab_code), (False, True))
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度"):
     chk(f"  畫面文字沒有「{w}」", w in lab_code, False)

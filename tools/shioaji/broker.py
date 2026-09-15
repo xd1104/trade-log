@@ -418,6 +418,33 @@ def broker_position():
     return None
 
 
+# ⭐ 重啟撿回部位時，「這一口自己的停損點數」要從哪裡補（2026-09-15 加）。
+#    自動下單改成 ±0.5% 之後，每一口部位帶自己的 `sl_points`（enter() 存進去）；
+#    撿回來的部位沒有這個欄位 ⇒ 面板停損會掉回 SL_POINTS（手動那一套）⇒ 自動下單那一口
+#    被提早洗掉。所以撿回來的那一刻問一次掛勾（`auto_fire.recover_meta`）。
+# ⛔ 預設是 None（這個檔不 import auto_fire —— 下單的模組不依賴送單策略），
+#    **只有 live_panel.main() 會接上去**（治具與測試不接就是「照舊用 SL_POINTS」）。
+# ⛔⛔ reconcile() 在 4Hz 主迴圈上被叫（reconcile_tick），而且這裡拿著 _lock ⇒
+#    掛上去的函式**只准讀記憶體**：一行 I/O、一次網路、一個鎖都不准有。
+RECOVER_HOOK = None
+_RECOVER_KEYS = ("sl_points", "tp_points", "sl_src", "sl_warn")
+
+
+def _recover_meta(got):
+    """把掛勾回的欄位補到撿回來的部位上。⛔ 永遠不往外丟例外（這裡是對帳路徑）。"""
+    hook = RECOVER_HOOK
+    if hook is None:
+        return
+    try:
+        extra = hook(dict(got))
+    except Exception as e:
+        got["sl_src"] = "unmatched"
+        got["sl_warn"] = "補停損點數時出錯（%s）—— 停損用手動真單那一套" % str(e)[:80]
+        return
+    if isinstance(extra, dict):
+        got.update({k: extra[k] for k in _RECOVER_KEYS if k in extra})
+
+
 _LAST_RECONCILE = {"at": 0.0}
 RECONCILE_EVERY = 3.0     # 秒。面板每 0.25 秒跑一圈，不節流會把券商 API 打爆
 
@@ -481,9 +508,11 @@ def reconcile():
                                            "why": "券商那邊已經沒有部位（停利成交或他自己平掉）"})
         elif _state["position"] is None:
             # 重啟後撿回部位：只知道方向與均價，停利單的下落要另外查
-            _state["position"] = {"dir": pos["dir"], "entry": pos["entry"],
-                                  "qty": pos["qty"], "entry_time": None,
-                                  "target_trade": None, "recovered": True}
+            got = {"dir": pos["dir"], "entry": pos["entry"],
+                   "qty": pos["qty"], "entry_time": None,
+                   "target_trade": None, "recovered": True}
+            _recover_meta(got)
+            _state["position"] = got
         else:
             # 【券商永遠是真相】本機那份跟券商不一樣時要以券商為準。
             # 舊版只在本機是空的時候才採用券商的資料，本機一旦記錯方向就**永遠改不回來** ——
@@ -606,10 +635,14 @@ def _wait_fill(direction):
     return None
 
 
-def enter(direction, price, tp_points):
+def enter(direction, price, tp_points, sl_points=None):
     """
     進場。用範圍市價（MKP）＋ IOC：要就立刻成交，不要掛在那裡等。
     **確認成交之後**才把停利限價單掛到券商那邊 —— 那一張電腦關機也有效。
+
+    `sl_points`（2026-09-15 加）：**這一口自己的停損點數**，存進部位裡給面板的停損迴圈讀
+    （`live_panel.check_real_position`）。⛔ 手動真單不帶 ⇒ 部位裡沒有這個欄位 ⇒
+    面板照舊用 SL_POINTS。自動下單帶 ±0.5% 算出來的點數。
     """
     import shioaji as sj
     act = sj.Action.Buy if direction == "long" else sj.Action.Sell
@@ -639,7 +672,11 @@ def enter(direction, price, tp_points):
         _state["position"] = {"dir": direction, "entry": entry, "qty": QTY,
                               "entry_time": datetime.now().strftime("%H:%M:%S"),
                               "target_trade": None, "recovered": False,
-                              "ref_price": float(price)}
+                              "ref_price": float(price),
+                              "tp_points": float(tp_points)}
+        if sl_points is not None:
+            # ⛔ 只有帶了才存：沒有這個欄位 ＝「用手動那一套」，那是停損迴圈的判準
+            _state["position"]["sl_points"] = float(sl_points)
     # 停利一律用**實際成交價**算，不是送單當下的參考價
     tp = entry + (tp_points if direction == "long" else -tp_points)
     tok, terr = place_target(tp)

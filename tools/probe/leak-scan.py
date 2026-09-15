@@ -243,12 +243,27 @@ def _consts_from_source(src):
             targets, val = [node.target], node.value
         else:
             continue
-        val = _fmt_const(val)
-        if val is None:
+        names = [t.id for t in targets if isinstance(t, ast.Name) and t.id.isupper()]
+        if not names:
             continue
-        for t in targets:
-            if isinstance(t, ast.Name) and t.id.isupper():
-                out.setdefault(val, t.id)
+        # ⭐ 2026-09-15：`PAST_*` 可以是 tuple（當過產品常數的值不只一個：
+        #    09:03:30 → 09:03:00 → 09:03:30、±100 → ±130）。
+        # ⛔ **只有 `PAST_` 開頭的名字**收 tuple／list —— 其他全大寫的 tuple
+        #    （`EOD_ALARM`、`METHODS`、將來誰寫的數字 tuple）一律不收，
+        #    否則「隨手一個 tuple 常數」就變成一批數字的後門（自證有一條在守）。
+        # ⛔ tuple 裡面每一個元素照樣走 `_fmt_const()`（只認字面值、擋 bool、時間要像時間）；
+        #    ⛔ 不遞迴（巢狀 tuple 裡的值不收）。
+        if isinstance(val, (ast.Tuple, ast.List)):
+            if not all(n.startswith("PAST_") for n in names):
+                continue
+            vals = [_fmt_const(e) for e in val.elts]
+        else:
+            vals = [_fmt_const(val)]
+        for v in vals:
+            if v is None:
+                continue
+            for n in names:
+                out.setdefault(v, n)
     return out
 
 
@@ -397,7 +412,7 @@ def self_test(recs, subs, consts):
         print("  尺壞了：讀不到完整的時間常數（HH:MM:SS）或數值常數，無法自證")
         return False
     faked = _synth_time(ct, consts, recs)
-    px = _synth_px(consts, recs, 5)          # 5 個「絕不撞到他資料」的假價格
+    px = _synth_px(consts, recs, 9)          # 9 個「絕不撞到他資料」的假價格
     if faked is None or px is None:
         print("  尺壞了：湊不出假時間／假價格（⛔ 不可以拿他的真數字頂替）")
         return False
@@ -438,10 +453,12 @@ def self_test(recs, subs, consts):
     #    ⛔ 用一段合成的原始碼，⛔ 不是真的那兩支（不然改了產品常數這裡就跟著壞）。
     _t1, _t2 = faked, _synth_time(faked, consts, recs)
     _t3 = _synth_time(_t2, consts, recs) if _t2 else None
-    if len({_t1, _t2, _t3}) != 3:
-        print("  尺壞了：湊不出三個相異的假時間")
+    _t4 = _synth_time(_t3, consts, recs) if _t3 else None
+    _t5 = _synth_time(_t4, consts, recs) if _t4 else None
+    if len({_t1, _t2, _t3, _t4, _t5}) != 5:
+        print("  尺壞了：湊不出五個相異的假時間")
         return False
-    _n1, _n2, _n3, _n4, _n5 = px          # 五個相異的假數字
+    _n1, _n2, _n3, _n4, _n5, _n6, _n7, _n8, _n9 = px          # 九個相異的假數字
     _got = _consts_from_source(
         'X_AT = "%s"\n'
         'lower_at = "%s"\n'
@@ -454,7 +471,14 @@ def self_test(recs, subs, consts):
         '    INSIDE_AT = "%s"\n'
         "    INSIDE_PTS = %s\n"
         "    return INSIDE_AT, INSIDE_PTS\n"
-        % (_t1, _t2, _n1, _n2, _n3, _n4, _t3, _n5))
+        # ── 2026-09-15：PAST_* 可以是 tuple；⛔ 別的名字的 tuple、巢狀、函式裡的一律不收
+        'PAST_X_AT = ("%s", %s.0)\n'
+        'X_TUPLE = ("%s", %s)\n'
+        "PAST_NEST = ((%s,),)\n"
+        "def g():\n"
+        "    PAST_IN = (%s,)\n"
+        "    return PAST_IN\n"
+        % (_t1, _t2, _n1, _n2, _n3, _n4, _t3, _n5, _t4, _n6, _t5, _n7, _n8, _n9))
     for _name, _cond in (
             ("模組層級、全大寫的時間常數讀得到", _got.get(_t1) == "X_AT"),
             ("⛔ 函式**裡面**的時間字串不算常數（⛔ 不准用 ast.walk）", _t3 not in _got),
@@ -465,7 +489,14 @@ def self_test(recs, subs, consts):
             ("⛔ 函式**裡面**的數字不算常數", _n5 not in _got),
             ("⛔ 小寫的模組層級數字不算常數", _n2 not in _got),
             ("⛔ 算式不算常數（%s * 1）" % _n4, str(int(_n4) * 1) not in _got),
-            ("⛔ True／False 不算數值常數（bool 是 int 的子類）", "1" not in _got)):
+            ("⛔ True／False 不算數值常數（bool 是 int 的子類）", "1" not in _got),
+            ("PAST_ 開頭的 tuple：裡面的時間讀得到", _got.get(_t4) == "PAST_X_AT"),
+            ("PAST_ 開頭的 tuple：裡面的數字讀得到（%s.0 → \"%s\"）" % (_n6, _n6),
+             _got.get(_n6) == "PAST_X_AT"),
+            ("⛔ 不是 PAST_ 開頭的 tuple 一個都不收（時間）", _t5 not in _got),
+            ("⛔ 不是 PAST_ 開頭的 tuple 一個都不收（數字）", _n7 not in _got),
+            ("⛔ 巢狀 tuple 裡的值不收", _n8 not in _got),
+            ("⛔ 函式**裡面**的 PAST_ tuple 不收", _n9 not in _got)):
         ok = ok and bool(_cond)
         print("  %s %s" % ("OK  " if _cond else "壞了", _name))
 

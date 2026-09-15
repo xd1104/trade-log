@@ -58,12 +58,25 @@ TMP = pathlib.Path(tempfile.mkdtemp(prefix="autofire-test-"))
 REAL_PATHS = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DIR,
               "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
               "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
-              "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR}
+              "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST}
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"          # 不存在 → dry run
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"               # 不存在 → 自動下單關著
 AF.FIRE_DIR = TMP / "autofire"
+AF.FAST_HIST = TMP / "fast_hist.jsonl"             # ⛔ 2026-09-15：開盤走幅歷史也導走
+
+
+def _hist_fp(p):
+    """一個檔的指紋（在不在／大小／mtime）。⚠️ 部署後他真的會有這個檔 ⇒ 不能斷言「不存在」。"""
+    try:
+        s = p.stat()
+        return (True, s.st_size, s.st_mtime_ns)
+    except OSError:
+        return (False, None, None)
+
+
+_REAL_HIST0 = _hist_fp(REAL_PATHS["AF.FAST_HIST"])
 LP.AUTO_DIR = TMP / "autotest"                     # ⛔ 不准碰他真的模擬紀錄
 LP.AUTO_REAL_DIR = TMP / "real_trades"
 
@@ -227,7 +240,8 @@ def connect(api):
 class FakeToday:
     """`Today` 的替身：`_auto_snap()` 只讀這幾個屬性。"""
 
-    def __init__(self, px=PX, open845=OPEN845, p900=P0900, age=0.2, is_mid=False):
+    def __init__(self, px=PX, open845=OPEN845, p900=P0900, age=0.2, is_mid=False,
+                 c0859=None):
         self.price = px
         self.bid = None if px is None else px - 1
         self.ask = None if px is None else px + 1
@@ -238,7 +252,9 @@ class FakeToday:
         self.high = 12020.0
         self.low = 11995.0
         self.minute_bar = {} if p900 is None else {540: {"o": p900}}
-        self.minute_close = {}
+        # 2026-09-15：「開盤快不快」的參考價優先用 minute_close[539]（09:00 以前最後一筆）；
+        #   沒給就沒有 ⇒ 退到 minute_bar[540]["o"]（ref_src＝bar_open）
+        self.minute_close = {} if c0859 is None else {539: c0859}
 
 
 # ---------------------------------------------------------------- 治具
@@ -262,8 +278,35 @@ def live_off():
         broker.REAL_FLAG.unlink()
 
 
-def reset(keep_orders=False):
+def hist_seed(moves=None, days=40, end=None):
+    """
+    寫一份開盤走幅歷史（⛔ 暫存區）。預設 40 天、每天 0.02% ⇒ 門檻 0.02%，
+    而 FakeToday() 的走幅是 |12010−12005|/12005 ≈ 0.0416% ⇒ **快** ⇒ 會送。
+    ⚠️ 2026-09-15 起沒有歷史就是 no_hist 不送 ⇒ 既有「會送出去」的每一節都靠這一份。
+    """
+    end = end or TODAY
+    if moves is None:
+        moves = [0.02] * days
+    lines = []
+    d, k = end, len(moves)
+    out = []
+    while len(out) < k:
+        d -= datetime.timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(str(d))
+    for s, mv in zip(reversed(out), moves):
+        lines.append(json.dumps({"date": s, "ref": 12000.0, "px": 12000.0 * (1 + mv / 100),
+                                 "move_pct": mv, "ref_src": "seed"}))
+    AF.FAST_HIST.write_text("".join(x + "\n" for x in lines), encoding="utf-8")
+
+
+def reset(keep_orders=False, hist=True):
     """每一個情境之間把狀態歸零。⛔ 量之前把狀態歸零（CLAUDE.md 的通則）。"""
+    if AF.FAST_HIST.exists():
+        AF.FAST_HIST.unlink()
+    if hist:
+        hist_seed()
+    AF._MEM.update({"date": None, "entry": None, "state": None})
     if AF.FIRE_DIR.exists():
         shutil.rmtree(AF.FIRE_DIR)
     if not keep_orders and broker.ORDER_DIR.exists():
@@ -296,8 +339,9 @@ def reset_eod():
 def wire():
     """跟 live_panel.main() 一模一樣的接線（⛔ 常數與算式的正本都在 live_panel）。"""
     AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC,
-                 late_ms=LP.AUTO_LATE_MS, gap_s=LP.AUTO_GAP_S, tp_points=LP.TP_POINTS,
-                 sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT)
+                 late_ms=LP.AUTO_LATE_MS, gap_s=LP.AUTO_GAP_S,
+                 sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT,
+                 pctl=LP.FAST_PCTL)
     LP.AUTO_SIG_HOOK = AF.on_signal
     LP.AUTO_EOD_HOOK = AF.on_eod
 
@@ -380,20 +424,26 @@ print("=== ① 開關（AUTO_ORDERS_ON）===")
 arm_clear()
 a = AF.arm()
 chk("  檔案不存在 → 關著", (a["on"], a["why"]), (False, "off"))
-for txt, want in (("A", "A"), ("B", "B"), ("a\n", "A"), ("  b  \r\n", "B")):
+for txt, want in (("A", "A"), ("a\n", "A"), ("  a  \r\n", "A")):
     arm_write(txt)
     a = AF.arm()
     chk(f"  內容 {txt!r} → 開，做法 {want}", (a["on"], a["method"]), (True, want))
-for txt in ("", "   \n", "C", "D", "AB", "A B", "A,B", "5 分 K", "1", "on", "\x00\xff"):
+# ⛔ 2026-09-15（規格改變，斷言跟著改）：B 不再是可下單的做法
+for txt in ("", "   \n", "B", "b\n", "  B  \r\n", "C", "D", "AB", "A B", "A,B", "5 分 K",
+            "1", "on", "\x00\xff"):
     arm_write(txt)
     a = AF.arm()
     say(a["on"] is False and a["why"] == "bad_method" and len(a["msg"]) > 8,
         f"  內容 {txt!r} → 拒絕下單，而且講得出原因", a["msg"][:46])
 arm_write("C")
-say("C" in AF.arm()["msg"] and "A" in AF.arm()["msg"] and "B" in AF.arm()["msg"],
-    "  C 的訊息要明說「只支援 A 與 B」，⛔ 不可以只說「看不懂」")
+say("C" in AF.arm()["msg"] and "只有 A" in AF.arm()["msg"],
+    "  C 的訊息要明說「只有 A」，⛔ 不可以只說「看不懂」", AF.arm()["msg"])
+arm_write("B")
+say(AF.MSG_ONLY_A in AF.arm()["msg"] and "B 已經不支援" in AF.arm()["msg"],
+    "  ⛔ B 的訊息要講清楚「B 已經不支援，自動下單現在只有 A（開盤快才做）」",
+    AF.arm()["msg"])
 arm_clear()
-chk("  ⛔ 只支援兩種做法（C／D 不做成可下單的選項）", list(AF.METHODS), ["A", "B"])
+chk("  ⛔ 只支援一種做法（2026-09-15 起只剩 A）", list(AF.METHODS), ["A"])
 say(len(set(AF.WHY.values())) == len(AF.WHY),
     "  ⛔ 每一種原因都有自己的一句話（兩個不同的原因不准寫同一句）",
     f"{len(AF.WHY)} 種")
@@ -402,7 +452,10 @@ say(len(set(AF.WHY.values())) == len(AF.WHY),
 print("\n=== ② 常數的正本只有一份 ===")
 wire()
 chk("  訊號時刻跟模擬那一頁同一個", AF._CFG["signal_at"], LP.SIGNAL_AT)
-chk("  停利點數跟他真的在用的規則同一組", AF._CFG["tp"], LP.TP_POINTS)
+# ⛔ 2026-09-15（規格改變）：自動下單的停利停損是 ±0.5%，⛔ 不再吃 TP_POINTS（手動那一套）
+chk("  ⛔ auto_fire 不再接 TP_POINTS（沒有 tp 這個設定）", "tp" in AF._CFG, False)
+chk("  訊號時刻是 09:03:30（2026-09-15 改回來）", LP.SIGNAL_AT, "09:03:30")
+chk("  SIGNAL_SEC 跟 SIGNAL_AT 同一個時刻", LP.SIGNAL_SEC, 9 * 3600 + 3 * 60 + 30)
 chk("  報價新鮮度門檻同一個", AF._CFG["gap_s"], LP.AUTO_GAP_S)
 chk("  訊號算式用的是 live_panel 的正本", AF._CFG["sig_fn"], LP.auto_sig)
 chk("  方向算式用的是 live_panel 的正本", AF._CFG["dirs_fn"], LP.auto_dirs)
@@ -425,7 +478,7 @@ say(len(r.get("why_msg") or "") > 6, "  而且講得出原因（畫面看得到�
 
 print("\n  ── 開關開著、但真單開關關著（dry run）──")
 reset()
-arm_write("B")
+arm_write("A")
 live_off()
 connect(ExplodeAPI())
 run_signal(FakeToday())
@@ -457,8 +510,13 @@ def one_round(method, st, side, fill, want_action, want_tp_action, want_tp):
     return api
 
 
-print("\n  ── 做多（開盤起：08:45 → 09:03:30 上漲）──")
-api = one_round("B", FakeToday(px=12010.0, open845=12000.0, p900=12005.0),
+# ⚠️ 2026-09-15（規格改變）：做法只剩 A（09:00 → 09:03:30），停利停損 ＝ round(px × 0.5%)。
+#    PX_TP ＝ 09:03:30 那一刻的價 12010 × 0.005 ＝ 60.05 ⇒ 60 點（⛔ 從產品的 tpsl_points 拿，
+#    另外再寫死一次 60 對照，避免「兩邊一起錯」）。
+PTS = AF.tpsl_points(12010.0)
+chk("  前置：12010 × 0.5% ⇒ 60 點（寫死對照）", PTS, 60)
+print("\n  ── 做多（09:00 → 09:03:30 上漲）──")
+api = one_round("A", FakeToday(px=12010.0, open845=12000.0, p900=12005.0),
                 "Buy", 12013.0, None, None, None)
 o = sent_orders(api)
 chk("  送出 2 張（進場 ＋ 停利），⛔ 不多不少", len(o), 2)
@@ -471,15 +529,21 @@ chk("  停利方向 Sell（做多的反向）", o[1]["action"], "Action.Sell")
 chk("  停利是限價 LMT", o[1]["price_type"], "FuturesPriceType.LMT")
 chk("  停利是 ROD", o[1]["order_type"], "OrderType.ROD")
 chk("  停利是平倉 Cover", o[1]["octype"], "FuturesOCType.Cover")
-chk(f"  ⛔ 停利價 = **實際成交價** 12013 +{LP.TP_POINTS:g} = {12013 + LP.TP_POINTS:g}"
-    f"（不是參考價 12010+{LP.TP_POINTS:g}）",
-    o[1]["price"], 12013.0 + LP.TP_POINTS)
+chk(f"  ⛔ 停利價 = **實際成交價** 12013 +{PTS} = {12013 + PTS}"
+    f"（不是參考價 12010+{PTS}）",
+    o[1]["price"], 12013.0 + PTS)
 chk("  停利口數 1", o[1]["qty"], 1)
 r = merged()
-chk("  紀錄：做法＝開盤起", r.get("method"), "B")
+chk("  紀錄：做法＝A（開盤快才做）", r.get("method"), "A")
 chk("  紀錄：方向＝做多", r.get("dir"), "long")
 chk("  紀錄：進場價＝實際成交價", r.get("entry"), 12013.0)
-chk("  紀錄：停利價", r.get("tp"), 12013.0 + LP.TP_POINTS)
+chk("  紀錄：停利價", r.get("tp"), 12013.0 + PTS)
+chk("  紀錄：停損價（2026-09-15 落地）", r.get("sl"), 12013.0 - PTS)
+chk("  ⛔ 紀錄：tp_points ＝ round(px × 0.005)", r.get("tp_points"), PTS)
+chk("  ⛔ 紀錄：sl_points ＝ round(px × 0.005)（撿回部位時靠它補停損）", r.get("sl_points"), PTS)
+chk("  ⛔ 部位帶著自己的 sl_points（停損迴圈讀它）", broker._state["position"].get("sl_points"),
+    float(PTS))
+chk("  紀錄：快不快的判定落地", (r.get("fast") or {}).get("verdict"), "fast")
 chk("  紀錄：滑價＝成交 − 09:03:30 的價", r.get("slip"), 3.0)
 chk("  紀錄：這是真單", r.get("live"), True)
 chk("  紀錄：停利真的掛上去了", r.get("has_target"), True)
@@ -491,9 +555,10 @@ chk("  ⛔ 檔案裡是兩列（先 sending 再 result），不是被覆寫成�
 chk("  ⛔ 而且 sending 那一列在前面（先落地再送單）",
     [x.get("stage") for x in raw], ["sending", "done"])
 
-print("\n  ── 做空（開盤起：08:45 → 09:03:30 下跌）──")
-api = one_round("B", FakeToday(px=11990.0, open845=12000.0, p900=11995.0),
+print("\n  ── 做空（09:00 → 09:03:30 下跌）──")
+api = one_round("A", FakeToday(px=11990.0, open845=12000.0, p900=11995.0),
                 "Sell", 11987.0, None, None, None)
+PTS_S = AF.tpsl_points(11990.0)
 o = sent_orders(api)
 chk("  送出 2 張（進場 ＋ 停利）", len(o), 2)
 chk("  ⛔ 進場方向 Sell（做空）", o[0]["action"], "Action.Sell")
@@ -503,19 +568,21 @@ chk("  進場 IOC", o[0]["order_type"], "OrderType.IOC")
 chk("  進場 New", o[0]["octype"], "FuturesOCType.New")
 chk("  ⛔ 停利方向 Buy（做空的反向）—— 送 Sell 等於再加一口空單",
     o[1]["action"], "Action.Buy")
-chk(f"  ⛔ 停利價 = 實際成交價 11987 −{LP.TP_POINTS:g} = {11987 - LP.TP_POINTS:g}",
-    o[1]["price"], 11987.0 - LP.TP_POINTS)
+chk("  前置：11990 × 0.5% ⇒ 60 點（寫死對照）", PTS_S, 60)
+chk(f"  ⛔ 停利價 = 實際成交價 11987 −{PTS_S} = {11987 - PTS_S}",
+    o[1]["price"], 11987.0 - PTS_S)
 chk("  停利是 LMT / ROD / Cover",
     (o[1]["price_type"], o[1]["order_type"], o[1]["octype"]),
     ("FuturesPriceType.LMT", "OrderType.ROD", "FuturesOCType.Cover"))
 r = merged()
 chk("  紀錄：方向＝做空", r.get("dir"), "short")
 chk("  紀錄：進場價＝實際成交價", r.get("entry"), 11987.0)
-chk("  紀錄：停利價", r.get("tp"), 11987.0 - LP.TP_POINTS)
+chk("  紀錄：停利價", r.get("tp"), 11987.0 - PTS_S)
+chk("  紀錄：停損價（做空 ⇒ 在上面）", r.get("sl"), 11987.0 + PTS_S)
 chk("  紀錄：滑價（做空，成交比參考價低 3 點＝賺 3 點）", r.get("slip"), 3.0)
 
-print("\n  ── 做法 A（5 分 K）跟做法 B 判出不同方向時，送出去的要跟開關講的一致 ──")
-# 09:00 之後上漲、但 08:45 到現在是跌 ⇒ A 做多、B 做空
+print("\n  ── 方向用的是 A（09:00 起算），⛔ 不是 08:45 開盤起 ──")
+# 09:00 之後上漲、但 08:45 到現在是跌 ⇒ A 做多（B 會做空，但 B 已經不支援）
 ST_SPLIT = dict(px=11990.0, open845=12000.0, p900=11980.0)
 chk("  這一組資料 A 與 B 真的不同向",
     (LP.auto_dirs(*LP.auto_sig(ST_SPLIT["px"], ST_SPLIT["open845"], ST_SPLIT["p900"]))["A"],
@@ -523,12 +590,19 @@ chk("  這一組資料 A 與 B 真的不同向",
     (1, -1))
 api = one_round("A", FakeToday(**ST_SPLIT), "Buy", 11991.0, None, None, None)
 chk("  開關寫 A ⇒ 送出的是 Buy（做多）", sent_orders(api)[0]["action"], "Action.Buy")
-chk("  ⛔ 只送一次進場（一天一口，不是兩個做法各一口）",
+chk("  ⛔ 只送一次進場（一天一口）",
     len([x for x in sent_orders(api) if x["octype"] == "FuturesOCType.New"]), 1)
-api = one_round("B", FakeToday(**ST_SPLIT), "Sell", 11989.0, None, None, None)
-chk("  開關寫 B ⇒ 送出的是 Sell（做空）", sent_orders(api)[0]["action"], "Action.Sell")
-chk("  ⛔ 只送一次進場", len([x for x in sent_orders(api)
-                              if x["octype"] == "FuturesOCType.New"]), 1)
+reset()
+arm_write("B")
+live_on()
+api = SimAPI("Sell", 11989.0)
+connect(api)
+run_signal(FakeToday(**ST_SPLIT))
+r = merged()
+chk("  ⛔ 開關寫 B ⇒ 一張單都不送（2026-09-15 起 B 不支援）", len(api.orders), 0)
+chk("    紀錄是 bad_method", (r.get("rec"), r.get("why")), ("skip", "bad_method"))
+say("B 已經不支援" in (r.get("why_msg") or ""), "    而且畫面那句講清楚「B 已經不支援」",
+    r.get("why_msg"))
 
 # ══ ⑤ 每一種「不送」都要真的沒送（假券商一被呼叫就 raise）═══════════════
 print("\n=== ⑤ 這些情況一律不送，而且每一種都要有原因 ===")
@@ -557,28 +631,27 @@ def no_send(name, why, setup, st=None, api=None, live=True, no_api=False):
 no_send("開關檔不存在", "off", arm_clear)
 no_send("開關內容不合法（C）", "bad_method", lambda: arm_write("C"))
 no_send("開關內容不合法（空的）", "bad_method", lambda: arm_write(""))
-no_send("09:03:30 收不到成交價", "no_quote", lambda: arm_write("B"),
+no_send("開關內容是 B（2026-09-15 起不支援）", "bad_method", lambda: arm_write("B"))
+no_send("09:03:30 收不到成交價", "no_quote", lambda: arm_write("A"),
         st=FakeToday(px=None))
-no_send("報價中斷（超過 5 秒沒更新）", "quote_stale", lambda: arm_write("B"),
+no_send("報價中斷（超過 5 秒沒更新）", "quote_stale", lambda: arm_write("A"),
         st=FakeToday(age=30.0))
-no_send("從來沒收到過報價", "quote_stale", lambda: arm_write("B"),
+no_send("從來沒收到過報價", "quote_stale", lambda: arm_write("A"),
         st=FakeToday(age=None))
-no_send("只有中價、還沒有成交", "mid_only", lambda: arm_write("B"),
+no_send("只有中價、還沒有成交", "mid_only", lambda: arm_write("A"),
         st=FakeToday(is_mid=True))
-no_send("算不出訊號（拿不到 08:45 開盤）", "no_signal", lambda: arm_write("B"),
-        st=FakeToday(open845=None))
 no_send("算不出訊號（拿不到 09:00 的價，做法 A）", "no_signal", lambda: arm_write("A"),
         st=FakeToday(p900=None))
-no_send("還沒連上永豐", "cant_enter", lambda: arm_write("B"), no_api=True)
-no_send("跟券商對帳失敗", "cant_enter", lambda: arm_write("B"), api=BadAPI())
-no_send("券商已經有部位", "cant_enter", lambda: arm_write("B"), api=HasPosAPI())
+no_send("還沒連上永豐", "cant_enter", lambda: arm_write("A"), no_api=True)
+no_send("跟券商對帳失敗", "cant_enter", lambda: arm_write("A"), api=BadAPI())
+no_send("券商已經有部位", "cant_enter", lambda: arm_write("A"), api=HasPosAPI())
 no_send("憑證沒啟用", "cant_enter",
-        lambda: (arm_write("B"), broker.CA_OK.update({"ok": False, "msg": "憑證沒啟用"}))[0])
+        lambda: (arm_write("A"), broker.CA_OK.update({"ok": False, "msg": "憑證沒啟用"}))[0])
 broker.CA_OK["ok"] = True
 
 
 def _fill_limit():
-    arm_write("B")
+    arm_write("A")
     broker.ORDER_DIR.mkdir(parents=True, exist_ok=True)
     with (broker.ORDER_DIR / f"{TODAY}.jsonl").open("a", encoding="utf-8") as f:
         for _ in range(broker.MAX_ENTRIES):
@@ -596,7 +669,7 @@ say(SENT["n"] == 0 and r.get("why") == "cant_enter" and "上限" in (r.get("why_
 
 print("\n  ── 面板 09:03:30 沒開著／剛啟動 ⇒ 那天跳過，⛔ 不補單 ──")
 reset()
-arm_write("B")
+arm_write("A")
 live_on()
 connect(ExplodeAPI())
 run_signal(FakeToday(), hh=9, mm=10, ss=0)      # 面板 09:10 才開起來
@@ -609,7 +682,7 @@ say(rows() and all(x.get("rec") == "skip" for x in rows()),
 
 print("\n  ── 排隊排太久（主迴圈準時、但送單那一段卡住）⇒ 不送 ──")
 reset()
-arm_write("B")
+arm_write("A")
 live_on()
 connect(ExplodeAPI())
 st_late = FakeToday()
@@ -629,7 +702,7 @@ while not LP._AUTO_Q.empty():
 
 print("\n  ── 沒有接線（configure 沒跑）⇒ 不送 ──")
 reset()
-arm_write("B")
+arm_write("A")
 live_on()
 connect(ExplodeAPI())
 AF._ST["wired"] = False
@@ -640,7 +713,7 @@ wire()
 
 print("\n  ── 那天已經送過了（一天 1 次）──")
 reset()
-arm_write("B")
+arm_write("A")
 live_on()
 api = SimAPI("Buy", 12013.0)
 connect(api)
@@ -655,7 +728,7 @@ chk("  第一次真的有送", n1, 2)
 
 print("\n  ── 送到一半當掉：重啟後 ⛔ 不可以再送一次 ──")
 reset()
-arm_write("B")
+arm_write("A")
 live_on()
 api = SimAPI("Buy", 12013.0)
 connect(api)
@@ -663,7 +736,7 @@ connect(api)
 AF.FIRE_DIR.mkdir(parents=True, exist_ok=True)
 with (AF.FIRE_DIR / (DAY[:7] + ".jsonl")).open("a", encoding="utf-8") as f:
     f.write(json.dumps({"rec": "fire", "stage": "sending", "date": DAY,
-                        "method": "B", "dir": "long"}, ensure_ascii=False) + "\n")
+                        "method": "A", "dir": "long"}, ensure_ascii=False) + "\n")
 run_signal(FakeToday())
 chk("  ⛔ 一張單都沒送", len(api.orders), 0)
 d, _l = AF.read_all()
@@ -674,7 +747,7 @@ say("大戶投" in (d[0].get("why_msg") or ""), "  而且叫他自己去確認�
 # ══ ⑥ 帳本：每一列都要有去處 ═══════════════════════════════════════════
 print("\n=== ⑥ 帳本（每一列都要有去處）===")
 reset()
-arm_write("B")
+arm_write("A")
 live_on()
 connect(SimAPI("Buy", 12013.0))
 run_signal(FakeToday())
@@ -808,9 +881,23 @@ def wiring_fails(text):
         if want not in m:
             bad.append(f"main() 沒有 {want}")
     for want in ("sig_fn=auto_sig", "dirs_fn=auto_dirs", "signal_at=SIGNAL_AT",
-                 "tp_points=TP_POINTS", "gap_s=AUTO_GAP_S", "eod_at=EOD_CLOSE_AT"):
+                 "gap_s=AUTO_GAP_S", "eod_at=EOD_CLOSE_AT"):
         if want not in m:
             bad.append(f"main() 的接線少了 {want}（⛔ 比名稱不比數值）")
+    # ⛔ 2026-09-15：自動下單不准再吃 TP_POINTS（那是手動真單的 ±130）
+    if "tp_points=TP_POINTS" in m:
+        bad.append("main() 還把 TP_POINTS 接給 auto_fire（自動下單會變回 ±130）")
+    # ④b 撿回部位補停損點數的掛勾：⛔ 只有 main() 會接，接的是 auto_fire.recover_meta
+    where_r = []
+    for name, node in fns.items():
+        for n in ast.walk(node):
+            if isinstance(n, ast.Assign) and any(
+                    isinstance(x, ast.Attribute) and x.attr == "RECOVER_HOOK"
+                    and getattr(x.value, "id", "") == "broker" for x in n.targets):
+                where_r.append((name, ast.unparse(n.value)))
+    if where_r != [("main", "auto_fire.recover_meta")]:
+        bad.append(f"broker.RECOVER_HOOK 的指派點不對：{where_r}"
+                   "（重啟撿回的自動下單部位會掉回 SL_POINTS）")
     # ⑤ _auto_tick 的**兩個**分支都要通知掛勾（晚到那一邊也要留下原因）
     tk = ast.unparse(fns["_auto_tick"]) if "_auto_tick" in fns else ""
     if tk.count("AUTO_SIG_HOOK(") != 2:
@@ -883,6 +970,9 @@ MUT = [
     ("跨日沒有重置 AUTO['eod']（隔天不會再平）",
      '        AUTO.update({"day": d, "done": False, "settled": False, "eod": False,',
      '        AUTO.update({"day": d, "done": False, "settled": False,'),
+    # ── 2026-09-15：撿回部位補停損點數的接線
+    ("⛔ 撿回部位補停損的掛勾沒接（重啟後自動下單那一口停損掉回 130）",
+     "    broker.RECOVER_HOOK = auto_fire.recover_meta", "    pass"),
 ]
 for name, old, new in MUT:
     say(old in LPSRC, f"  突變目標真的在原始碼裡：{name}")
@@ -1005,7 +1095,7 @@ say(len(set(AF.WHY.values())) == len(AF.WHY),
     "  ⛔ 加了收盤那幾種之後，每一句話仍然互不相同")
 
 
-def auto_entered(method="B", side="Buy", fill=12013.0):
+def auto_entered(method="A", side="Buy", fill=12013.0):
     """讓自動下單真的開出一口部位（走完整條 09:03:30 的路），回傳那口部位。"""
     reset_eod()
     arm_write(method)
@@ -1219,7 +1309,7 @@ class NoCoverAPI(SimAPI):
 
 
 reset_eod()
-arm_write("B")
+arm_write("A")
 live_on()
 api = NoCoverAPI("Buy", 12013.0)
 connect(api)
@@ -1298,11 +1388,11 @@ chk("  ⛔ 也不會再多寫一列", len(rows()), n_rows)
 
 print("\n  ── ⑩ 送到一半當掉那天（不知道下場）⇒ ⛔ 不敢動手 ──")
 reset_eod()
-arm_write("B")
+arm_write("A")
 live_on()
 api = SimAPI("Buy", 12013.0)
 connect(api)
-AF._append({"rec": "fire", "stage": "sending", "date": DAY, "method": "B",
+AF._append({"rec": "fire", "stage": "sending", "date": DAY, "method": "A",
             "dir": "long", "px": 12010.0, "live": True})
 broker._state["position"] = {"dir": "long", "entry": 12013.0, "qty": 1,
                              "entry_time": "09:03:31", "target_trade": None,
@@ -1316,7 +1406,7 @@ say(bool((eod_row() or {}).get("alarm")), "  標成要他自己確認（alarm）
 
 print("\n  ── ⑪ 演練模式（真單關著）也要照跑（⛔ 只差不送出去）──")
 reset_eod()
-arm_write("B")
+arm_write("A")
 live_off()
 api = SimAPI("Buy", 12013.0)
 connect(api)
@@ -1453,7 +1543,7 @@ chk("      落地是「平掉了」", (eod_row() or {}).get("why"), "eod_closed"
 
 print("\n  ── ⑫d ⛔ M3／Y1：帳本那一列沒有進場價 ⇒ ⛔ 不准寫成「已經平掉了」──")
 reset_eod()
-arm_write("B")
+arm_write("A")
 live_on()
 api = SimAPI("Buy", 12013.0)
 api.opened = True
@@ -1464,7 +1554,7 @@ broker._state["position"] = {"dir": "long", "entry": 12013.0, "qty": 1,
 AF.FIRE_DIR.mkdir(parents=True, exist_ok=True)
 AF._append({"rec": "result", "date": DAY, "stage": "done", "ok": True,
             "dir": "long", "entry": None, "entry_time": "09:03:31",
-            "method": "B", "why": None})
+            "method": "A", "why": None})
 n_before = len(api.orders)
 run_eod()
 r = eod_row()
@@ -1606,7 +1696,7 @@ broker._state["position"] = {"dir": "long", "entry": 12013.0, "qty": 1,
 AF.FIRE_DIR.mkdir(parents=True, exist_ok=True)
 AF._append({"rec": "result", "date": DAY, "stage": "done", "ok": True,
             "dir": "long", "entry": 12013.0, "entry_time": "09:03:31",
-            "method": "B", "why": None})
+            "method": "A", "why": None})
 _CLK = {"t": 1000000.0}
 _CLK["t0"] = _CLK["t"]
 _rt, _sl = time.time, time.sleep
@@ -1757,11 +1847,15 @@ try:
     _c, _o = LP.fire_arm_on("C")
     say(_c == 400 and not AF.ARM_FLAG.exists(),
         "  ⛔ mode=C ⇒ 400，而且**一個檔都沒建**", f"{_c} {str(_o)[:60]}")
+    # ⛔ 2026-09-15（規格改變）：B 也是 400，而且那句話講清楚「B 已經不支援」
+    _c, _o = LP.fire_arm_on("B")
+    say(_c == 400 and not AF.ARM_FLAG.exists() and _o.get("msg") == AF.MSG_ONLY_A,
+        "  ⛔ mode=B ⇒ 400、一個檔都沒建、訊息是「B 已經不支援…」", f"{_c} {str(_o)[:60]}")
     _c, _o = LP.fire_arm_on("A")
     say(_c == 200 and AF.ARM_FLAG.read_bytes() == b"A",
         "  尺的自證：mode=A ⇒ 真的建出來，內容就是一個 ASCII 字母",
         f"{_c} {AF.ARM_FLAG.read_bytes()!r}")
-    _c, _o = LP.fire_arm_on("B")
+    _c, _o = LP.fire_arm_on("A")
     say(_c == 409 and AF.ARM_FLAG.read_bytes() == b"A",
         "  ⛔⛔ 已經開著再按 ⇒ 409，⛔ 原本那個檔一個位元組都沒被動到",
         f"{_c} {AF.ARM_FLAG.read_bytes()!r}")
@@ -1773,9 +1867,12 @@ _cr = LP.fire_arm_confirm(True)
 _cd = LP.fire_arm_confirm(False)
 say(_cr["live"] is True and _cd["live"] is False and _cr["text"] != _cd["text"],
     "  ⛔ 真錢與演練兩句話不一樣", (_cr["text"][:24] + " ／ " + _cd["text"][:16]))
-say(all(s in _cr["text"] for s in ("真實下單", "你的錢", LP.SIGNAL_AT))
-    and ("%g" % LP.TP_POINTS) in _cr["text"],
-    "  ⛔ 真錢那句要講「用你的錢」「幾點送」「幾點停利停損」", _cr["text"])
+# ⚠️ 2026-09-15（規格改變）：自動下單的停利停損是 ±0.5%，⛔ 那句話不准再寫手動的 130 點
+say(all(s in _cr["text"] for s in ("真實下單", "你的錢", LP.SIGNAL_AT, "快"))
+    and ("±%g%%" % (AF.FAST_RULE["tpsl_frac"] * 100)) in _cr["text"]
+    and ("%g 點" % LP.TP_POINTS) not in _cr["text"],
+    "  ⛔ 真錢那句要講「用你的錢」「幾點看」「快才送」「停利停損 ±0.5%」（⛔ 不是 130 點）",
+    _cr["text"])
 say("演練" in _cd["text"] and "不會真的送單" in _cd["text"]
     and "你的錢" not in _cd["text"],
     "  ⛔ 演練那句⛔ 不准出現「你的錢」（會嚇人，而且是假的）", _cd["text"])
@@ -2117,12 +2214,13 @@ _cases = [
     ("A + LF", b"A\n", True, "A"),
     ("A + CRLF（Windows 記事本）", b"A\r\n", True, "A"),
     ("小寫 a", b"a", True, "A"),
-    ("前後有空白", b"  B  \r\n", True, "B"),
+    # ⚠️ 2026-09-15（規格改變）：原本這三條用 B，B 不支援之後改成 A（量的是編碼，不是做法）
+    ("前後有空白", b"  A  \r\n", True, "A"),
     ("UTF-8 with BOM（記事本另存選錯）", b"\xef\xbb\xbfA", True, "A"),
-    ("UTF-8 with BOM + CRLF", b"\xef\xbb\xbfB\r\n", True, "B"),
+    ("UTF-8 with BOM + CRLF", b"\xef\xbb\xbfa\r\n", True, "A"),
     ("UTF-16LE + BOM（PowerShell 的 \"A\" > 檔 / Out-File）",
      "A\r\n".encode("utf-16-le") and b"\xff\xfe" + "A\r\n".encode("utf-16-le"), True, "A"),
-    ("UTF-16BE + BOM", b"\xfe\xff" + "B\r\n".encode("utf-16-be"), True, "B"),
+    ("UTF-16BE + BOM", b"\xfe\xff" + "A\r\n".encode("utf-16-be"), True, "A"),
     ("UTF-16LE 沒有 BOM", "A\r\n".encode("utf-16-le"), True, "A"),
 ]
 for name, raw, want_on, want_m in _cases:
@@ -2133,15 +2231,20 @@ for name, raw, want_on, want_m in _cases:
         f'on={a["on"]} method={a["method"]} raw={a["raw"]!r}')
 _bad = [("空的", b""), ("C", b"C"), ("D", b"D"), ("AB", b"AB"),
         ("亂碼", b"\x81\x40\x81\x41"), ("BOM + C", b"\xef\xbb\xbfC"),
-        ("UTF-16 的 C", b"\xff\xfe" + "C".encode("utf-16-le"))]
+        ("UTF-16 的 C", b"\xff\xfe" + "C".encode("utf-16-le")),
+        ("B（2026-09-15 起不支援）", b"B"), ("UTF-16 的 B", b"\xff\xfe" + "B".encode("utf-16-le"))]
 for name, raw in _bad:
     AF.ARM_FLAG.write_bytes(raw)
     a = AF.arm()
     say(a["on"] is False and len(a["msg"] or "") > 6,
         f"  ⛔ {name} ⇒ 拒絕下單並講得出讀到什麼", a["msg"])
 AF.ARM_FLAG.write_bytes(b"\xff\xfe" + "C".encode("utf-16-le"))
-say("C" in (AF.arm()["msg"] or "") and "只支援" in (AF.arm()["msg"] or ""),
+say("C" in (AF.arm()["msg"] or "") and "只有 A" in (AF.arm()["msg"] or ""),
     "  ⛔ UTF-16 的 C 也要認出「這是 C」，不可以只說看不懂", AF.arm()["msg"])
+AF.ARM_FLAG.write_bytes(b"\xff\xfe" + "B\r\n".encode("utf-16-le"))
+say(AF.MSG_ONLY_A in (AF.arm()["msg"] or ""),
+    "  ⛔ UTF-16 的 B 也要認出「這是 B、已經不支援」（他 09-09 以前可能用 PowerShell 寫過 B）",
+    AF.arm()["msg"])
 arm_clear()
 
 # ══ ⑮ ⛔ fire_sim_pairs() 是唯讀的（呼叫前後雜湊比對）═══════════════
@@ -2198,12 +2301,628 @@ _srcs = sorted({n.attr for n in ast.walk(ast.parse(
 say(not any(a in _srcs for a in ("write_text", "write_bytes", "mkdir", "unlink")),
     "  ⛔ AST：fire_sim_pairs 裡沒有任何寫檔呼叫", str(_srcs))
 
+# ══ ⑯ ⭐⭐ 2026-09-15「開盤快才做」＋ ±0.5% ＋ 每一口自己的停損 ══════════════════
+print("\n=== ⑯ ⭐⭐ 開盤快才做（2026-09-15）===")
+import numpy as _np                                                   # noqa: E402
+
+# ── ⑯a 門檻 ＝ numpy.percentile（第二把尺：自己寫的線性內插，⛔ 不是拿產品的算式對產品）
+print("\n  ── ⑯a 門檻 ＝ 過去 40 天 move_pct 的第 80 百分位（numpy 預設線性內插）──")
+# ⚠️ 2026-09-15 下午規格改變：70 → 80（Benson 拍板；研究 17 組裡唯一過多重檢定的是 80）。
+#    ⛔ 下面的「80」**故意寫死**（第二把尺）：拿 LP.FAST_PCTL 對 LP.FAST_PCTL 是恆真。
+chk("  ⛔ 正本 live_panel.FAST_PCTL 就是 80（逐字）", LP.FAST_PCTL, 80)
+chk("  ⛔ configure 接過去的也是 80", AF.fast_pctl(), 80)
+# ⛔⛔ 接線（QA 退件 L1：main() 寫 `pctl=70` 全綠 —— 上面那條驗的是**測試自己的** wire()，
+#    不是面板真正跑的 main()）。沿用 ⑥b 那招：AST 讀 live_panel.main()，**比名稱不比數值**
+#    （比數值的話 FAST_PCTL 改成 85、main() 還寫 80 也會過）。
+_main_fn = next(n for n in ast.parse(LPSRC).body if isinstance(n, ast.FunctionDef) and n.name == "main")
+_cfg_calls = [c for c in ast.walk(_main_fn) if isinstance(c, ast.Call)
+              and isinstance(c.func, ast.Attribute) and c.func.attr == "configure"
+              and isinstance(c.func.value, ast.Name) and c.func.value.id == "auto_fire"]
+chk("  ⛔ main() 裡叫 auto_fire.configure 剛好一次", len(_cfg_calls), 1)
+_pk = [k.value for c in _cfg_calls for k in c.keywords if k.arg == "pctl"]
+say(len(_pk) == 1 and isinstance(_pk[0], ast.Name) and _pk[0].id == "FAST_PCTL",
+    "  ⛔ main() 傳的 pctl 就是名稱 FAST_PCTL（⛔ 不是寫死的數字、不是別的名字）",
+    ast.unparse(_pk[0]) if _pk else "（沒有 pctl 參數）")
+_bad_main = ast.parse("def main():\n    auto_fire.configure(signal_at=SIGNAL_AT, pctl=70)\n")
+_bk = [k.value for c in ast.walk(_bad_main) if isinstance(c, ast.Call) for k in c.keywords
+       if k.arg == "pctl"]
+say(not (isinstance(_bk[0], ast.Name) and _bk[0].id == "FAST_PCTL"),
+    "    尺的自證：`pctl=70` 那種寫法這把尺判得出不對")
+say("pctl" not in AF.FAST_RULE, "  ⛔ auto_fire 裡沒有第二份百分位（FAST_RULE 不帶 pctl）",
+    str(AF.FAST_RULE))
+_rng = _np.random.RandomState(20260915)
+_moves = [round(float(x), 6) for x in _rng.uniform(0.01, 0.6, 55)]
+
+
+def _pct_manual(vals, q):
+    """線性內插的百分位（numpy 預設 method='linear' 的定義）—— ⛔ 故意不用 numpy。"""
+    s = sorted(vals)
+    pos = (len(s) - 1) * q / 100.0
+    lo = int(pos)
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+
+
+hist_seed(_moves)
+_rows, _bad, _dup = AF.hist_read()
+_v = AF.fast_verdict(DAY, 0.3, _rows)
+say(abs(_v["thr_pct"] - float(_np.percentile(_moves[-40:], 80))) < 1e-12,
+    "  ⛔ 門檻 ＝ numpy.percentile(最近 40 天, 80)", "%.6f" % _v["thr_pct"])
+say(abs(_v["thr_pct"] - _pct_manual(_moves[-40:], 80)) < 1e-9,
+    "  ⛔ 而且跟手寫的線性內插對得上（第二把尺）", "%.6f vs %.6f" % (
+        _v["thr_pct"], _pct_manual(_moves[-40:], 80)))
+chk("  只用最近 40 天（⛔ 不是 55 天全部）", _v["n"], 40)
+say(abs(_v["thr_pct"] - float(_np.percentile(_moves, 80))) > 1e-6,
+    "    尺的自證：55 天全部拿去算會是不同的數（⇒ 上面那條不是恆真）")
+say(abs(_v["thr_pct"] - float(_np.percentile(_moves[-40:], 70))) > 1e-6,
+    "    尺的自證：用舊的 70 算會是不同的數（⇒ 80 那條真的分得出 70／80）")
+# ⛔ 沒接百分位 ⇒ 不猜：fast_threshold 丟例外、configure 判 wired=False、state() 不崩
+_cfg_bak = dict(AF._CFG)
+_wired_bak = AF._ST["wired"]
+try:
+    for _bad_q in (None, True, 0, 101, "80"):
+        AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC,
+                     late_ms=LP.AUTO_LATE_MS, gap_s=LP.AUTO_GAP_S,
+                     sig_fn=LP.auto_sig, dirs_fn=LP.auto_dirs, eod_at=LP.EOD_CLOSE_AT,
+                     pctl=_bad_q)
+        chk(f"  ⛔ configure(pctl={_bad_q!r}) ⇒ wired=False（不送）", AF._ST["wired"], False)
+    try:
+        AF.fast_threshold([0.1] * 40)
+        _raised = False
+    except ValueError:
+        _raised = True
+    say(_raised, "  ⛔ 百分位沒接 ⇒ fast_threshold 丟例外（⛔ 不猜一個預設值）")
+    say(AF.state()["fast"]["verdict"] is None and AF.state()["rule"]["pctl"] is None,
+        "  ⛔ 百分位沒接 ⇒ state() 照樣回得出來（門檻留空）", str(AF.state()["fast"])[:120])
+finally:
+    AF._CFG.clear()
+    AF._CFG.update(_cfg_bak)
+    AF._ST["wired"] = _wired_bak
+# ⛔ 不含今天：歷史檔裡有今天那一列也不准算進門檻
+_today_row = json.dumps({"date": DAY, "ref": 12000.0, "px": 12120.0, "move_pct": 99.0,
+                         "ref_src": "prev_min_close"})
+with AF.FAST_HIST.open("a", encoding="utf-8") as _f:
+    _f.write(_today_row + "\n")
+_rows2, _, _ = AF.hist_read()
+chk("  ⛔ 今天那一列（99%）不算進門檻", AF.fast_verdict(DAY, 0.3, _rows2)["thr_pct"],
+    _v["thr_pct"])
+
+# ── ⑯b 壞列跳過並計數（⛔ 安靜地少是禁止的）
+print("\n  ── ⑯b 歷史檔的壞列：跳過並計數 ──")
+hist_seed(_moves)
+with AF.FAST_HIST.open("a", encoding="utf-8") as _f:
+    _f.write("{ 這一列不是 json\n")
+    _f.write(json.dumps({"date": "20260102", "move_pct": 0.1}) + "\n")       # 日期壞
+    _f.write(json.dumps({"date": "2020-01-02", "move_pct": "0.1"}) + "\n")   # 數字是字串
+    _f.write(json.dumps({"date": "2020-01-03", "move_pct": -0.1}) + "\n")    # 負的
+    _f.write(json.dumps({"date": "2020-01-06", "move_pct": True}) + "\n")    # bool
+    _f.write(json.dumps({"date": _rows[0]["date"], "move_pct": 50.0}) + "\n")  # 同一天第二列
+_rows3, _bad3, _dup3 = AF.hist_read()
+chk("  ⛔ 壞列數（5 種壞法各一列）", _bad3, 5)
+chk("  ⛔ 同一天第二列算重複（只認第一列）", _dup3, 1)
+chk("  好的那 55 天一天都沒少", len(_rows3), 55)
+chk("  ⛔ 門檻不受壞列／重複那一列影響", AF.fast_verdict(DAY, 0.3, _rows3)["thr_pct"],
+    _v["thr_pct"])
+reset()
+hist_seed(_moves)
+with AF.FAST_HIST.open("a", encoding="utf-8") as _f:
+    _f.write("{ 壞\n{ 也壞\n")
+arm_write("A")
+live_on()
+connect(SimAPI("Buy", 12013.0))
+run_signal(FakeToday())
+_r = merged()
+chk("  ⛔ 送單那一刻讀到的壞列數有落地（帳本那一列）", (_r.get("hist") or {}).get("bad"), 2)
+chk("  ⛔ 而且 state() 端得出去（畫面看得到）", AF.state()["fast"]["bad"], 2)
+chk("  ⛔ _ST 也記著（主控台印過）", AF._ST["hist_bad"], 2)
+
+# ── ⑯c not_fast：開盤不夠快 ⇒ 不送，而且那句話寫出走了多少、門檻多少
+print("\n  ── ⑯c 開盤不夠快 ⇒ 不送（not_fast）──")
+reset(hist=False)
+hist_seed([0.30] * 40)          # 門檻 0.30%；FakeToday 走 ≈0.042% ⇒ 慢
+arm_write("A")
+live_on()
+api = SimAPI("Buy", 12013.0)
+connect(api)
+run_signal(FakeToday())
+_r = merged()
+chk("  ⛔ 一張單都沒送", len(api.orders), 0)
+chk("  紀錄是 not_fast", (_r.get("rec"), _r.get("why")), ("skip", "not_fast"))
+_m = _r.get("why_msg") or ""
+say("不夠快" in _m and "0.04%" in _m and "0.30%" in _m and "約 5 點" in _m and "約 36 點" in _m,
+    "  ⛔ 那句話寫出今天走多少、門檻多少（% 與約略點數都寫）", _m)
+chk("  判定落地 slow", (_r.get("fast") or {}).get("verdict"), "slow")
+say(AF.WHY["not_fast"] not in (AF.WHY["no_hist"], AF.WHY["no_signal"], AF.WHY["no_trade"]),
+    "  ⛔ not_fast 有自己的一句話")
+
+# ── ⑯d no_hist：歷史不到 20 天 ⇒ 不送；剛好 20 天 ⇒ 會送（邊界）
+print("\n  ── ⑯d 歷史不夠（no_hist）與 min_n 的邊界 ──")
+for _n_days, _want_sent in ((0, False), (19, False), (20, True)):
+    reset(hist=False)
+    if _n_days:
+        hist_seed([0.01] * _n_days)
+    arm_write("A")
+    live_on()
+    api = SimAPI("Buy", 12013.0)
+    connect(api)
+    run_signal(FakeToday())
+    _r = merged()
+    if _want_sent:
+        chk(f"  歷史 {_n_days} 天 ⇒ 算得出門檻、走得快 ⇒ 送出", (_r.get("rec"), _r.get("ok")),
+            ("result", True))
+    else:
+        chk(f"  ⛔ 歷史 {_n_days} 天 ⇒ 一張單都沒送", len(api.orders), 0)
+        chk(f"    紀錄是 no_hist", (_r.get("rec"), _r.get("why")), ("skip", "no_hist"))
+        say(("%d 天" % _n_days) in (_r.get("why_msg") or "") and "20 天" in (_r.get("why_msg") or ""),
+            "    那句話講出現在有幾天、至少要幾天", _r.get("why_msg"))
+chk("  ⛔ min_n 就是 20（逐字）", AF.FAST_RULE["min_n"], 20)
+chk("  ⛔ window 就是 40、pctl 就是 80（逐字；2026-09-15 由 70 改 80）",
+    (AF.FAST_RULE["window"], AF.fast_pctl()), (40, 80))
+# 讀不出歷史檔 ⇒ no_hist（⛔ 不是崩掉、⛔ 不是當成快）
+reset(hist=False)
+AF.FAST_HIST.mkdir()           # 同名資料夾 ⇒ read_text 會丟例外
+arm_write("A")
+live_on()
+api = SimAPI("Buy", 12013.0)
+connect(api)
+_e0 = AF._ST["err_n"]
+run_signal(FakeToday())
+_r = merged()
+chk("  ⛔ 歷史檔讀不出來 ⇒ 一張單都沒送", len(api.orders), 0)
+chk("    紀錄是 no_hist（⛔ 不是 crashed）", _r.get("why"), "no_hist")
+say(AF._ST["err_n"] > _e0, "    ⛔ 而且有計數（不安靜地吞）", AF._ST["err"])
+AF.FAST_HIST.rmdir()
+
+# ── ⑯e `>=` 算快（研究：abs(move) >= percentile）
+print("\n  ── ⑯e 剛好等於門檻 ⇒ 算快（>=）──")
+hist_seed([0.05] * 40)
+_rows4, _, _ = AF.hist_read()
+chk("  走幅剛好 ＝ 門檻 ⇒ fast", AF.fast_verdict(DAY, 0.05, _rows4)["verdict"], "fast")
+chk("  差一點點 ⇒ slow", AF.fast_verdict(DAY, 0.0499999, _rows4)["verdict"], "slow")
+chk("  算不出今天走幅 ⇒ verdict None（⛔ 不是 slow）",
+    AF.fast_verdict(DAY, None, _rows4)["verdict"], None)
+
+# ── ⑯f 快 ⇒ 送出；tp_points ＝ sl_points ＝ round(px × 0.005)
+print("\n  ── ⑯f 停利停損 ＝ round(09:03:30 的價 × 0.5%) ──")
+chk("  12200 × 0.5% ⇒ 61", AF.tpsl_points(12200.0), 61)
+chk("  12345 × 0.5% ⇒ 62（61.725 四捨五入）", AF.tpsl_points(12345.0), 62)
+chk("  拿不到價 ⇒ None", AF.tpsl_points(None), None)
+reset()
+arm_write("A")
+live_on()
+api = SimAPI("Buy", 12350.0)
+connect(api)
+run_signal(FakeToday(px=12345.0, p900=12300.0, open845=12290.0))
+_r = merged()
+o = sent_orders(api)
+chk("  送出 2 張（進場 ＋ 停利）", len(o), 2)
+chk("  ⛔ 帳本 tp_points ＝ round(12345 × 0.005) ＝ 62", _r.get("tp_points"), 62)
+chk("  ⛔ 帳本 sl_points ＝ 62", _r.get("sl_points"), 62)
+chk("  ⛔ 停利單價 ＝ 實際成交 12350 + 62", o[1]["price"], 12412)
+chk("  ⛔ 部位 sl_points ＝ 62（停損迴圈讀它）", broker._state["position"].get("sl_points"), 62.0)
+chk("  ⛔ 部位 tp_points ＝ 62", broker._state["position"].get("tp_points"), 62.0)
+_fire_row = [x for x in rows() if x.get("rec") == "fire"]
+chk("  ⛔ 「要送了」那一列（先落地）就帶著 sl_points（送到一半當掉也補得回來）",
+    (_fire_row[0] if _fire_row else {}).get("sl_points"), 62)
+
+# ── ⑯g 參考價：09:00 以前最後一筆（minute_close[539]）優先，拿不到才退 bar_open
+print("\n  ── ⑯g 參考價與歷史檔的那一列 ──")
+reset()
+arm_clear()                     # ⛔ 開關關著也要寫歷史
+live_on()
+connect(ExplodeAPI())
+run_signal(FakeToday(px=12010.0, p900=12005.0, c0859=11998.0))
+_h = [x for x in AF.hist_read()[0] if x["date"] == DAY]
+chk("  ⛔ 開關關著 ⇒ 照樣寫進今天那一列", len(_h), 1)
+chk("  ref ＝ minute_close[539]（09:00 以前最後一筆）", (_h[0] if _h else {}).get("ref"), 11998.0)
+chk("  ref_src ＝ prev_min_close", (_h[0] if _h else {}).get("ref_src"), "prev_min_close")
+chk("  px ＝ 09:03:30 那一刻的價", (_h[0] if _h else {}).get("px"), 12010.0)
+say(abs((_h[0] if _h else {}).get("move_pct", -1) - 12 / 11998 * 100) < 1e-5,
+    "  move_pct ＝ |px − ref| / ref × 100", str((_h[0] if _h else {}).get("move_pct")))
+chk("  place_order 0 次（關著）", SENT["n"], 0)
+_snap = LP._auto_snap(FakeToday(p900=12005.0), datetime.datetime.combine(TODAY, _sig_time(0)))
+chk("  沒有 minute_close[539] ⇒ 退到 minute_bar[540]['o']", (_snap["ref0900"], _snap["ref_src"]),
+    (12005.0, "bar_open"))
+_snap = LP._auto_snap(FakeToday(p900=None), datetime.datetime.combine(TODAY, _sig_time(0)))
+chk("  兩個都沒有 ⇒ None", (_snap["ref0900"], _snap["ref_src"]), (None, None))
+
+print("\n  ── ⑯h 歷史檔同一天不重寫；報價不能用就不寫（並落地原因）──")
+reset()
+_s = LP._auto_snap(FakeToday(), datetime.datetime.combine(TODAY, _sig_time(100)))
+_h1 = AF._hist_step(DAY, _s)
+_n1 = len(AF.FAST_HIST.read_text(encoding="utf-8").splitlines())
+_h2 = AF._hist_step(DAY, _s)                   # 看門狗重啟：同一天再跑一次
+_n2 = len(AF.FAST_HIST.read_text(encoding="utf-8").splitlines())
+chk("  第一次寫進去", (_h1["wrote"], _h1["why"]), (True, None))
+chk("  ⛔ 第二次不寫（already）", (_h2["wrote"], _h2["why"]), (False, "already"))
+chk("  ⛔ 檔案行數沒變", _n2, _n1)
+reset()
+_n0 = len(AF.FAST_HIST.read_text(encoding="utf-8").splitlines())
+for _nm, _st, _why in (("報價太舊", FakeToday(age=30.0), "quote_stale"),
+                       ("只有中價", FakeToday(is_mid=True), "mid_only"),
+                       ("沒有成交價", FakeToday(px=None), "no_quote"),
+                       ("拿不到 09:00 以前的價", FakeToday(p900=None), "no_ref")):
+    _hh = AF._hist_step(DAY, LP._auto_snap(_st, datetime.datetime.combine(TODAY, _sig_time(100))))
+    chk(f"  ⛔ {_nm} ⇒ 不寫，原因 {_why}", (_hh["wrote"], _hh["why"]), (False, _why))
+chk("  ⛔ 那四種一列都沒寫進去", len(AF.FAST_HIST.read_text(encoding="utf-8").splitlines()), _n0)
+reset()
+arm_write("A")
+live_on()
+connect(ExplodeAPI())
+run_signal(FakeToday(age=30.0))
+chk("  ⛔ 原因落地在帳本那一列（hist.why）", (merged().get("hist") or {}).get("why"), "quote_stale")
+
+# ── ⑯i 每一口自己的停損：check_real_position 讀 sl_points
+print("\n  ── ⑯i 停損迴圈讀這一口自己的 sl_points（沒有才用 SL_POINTS）──")
+_closes = []
+_realclose2 = broker.close
+broker.close = lambda reason: (_closes.append(reason), (True, None))[1]
+try:
+    for _nm, _pos, _px, _want in (
+            ("自動下單那一口（sl 230）・跌 131 點 ⇒ 不停損", {"sl_points": 230.0}, 12000 - 131, 0),
+            ("自動下單那一口（sl 230）・跌 229 點 ⇒ 不停損", {"sl_points": 230.0}, 12000 - 229, 0),
+            ("自動下單那一口（sl 230）・跌 230 點 ⇒ 停損", {"sl_points": 230.0}, 12000 - 230, 1),
+            ("手動真單（沒有 sl_points）・跌 130 點 ⇒ 停損（仍用 SL_POINTS）", {}, 12000 - LP.SL_POINTS, 1),
+            ("手動真單（沒有 sl_points）・跌 129 點 ⇒ 不停損", {}, 12000 - LP.SL_POINTS + 1, 0),
+            ("sl_points 壞掉（bool）⇒ 退回 SL_POINTS", {"sl_points": True}, 12000 - LP.SL_POINTS, 1),
+            ("sl_points 壞掉（0）⇒ 退回 SL_POINTS", {"sl_points": 0}, 12000 - LP.SL_POINTS, 1)):
+        _closes.clear()
+        broker._state["position"] = dict({"dir": "long", "entry": 12000.0, "qty": 1,
+                                          "entry_time": "09:03:31", "target_trade": None,
+                                          "recovered": False}, **_pos)
+        LP.check_real_position(float(_px), 0, "day")
+        chk("  " + _nm, len(_closes), _want)
+    # 做空那一邊（停損在上面）
+    _closes.clear()
+    broker._state["position"] = {"dir": "short", "entry": 12000.0, "qty": 1, "sl_points": 230.0}
+    LP.check_real_position(12000.0 + 200, 0, "day")
+    chk("  做空・漲 200（sl 230）⇒ 不停損", len(_closes), 0)
+    LP.check_real_position(12000.0 + 230, 0, "day")
+    chk("  做空・漲 230（sl 230）⇒ 停損", len(_closes), 1)
+finally:
+    broker.close = _realclose2
+live_off()                                       # ⛔ 演練模式 ⇒ reconcile_tick 不會去動部位
+broker._state["position"] = {"dir": "long", "entry": 12000.0, "qty": 1, "sl_points": 230.0,
+                             "tp_points": 230.0, "target_trade": None, "recovered": False}
+_rs = LP.real_state(12000.0, "closed", 0)       # closed ⇒ 停損迴圈直接 return（不送單）
+chk("  ⛔ 畫面的停損價也用這一口自己的點數（不然畫面寫 −130、實際 −230）",
+    (_rs.get("sl"), _rs.get("tp"), _rs.get("sl_pts")), (11770.0, 12230.0, 230.0))
+broker._state["position"] = None
+live_on()
+
+# ── ⑯i2 ⛔⛔ 壞掉的 sl_points（0／負數／inf／極大／超過進場價 2%）⇒ 退回 SL_POINTS 並示警
+#    （2026-09-15 QA 退件 L10：拿掉 `v <= 0` 全綠 —— 舊測資「跌 130 點」用 0 也會停，分不出來；
+#     inf／1e11 會讓停損價落在永遠碰不到的地方 ⇒ 停損永遠不觸發，PM 升為必修）
+print("\n  ── ⑯i2 ⛔⛔ 壞掉的 sl_points ⇒ 用 SL_POINTS ＋ 示警 ──")
+_closes = []
+_realclose3 = broker.close
+broker.close = lambda reason: (_closes.append(reason), (True, None))[1]
+try:
+    chk("  ⛔ 上限比例就是 2%（逐字）", LP.POS_POINTS_MAX_FRAC, 0.02)
+    # 跌 SL_POINTS−1 點：用 SL_POINTS ⇒ 不停；用壞值（0／負數把停損價放到進場價或更上面）⇒ 會停 ⇒ 分得出來
+    for _nm, _v in (("0", 0), ("負數 −50", -50.0), ("0.0", 0.0)):
+        _closes.clear()
+        _bad0 = LP.POS_POINTS_BAD["n"]
+        broker._state["position"] = {"dir": "long", "entry": 12000.0, "qty": 1, "sl_points": _v}
+        LP.check_real_position(12000.0 - LP.SL_POINTS + 1, 0, "day")
+        chk(f"  ⛔ sl_points={_nm}・差 1 點沒到 SL_POINTS ⇒ **不停**（用 SL_POINTS，不是 {_nm}）",
+            len(_closes), 0)
+        _pp = broker._state["position"]
+        say("壞掉" in (_pp.get("sl_warn") or "") and LP.POS_POINTS_BAD["n"] == _bad0 + 1,
+            "    ⛔ 而且示警（sl_warn ＋ 計數）", _pp.get("sl_warn"))
+        LP.check_real_position(12000.0 - LP.SL_POINTS, 0, "day")
+        chk("    跌滿 SL_POINTS ⇒ 停（SL_POINTS 生效）", len(_closes), 1)
+        chk("    ⛔ 同一口同一個壞值只示警一次（主迴圈 4Hz 不刷主控台）", LP.POS_POINTS_BAD["n"], _bad0 + 1)
+    # 太大：inf／1e11／超過進場價 2%（12000 × 2% ＝ 240）／nan ⇒ 用 SL_POINTS ⇒ 跌滿就停
+    for _nm, _v in (("inf", float("inf")), ("1e11", 1e11), ("241（> 2%）", 241.0),
+                    ("nan", float("nan"))):
+        _closes.clear()
+        broker._state["position"] = {"dir": "long", "entry": 12000.0, "qty": 1, "sl_points": _v}
+        LP.check_real_position(12000.0 - LP.SL_POINTS, 0, "day")
+        chk(f"  ⛔ sl_points={_nm}・跌滿 SL_POINTS ⇒ 停（⛔ 不是永遠不觸發）", len(_closes), 1)
+        say("壞掉" in (broker._state["position"].get("sl_warn") or ""), "    ⛔ 而且示警",
+            broker._state["position"].get("sl_warn"))
+    # 邊界：剛好 2%（240）⇒ 可信 ⇒ 做空漲 239 不停、漲 240 停
+    _closes.clear()
+    broker._state["position"] = {"dir": "short", "entry": 12000.0, "qty": 1, "sl_points": 240.0}
+    LP.check_real_position(12000.0 + 239, 0, "day")
+    chk("  剛好 2%（240）是可信的・做空漲 239 ⇒ 不停", len(_closes), 0)
+    LP.check_real_position(12000.0 + 240, 0, "day")
+    chk("  做空漲 240 ⇒ 停", len(_closes), 1)
+    chk("    ⛔ 可信的值不示警", broker._state["position"].get("sl_warn"), None)
+    chk("  進場價看不懂 ⇒ 檢查不了上限 ⇒ 不信 sl_points",
+        LP.pos_sl_points({"entry": None, "sl_points": 230.0}), LP.SL_POINTS)
+    _m = {"dir": "long", "entry": 12000.0, "qty": 1}
+    chk("  ⛔ 手動真單沒有 sl_points ⇒ SL_POINTS 且**不示警**",
+        (LP.pos_sl_points(_m), _m.get("sl_warn")), (LP.SL_POINTS, None))
+    live_off()
+    broker._state["position"] = {"dir": "long", "entry": 12000.0, "qty": 1, "sl_points": float("inf"),
+                                 "target_trade": None, "recovered": False}
+    _rs3 = LP.real_state(12000.0, "closed", 0)
+    chk("  ⛔ 畫面的停損價也退回 SL_POINTS（跟停損迴圈同一支）", _rs3.get("sl"), 12000.0 - LP.SL_POINTS)
+finally:
+    broker.close = _realclose3
+    broker._state["position"] = None
+    live_on()
+
+# ── ⑯f2 ⛔ _fire 算走幅用的是 ref0900（09:00 以前最後一筆），⛔ 不是方向用的 p0900
+#    （QA 退件 A10：⑯g 只驗快照值，_fire 改用 p0900 全綠）。
+#    測資讓兩個參考價算出的快慢**相反**（門檻 0.07%，px 12010）：
+#      11998 ⇒ 0.100%（快）　12005 ⇒ 0.042%（慢）
+print("\n  ── ⑯f2 ⛔ _fire 的走幅用 ref0900（跟 p0900 算出相反判定的測資）──")
+for _nm, _c0859, _p900, _want in (("ref0900 算快、p0900 算慢", 11998.0, 12005.0, ("result", "fast")),
+                                   ("ref0900 算慢、p0900 算快", 12005.0, 11998.0, ("skip", "slow"))):
+    reset(hist=False)
+    hist_seed([0.07] * 40)
+    arm_write("A")
+    live_on()
+    api = SimAPI("Buy", 12013.0)
+    connect(api)
+    run_signal(FakeToday(px=12010.0, p900=_p900, c0859=_c0859))
+    _r = merged()
+    _f = _r.get("fast") or {}
+    chk(f"  ⛔ {_nm} ⇒ 照 ref0900 判（{_want[1]}）", (_r.get("rec"), _f.get("verdict")), _want)
+    say(_f.get("move_pct") == round(abs(12010.0 - _c0859) / _c0859 * 100, 4),
+        "    落地的 move_pct ＝ |px − ref0900| / ref0900", str(_f.get("move_pct")))
+arm_clear()
+
+# ── ⑯j 重啟撿回部位：從帳本補回 sl_points
+print("\n  ── ⑯j ⛔⛔ 重啟撿回部位 ⇒ 從今天帳本補回 sl_points ──")
+
+
+class RecAPI(ExplodeAPI):
+    """券商上有一口（重啟後撿回來的形狀）。"""
+
+    def __init__(self, side, px, qty=1):
+        self.side, self.px, self.qty = side, px, qty
+
+    def list_positions(self, acc=None):
+        return [type("P", (), {"code": "TMFI6", "quantity": self.qty,
+                               "direction": self.side, "price": self.px})()]
+
+
+def _auto_opened(px=12345.0, fill=12350.0):
+    """走完整條 09:03:30 的路，讓帳本上有一口自動下單開出來的部位（sl_points＝62）。"""
+    reset()
+    arm_write("A")
+    live_on()
+    connect(SimAPI("Buy", fill))
+    run_signal(FakeToday(px=px, p900=px - 45, open845=px - 55))
+    return merged()
+
+
+_ent = _auto_opened()
+chk("  前置：帳本上有一口自動下單（sl_points 62）", (_ent.get("ok"), _ent.get("sl_points")), (True, 62))
+# 看門狗重啟：記憶體全沒了，只剩帳本與券商
+_old_hook = broker.RECOVER_HOOK
+try:
+    broker.RECOVER_HOOK = AF.recover_meta
+    AF._MEM.update({"date": None, "entry": None, "state": None})
+    AF._mem_load(DAY)                           # ＝ start() 開機那一刻
+    broker._state["position"] = None
+    broker._state["api"] = RecAPI("Buy", 12350.0)
+    _p = broker.reconcile()
+    say(isinstance(_p, dict) and _p.get("recovered"), "  前置：reconcile 撿回一口部位", str(_p))
+    chk("  ⛔⛔ 撿回來那一刻就補回 sl_points（主迴圈上、只讀記憶體）",
+        (_p or {}).get("sl_points"), 62.0)
+    chk("    sl_src ＝ autofire", (_p or {}).get("sl_src"), "autofire")
+    chk("    ⛔ 停損迴圈拿到的是 62，不是 SL_POINTS", LP.pos_sl_points(_p), 62.0)
+
+    print("    ── 記憶體還沒有今天的帳本（開機還沒讀到）⇒ 送單執行緒補 ──")
+    AF._MEM.update({"date": None, "entry": None, "state": None})
+    broker._state["position"] = None
+    _p = broker.reconcile()
+    chk("    撿回來那一刻補不起來（sl_src 還是空的 ⇒ 暫時用 SL_POINTS）",
+        ((_p or {}).get("sl_src"), LP.pos_sl_points(_p)), (None, LP.SL_POINTS))
+    AF._recover_poll()                           # ＝ 送單執行緒 0.5 秒後醒來
+    chk("    ⛔ 送單執行緒讀帳本補回 62", ((_p or {}).get("sl_points"), (_p or {}).get("sl_src")),
+        (62.0, "autofire"))
+    say("62" in (AF._ST["rec_msg"] or ""), "    主控台／畫面講得出補回來了", AF._ST["rec_msg"])
+
+    print("    ── ⛔ 對不上（進場價差 5 點）⇒ 維持 SL_POINTS 並示警 ──")
+    AF._mem_load(DAY)
+    broker._state["position"] = None
+    broker._state["api"] = RecAPI("Buy", 12355.0)
+    _p = broker.reconcile()
+    chk("    ⛔ 沒有 sl_points（用手動那一套）", (_p or {}).get("sl_points"), None)
+    chk("    sl_src ＝ unmatched", (_p or {}).get("sl_src"), "unmatched")
+    say("對不上" in ((_p or {}).get("sl_warn") or "") and "進場價" in ((_p or {}).get("sl_warn") or ""),
+        "    ⛔ sl_warn 講得出差在哪", (_p or {}).get("sl_warn"))
+    chk("    ⛔ 停損迴圈用 SL_POINTS", LP.pos_sl_points(_p), LP.SL_POINTS)
+    AF._REC_SEEN["pos"] = None
+    AF._ST["rec_msg"] = None
+    AF._recover_poll()
+    say("對不上" in (AF._ST["rec_msg"] or ""), "    ⛔ 主控台／畫面講出來（rec_msg）", AF._ST["rec_msg"])
+    _st = AF.state()
+    say((_st.get("pos_sl") or {}).get("sl_warn"), "    ⛔ /api/fire/state 端得出那句警告",
+        str(_st.get("pos_sl")))
+    _rs2 = LP.real_state(12355.0, "closed", 0)
+    say(((_rs2.get("position") or {}).get("sl_warn")), "    ⛔ /api/state 的真實部位也端得出那句警告")
+
+    print("    ── ⛔ 口數不一樣（他加碼成 2 口）⇒ 維持 SL_POINTS ──")
+    broker._state["position"] = None
+    broker._state["api"] = RecAPI("Buy", 12350.0, qty=2)
+    _p = broker.reconcile()
+    chk("    ⛔ 2 口 ⇒ 不補（unmatched）", ((_p or {}).get("sl_points"), (_p or {}).get("sl_src")),
+        (None, "unmatched"))
+
+    print("    ── 今天自動下單沒有開出部位 ⇒ 撿回來的是手動那一口（不示警）──")
+    reset()
+    arm_clear()
+    live_on()
+    connect(ExplodeAPI())
+    run_signal(FakeToday())
+    AF._mem_load(DAY)
+    broker.RECOVER_HOOK = AF.recover_meta
+    broker._state["position"] = None
+    broker._state["api"] = RecAPI("Buy", 12010.0)
+    _p = broker.reconcile()
+    chk("    sl_src ＝ manual、沒有 sl_warn", ((_p or {}).get("sl_src"), (_p or {}).get("sl_warn")),
+        ("manual", None))
+    chk("    停損用 SL_POINTS", LP.pos_sl_points(_p), LP.SL_POINTS)
+
+    print("    ── 今天那一張停在「送出去了但不知道結果」⇒ 認不出來 ⇒ SL_POINTS ＋ 示警 ──")
+    reset()
+    AF._append({"rec": "fire", "stage": "sending", "date": DAY, "method": "A",
+                "dir": "long", "px": 12010.0, "sl_points": 60, "live": True})
+    AF._mem_load(DAY)
+    broker._state["position"] = None
+    broker._state["api"] = RecAPI("Buy", 12013.0)
+    _p = broker.reconcile()
+    say((_p or {}).get("sl_src") == "unmatched" and "不知道下場" in ((_p or {}).get("sl_warn") or ""),
+        "    ⛔ unmatched ＋ 講得出「不知道下場」", str(_p))
+
+    print("    ── 掛勾自己丟例外 ⇒ reconcile 照樣撿得回部位（⛔ 對帳路徑不准被帶掉）──")
+    broker.RECOVER_HOOK = lambda pos: 1 / 0
+    broker._state["position"] = None
+    _p = broker.reconcile()
+    say(isinstance(_p, dict) and _p.get("sl_src") == "unmatched" and _p.get("sl_warn"),
+        "    ⛔ 部位撿回來了、用 SL_POINTS、而且講出來", str(_p))
+    broker.RECOVER_HOOK = None
+    broker._state["position"] = None
+    _p = broker.reconcile()
+    chk("    沒接掛勾（治具／--replay）⇒ 照舊（沒有 sl_src，停損用 SL_POINTS）",
+        ((_p or {}).get("sl_src"), LP.pos_sl_points(_p)), (None, LP.SL_POINTS))
+finally:
+    broker.RECOVER_HOOK = _old_hook
+    broker._state["position"] = None
+
+# ── ⑯k 主迴圈上的函式：⛔ 沒有 I/O／鎖／網路（AST）
+print("\n  ── ⑯k ⛔ 主迴圈會走到的函式裡沒有新增 I/O（AST）──")
+# ⚠️ `print` **不算** I/O：這個專案明令「不可以安靜地吞」，主控台那一行是規定要有的。
+#    `get` 是 dict.get（記憶體），底下逐一排除。
+_IO = {"open", "read_text", "write_text", "read_bytes", "write_bytes", "mkdir", "stat",
+       "exists", "unlink", "sleep", "acquire", "put", "hist_read", "_hist_step",
+       "_rows_of", "_auto_entry", "_mem_load", "_append", "urlopen", "reconcile",
+       "broker_position", "list_positions", "enter", "close", "load", "loads", "dumps"}
+
+
+def _calls_of(tree_, name):
+    fn_ = next((n for n in ast.walk(tree_) if isinstance(n, ast.FunctionDef) and n.name == name), None)
+    if fn_ is None:
+        return None
+    return sorted({(c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, "id", "?"))
+                   for c in ast.walk(fn_) if isinstance(c, ast.Call)})
+
+
+_af_tree = ast.parse(pathlib.Path(AF.__file__).read_text(encoding="utf-8"))
+_lp_tree = ast.parse(LPSRC)
+_bk_tree = ast.parse(pathlib.Path(broker.__file__).read_text(encoding="utf-8"))
+for _tr, _nm in ((_lp_tree, "check_real_position"), (_lp_tree, "pos_sl_points"),
+                 (_lp_tree, "_pos_points"), (_lp_tree, "_auto_snap"), (_lp_tree, "_auto_tick"),
+                 (_af_tree, "on_signal"), (_af_tree, "on_eod"), (_af_tree, "recover_meta"),
+                 (_af_tree, "_recover_decide"), (_af_tree, "_looks_ours"),
+                 (_bk_tree, "_recover_meta")):
+    _cs = _calls_of(_tr, _nm)
+    _hit = sorted(set(_cs or []) & _IO)
+    # check_real_position 本來就會叫 broker.close（停損，既有行為）；
+    # on_signal／on_eod 本來就是 put_nowait（不在 _IO 裡）
+    if _nm == "check_real_position":
+        _hit = [x for x in _hit if x != "close"]
+    say(_cs is not None and not _hit, f"  ⛔ {_nm}：沒有 I/O／鎖／網路", f"{_hit} ⊂ {_cs}")
+
+# ── ⑯l 畫面：規則文字從後端來（⛔ 不寫死 0.5／40／70）
+print("\n  ── ⑯l 端點與畫面 ──")
+reset()
+_st = AF.state()
+chk("  state() 端出規則數字", _st.get("rule"), {"window": 40, "pctl": 80, "min_n": 20, "tpsl_pct": 0.5})
+say(isinstance(_st.get("fast"), dict) and _st["fast"].get("thr_pct") is not None,
+    "  state() 端出今天的門檻", str(_st.get("fast")))
+chk("  ⛔ 09:03:30 之前不預告判定（verdict None）", _st["fast"].get("verdict"), None)
+say("tp" not in _st, "  ⛔ state() 不再端出手動那個 tp（±130）", str(sorted(_st)))
+_c, _ct, _b = hit("/api/fire/state")
+say(_c in (200, 403), "  （/api/fire/state 行為面由 test_fire_routes 驗）", str(_c))
+_alp = page[page.index("function alPaint"):page.index("function alOnHTML")]
+_alp_nc = _re.sub(r"/\*.*?\*/", " ", _alp, flags=_re.S)
+say("alFastHTML(D)" in _alp_nc and "setEl('alfast'" in _alp_nc,
+    "  畫面畫得出今天的門檻與判定（#alfast）")
+_alon_nc2 = _re.sub(r"/\*.*?\*/", " ", page[page.index("function alOnHTML"):page.index("function alArm")],
+                    flags=_re.S)
+chk("  ⛔ 打開鈕只剩一顆（data-alon=\"A\"，B 那顆拿掉）",
+    (_alon_nc2.count('data-alon="A"'), _alon_nc2.count('data-alon="B"')), (1, 0))
+_rule_js = page[page.index("function alPct("):page.index("function alFastHTML(")]
+say("0.005" not in _rule_js and "0.5" not in _re.sub(r"/\*.*?\*/", " ", _rule_js, flags=_re.S),
+    "  ⛔ 前端規則那一句沒有寫死 0.5／0.005（一律 D.rule）")
+_rule_nc = _re.sub(r"/\*.*?\*/", " ", _rule_js, flags=_re.S)
+say(not _re.search(r"(?<![\w.])(40|80|70|20)(?![\w.])", _rule_nc) and "alPctlTxt(D)" in _rule_nc
+    and "r.pctl" in _rule_nc and "r.window" in _rule_nc,
+    "  ⛔ 「比過去 40 天裡 8 成的日子快」那半句的 40／80 從 D.rule 來（⛔ 沒有寫死 40／80／70／20）")
+say('id="alfast"' in fire_html, "  #alfast 在【自動下單】那一頁的骨架裡")
+
+# ── ⑯m 種子腳本（build_fast_hist.py）：ref／px 的定義與「只 append、不重寫」
+print("\n  ── ⑯m 種子腳本：ref ＝ 09:00 以前最後一筆、px ＝ 09:03:30 以前最後一筆 ──")
+import build_fast_hist as BF                                          # noqa: E402
+import gzip as _gz                                                    # noqa: E402
+
+_seed_dir = TMP / "seedticks"
+_seed_dir.mkdir(exist_ok=True)
+
+
+def _mk_day(d, rows):
+    """rows：[(時間字串, 成交價)] ⇒ 寫一個 YYYY-MM-DD.csv.gz（欄位跟研究資料一樣）。"""
+    txt = "ts,close,volume,bid_price,bid_volume,ask_price,ask_volume,tick_type\n"
+    for t, px in rows:
+        txt += f"{d} {t},{px},1,{px - 1},1,{px},1,1\n"
+    with _gz.open(_seed_dir / f"{d}.csv.gz", "wt", encoding="utf-8") as f:
+        f.write(txt)
+
+
+# ⚠️ 08:44 那一筆在日盤之外（研究的 load_day 只留 08:45~13:45）⇒ 不可以被當成 ref
+_mk_day("2026-01-05", [("08:44:59.000", 11900.0), ("08:45:00.100", 12000.0),
+                       ("08:59:59.900", 12001.0), ("09:00:00.000", 12002.0),
+                       ("09:00:00.100", 12050.0), ("09:03:29.999", 12062.0),
+                       ("09:03:30.000", 12063.0), ("09:03:30.001", 12999.0),
+                       ("13:44:00.000", 12080.0)])
+_row, _why = BF.day_row(_seed_dir / "2026-01-05.csv.gz")
+chk("  ref ＝ 09:00:00.000（含）以前最後一筆", (_row or {}).get("ref"), 12002.0)
+chk("  px ＝ 09:03:30.000（含）以前最後一筆（⛔ 不是之後那一筆 12999）",
+    (_row or {}).get("px"), 12063.0)
+# ⚠️ 那一列的 move_pct 是 round(…, 6) 落地的（跟面板 _hist_step 同一個精度）⇒ 容差要跟精度一致，
+#    用 1e-9 量 6 位小數是尺的問題，不是產品的問題（第一版就是這樣紅的）。
+say(abs((_row or {}).get("move_pct", -1) - abs(12063.0 - 12002.0) / 12002.0 * 100) < 1e-6
+    and (_row or {}).get("move_pct") == round(AF.move_pct(12063.0, 12002.0), 6),
+    "  move_pct 跟產品同一支 move_pct()（round 6 位）", str((_row or {}).get("move_pct")))
+chk("  ref_src ＝ seed", (_row or {}).get("ref_src"), "seed")
+# 09:00 以前沒有成交 ⇒ ⛔ 跳過，不猜
+_mk_day("2026-01-06", [("09:00:00.100", 12050.0), ("09:03:00.000", 12062.0)])
+_row2, _why2 = BF.day_row(_seed_dir / "2026-01-06.csv.gz")
+say(_row2 is None and "09:00" in (_why2 or ""), "  ⛔ 09:00 以前沒有成交 ⇒ 跳過並講原因", _why2)
+_mk_day("2026-01-07", [("08:46:00.000", 12000.0), ("08:59:00.000", 12001.0)])
+_row3, _why3 = BF.day_row(_seed_dir / "2026-01-07.csv.gz")
+say(_row3 is None and "09:03:30" in (_why3 or ""),
+    "  ⛔ 09:00~09:03:30 之間沒有成交 ⇒ 跳過（⛔ 不准拿 08:59 那一筆當 px 寫成走幅 0%）", _why3)
+# 09:00~09:03:30 之間沒有成交、但 09:03:30 之後有 ⇒ 一樣跳過（last_before 會退回 08:59 那一筆）
+_mk_day("2026-01-08", [("08:46:00.000", 12000.0), ("08:59:00.000", 12001.0),
+                       ("09:05:00.000", 12100.0)])
+_row3b, _why3b = BF.day_row(_seed_dir / "2026-01-08.csv.gz")
+say(_row3b is None and "09:03:30" in (_why3b or ""),
+    "  ⛔ 09:03:30 之後才有成交 ⇒ 也跳過（px 不准退回 09:00 以前那一筆）", _why3b)
+_out = TMP / "seed_out.jsonl"
+if _out.exists():
+    _out.unlink()
+BF.main([str(_seed_dir), "--out", str(_out), "--before", "2026-06-01"])
+_sr, _sb, _sd = AF.hist_read(_out)
+chk("  寫出來的是產品讀得懂的格式（1 天）", (len(_sr), _sb, _sd), (1, 0, 0))
+BF.main([str(_seed_dir), "--out", str(_out), "--before", "2026-06-01"])
+_sr2, _, _ = AF.hist_read(_out)
+chk("  ⛔ 再跑一次不會重複寫（只 append、已經有的日子跳過）", len(_sr2), 1)
+_out2 = TMP / "seed_out2.jsonl"
+BF.main([str(_seed_dir), "--out", str(_out2), "--before", "2026-01-05"])
+_sr3, _, _ = AF.hist_read(_out2)
+chk("  ⛔ --before 是**不含**那一天（今天那一列留給面板自己寫）", len(_sr3), 0)
+BF.main([str(_seed_dir), "--out", str(_out2), "--before", "2026-01-06"])
+_sr4, _, _ = AF.hist_read(_out2)
+chk("    尺的自證：--before 往後一天就收得到那一天", len(_sr4), 1)
+
 # ══ ⑪ ⛔ 全程沒有指回真的資料夾 ════════════════════════════════════════
 print("\n=== ⑪ ⛔ 全程沒有寫到他真的資料夾 ===")
 now_paths = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DIR,
              "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
              "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
-             "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR}
+             "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST}
+say(_hist_fp(REAL_PATHS["AF.FAST_HIST"]) == _REAL_HIST0,
+    "  ⛔ 真的 fast_hist.jsonl 全程沒被動過（在不在、大小、修改時間都跟開跑前一樣）",
+    str(_REAL_HIST0))
 for k, real in REAL_PATHS.items():
     say(now_paths[k] != real and str(TMP) in str(now_paths[k]),
         f"  {k} 全程都在暫存區", str(now_paths[k]))

@@ -39,12 +39,39 @@
    與 UTF-16 都當**主流程**處理（CLAUDE.md：第一次一定會失敗的路徑要當成主流程做）。
 
 - **檔案不存在** ⇒ 完全不送，畫面上寫「關閉中」。這是出貨狀態。
-- **內容是 `A`** ⇒ 用「5 分 K」（09:00 那根到 09:03:30 是漲是跌）。
-- **內容是 `B`** ⇒ 用「開盤起」（08:45 到 09:03:30 是漲是跌）。
+- **內容是 `A`** ⇒ 用「開盤快才做」（見下面〈2026-09-15 規則〉）。
+- ⛔ **`B` 已經不支援**（2026-09-15 Benson 決定自動下單只剩 A）：寫 B ⇒ 拒絕下單，
+  而且那句話要講清楚「B 已經不支援」，⛔ 不可以只說「看不懂」。
 - **其他任何內容**（空的、`C`、`D`、`A B`、亂碼…）⇒ **拒絕下單並把讀到什麼講出來**。
   ⛔ 不准猜、不准挑一個預設值 —— 猜錯就是送出一口方向相反的單。
-- **一次只能一個做法**。檔案裡只放一個字母，結構上就送不出兩口
-  （兩個做法各送一口＝一天兩口，那不是他要的）。
+- **一次只能一個做法**。檔案裡只放一個字母，結構上就送不出兩口。
+
+================================================================
+⭐⭐ 2026-09-15 規則：「開盤衝得快才做」（⛔ 只有自動下單換規則）
+================================================================
+研究在 tick-research/scripts/benson_rule.py、exam25h2.py（事先登記、跑完不改）。
+⛔ **手動真單、練習下單、【自動下單（模擬）】維持 ±130 不動** —— Benson 選的是只改自動下單。
+  1. 09:03:30 那一刻（快照是 live_panel 主迴圈給的同一份，⛔ 不自己再讀一次價）：
+     方向＝做法 A（09:03:30 的價 − 09:00 的價，≥0 做多）。
+  2. **快不快**：`move_pct = |px − ref| / ref × 100`
+       px  ＝ 09:03:30 那一刻的成交價（就是停損看的那個價）
+       ref ＝ **09:00 以前最後一筆成交**（`minute_close[539]`），拿不到才退到
+             09:00 那一分鐘第一筆（`minute_bar[540]["o"]`），用了哪一種記在 `ref_src`。
+     門檻 ＝ 過去最近 `FAST_RULE["window"]`（40）個交易日（⛔ 不含今天）的 move_pct，
+             `numpy.percentile(…, pctl)`（**80**，預設線性內插，跟研究同一個算法）。
+             ⚠️ 百分位的正本是 `live_panel.FAST_PCTL`，經 `configure(pctl=…)` 接過來（`_CFG["pctl"]`）。
+             ⚠️ 2026-09-15 下午由 70 改 80（Benson 拍板）：研究 17 組測試裡唯一過多重檢定門檻的是 80。
+     少於 `FAST_RULE["min_n"]`（20）天 ⇒ **不送**（`no_hist`）。
+     `move_pct >= 門檻` ⇒ 送；否則不送（`not_fast`），畫面寫出走了多少、門檻多少。
+  3. 停利停損 ＝ **±0.5% of 09:03:30 的 px**：`pts = round(px × 0.005)`。
+     停利掛券商（用實際成交價 ± pts，broker 既有行為）；停損 ⇒ **這一口部位自己帶
+     `sl_points`**（`broker.enter(..., sl_points=pts)`），面板的停損迴圈讀它
+     （手動真單沒有這個欄位 ⇒ 照舊用 SL_POINTS）。
+     ⛔⛔ 重啟後從券商撿回來的部位沒有 `sl_points` ⇒ 會掉回 130（被提早洗掉）。
+        所以撿回部位時用今天帳本那一列（`rec:"result"` ok）把它補回去 —— 見 `recover_meta()`。
+  4. 歷史檔 `fast_hist.jsonl`（⛔ gitignore）：一天一列，**不管開關開不開、送不送**都寫，
+     由工作執行緒寫（⛔ 不是主迴圈）；同一天不重寫（看檔案）。
+     種子由 `build_fast_hist.py` 從研究的逐筆資料建。
 
 ⛔ **同時受 `REAL_ORDERS_ON` 管**：這個檔**不自己判斷要不要真的送出去**，
    一律走 `broker.enter()` ⇒ `broker._send()` ⇒ `broker.is_live()`。
@@ -64,8 +91,8 @@
 - 一天上限 `broker.MAX_ENTRIES`（送單前 `broker.can_enter()` 會擋）
 - 送單前 `can_enter()` 會跟券商對帳（沒報價／報價不新鮮／還沒連上永豐／
   對帳失敗／券商已有部位／當天已達上限，任何一項都擋下來）
-- 停利掛在券商端（`enter()` 用**實際成交價**算 ±100）
-- 停損由面板主迴圈監控（`live_panel.check_real_position`）
+- 停利掛在券商端（`enter()` 用**實際成交價**算 ± pts，pts ＝ round(09:03:30 的價 × 0.5%)）
+- 停損由面板主迴圈監控（`live_panel.check_real_position`，讀這一口自己的 `sl_points`）
 
 ================================================================
 一天只送一次，而且「送過了」看檔案不看記憶體
@@ -124,6 +151,8 @@ import threading
 import time
 from datetime import date, datetime
 
+import numpy as np       # 門檻用 numpy.percentile（跟研究同一個算法，⛔ 不自己寫內插）
+
 import broker            # ⛔ 唯一的下單出口。這個檔不自己組單、不自己送單
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -131,14 +160,34 @@ HERE = pathlib.Path(__file__).resolve().parent
 #    ⛔⛔ 開發與測試**一律不准**把這個檔建出來（測試全部導到暫存區）。
 ARM_FLAG = HERE / "AUTO_ORDERS_ON"
 FIRE_DIR = HERE / "autofire"            # ⛔ 一定要 gitignore（含進場價與時間）
+# 開盤走幅的歷史（一天一列）。⛔ 一定要 gitignore：裡面是每天 09:00／09:03:30 的價。
+FAST_HIST = HERE / "fast_hist.jsonl"
 
-# ⛔ 只支援 A 與 B。C（要 30 點）與 D（不判斷）是【模擬】那一頁的對照組，
-#    **刻意不做成可下單的選項**（Benson 2026-09-09 指示）。
-METHODS = ("A", "B")
-# 畫面上的名字。⛔ 跟【模擬】那一頁同一組字（那邊的正本是前端的 AT_NAME／AT_SUB）——
-#    他退件過一次：「我要從哪裡知道現在我看的是哪個做法？」，代號不准上畫面。
-METHOD_NAME = {"A": "5 分 K", "B": "開盤起"}
-METHOD_SUB = {"A": "09:00 起算", "B": "08:45 起算"}
+# ⛔ 2026-09-15 起**只支援 A**（Benson 決定自動下單只剩「開盤快才做」）。
+#    B（開盤起）不再是可下單的選項；C（要 30 點）與 D（不判斷）本來就只是【模擬】那一頁的對照組。
+#    ⚠️ `live_panel.fire_arm_on()` 拿這個 tuple 驗 mode（⛔ 不自己寫一份），
+#       所以面板上那顆「用 B 開始」按鈕自然也打不開了。
+METHODS = ("A",)
+# 畫面上的名字。⛔ 代號不准上畫面（他退件過一次：「我要從哪裡知道現在我看的是哪個做法？」）。
+#    ⚠️ 名字從「5 分 K」改成「開盤快才做」：方向的算法沒變（仍是 09:00 那根起算），
+#       但「今天做不做」多了一道快不快 —— 名字只寫方向的話，他會以為每天都送。
+METHOD_NAME = {"A": "開盤快才做"}
+METHOD_SUB = {"A": "09:00 起算"}
+
+# ⭐ 「開盤快才做」的規則數字（前端從 state()["rule"] 拿，⛔ 不准寫死）。
+#   window    過去幾個交易日（⛔ 不含今天）
+#   min_n     少於幾天就不送（no_hist）
+#   tpsl_frac 停利停損 ＝ 09:03:30 的價 × 這個比例（0.005 ＝ 0.5%）
+# ⛔⛔ **百分位不在這裡**：正本是 `live_panel.FAST_PCTL`（80），經 `configure(pctl=…)` 接進 `_CFG["pctl"]`。
+#    （2026-09-15 下午 Benson 拍板由 70 改 80；⛔ 不准在這個檔再寫一份預設值 —— 兩把尺。）
+# ⚠️ 刻意收成一個 dict、⛔ 不寫成全大寫的數值常數：`tools/probe/leak-scan.py` 會把
+#    CONST_SOURCES 模組層級「全大寫＝字面數字」的常數當成公開值，而**值等於產品常數的欄位
+#    沒有作證資格**。20／40 正好落在他真實交易「點數」的尺度 ⇒ 註冊成常數就是替
+#    那幾個點數開後門（CLAUDE.md ⑦c：「要盯的是常數清單變長，尤其是接近他紀錄尺度的數字」）。
+#    收成 dict ⇒ leak-scan 讀不到 ⇒ 掃描維持嚴格（安全的那一邊）。
+FAST_RULE = {"window": 40, "min_n": 20, "tpsl_frac": 0.005}
+# 開關檔寫 B（或面板上有人送 mode=B）時的那句話。⛔ 正本只有這一份（arm() 與 fire_arm_on 共用）。
+MSG_ONLY_A = "B 已經不支援，自動下單現在只有 A（開盤快才做）"
 
 ARM_MAX_BYTES = 64          # 開關檔只讀這麼多 —— 有人不小心指到大檔也不會卡住
 ARM_SHOW = 24               # 內容看不懂時，畫面上顯示前幾個字
@@ -187,8 +236,11 @@ WHY = {
     "no_quote": "09:03:30 收不到成交價",
     "quote_stale": "09:03:30 的報價太舊（斷線中），不能用舊價下單",
     "mid_only": "只有中價、還沒有成交，不能拿它當進場價",
-    "no_signal": "拿不到 08:45／09:00 的參考價，算不出方向",
+    "no_signal": "拿不到 09:00 的參考價，算不出方向與開盤走幅",
     "no_trade": "這個做法今天判定不下單",
+    # ── 2026-09-15「開盤快才做」的兩種不送（⛔ 跟上面每一句都不一樣）───────
+    "not_fast": "今天開盤不夠快 —— 照規則今天不做",
+    "no_hist": "過去的開盤走幅紀錄不夠多天，算不出「快」的門檻 —— 照規則不做",
     "cant_enter": "券商那一關擋下來了",
     "order_failed": "單送出去了，但沒有成交或被拒絕",
     "queue_full": "主迴圈丟不進佇列（前一件事還沒做完），這一天沒有送",
@@ -225,13 +277,33 @@ _ST = {
     "last": None,          # 最後一次的結果（畫面用；真相仍然在檔案裡）
     "off_at": None,        # 最後一次從畫面上按「關閉」是什麼時候（真相是那個被改名的檔）
     "off_msg": None,
+    # ── 開盤走幅歷史（⛔ 讀到壞列不可以安靜地少：計數 ＋ 主控台 ＋ 端點端出去）
+    "hist_bad": 0,         # 最近一次讀 fast_hist.jsonl 時跳過的壞列數
+    "hist_dup": 0,         # 同一天出現第二列（只認第一列）
+    "hist_msg": None,      # 最近一次「今天那一列沒有寫」的原因
+    # ── 重啟撿回部位時補停損點數（recover_meta／_recover_poll）
+    "rec_msg": None,       # 最近一次補（或補不回來）的結果，畫面看得到
 }
 
 # 這些常數的**正本在 live_panel.py**，由 configure() 接過來。
 # ⛔ 不要在這裡自己寫一份預設值 —— 兩把尺分岔的話，訊號時刻改了這裡不會跟著改，
 #    而畫面上完全看不出來（【程式下單】的 R2 就是這個形狀）。
+# ⚠️ 2026-09-15 拿掉 `tp`：自動下單的停利停損改成 ±0.5%（FAST_RULE），
+#    ⛔ 不再吃 live_panel 的 TP_POINTS（那是手動真單／練習／模擬的 ±130）。
+#    留著一個沒人用的 `tp` 會讓人以為自動下單還是 ±130。
+# ⭐ `pctl`（2026-09-15 加）：「開盤快才做」門檻的百分位，正本 live_panel.FAST_PCTL（80）。
+#    沒接（None）⇒ wired=False ⇒ 不送；fast_threshold() 拿不到也**不猜一個預設值**（丟例外）。
 _CFG = {"signal_at": None, "signal_sec": None, "late_ms": None, "gap_s": None,
-        "tp": None, "sig_fn": None, "dirs_fn": None, "eod_at": None}
+        "sig_fn": None, "dirs_fn": None, "eod_at": None, "pctl": None}
+
+# 今天帳本裡「自動下單開出來的那一口」的記憶體副本（重啟撿回部位時補 sl_points 用）。
+#   date  這份是哪一天的（⛔ 不是今天就不准拿來用 ⇒ 交給工作執行緒去讀檔）
+#   entry `rec:"result"` ok 那一列（沒有就 None）
+#   state `_auto_entry()` 的第二個回傳值（None＝有那一口；eod_no_entry／eod_unsure）
+# ⛔ 真相永遠在檔案裡；這份只是讓 `recover_meta()`（跑在主迴圈的 reconcile 裡）不必碰磁碟。
+#    寫入的地方只有三個：start() 開機讀一次、_result() 送成那一刻、_recover_poll() 讀檔。
+_MEM = {"date": None, "entry": None, "state": None}
+POLL_S = 0.5            # 送單執行緒沒事做時多久看一次「有沒有撿回來、還沒補停損的部位」
 
 _Q = queue.Queue(maxsize=QUEUE_MAX)
 # ⚠️ 收盤平倉走**自己的**佇列與執行緒：09:03:30 那一件跟 13:43:30 那一件差四個半小時，
@@ -320,14 +392,18 @@ def arm():
                 "msg": "用「%s」（%s）" % (METHOD_NAME[txt], METHOD_SUB[txt]),
                 "raw": _clean(raw.strip())}
     if not txt:
-        msg = WHY["bad_method"] + "：檔案是空的。要用請寫一個 A 或 B 進去"
+        msg = WHY["bad_method"] + "：檔案是空的。要用請寫一個 A 進去"
+    elif txt == "B":
+        # ⛔⛔ 2026-09-15 起 B 不支援。他 09-09 以前開過 B 的話，檔案裡還是 B ⇒
+        #    這句話一定要講清楚「是規則換了」，⛔ 不可以只說「看不懂」（他會以為檔案壞了）。
+        msg = WHY["bad_method"] + "：讀到「B」。" + MSG_ONLY_A
     elif txt in ("C", "D"):
         # ⛔ C（要 30 點）與 D（不判斷）刻意不支援 —— 講清楚，不要只說「看不懂」
-        msg = (WHY["bad_method"] + "：讀到「%s」。自動下單只支援 A（%s）與 B（%s），"
+        msg = (WHY["bad_method"] + "：讀到「%s」。自動下單現在只有 A（%s），"
                "C 與 D 只有【自動下單（模擬）】那一頁在跑" %
-               (_clean(txt), METHOD_NAME["A"], METHOD_NAME["B"]))
+               (_clean(txt), METHOD_NAME["A"]))
     else:
-        msg = WHY["bad_method"] + "：讀到「%s」，只認得 A 或 B" % _clean(raw.strip())
+        msg = WHY["bad_method"] + "：讀到「%s」，只認得 A" % _clean(raw.strip())
     return {"on": False, "method": None, "why": "bad_method",
             "msg": msg, "raw": _clean(raw.strip())}
 
@@ -432,6 +508,175 @@ def _skip(d, why, extra=None, msg=None):
     return _append(row)
 
 
+# ---------------------------------------------------------------- 開盤快不快（純函式）
+#
+# ⛔ 這幾支是規則的**正本**：`_fire()`、`state()`、`tools/probe/fast-rule-replay.py`
+#    （離線逐日對照研究）全部呼叫同一份。⛔ 不准在別處再寫一份「>= 門檻」或「× 0.005」
+#    —— 兩把尺的話，畫面說「快」、送單那邊卻判「不快」，而且看不出來。
+
+def move_pct(px, ref):
+    """今天開盤走幅（%）＝ |px − ref| / ref × 100。拿不到或 ref 不合理 ⇒ None（⛔ 不猜）。"""
+    px, ref = _num(px), _num(ref)
+    if px is None or ref is None or ref <= 0:
+        return None
+    return abs(px - ref) / ref * 100.0
+
+
+def fast_pctl():
+    """門檻用第幾百分位（正本 live_panel.FAST_PCTL，configure 接過來）。沒接 ⇒ None。"""
+    return _CFG["pctl"]
+
+
+def fast_threshold(past_moves, pctl=None):
+    """
+    過去的 move_pct（舊到新，⛔ 呼叫端負責排掉今天）⇒ (門檻 %, 用了幾天)。
+    天數不夠 `min_n` ⇒ (None, 天數)。
+    ⚠️ 取**最近** `window` 天；`numpy.percentile` 預設線性內插 —— 研究
+       （benson_rule.py 的 `np.percentile(hist, …)`，hist 是 deque(maxlen=40)）同一個算法。
+    `pctl` 不給 ⇒ 用 configure 接過來的 `_CFG["pctl"]`（80）。
+    ⛔ 兩個都沒有 ⇒ **丟例外**（⛔ 不猜一個預設百分位：猜錯就是門檻整個換一把尺）。
+    """
+    q = _CFG["pctl"] if pctl is None else pctl
+    if isinstance(q, bool) or not isinstance(q, (int, float)) or not (0 < q <= 100):
+        raise ValueError("開盤快才做的百分位沒有接起來（pctl=%r）" % (q,))
+    last = [float(m) for m in past_moves][-FAST_RULE["window"]:]
+    if len(last) < FAST_RULE["min_n"]:
+        return None, len(last)
+    return float(np.percentile(last, q)), len(last)
+
+
+def approx_points(pct, ref):
+    """% 換成「約略點數」給畫面看（％ × ref / 100 取整）。⚠️ 只是換算，判斷一律用 %。"""
+    pct, ref = _num(pct), _num(ref)
+    if pct is None or ref is None:
+        return None
+    return int(round(pct * ref / 100.0))
+
+
+def tpsl_points(px):
+    """停利停損點數 ＝ round(09:03:30 的價 × 0.5%)。例：px=46000 ⇒ 230。拿不到價 ⇒ None。"""
+    px = _num(px)
+    if px is None or px <= 0:
+        return None
+    return int(round(px * FAST_RULE["tpsl_frac"]))
+
+
+def fast_verdict(day, mv, hist_rows, pctl=None):
+    """
+    ⭐ 「今天快不快」唯一的判斷。`hist_rows` 是 `hist_read()` 的 rows（舊到新）。
+    `pctl` 只給離線對照（fast-rule-replay.py 傳 live_panel.FAST_PCTL）用；面板一律不傳（走 _CFG）。
+    回 {"verdict": "fast"|"slow"|"no_hist"|None, "thr_pct", "n", "move_pct"}。
+      - 過去（date < day）天數不夠 ⇒ "no_hist"
+      - mv 是 None ⇒ verdict None（算不出今天的走幅，⛔ 不是「不快」）
+      - ⛔ **`>=` 算快**（研究：`abs(move) >= np.percentile(...)`）
+    """
+    past = [r["move_pct"] for r in (hist_rows or []) if r.get("date", "") < day]
+    thr, n = fast_threshold(past, pctl)
+    out = {"thr_pct": thr, "n": n, "move_pct": _num(mv)}
+    if thr is None:
+        out["verdict"] = "no_hist"
+    elif out["move_pct"] is None:
+        out["verdict"] = None
+    else:
+        out["verdict"] = "fast" if out["move_pct"] >= thr else "slow"
+    return out
+
+
+def hist_read(path=None):
+    """
+    讀 `fast_hist.jsonl` ⇒ (rows 依日期舊到新, 壞列數, 重複天數)。
+    ⚠️ **只准在工作執行緒／HTTP 執行緒叫**（⛔ 主迴圈不准，這是磁碟 I/O）。
+    ⛔ 壞列**跳過並計數**（「安靜地少」是這個專案明令禁止的失敗模式）：
+       呼叫端要把 bad 端到畫面、印到主控台。
+    ⛔ 同一天第二列**只認第一列**、也計數（只 append 的檔，正常情況不會有）。
+    讀不出整個檔（權限／編碼）⇒ 讓例外往外丟，呼叫端當成「歷史拿不到」處理。
+    """
+    p = path or FAST_HIST
+    rows, bad, dup, seen = [], 0, 0, set()
+    if not p.exists():
+        return rows, 0, 0
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            bad += 1
+            continue
+        d = o.get("date") if isinstance(o, dict) else None
+        mv = _num(o.get("move_pct")) if isinstance(o, dict) else None
+        if not isinstance(d, str) or not _DATE_RE.match(d) or mv is None or mv < 0:
+            bad += 1
+            continue
+        if d in seen:
+            dup += 1
+            continue
+        seen.add(d)
+        rows.append({"date": d, "move_pct": mv, "ref": _num(o.get("ref")),
+                     "px": _num(o.get("px")), "ref_src": o.get("ref_src")})
+    rows.sort(key=lambda r: r["date"])
+    return rows, bad, dup
+
+
+def _hist_note(bad, dup):
+    """讀到壞列／重複 ⇒ 記下來 ＋ 主控台（⛔ 不可以安靜地少）。"""
+    _ST["hist_bad"], _ST["hist_dup"] = bad, dup
+    if bad or dup:
+        print("⚠️ [自動下單] %s 有 %d 列讀不出來、%d 列是重複的日子 —— 已跳過（門檻少算那幾天）"
+              % (FAST_HIST.name, bad, dup), flush=True)
+
+
+def _hist_step(d, snap):
+    """
+    09:03:30 之後（⚠️ **工作執行緒**）：讀歷史 ＋ 把今天那一列寫進去。
+    ⛔ 不管開關開不開、送不送都要跑（歷史是給以後的門檻用的，不能只記送單的日子）。
+    ⛔ 永遠不往外丟例外（它出錯不可以讓送單那一段直接崩掉；而是變成「歷史拿不到 ⇒ 不送」）。
+    回 {"rows", "bad", "dup", "wrote", "why", "err"}：
+      wrote=False 的 why：already（今天已經有了，看門狗重啟）／no_quote／quote_stale／
+      mid_only（報價不能用）／no_ref（拿不到 09:00 以前的價）／io（寫不進去）
+    """
+    out = {"rows": None, "bad": 0, "dup": 0, "wrote": False, "why": None, "err": None}
+    try:
+        rows, bad, dup = hist_read()
+    except Exception as e:
+        out.update(err="讀不出 %s：%s" % (FAST_HIST.name, str(e)[:100]), why="io")
+        _ST["err"], _ST["err_n"] = "hist: " + out["err"], _ST["err_n"] + 1
+        print("⚠️ [自動下單] " + out["err"], flush=True)
+        return out
+    out.update(rows=rows, bad=bad, dup=dup)
+    _hist_note(bad, dup)
+    if any(r["date"] == d for r in rows):
+        out["why"] = "already"                   # ⛔ 同一天不重寫（看檔案，看門狗重啟是常態）
+        return out
+    q = _quote_why(snap)
+    ref = _num(snap.get("ref0900"))
+    px = _num(snap.get("px"))
+    mv = move_pct(px, ref)
+    if q or mv is None:
+        # ⛔ 報價不能用／拿不到 09:00 以前的價 ⇒ **不寫**（寫進去就是一筆假的走幅，
+        #    會污染以後 40 天的門檻），原因落地在帳本那一列（base["hist"]）＋ 主控台。
+        out["why"] = q or "no_ref"
+        _ST["hist_msg"] = "%s 今天那一列沒有寫進開盤走幅歷史（%s）" % (d, out["why"])
+        print("[自動下單] " + _ST["hist_msg"], flush=True)
+        return out
+    row = {"date": d, "ref": ref, "px": px, "move_pct": round(mv, 6),
+           "ref_src": snap.get("ref_src")}
+    try:
+        FAST_HIST.parent.mkdir(parents=True, exist_ok=True)
+        # ⛔ 一定是 open("a")：看門狗重啟是常態，覆寫＝把過去的歷史弄丟。
+        with FAST_HIST.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+    except Exception as e:
+        out.update(why="io", err="寫不進 %s：%s" % (FAST_HIST.name, str(e)[:100]))
+        _ST["err"], _ST["err_n"] = "hist: " + out["err"], _ST["err_n"] + 1
+        print("⚠️ [自動下單] " + out["err"], flush=True)
+        return out
+    out["wrote"] = True
+    _ST["hist_msg"] = None
+    return out
+
+
 # ---------------------------------------------------------------- 決定與送出
 
 def _quote_why(snap):
@@ -467,11 +712,18 @@ def _fire(snap, day, lag_ms, put_at):
         # 主迴圈說「跨過 09:03:30 了，但已經晚太多」（面板 09:10 才開起來／看門狗剛重啟）
         return _skip(d, "late", {"at_lag_ms": lag_ms})
 
+    # ── 開盤走幅歷史：先把今天那一列寫進去。⛔ 排在「開關開不開」之前 ——
+    #    歷史是以後 40 天門檻的材料，只記送單的日子就是一份有偏差的歷史。
+    hist = _hist_step(d, snap)
+
     a = arm()
     base = {"method": a["method"], "arm_raw": a["raw"],
             "at": snap.get("at"), "at_lag_ms": snap.get("at_lag_ms"),
             "px": _num(snap.get("px")), "quote_age_ms": snap.get("quote_age_ms"),
-            "quote_gaps": snap.get("quote_gaps")}
+            "quote_gaps": snap.get("quote_gaps"),
+            # ⛔ 今天那一列有沒有寫進歷史、沒寫的話為什麼 —— 落地在每一種結局上
+            "hist": {"wrote": hist["wrote"], "why": hist["why"],
+                     "bad": hist["bad"], "dup": hist["dup"], "err": hist["err"]}}
     if not a["on"]:
         return _skip(d, a["why"], base, a["msg"])
 
@@ -481,21 +733,52 @@ def _fire(snap, day, lag_ms, put_at):
 
     px = _num(snap.get("px"))
     o845, p900 = _num(snap.get("open0845")), _num(snap.get("p0900"))
+    ref = _num(snap.get("ref0900"))
     sig_a, sig_b = _CFG["sig_fn"](px, o845, p900)
     dirs = _CFG["dirs_fn"](sig_a, sig_b)
-    base["sig"] = {"A": sig_a, "B": sig_b}
+    base["sig"] = {"A": sig_a}
     base["ref"] = {"open0845": o845, "p0900": p900,
                    "p0900_src": snap.get("p0900_src"),
+                   "ref0900": ref, "ref_src": snap.get("ref_src"),
                    "prev_close": _num(snap.get("prev_close"))}
     base["bid"], base["ask"] = _num(snap.get("bid")), _num(snap.get("ask"))
     dv = dirs.get(a["method"])
-    if dv is None:
+    mv = move_pct(px, ref)
+    # ⛔ 方向（09:00 那一分鐘第一筆）或走幅（09:00 以前最後一筆）任一個算不出來 ⇒ 不送。
+    #    兩個參考價在 _auto_snap 裡是同兩個來源、順序相反，所以實際上會一起有、一起沒有。
+    if dv is None or mv is None:
         return _skip(d, "no_signal", base)
     if dv == 0:
-        # A 與 B 不會回 0（那是 C 的門檻），留著是防呆：真的回 0 就是不做，⛔ 不猜方向
+        # A 不會回 0（那是 C 的門檻），留著是防呆：真的回 0 就是不做，⛔ 不猜方向
         return _skip(d, "no_trade", base)
     direction = "long" if dv > 0 else "short"
     base["dir"] = direction
+
+    # ── ⭐ 快不快（2026-09-15）。⛔ 判斷只准走 fast_verdict()（畫面與離線對照用同一支）
+    if hist["rows"] is None:
+        base["fast"] = {"verdict": "no_hist", "move_pct": round(mv, 4)}
+        return _skip(d, "no_hist", base,
+                     WHY["no_hist"] + "（" + str(hist["err"] or "歷史檔讀不出來") + "）")
+    v = fast_verdict(d, mv, hist["rows"])
+    fast = {"verdict": v["verdict"], "move_pct": round(mv, 4),
+            "move_pts": approx_points(mv, ref),
+            "thr_pct": None if v["thr_pct"] is None else round(v["thr_pct"], 4),
+            "thr_pts": approx_points(v["thr_pct"], ref),
+            "n": v["n"], "window": FAST_RULE["window"], "pctl": fast_pctl(),
+            "min_n": FAST_RULE["min_n"]}
+    base["fast"] = fast
+    if v["verdict"] == "no_hist":
+        return _skip(d, "no_hist", base,
+                     "過去的開盤走幅只有 %d 天（至少要 %d 天才算得出門檻）—— 照規則今天不做"
+                     % (v["n"], FAST_RULE["min_n"]))
+    if v["verdict"] != "fast":
+        return _skip(d, "not_fast", base,
+                     "今天開盤不夠快：走 %.2f%%（約 %s 點），門檻 %.2f%%（約 %s 點）—— 照規則今天不做"
+                     % (mv, fast["move_pts"], v["thr_pct"], fast["thr_pts"]))
+    # ⭐ 停利停損 ±0.5% of 09:03:30 的價（⛔ 不是成交價：送單之前就要定下來、落地）
+    pts = tpsl_points(px)
+    base["tp_points"] = pts
+    base["sl_points"] = pts
 
     # 【第二道遲到檢查】上面那道是主迴圈跨過 09:03:30 的延遲；這一道是
     # 「排隊 ＋ 排到我開始做」的延遲。市價單晚幾秒送出去，成交價就不是那一刻的價了。
@@ -510,7 +793,6 @@ def _fire(snap, day, lag_ms, put_at):
     fire = dict(base)
     fire.update({"rec": "fire", "stage": "sending", "date": d,
                  "live": broker.is_live(), "qty": broker.QTY,
-                 "tp_points": _CFG["tp"],
                  "wrote_at": datetime.now().isoformat(timespec="seconds")})
     _append(fire)
     _ST["last"] = fire
@@ -531,18 +813,21 @@ def _fire(snap, day, lag_ms, put_at):
         return _result(d, base, False, "cant_enter",
                        WHY["cant_enter"] + "：" + why + hint)
 
-    print("[%s] 自動下單：用「%s」判定 %s，送出 1 口（%s）" %
+    print("[%s] 自動下單：用「%s」判定 %s（走 %.2f%% ≥ 門檻 %.2f%%），送出 1 口，停利停損各 %d 點（%s）" %
           (d, METHOD_NAME[a["method"]], "做多" if direction == "long" else "做空",
+           mv, v["thr_pct"], pts,
            "真單" if broker.is_live() else "演練，不會真的送出去"), flush=True)
-    ok, err, pos = broker.enter(direction, px, _CFG["tp"])
+    # ⛔⛔ sl_points 一定要帶：停損活在面板迴圈（check_real_position），它讀的是
+    #     **這一口部位自己的** sl_points；沒帶就掉回手動真單的 SL_POINTS（130）⇒ 提早被洗掉。
+    ok, err, pos = broker.enter(direction, px, pts, sl_points=pts)
     if not ok:
         return _result(d, base, False, "order_failed",
                        WHY["order_failed"] + "：" + str(err or "券商沒有說原因"))
     entry = _num((pos or {}).get("entry"))
-    tp = None if entry is None else round(
-        entry + (_CFG["tp"] if direction == "long" else -_CFG["tp"]), 1)
+    tp = None if entry is None else round(entry + (pts if direction == "long" else -pts), 1)
+    sl = None if entry is None else round(entry - (pts if direction == "long" else -pts), 1)
     extra = dict(base)
-    extra.update({"entry": entry, "tp": tp,
+    extra.update({"entry": entry, "tp": tp, "sl": sl,
                   # ⛔⛔ **收盤平倉靠這個欄位認人**（日期＋進場時間＋進場價，
                   #    跟 broker.set_trade_note() 同一套）—— 少了它，13:43:30 那一下
                   #    只能比方向與價格，他自己開的單就有機會被誤判成「我的」。
@@ -565,7 +850,12 @@ def _result(d, extra, ok, why, msg):
                 "wrote_at": datetime.now().isoformat(timespec="seconds")})
     _ST["last"] = row
     print("[%s] 自動下單：%s" % (d, msg or "已送出並記錄"), flush=True)
-    return _append(row)
+    out = _append(row)
+    if ok:
+        # 撿回部位時要用的「今天那一口」—— 剛寫進檔案的就是真相，直接放進記憶體
+        # （⛔ 不必再讀一次檔；recover_meta() 在主迴圈上只准讀記憶體）。
+        _MEM.update({"date": d, "entry": row, "state": None})
+    return out
 
 
 # ---------------------------------------------------------------- 收盤平倉
@@ -854,20 +1144,115 @@ def _eod_worker():
                 pass
 
 
+# ---------------------------------------------------------------- 重啟撿回部位：補停損點數
+#
+# ⛔⛔ 為什麼一定要有這一段：停損活在面板迴圈（`live_panel.check_real_position`），
+#    它讀的是**這一口部位自己的** `sl_points`。看門狗重啟之後，`broker.reconcile()`
+#    從券商撿回來的部位只有方向／口數／均價（`recovered=True`）⇒ 沒有 `sl_points`
+#    ⇒ 掉回手動真單的 SL_POINTS（130）⇒ **自動下單那一口的停損從 ±0.5%（約 230 點）
+#    縮成 130 點，提早被洗掉。**
+# ⇒ 認人：今天帳本裡 `rec:"result"` ok 那一列，**沿用 `_looks_ours()`**
+#    （方向 ＋ 進場價 ±EOD_PX_TOL ＋ 口數；撿回來的部位沒有 entry_time，那一格跳過）。
+#    ⛔ 不另寫一把尺（收盤平倉認人用的就是這一把）。
+# ⛔ 對不上 ⇒ **維持 SL_POINTS**，並把原因掛在部位上（`sl_warn`，/api/state 端得出去）
+#    ＋ 主控台。⚠️ 方向是**寧可用手動那一套**：誤把他自己的單當成自動的，停損就被放寬了。
+
+def _recover_decide(pos, ent, why):
+    """純函式：撿回來的那口 ＋ 今天帳本那一口 ⇒ 要補到部位上的欄位。"""
+    if ent is None:
+        if why == "eod_unsure":
+            # 今天有一張單停在「送出去了但不知道結果」⇒ 撿回來的這口**可能**就是它，
+            # 但帳本裡沒有進場價可以比 ⇒ 認不出來 ⇒ 用手動那一套，而且要講。
+            return {"sl_src": "unmatched",
+                    "sl_warn": "今天自動下單那一張停在「不知道下場」，認不出撿回來的這口是不是它"
+                               " —— 停損先用手動真單那一套，請自己到大戶投確認"}
+        # 今天自動下單根本沒有開出部位 ⇒ 這口是他自己開的（或更早的），手動那一套就是對的
+        return {"sl_src": "manual"}
+    ours, diff = _looks_ours(pos, ent)
+    slp, tpp = _num(ent.get("sl_points")), _num(ent.get("tp_points"))
+    if ours and slp is not None and slp > 0:
+        return {"sl_points": slp, "tp_points": tpp, "sl_src": "autofire"}
+    if ours:
+        return {"sl_src": "unmatched",
+                "sl_warn": "撿回來的這口對得上今天自動下單那一口，但帳本那一列沒有停損點數"
+                           " —— 停損先用手動真單那一套，請自己確認"}
+    return {"sl_src": "unmatched",
+            "sl_warn": "撿回來的這口對不上今天自動下單那一口（%s）—— 停損用手動真單那一套" % diff}
+
+
+def recover_meta(pos):
+    """
+    ⚠️⚠️ **會在 4Hz 主迴圈上被呼叫**（`broker.reconcile()` 撿回部位那一刻，經由
+       `broker.RECOVER_HOOK`；reconcile_tick 是主迴圈叫的）。
+    ⛔ 只准讀記憶體（`_MEM`）—— 一行 I/O、一次網路、一個鎖都不准有；⛔ 永遠不往外丟例外。
+    記憶體裡還沒有今天的帳本（開機還沒讀到／剛跨日）⇒ 回 None，交給 `_recover_poll()`
+    在送單執行緒上讀檔補（最多晚 POLL_S 秒；那段時間停損用手動那一套）。
+    """
+    try:
+        if _MEM["date"] != str(date.today()):
+            return None
+        return _recover_decide(pos, _MEM["entry"], _MEM["state"])
+    except Exception:
+        return None
+
+
+def _mem_load(d):
+    """⚠️ 送單執行緒／start()：讀今天帳本那一口放進記憶體。"""
+    ent, why = _auto_entry(d)
+    _MEM.update({"date": d, "entry": ent, "state": why})
+
+
+_REC_SEEN = {"pos": None}      # 哪一口已經講過了（⛔ 主控台一口只講一次，不要每 0.5 秒刷一次）
+
+
+def _recover_poll():
+    """
+    ⚠️ **送單執行緒**（⛔ 不是主迴圈）：看有沒有「撿回來、還沒補停損點數」的部位。
+    `recover_meta()` 在主迴圈上補不起來（記憶體還沒有今天的帳本）時，由這裡讀檔補。
+    """
+    pos = broker._state.get("position")
+    if not isinstance(pos, dict) or not pos.get("recovered"):
+        return None
+    if pos.get("sl_src") is None:
+        d = str(date.today())
+        if _MEM["date"] != d:
+            _mem_load(d)
+        meta = _recover_decide(pos, _MEM["entry"], _MEM["state"])
+        with broker._lock:
+            if broker._state.get("position") is pos and pos.get("sl_src") is None:
+                pos.update(meta)
+    if _REC_SEEN["pos"] is pos:
+        return pos.get("sl_src")
+    _REC_SEEN["pos"] = pos
+    if pos.get("sl_src") == "autofire":
+        _ST["rec_msg"] = ("重啟後撿回自動下單那一口：停損 %g 點（從今天的帳本補回來）"
+                          % pos.get("sl_points"))
+        print("[自動下單] " + _ST["rec_msg"], flush=True)
+    elif pos.get("sl_warn"):
+        _ST["rec_msg"] = str(pos["sl_warn"])
+        print("⚠️ [自動下單] " + _ST["rec_msg"], flush=True)
+    return pos.get("sl_src")
+
+
 # ---------------------------------------------------------------- 接線
 
-def configure(signal_at, signal_sec, late_ms, gap_s, tp_points, sig_fn, dirs_fn,
-              eod_at):
+def configure(signal_at, signal_sec, late_ms, gap_s, sig_fn, dirs_fn, eod_at, pctl):
     """
     面板啟動時叫一次，把**常數與訊號算式的正本**接過來（正本在 live_panel.py）。
 
-    ⛔ 這個檔不自己寫一份 09:03:30／±100／訊號算式 —— 那會變成兩把尺，
+    ⛔ 這個檔不自己寫一份 09:03:30／訊號算式 —— 那會變成兩把尺，
        訊號時刻改了一邊、另一邊不會跟著改，而畫面上完全看不出來。
+    ⚠️ 停利停損點數（2026-09-15 起 ±0.5%）的正本是這個檔的 FAST_RULE，⛔ 不吃 TP_POINTS。
+    ⭐ `pctl`（2026-09-15）：「開盤快才做」門檻的百分位，正本 `live_panel.FAST_PCTL`（80）。
+       看不懂（bool／非數字／不在 0~100）⇒ 存 None ⇒ wired=False ⇒ 不送（⛔ 不猜）。
     沒有接起來（`wired=False`）時**一律不送**，理由 `not_wired`。
     """
+    ok_pctl = (not isinstance(pctl, bool) and isinstance(pctl, (int, float))
+               and 0 < pctl <= 100)
     _CFG.update({"signal_at": signal_at, "signal_sec": signal_sec,
-                 "late_ms": late_ms, "gap_s": float(gap_s), "tp": float(tp_points),
-                 "sig_fn": sig_fn, "dirs_fn": dirs_fn, "eod_at": eod_at})
+                 "late_ms": late_ms, "gap_s": float(gap_s),
+                 "sig_fn": sig_fn, "dirs_fn": dirs_fn, "eod_at": eod_at,
+                 "pctl": pctl if ok_pctl else None})
     _ST["wired"] = all(_CFG[k] is not None for k in _CFG)
     return _ST["wired"]
 
@@ -894,15 +1279,29 @@ def on_signal(snap, day, lag_ms):
 
 def _worker():
     while True:
-        item = _Q.get()
+        # ⚠️ 帶 timeout：沒有單可送的時候也要醒來看一眼「撿回來的部位補停損了沒」
+        #    （_recover_poll）。⛔ 那件事不准放進主迴圈（要讀檔）。
         try:
-            _fire(*item)
+            item = _Q.get(timeout=POLL_S)
+        except queue.Empty:
+            item = None
+        if item is not None:
+            try:
+                _fire(*item)
+            except Exception as e:
+                # ⛔ 不可以安靜地吞：計數 ＋ 主控台 ＋ 端點端出去（畫面上看得到）
+                _ST["err"] = "fire: " + str(e)[:150]
+                _ST["err_n"] += 1
+                print("⚠️ [自動下單] 送單那一段出錯（停損不受影響）：%s" % str(e)[:200],
+                      flush=True)
+        try:
+            _recover_poll()
         except Exception as e:
-            # ⛔ 不可以安靜地吞：計數 ＋ 主控台 ＋ 端點端出去（畫面上看得到）
-            _ST["err"] = "fire: " + str(e)[:150]
+            _ST["err"] = "recover: " + str(e)[:150]
             _ST["err_n"] += 1
-            print("⚠️ [自動下單] 送單那一段出錯（停損不受影響）：%s" % str(e)[:200],
-                  flush=True)
+            if _ST["err_n"] <= 3:
+                print("⚠️ [自動下單] 補撿回部位的停損點數出錯（停損照舊用手動那一套）：%s"
+                      % str(e)[:200], flush=True)
 
 
 def start():
@@ -913,6 +1312,14 @@ def start():
     """
     if _ST["started"]:
         return False
+    # 開機先把今天帳本那一口讀進記憶體：看門狗重啟後 reconcile 撿回部位的**第一刻**
+    # recover_meta() 就補得起來（⛔ 不必等送單執行緒 0.5 秒後才補 —— 那段時間停損是 130）。
+    # ⚠️ 這裡是 main() 啟動流程（還沒進主迴圈），讀一次小檔可以。
+    try:
+        _mem_load(str(date.today()))
+    except Exception as e:
+        print("⚠️ [自動下單] 開機讀不到今天的帳本（撿回部位時改由送單執行緒補）：%s"
+              % str(e)[:120], flush=True)
     threading.Thread(target=_worker, daemon=True, name="auto-fire").start()
     threading.Thread(target=_eod_worker, daemon=True, name="auto-fire-eod").start()
     _ST["started"] = True
@@ -985,11 +1392,83 @@ def read_all(limit_days=180):
     return out, led
 
 
+_HIST_CACHE = {"key": None, "rows": [], "bad": 0, "dup": 0, "err": None}
+_HIST_LOCK = threading.Lock()   # ⛔ 只保護這份快取（HTTP 執行緒會併發），跟停損那條路無關
+
+
+def _hist_cached():
+    """
+    給 `state()`（HTTP 執行緒，每 5 秒一次）用的歷史。`(mtime_ns, size)` 快取 ——
+    ⚠️ 穩態下一次 stat、零次讀檔（HTTP 執行緒跟 4Hz 主迴圈搶同一個 GIL）。
+    ⛔ 快取鍵要帶 size（只比 mtime 會停在舊資料，`_auto_read_month` 踩過同一個坑）。
+    """
+    try:
+        st = FAST_HIST.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = "missing"
+    with _HIST_LOCK:
+        if _HIST_CACHE["key"] == key:
+            return dict(_HIST_CACHE)
+    try:
+        rows, bad, dup = hist_read() if key != "missing" else ([], 0, 0)
+        val = {"key": key, "rows": rows, "bad": bad, "dup": dup, "err": None}
+    except Exception as e:
+        val = {"key": None, "rows": [], "bad": 0, "dup": 0,
+               "err": "讀不出 %s：%s" % (FAST_HIST.name, str(e)[:100])}
+    with _HIST_LOCK:
+        _HIST_CACHE.update(val)
+    return dict(val)
+
+
+def fast_today(today, day_row=None):
+    """
+    畫面上「今天的門檻與判定」。⚠️ 唯讀。判斷一律走 `fast_verdict()`（跟送單同一支）。
+    - 09:03:30 之前：只有門檻（%）與天數；verdict 是 None（⛔ 不預告）
+    - 之後：歷史檔裡有今天那一列 ⇒ 用它判（開關關著的日子也看得到判定）
+    - 帳本那一列若有 `fast`（送單那一刻判的）⇒ **以帳本為準**（那才是真的決定送不送的那一次）
+    """
+    h = _hist_cached()
+    rows = h["rows"]
+    if fast_pctl() is None:
+        # 沒接起來（治具／設定沒跑到）⇒ 算不出門檻；⛔ 不猜百分位、⛔ 不讓 state() 整個崩掉
+        return {"thr_pct": None, "n": None, "bad": h["bad"], "dup": h["dup"],
+                "err": (h["err"] or "") + ("；" if h["err"] else "") + WHY["not_wired"],
+                "window": FAST_RULE["window"], "pctl": None, "min_n": FAST_RULE["min_n"],
+                "verdict": None, "move_pct": None, "move_pts": None, "thr_pts": None,
+                "pts": None, "src": None}
+    mine = next((r for r in rows if r["date"] == today), None)
+    v = fast_verdict(today, mine["move_pct"] if mine else None, rows)
+    ref = (mine or {}).get("ref")
+    out = {"thr_pct": v["thr_pct"], "n": v["n"], "bad": h["bad"], "dup": h["dup"],
+           "err": h["err"], "window": FAST_RULE["window"], "pctl": fast_pctl(),
+           "min_n": FAST_RULE["min_n"],
+           "verdict": v["verdict"] if mine else ("no_hist" if v["verdict"] == "no_hist" else None),
+           "move_pct": None if not mine else mine["move_pct"],
+           "move_pts": approx_points(mine["move_pct"], ref) if mine else None,
+           "thr_pts": approx_points(v["thr_pct"], ref) if mine else None,
+           "pts": tpsl_points((mine or {}).get("px")),
+           "src": "hist" if mine else None}
+    f = (day_row or {}).get("fast")
+    if isinstance(f, dict) and f.get("verdict"):
+        out.update({"verdict": f.get("verdict"), "move_pct": f.get("move_pct"),
+                    "move_pts": f.get("move_pts"), "thr_pct": f.get("thr_pct"),
+                    "thr_pts": f.get("thr_pts"), "n": f.get("n"), "src": "ledger"})
+        if (day_row or {}).get("tp_points") is not None:
+            out["pts"] = day_row.get("tp_points")
+    return out
+
+
 def state():
     """給 `/api/fire/state`。⚠️ **唯讀**，這個函式一張單都不會送。"""
     a = arm()
     rows, led = read_all()
     today = str(date.today())
+    pos = broker._state.get("position")
+    pos_sl = None
+    if isinstance(pos, dict):
+        pos_sl = {k: pos.get(k) for k in ("sl_points", "tp_points", "sl_src", "sl_warn",
+                                          "recovered")}
     return {
         "armed": a["on"], "method": a["method"],
         "arm_why": a["why"], "arm_msg": a["msg"], "arm_raw": a["raw"],
@@ -1008,7 +1487,15 @@ def state():
         "live": broker.is_live(), "live_flag": broker.REAL_FLAG.name,
         "methods": [{"k": k, "name": METHOD_NAME[k], "sub": METHOD_SUB[k]}
                     for k in METHODS],
-        "signal_at": _CFG["signal_at"], "tp": _CFG["tp"],
+        "signal_at": _CFG["signal_at"],
+        # ⭐ 規則數字（前端 ⛔ 不准寫死 40／80／20／0.5%）
+        "rule": {"window": FAST_RULE["window"], "pctl": fast_pctl(),
+                 "min_n": FAST_RULE["min_n"],
+                 "tpsl_pct": round(FAST_RULE["tpsl_frac"] * 100, 6)},
+        "fast": fast_today(today, next((r for r in rows if r.get("date") == today), None)),
+        "hist_msg": _ST["hist_msg"],
+        # 現在那一口部位用的停損點數從哪來（自動下單那一口／手動那一套／撿回來對不上）
+        "pos_sl": pos_sl, "rec_msg": _ST["rec_msg"],
         "qty": broker.QTY, "max_entries": broker.MAX_ENTRIES,
         "entries_today": broker.entries_today(),
         "wired": _ST["wired"], "started": _ST["started"],
