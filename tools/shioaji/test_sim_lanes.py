@@ -1075,7 +1075,9 @@ D_U4 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12
                     (ms(13, 44, 59), 12000.0, 11999, 12001)])
 _c4 = S.union_cands(DAY, D_U4, S.day_pack(DAY, D_U4, H40, UBH))[0]
 chk("  ④ 不快＋09:15 同方向＋箱子沒突破 ⇒ 一個候選都沒有", _c4, [])
-chk("  ④ ⇒ 不做", S.union_eval(DAY, D_U4, H40, UBH).get("why"), "no_long")
+chk("  ④ ⇒ 不做（no_cand：三個都可用、只是都沒觸發）",
+    (S.union_eval(DAY, D_U4, H40, UBH).get("why"), S.union_eval(DAY, D_U4, H40, UBH).get("miss")),
+    ("no_cand", []))
 
 # ⑤ 回馬槍候選：⛔ 只有「09:03:30 判定不快」的日子才有
 D_U5 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
@@ -1123,15 +1125,39 @@ chk("  ⑥ ⇒ 那天多方聯軍不做",
 say(S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, [_bp1] * S.ORB_HIST_N))[0][-1]["kind"] == "orb",
     "  ⑥ 自證：箱寬**等於**中位數時開箱那個候選成立（⛔ 只有小於才不算）")
 
-# ⑦ 資料缺（⛔ 不寫檔）
-chk("  ⑦ 箱子歷史不夠 ⇒ 資料缺（⛔ 不是定論）",
-    [S.union_eval(DAY, D_U1, H40, [0.0] * (S.ORB_HIST_N - 1)).get(k) for k in ("pending", "why")],
-    [True, "few_box_hist"])
+# ⑦ ⛔ 整條資料缺**只有這三種**（沒接上／沒逐筆／讀不到 fast_hist.jsonl）
 chk("  ⑦ 沒有逐筆／沒接上規則 ⇒ 資料缺",
     [S.union_eval(DAY, None, H40, UBH).get("why"),
      S.union_eval(DAY, D_U1, H40, UBH, cfg={"verdict": None}).get("why")], ["no_ticks", "not_wired"])
-chk("  ⑦ 讀不到開盤走幅歷史 ⇒ 資料缺（⛔ 不准只靠開箱就做）",
+chk("  ⑦ 讀不到 fast_hist.jsonl（檔案不見）⇒ 資料缺（⛔ 檔案不見不可以記成定論）",
     S.union_eval(DAY, D_U1, None, UBH).get("why"), "no_hist_file")
+
+# ⑧ ⛔⛔ 每個候選**各自**判斷可不可用：拿不到就是「今天少一個候選」，⛔ 不是整條沒資料
+#    （PM 2026-09-16 裁示；第一版寫成「收不齊就整條資料缺」，跟回測口徑對不起來）
+H19 = hist_rows(DAY, 19)                      # 走幅歷史不夠 ⇒ 快攻與回馬槍兩個候選都不可用
+_c8 = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H19, UBH))
+# ⚠️ 用 `or []` 兜住：整條被停掉時 cands 是 None，⛔ 讓測試崩潰的紅是壞的紅（看不出是哪一條）
+chk("  ⑧ 走幅歷史不夠 ⇒ 只剩開箱那一個候選（⛔ 整條沒有停）",
+    ([(x["kind"], x["dir"]) for x in (_c8[0] or [])], _c8[0] is None, _c8[2]),
+    ([("orb", 1)], False, None))
+r8 = S.union_eval(DAY, D_U1, H19, UBH)
+chk("  ⑧ ⛔ 只有一個候選可用 ⇒ 照它做（⛔ 不是記資料缺）",
+    (r8.get("pending"), r8.get("decision"), r8.get("pick"), r8.get("entry")), (None, "做多", "orb", 12051.0))
+say("不可用" in (r8.get("reason") or "") and "快攻" in (r8.get("reason") or ""),
+    "  ⑧ reason 寫得出今天少了哪些候選", r8.get("reason"))
+say(S.fast_eval(DAY, D_U1, H19).get("why") == "no_hist",
+    "  ⑧ 自證：那一天快攻自己是「歷史不夠」（所以真的少了那個候選）")
+r8b = S.union_eval(DAY, D_U2, H40, [0.0] * (S.ORB_HIST_N - 1))
+chk("  ⑧ 反過來：箱子歷史不夠 ⇒ 只剩快攻那個候選，照它做",
+    (r8b.get("pending"), r8b.get("decision"), r8b.get("pick"), r8b.get("entry")), (None, "做多", "fast", 12061.0))
+say("開箱" in (r8b.get("reason") or "") and "不可用" in (r8b.get("reason") or ""),
+    "  ⑧ reason 寫得出開箱那個候選不可用", r8b.get("reason"))
+r8c = S.union_eval(DAY, D_U2, H19, [0.0] * (S.ORB_HIST_N - 1))
+chk("  ⑧ 兩種歷史都不夠 ⇒ 一個候選都沒有（no_cand，⛔ 不是資料缺）",
+    (r8c.get("pending"), r8c.get("decision"), r8c.get("why")), (None, "不做", "no_cand"))
+chk("  ⑧ 兩個不可用的原因都記進那一列", len(r8c.get("miss") or []), 2)
+chk("  ⑧ ⛔ 「都說做空」記 no_long、「一個候選都沒有」記 no_cand（將來看紀錄意義不同）",
+    (S.union_eval(DAY, D_U3, H40, UBH).get("why"), r8c.get("why")), ("no_long", "no_cand"))
 
 
 print("\n=== ⑪c 一輪 step：六條各自落地，同一天只讀一次逐筆、只算一次 day_pack ===")
@@ -1149,11 +1175,13 @@ finally:
     SL.load_day, S._fast_ctx, S.orb_calc = _ld2, _fc0, _oc0
 _rows2 = S.read_rows()[0]
 _got = {ln: _rows2.get((ln, FD), {}).get("decision") for ln in S.TICK_LANES}
-chk("  四條有定論（快攻／早收／回馬槍／純回馬），⛔ 開箱與多方聯軍因為箱子歷史不夠是資料缺",
-    (_got["fast"], _got["hmq"], _got["rev"], _got["fast11"], ("orb", FD) in _rows2, ("union", FD) in _rows2),
-    ("做多", "做多", "不做", "做多", False, False))
-chk("  開箱／多方聯軍在 pending 裡寫得出原因",
-    [S.STATE["pending"][ln].get(FD, {}).get("why") for ln in ("orb", "union")], ["few_box_hist"] * 2)
+chk("  四條有定論（快攻／早收／回馬槍／純回馬），⛔ 開箱因為箱子歷史不夠是資料缺，"
+    "但多方聯軍**照樣做得出來**（只是少一個候選）",
+    (_got["fast"], _got["hmq"], _got["rev"], _got["fast11"], ("orb", FD) in _rows2, _got["union"]),
+    ("做多", "做多", "不做", "做多", False, "做多"))
+chk("  開箱在 pending 裡寫得出原因；多方聯軍⛔ 不在 pending 裡（它有定論）",
+    [S.STATE["pending"]["orb"].get(FD, {}).get("why"), S.STATE["pending"]["union"].get(FD)],
+    ["few_box_hist", None])
 chk("  ⛔ 同一天的逐筆只讀一次（六條共用，⛔ 不是一條讀一次）", _hits.count(FD), 1)
 # ⛔ 六條共用同一份候選：那一天的 _fast_ctx／orb_calc 各只准跑**一次**
 #    （多方聯軍就是靠這份一致性；各算各的除了慢，還會讓七條看到不一樣的答案）

@@ -545,6 +545,9 @@ def _orb_enter(lane, day, D, o, cutoff, why, reason, base, extra=None):
 def orb_eval(day, D, box_hist, cfg=None, pack=None):
     """
     一天的「開箱」。box_hist＝**這一天以前**最近 ORB_HIST_N 個交易日的箱子寬度%（list）或 None（算不出來）。
+    ⛔⛔ **這裡不要用 pack 裡的 ctx**：`_fast_ctx` 回 stop 的日子（09:00 前沒成交／走幅歷史不夠…）
+       `pack["ctx"]` 會是 None，而開箱這條規則跟快攻那半完全無關，⛔ 不可以被它連坐。
+       這支只准用 `pack["orb"]` 與 `pack["box"]`。
     ⛔ 箱子太窄（< 中位數）是**定論**「不做」；歷史不夠是**資料缺**（⛔ 不寫檔 —— 逐筆之後可能補得回來）。
     """
     day = str(day)
@@ -584,59 +587,86 @@ def union_cands(day, D, p):
       ・快攻　　09:03:30，走幅 ≥ 過去 40 天第 80 百分位才算觸發
       ・開箱　　箱子寬度% ≥ 過去 20 天中位數才算數；**第一次**突破那一刻觸發
       ・回馬槍　只有「09:03:30 判定不快」的日子才有；09:15:00 價與 09:03:30 價**方向相反**才算觸發
-    回 (候選 list（照觸發時刻排好，早的在前）, 擋住的原因 or None)。
+
+    ⛔⛔ **每個候選各自判斷可不可用**（PM 2026-09-16 裁示，口徑跟回測一致）：
+       ・走幅歷史不夠（`no_hist`）／09:00 前沒成交（`no_ref`）… ⇒ 那天**沒有快攻與回馬槍這兩個候選**
+       ・箱子寬度歷史不夠（< 20 天）⇒ 那天**沒有開箱這個候選**
+       ⛔ 都**不是**「整條沒資料」—— 只要當天還有至少一個做多候選，多方聯軍照做。
+       （第一版寫成「收不齊就整條資料缺」是錯的：面板剛開始跑、箱子歷史還在掃的那幾十天，
+         union 會整條空白，跟回測對不起來。）
+
+    ⛔ 只有這三種算**整條資料缺**（`_fast_ctx` 回的 pending）：沒接上規則、沒有當天逐筆、
+       讀不到 `fast_hist.jsonl`。前兩個是「整天沒東西可算」，第三個是**檔案不見**——
+       CLAUDE.md 明令不可以把「檔案不見」記成定論（部署前沒放種子會把那幾天永久寫錯）。
+
+    回 (候選 list（照觸發時刻排好，早的在前）, 不可用的原因 list, 整條 stop or None)。
     """
     c = p["cfg"]
     ctx, stop = p["ctx"], p["stop"]
-    if stop is not None:
-        return None, stop                       # 快攻那半算不出來 ⇒ 三個候選裡有兩個不成立，整條交給 _stop_row
+    if stop is not None and stop.get("pending"):
+        return None, None, stop                 # ⛔ 只有「資料缺」那三種才整條停
+    out, miss = [], []
+    if ctx is None:                             # 定論級的算不出來（no_ref／no_px／no_hist／no_move）
+        miss.append("%s／%s：%s" % (LANE_NAME["fast"], LANE_NAME["hmq"], stop.get("reason") or ""))
+    else:
+        if ctx["fast"] and ctx["d"] != 0:
+            out.append({"kind": "fast", "dir": ctx["d"], "at_ms": FAST_PX_MS, "at": FAST_PX_AT, "i": ctx["i_px"]})
+        if not ctx["fast"]:                     # ⛔ 回馬槍只有「不快」的日子才有這個候選
+            i15, d2 = _rev_at(D, ctx, c)
+            if i15 is not None and d2 is not None:
+                out.append({"kind": "rev", "dir": d2, "at_ms": int(c["rev_sec"]) * 1000,
+                            "at": _hms_sec(c["rev_sec"]), "i": i15})
     bh, o = p["box"], p["orb"]
-    if bh is None:
-        return None, {"pending": True, "why": "no_box_hist", "msg": "算不出過去的箱子寬度（沒有歷史逐筆）"}
     med = orb_med(bh)
-    if med is None:
-        return None, {"pending": True, "why": "few_box_hist",
-                      "msg": "箱子寬度歷史不夠（這天以前只有 %d 天，要 %d 天）" % (len(bh), ORB_HIST_N)}
-    out = []
-    if ctx["fast"] and ctx["d"] != 0:
-        out.append({"kind": "fast", "dir": ctx["d"], "at_ms": FAST_PX_MS, "at": FAST_PX_AT, "i": ctx["i_px"]})
-    if not ctx["fast"]:                         # ⛔ 回馬槍只有「不快」的日子才有這個候選
-        i15, d2 = _rev_at(D, ctx, c)
-        if i15 is not None and d2 is not None:
-            out.append({"kind": "rev", "dir": d2, "at_ms": int(c["rev_sec"]) * 1000,
-                        "at": _hms_sec(c["rev_sec"]), "i": i15})
-    if o is not None and o["i"] is not None and o["box_pct"] >= med:
+    if med is None:                             # ⛔ 只是少一個候選，不是整條沒資料
+        miss.append("%s：箱子寬度歷史不夠（這天以前只有 %d 天，要 %d 天）"
+                    % (LANE_NAME["orb"], 0 if bh is None else len(bh), ORB_HIST_N))
+    elif o is not None and o["i"] is not None and o["box_pct"] >= med:
         out.append({"kind": "orb", "dir": o["d"], "at_ms": int(D["t"][o["i"]]),
                     "at": _hms_ms(int(D["t"][o["i"]])), "i": o["i"]})
     out.sort(key=lambda x: (x["at_ms"], UNION_TIE[x["kind"]]))
-    return out, None
+    return out, miss, None
 
 
 def _cand_txt(x):
     return "%s %s %s" % (LANE_NAME[x["kind"]], x["at"], "多" if x["dir"] > 0 else "空")
 
 
+def _miss_txt(miss):
+    """把「今天少了哪些候選」接成一句（⛔ 一定要寫進 reason —— 少一個候選會改變結果）"""
+    return ("；不可用：" + "、".join(miss)) if miss else ""
+
+
 def union_eval(day, D, hist_rows, box_vals=None, cfg=None, pack=None):
     """
-    「多方聯軍」：三個候選裡**只取方向為做多**的（⛔ 說做空的略過，但當天要**繼續看下一個**，
+    「多方聯軍」：候選裡**只取方向為做多**的（⛔ 說做空的略過，但當天要**繼續看下一個**，
     不是收工），在剩下的做多候選裡取**觸發時刻最早**的那一個，照它自己的進出場規則做，
-    ⛔ **一天最多一口**。當天沒有任何做多候選 ⇒ 不做。
+    ⛔ **一天最多一口**。
+
+    當天沒有任何做多候選 ⇒ 不做，而且 ⛔ **要分得出是哪一種**（將來看紀錄時意義完全不同）：
+      ・`no_long`　有候選、但都說做空
+      ・`no_cand`　一個候選都沒有（有的不可用、有的沒觸發，reason 寫清楚）
     """
     day = str(day)
     c = cfg or _CFG
     p = pack if pack is not None else day_pack(day, D, hist_rows, box_vals, c)
-    cands, stop = union_cands(day, D, p)
+    cands, miss, stop = union_cands(day, D, p)
     if stop is not None:
         return _stop_row("union", day, stop)
-    base = {"cands": [_cand_txt(x) for x in cands]}
+    base = {"cands": [_cand_txt(x) for x in cands], "miss": list(miss)}
     longs = [x for x in cands if x["dir"] > 0]     # ⛔ 用濾的（不是「碰到做空就 break」）
-    if not longs:
+    if cands and not longs:
         return _none_row("union", day, "no_long",
-                         ("候選都不是做多（%s），不做" % "、".join(_cand_txt(x) for x in cands))
-                         if cands else "今天三個候選一個都沒觸發，不做", base)
+                         "候選都不是做多（%s），不做%s"
+                         % ("、".join(_cand_txt(x) for x in cands), _miss_txt(miss)), base)
+    if not cands:
+        return _none_row("union", day, "no_cand",
+                         ("今天沒有可用的候選，不做%s" % _miss_txt(miss)) if miss
+                         else "三個候選都可用，但一個都沒觸發，不做", base)
     pick = longs[0]                               # cands 已經照 (觸發時刻, 定序) 排過 ⇒ 這就是最早的做多候選
-    reason = ("照「%s」做多（%s 觸發，最早）；候選：%s"
-              % (LANE_NAME[pick["kind"]], pick["at"], "、".join(_cand_txt(x) for x in cands)))
+    reason = ("照「%s」做多（%s 觸發，最早）；候選：%s%s"
+              % (LANE_NAME[pick["kind"]], pick["at"],
+                 "、".join(_cand_txt(x) for x in cands), _miss_txt(miss)))
     ex = {"pick": pick["kind"], "pick_name": LANE_NAME[pick["kind"]], "at": pick["at"]}
     cutoff = _day_cutoff(day)
     if pick["kind"] == "orb":
