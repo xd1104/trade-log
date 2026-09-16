@@ -6,11 +6,17 @@
   ・逐筆那六條：tick-research 的 `ticks2026/ticks/YYYY-MM-DD.csv.gz`（strategy_lab.load_csv_day 讀，⛔ 不建快取）
              ＋ 門檻歷史＝`--hist` 指的 fast_hist.jsonl（真單在用的那一份，唯讀）
              ⇒ sim_lanes.fast_eval()（規則函式注入 auto_fire 的正本＋live_panel.FAST_PCTL，跟面板 main() 同一組）
-  ・美股開盤順勢：tick-research 的 `nights/ticks/*.csv.gz`（夜盤逐筆，21:25~05:00）先合成 1 分 K
+  ・夜盤順勢：tick-research 的 `nights/ticks/*.csv.gz`（夜盤逐筆，21:25~05:00）先合成 1 分 K
              （**標籤＝結束時間**：那一分鐘裡的成交歸到下一個整分），再丟 sim_lanes.night_eval()。
              ⚠️ 這是「逐筆合成的 1 分 K」，面板用的是永豐的 kbars／tmf_1min.csv —— 口徑一樣、來源不同。
 
 ⛔ 不連永豐、不寫任何檔（只印）。
+
+⛔⛔ **這支印出來的開箱成績，是在「窗口跨度閘門關閉」的情況下算的**（lab-qa 2026-09-16 S5）：
+   這裡把箱子歷史當成一串**沒有日期的 list** 傳給 `orb_eval`，而 `sim_lanes._box_win()` 收到 list
+   就把 `span` 設成 `None` ⇒ `orb_span_bad()` 直接放行。面板那條路傳的是 `box_window()` 的 dict、
+   跨度 > `ORB_SPAN_MAX_DAYS` 會記「資料缺」不做定論 ⇒ **面板的結果可能比這裡少幾天**。
+   ⇒ ⛔ 不要把這支印出來的數字當成「閘門後的成績」拿去跟面板對帳。
 
     python sim-lanes-replay.py --ticks DIR --hist fast_hist.jsonl (--nights DIR | --min1 tmf_1min.csv)
                                [--from 2026-09-01] [--to 2026-09-15] [--night-from 2026-08-20] [--night-to 2026-09-01]
@@ -92,6 +98,11 @@ def main():
              ("；讀不動 %d 天：%s" % (len(_skip), "、".join(_skip[:3]))) if _skip else ""))
     for ln in S.TICK_LANES:
         print("\n■ %s（sim_lanes.%s）" % (S.LANE_NAME[ln], ln))
+        if ln in ("orb", "union"):
+            # ⛔ 講在輸出裡（看報告的人不會去讀 docstring）：這裡的箱子歷史是沒有日期的 list
+            #    ⇒ `_box_win()` 把 span 設成 None ⇒ 跨度閘門整個跳過。
+            print("  ⚠️ 這一段是**窗口跨度閘門關閉**下算的（歷史用 list 傳、沒有日期）"
+                  "⇒ ⛔ 不等於面板的成績（面板會把跨度 > %d 天的日子記成資料缺）" % S.ORB_SPAN_MAX_DAYS)
         print(_fmt % _hdr)
         tot, n = 0.0, 0
         for d, r in _rows[ln]:
@@ -118,7 +129,7 @@ def main():
                 dd = px["ts"].dt.date
                 src.append((E, px[(dd == E) | (dd == E + timedelta(days=1))].reset_index(drop=True)))
             E += timedelta(days=1)
-        print("\n■ 美股開盤順勢（%s 的 1 分 K ⇒ sim_lanes.night_eval）" % pathlib.Path(a.min1).name)
+        print("\n■ 夜盤順勢（%s 的 1 分 K ⇒ sim_lanes.night_eval）" % pathlib.Path(a.min1).name)
     else:
         src = []
         for f in sorted(pathlib.Path(a.nights).glob("*.csv.gz")):
@@ -126,7 +137,7 @@ def main():
             if E is None or not ((a.n0 or a.d0) <= str(E) <= a.n1):
                 continue
             src.append((E, bars))
-        print("\n■ 美股開盤順勢（逐筆合成 1 分 K ⇒ sim_lanes.night_eval）")
+        print("\n■ 夜盤順勢（逐筆合成 1 分 K ⇒ sim_lanes.night_eval）")
     print("%-10s %-5s %-4s %9s %9s %-4s %9s %-5s %7s %9s  %s" % (
         "晚上E", "開盤", "判定", "ref", "c", "出場", "出場價", "時刻", "點數", "研究×460", "原因"))
     tot = 0.0

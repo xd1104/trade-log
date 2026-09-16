@@ -106,7 +106,10 @@ M = [
     ("N8 orb 停損用固定點數（不是箱子另一端）", S, '    sl = round(fill - o["lo"], 1) if d > 0 else round(o["hi"] - fill, 1)', "    sl = 100.0"),
     ("N9 orb 設了停利（不再是「不設停利」）", S, '    raw, w = SL.run_bracket(D, o["i"], fill, d, ORB_NO_TP, sl, cutoff, cost=True)', '    raw, w = SL.run_bracket(D, o["i"], fill, d, sl, sl, cutoff, cost=True)'),
     ("N10 orb 碰到箱子邊就算突破", S, "    up, dn = p > hi, p < lo", "    up, dn = p >= hi, p <= lo"),
-    ("N11 orb 上下緣同時出現時挑後面那一筆", S, "    if idn is None or (iu is not None and iu <= idn):", "    if idn is not None and (iu is None or idn <= iu):"),
+    # ⛔ N11 要改的是**語意**（挑後面那一筆），⛔ 不是只把 if 的條件對調 —— 對調之後 return 的 body
+    #    沒跟著換，「只有上緣突破」那種日子會 `return i1 + idn`（idn is None）⇒ TypeError 崩潰，
+    #    紅的理由不對（lab-qa 2026-09-16 S3）。`iu >= idn` 才是真的「兩邊都有就挑晚的那一筆」。
+    ("N11 orb 上下緣同時出現時挑後面那一筆", S, "    if idn is None or (iu is not None and iu <= idn):", "    if idn is None or (iu is not None and iu >= idn):"),
     ("N12 orb 箱子收在 09:04（少一分鐘）", S, "ORB_BOX_TO_MS = SL.ms(9, 5, 0)", "ORB_BOX_TO_MS = SL.ms(9, 4, 0)"),
     ("N12b orb 箱子不含 09:05 那一筆", S, '    i1 = int(np.searchsorted(t, ORB_BOX_TO_MS, side="right"))', '    i1 = int(np.searchsorted(t, ORB_BOX_TO_MS, side="left"))'),
     ("N13 orb 箱子寬度歷史偷看未來", S, "        if m and m.group(1) < str(day):", "        if m and m.group(1) != str(day):"),
@@ -129,7 +132,9 @@ M = [
     ("U7 贏家是開箱時不照它的出場規則", S, '    if pick["kind"] == "orb":\n        return _orb_enter("union"', '    if False:\n        return _orb_enter("union"'),
     ("U9 候選沒有定序（時刻一樣時會飄）", S, '    out.sort(key=lambda x: (x["at_ms"], UNION_TIE[x["kind"]]))', '    out.sort(key=lambda x: -x["at_ms"])'),
     ('S1 窗口跨度那道閘門整個失效', S, '    if w.get("span") is None or w["span"] <= ORB_SPAN_MAX_DAYS:\n        return None', '    if True:\n        return None'),
-    ('S1b 跨度上限放寬到 9999 天', S, 'ORB_SPAN_MAX_DAYS = 90', 'ORB_SPAN_MAX_DAYS = 9999'),
+    ('S1b 跨度上限放寬到 9999 天', S, 'ORB_SPAN_MAX_DAYS = 50', 'ORB_SPAN_MAX_DAYS = 9999'),
+    # ⛔ 90 是舊值（PM 2026-09-16 收到 50）：放回去等於再容忍中間缺快 7 週還照樣放行
+    ('S1g 跨度上限放回舊的 90 天', S, 'ORB_SPAN_MAX_DAYS = 50', 'ORB_SPAN_MAX_DAYS = 90'),
     ('S1c 跨度太寬也做定論（會寫檔）', S, '        return _pending("box_span", bad)', '        return _none_row("orb", day, "box_span", bad)'),
     ('S1d union 把跨度太寬當成整條資料缺', S, '    elif _span_bad:                             # ⛔ 跨度太寬 ⇒ 同樣只是「少一個候選」\n        miss.append(', '    elif _span_bad:\n        return None, None, {"pending": True, "why": "box_span", "msg": _span_bad}\n    elif False:\n        miss.append('),
     ('S1e reason 不帶窗口起訖（只寫「過去 20 天」）', S, '    return ("過去 %d 天（%s~%s）" % (n, w["d0"], w["d1"])) if w.get("d0") else ("過去 %d 天" % n)', '    return "過去 %d 天" % n'),

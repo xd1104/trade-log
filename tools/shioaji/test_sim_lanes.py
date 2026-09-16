@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-【模擬】分頁（六條）離線測試（2026-09-15 晚上，2026-09-16 擴到六條，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
+【模擬】分頁（七條）離線測試（2026-09-15 晚上，2026-09-16 擴到七條，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
 
-  ① 早盤快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
+  ① 快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
      13:43:30 收盤平／結算日 13:30／沒有逐筆＝資料缺（不是定論）
-  ② 美股開盤順勢：夏令 21:30／冬令 22:30（含換季邊界）／同一根兩邊碰算停損／04:58 收盤平／停利／d=0 不做／沒到齊＝資料缺
+  ② 夜盤順勢：夏令 21:30／冬令 22:30（含換季邊界）／同一根兩邊碰算停損／04:58 收盤平／停利／d=0 不做／沒到齊＝資料缺
   ③ 落地：同一（lane,date）不重寫／資料缺之後補到會補算（兩條各一次）／壞列計數＋等式
   ④ 抓資料的防護：08:30~09:35 不抓／有部位不抓（問不到也算有）／流量高不抓／失敗隔 10 分鐘／問過沒有今天不重抓／正控組
   ⑤ 背景例外不外丟（step 與 loop 各驗）＋計數
   ⑥ 端點 GET /api/sim/state：200、唯讀（前後雜湊一樣）、跨站 403、POST 不接、模組是 None ⇒ 503；
      sim_lanes 載入失敗時 import live_panel 照樣成功
-  ⑦ 前端：獨立的 #tab-sim、六條並排、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑦ 前端：獨立的 #tab-sim、七條並排、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
   ⑪ 新的四條：hmq（快＋09:15 反轉）／rev（只做反轉那一半）／fast11（只換收盤時刻）／orb（箱子濾網）
   ⑫ 規則函式一律用注入的那一份（⛔ sim_lanes 裡沒有另一把尺）
   ⑧ AST：sim_lanes 不 import／引用 broker、auto_fire；主迴圈那幾支跟固定基準 a71087e 一模一樣（沒有基準 ⇒ 記「未驗」）
@@ -179,8 +179,8 @@ def base_day(ref=12000.0, px=12060.0, bid=None, ask=None, extra=()):
     return mkD(t)
 
 
-# ══ ① 早盤快攻 ══════════════════════════════════════════════════════
-print("=== ① 早盤快攻 ===")
+# ══ ① 快攻 ══════════════════════════════════════════════════════════
+print("=== ① 快攻 ===")
 DAY = "2026-10-13"          # 週二、不是結算日
 say(not SL.is_expiry(date.fromisoformat(DAY)), "  治具自證：%s 不是結算日" % DAY)
 H40 = hist_rows(DAY, 40)
@@ -254,8 +254,8 @@ chk("  沒接上規則函式 ⇒ 資料缺（⛔ 不猜）", S.fast_eval(DAY, ba
 S._CFG.update(_saved_cfg)
 
 
-# ══ ② 美股開盤順勢 ══════════════════════════════════════════════════
-print("\n=== ② 美股開盤順勢 ===")
+# ══ ② 夜盤順勢 ══════════════════════════════════════════════════════
+print("\n=== ② 夜盤順勢 ===")
 chk("  夏令換算：2026-03-07（週六，換季前）22:30、03-08（第二個週日）21:30",
     (S._hm(S.us_open_min(date(2026, 3, 7))), S._hm(S.us_open_min(date(2026, 3, 8)))), ("22:30", "21:30"))
 chk("  冬令換算：2026-10-31 21:30、11-01（第一個週日）22:30",
@@ -817,7 +817,7 @@ tab_code = _re.sub(r"<!--.*?-->", " ", tab, flags=_re.S)
 say(_re.match(r'\s*<div id="tab-sim" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
     "  【模擬】是獨立分頁，卡是它的第一個子元素")
 card = tab_code
-say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標題與六條的容器")
+say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標題與七條的容器")
 say('id="tab-tick"' not in page and 'id="tab-review"' not in page,
     "  【細節】與【回顧】兩個分頁的容器都不在了")
 chk("  分頁列恰好四顆，順序＝即時／模擬／策略實驗室／自動下單",
@@ -842,7 +842,7 @@ say("if(t==='sim'){ smEnter(); }" in page, "  切進【模擬】才問（不掛 
 say("if(TAB!=='sim') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
 say("e._smh!==html" in sjs and "innerHTML===" not in sjs, "  沒變就別動 DOM：比的是節點上快取的字串（不讀回 innerHTML）")
 say("my!==SM.seq" in sjs, "  請求帶流水號，只認最後一次")
-say("Object.keys(x.lanes)" in sjs, "  六條的順序由後端決定（前端不寫死 lane 名字）")
+say("Object.keys(x.lanes)" in sjs, "  七條的順序由後端決定（前端不寫死 lane 名字）")
 chk("  前端 JS 沒有寫死任何一條 lane 的 key", [k for k in S.LANES if ("'%s'" % k) in sjs_code], [])
 fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
 chk("  【自動下單】那一頁沒有模擬的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
@@ -852,7 +852,7 @@ chk("  【策略實驗室】那一頁已經沒有模擬卡", [w for w in ("smcar
 
 
 # ══ ⑪ 新的四條（2026-09-16）═══════════════════════════════════════════
-print("\n=== ⑪ hmq／rev／fast11：快的那一半與回馬槍那一半 ===")
+print("\n=== ⑪ hmq／rev／fast11：回馬槍／純回馬／早收 ===")
 reset_state()
 D_FAST = base_day(12000, 12060, extra=[(ms(10, 0), 12100.0, 12099, 12101), (ms(10, 30), 12121.0, 12120, 12122)])
 r_fast = S.fast_eval(DAY, D_FAST, H40)
@@ -921,7 +921,21 @@ chk("  沒接上規則 ⇒ 四條都記「沒接上」、⛔ 不猜",
      for f in (S.fast_eval, S.hmq_eval, S.rev_eval, S.fast11_eval)], ["not_wired"] * 4)
 
 
-print("\n=== ⑪b ORB 5 分＋箱子濾網 ===")
+print("\n=== ⑪b 開箱（ORB 5 分＋箱子濾網）===")
+
+
+def orb_ev(*a, **k):
+    """
+    ⛔ 這一節一律走這支，**不要直接呼叫 `S.orb_eval`**（lab-qa 2026-09-16 S2）：
+    `orb_eval` 會在「哨兵被碰到」時往外丟例外，直接呼叫的話整支測試會**崩潰**，
+    而崩潰型的紅看不出是哪一條在守（突變 N9 就是這樣紅的）。丟例外 ⇒ 回一個
+    絕對對不上任何斷言的 dict ⇒ **乾淨的紅**。
+    ⚠️ 「哨兵被碰到要丟例外」本身由 ⑪c3 用斷言釘住，⛔ 不是靠這裡。
+    """
+    try:
+        return S.orb_eval(*a, **k)
+    except Exception as e:
+        return {"why": "EXC", "decision": "EXC", "exc": repr(e)}
 ODAY = "2026-11-10"           # 不是結算日
 say(not SL.is_expiry(date.fromisoformat(ODAY)), "  治具自證：%s 不是結算日" % ODAY)
 BOX = [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
@@ -931,7 +945,7 @@ D_UP = mkD(BOX + [(ms(9, 30), 12050.0, 12049, 12051), (ms(10, 0), 12900.0, 12899
 o = S.orb_calc(ODAY, D_UP)
 chk("  箱子＝09:00~09:05 的最高最低（兩端都含）", (o["hi"], o["lo"], round(o["w"], 1)), (12040.0, 11980.0, 60.0))
 bp = o["box_pct"]
-r = S.orb_eval(ODAY, D_UP, [bp] * S.ORB_HIST_N)
+r = orb_ev(ODAY, D_UP, [bp] * S.ORB_HIST_N)
 chk("  箱寬**等於**中位數 ⇒ 要做（⛔ 只有「小於」才不做）", r.get("decision"), "做多")
 chk("  突破上緣做多：進場＝那一筆的賣價、停損＝箱子下緣（12051−11980＝71）",
     (r.get("entry"), r.get("sl_points")), (12051.0, 71.0))
@@ -939,18 +953,18 @@ chk("  ⛔ 不設停利：漲到 12900 也不出場，13:43:30 收盤平（對�
     (r.get("exit_reason"), r.get("exit"), r.get("points")), ("收盤", 12899.0, 843.0))
 chk("  cutoff 13:43:30、成本 5 點", (r.get("cutoff"), r.get("cost")), ("13:43:30", 5.0))
 say("停損＝箱子另一端" in (r.get("reason") or ""), "  原因寫得出停損是箱子另一端", r.get("reason"))
-r_narrow = S.orb_eval(ODAY, D_UP, [bp * 1.0000001] * S.ORB_HIST_N)
+r_narrow = orb_ev(ODAY, D_UP, [bp * 1.0000001] * S.ORB_HIST_N)
 chk("  箱寬小於中位數 ⇒ 定論「不做」（narrow_box）", (r_narrow.get("decision"), r_narrow.get("why")), ("不做", "narrow_box"))
 say(not r_narrow.get("pending"), "  箱子太窄是**定論**（會落地），不是資料缺")
-p_few = S.orb_eval(ODAY, D_UP, [bp] * (S.ORB_HIST_N - 1))
+p_few = orb_ev(ODAY, D_UP, [bp] * (S.ORB_HIST_N - 1))
 chk("  歷史不夠 ⇒ **資料缺**（⛔ 不寫檔，逐筆之後可能補得回來）",
     (p_few.get("pending"), p_few.get("why")), (True, "few_box_hist"))
-chk("  沒有當天逐筆 ⇒ 資料缺", S.orb_eval(ODAY, None, [bp] * 20).get("why"), "no_ticks")
-chk("  算不出歷史 ⇒ 資料缺", S.orb_eval(ODAY, D_UP, None).get("why"), "no_box_hist")
+chk("  沒有當天逐筆 ⇒ 資料缺", orb_ev(ODAY, None, [bp] * 20).get("why"), "no_ticks")
+chk("  算不出歷史 ⇒ 資料缺", orb_ev(ODAY, D_UP, None).get("why"), "no_box_hist")
 
 D_DN = mkD(BOX + [(ms(9, 30), 11970.0, 11969, 11971), (ms(10, 0), 12045.0, 12044, 12046),
                   (ms(13, 44, 59), 12000.0, 11999, 12001)])
-rd = S.orb_eval(ODAY, D_DN, [0.0] * S.ORB_HIST_N)
+rd = orb_ev(ODAY, D_DN, [0.0] * S.ORB_HIST_N)
 chk("  跌破下緣做空：進場用買價 11969、停損＝箱子上緣（12040−11969＝71）",
     (rd.get("decision"), rd.get("entry"), rd.get("sl_points")), ("做空", 11969.0, 71.0))
 chk("  碰到箱子上緣 ⇒ 停損，用觸發那一筆的成交價 12045 ⇒ −76−5",
@@ -959,14 +973,14 @@ chk("  碰到箱子上緣 ⇒ 停損，用觸發那一筆的成交價 12045 ⇒ 
 D_EDGE = mkD(BOX + [(ms(9, 30), 12040.0, 12039, 12041), (ms(9, 40), 11980.0, 11979, 11981),
                     (ms(13, 44, 59), 12000.0, 11999, 12001)])
 chk("  剛好碰到箱子邊**不算**突破（上緣用 >、下緣用 <）⇒ 整天沒突破",
-    S.orb_eval(ODAY, D_EDGE, [0.0] * 20).get("why"), "no_break")
+    orb_ev(ODAY, D_EDGE, [0.0] * 20).get("why"), "no_break")
 D_TWICE = mkD(BOX + [(ms(9, 30), 12050.0, 12049, 12051), (ms(9, 40), 11900.0, 11899, 11901),
                      (ms(13, 44, 59), 11950.0, 11949, 11951)])
-r2 = S.orb_eval(ODAY, D_TWICE, [0.0] * 20)
+r2 = orb_ev(ODAY, D_TWICE, [0.0] * 20)
 chk("  ⛔ 一天最多 1 次：只認第一次那一筆（先上緣 ⇒ 做多）", (r2.get("decision"), r2.get("entry")), ("做多", 12051.0))
 D_NOBOX = mkD([(ms(8, 50), 12000.0, 11999, 12001), (ms(9, 30), 12100.0, 12099, 12101)])
-chk("  09:00~09:05 沒有成交 ⇒ 定論「不做」（no_box）", S.orb_eval(ODAY, D_NOBOX, [0.0] * 20).get("why"), "no_box")
-chk("  結算日 13:30 平", S.orb_eval(EXP, D_UP, [0.0] * 20).get("cutoff"), "13:30:00")
+chk("  09:00~09:05 沒有成交 ⇒ 定論「不做」（no_box）", orb_ev(ODAY, D_NOBOX, [0.0] * 20).get("why"), "no_box")
+chk("  結算日 13:30 平", orb_ev(EXP, D_UP, [0.0] * 20).get("cutoff"), "13:30:00")
 
 print("\n  -- box_hist：這一天以前最近 20 個有逐筆的交易日 --")
 # ⛔ 換一個乾淨的 tick_hist：那 22 個「這天以前」的日子會蓋到前面幾節寫的 2026-10-20
@@ -1112,7 +1126,7 @@ chk("  ⑤c 兩個做多候選：回馬槍 09:15 早於開箱 09:30（⛔ 開箱
 r7 = S.union_eval(DAY, D_U7, H40, UBH)
 chk("  ⑤c ⇒ 照回馬槍做（進場 12009、±0.5% 停利 ⇒ 55 點）",
     (r7.get("pick"), r7.get("entry"), r7.get("exit_reason"), r7.get("points")), ("rev", 12009.0, "停利", 55.0))
-say(S.orb_eval(DAY, D_U7, UBH).get("entry") == 12021.0,
+say(orb_ev(DAY, D_U7, UBH).get("entry") == 12021.0,
     "  ⑤c 自證：開箱自己那條的進場價是 12021（⛔ 沒被選中的那個確實不一樣）")
 
 # ⑥ 箱子濾網擋住 ⇒ 開箱那個候選不算（但快攻／回馬槍照舊）
@@ -1171,13 +1185,19 @@ _WOK = {"vals": [0.1] * S.ORB_HIST_N, "d0": "2026-08-01", "d1": "2026-09-14", "s
 _WBAD = {"vals": [0.1] * S.ORB_HIST_N, "d0": "2025-05-14", "d1": "2026-09-14", "span": 489}
 say(S.orb_span_bad(_WOK) is None, "  跨度 45 天 ⇒ 放行")
 say(bool(S.orb_span_bad(_WBAD)), "  跨度 489 天 ⇒ 擋下來", S.orb_span_bad(_WBAD))
-say(S.orb_span_bad(dict(_WOK, span=S.ORB_SPAN_MAX_DAYS)) is None, "  邊界：剛好 %d 天 ⇒ 放行" % S.ORB_SPAN_MAX_DAYS)
-say(bool(S.orb_span_bad(dict(_WOK, span=S.ORB_SPAN_MAX_DAYS + 1))), "  邊界：%d 天 ⇒ 擋" % (S.ORB_SPAN_MAX_DAYS + 1))
-_rok = S.orb_eval(ODAY, D_UP, _WOK)
+# ⛔ 邊界**寫死 49/50/51/52**（PM 2026-09-16 裁示把上限從 90 收到 50）：
+#    拿 S.ORB_SPAN_MAX_DAYS ± 1 去比是「跟自己比」，常數被改掉照樣綠（突變 S1b 抓過同型假綠燈）。
+#    50 的來歷：他正本 520 天、501 個窗口實測 max 40（農曆年）＋10 天餘裕，見 sim_lanes.py 的註解。
+chk("  ⛔ 上限就是 50 個日曆天（寫死，⛔ 不准拿 S.ORB_SPAN_MAX_DAYS 比自己）", S.ORB_SPAN_MAX_DAYS, 50)
+say(S.orb_span_bad(dict(_WOK, span=49)) is None, "  邊界：49 天 ⇒ 放行")
+say(S.orb_span_bad(dict(_WOK, span=50)) is None, "  邊界：剛好 50 天 ⇒ 放行")
+say(bool(S.orb_span_bad(dict(_WOK, span=51))), "  邊界：51 天 ⇒ 擋")
+say(bool(S.orb_span_bad(dict(_WOK, span=52))), "  邊界：52 天 ⇒ 擋")
+_rok = orb_ev(ODAY, D_UP, _WOK)
 chk("  跨度正常 ⇒ 照算，而且 reason 帶得出窗口起訖",
     (_rok.get("decision"), "2026-08-01~2026-09-14" in (_rok.get("reason") or ""), _rok.get("box_span")),
     ("做多", True, 45))
-_rbad = S.orb_eval(ODAY, D_UP, _WBAD)
+_rbad = orb_ev(ODAY, D_UP, _WBAD)
 chk("  ⛔ 跨度太寬 ⇒ **資料缺**（⛔ 不做定論、不寫檔）", (_rbad.get("pending"), _rbad.get("why")), (True, "box_span"))
 say("489" in (_rbad.get("msg") or "") and "2025-05-14" in (_rbad.get("msg") or ""),
     "  原因講得出跨了幾天、從哪到哪", _rbad.get("msg"))
@@ -1310,6 +1330,43 @@ chk("  開箱那一條跟多方聯軍看到的是**同一個箱子**（進場價
 say("過去 20 天（" in (_ro.get("reason") or ""), "  開箱的 reason 帶得出窗口起訖", _ro.get("reason"))
 say(_ru.get("points") == _ro.get("points"),
     "  兩條算出來的點數一樣（自證：共用那份箱子不是嘴上說說）", (_ru.get("points"), _ro.get("points")))
+
+# ── ⑪c3 ORB_NO_TP 那道防禦碼：**斷言型**（lab-qa 2026-09-16 S2）────────────────
+# ⛔ 本來只有突變 N9 在守，而 N9 是靠「⑪b 直接呼叫沒人接 ⇒ 整支測試崩潰」翻紅 ——
+#    崩潰型的紅看不出是哪一條在守。現在直接釘住：把哨兵調小到一定會碰到，
+#    ① `orb_eval` 要丟 RuntimeError；② 面板那條路（`step()`）要吞掉 ⇒ 記 pending＋errors、
+#    ⛔ **一列都不落地**（絕對不可以把 10 億點那種假成績寫進只 append 的定論檔）。
+#    ⚠️ 這一條同時蓋掉 CLAUDE.md 舊記的 Q5「這段 raise 結構上碰不到 ⇒ 測不到」。
+print("\n  -- ORB_NO_TP 哨兵被碰到 ⇒ 丟例外、⛔ 不寫檔（lab-qa S2）--")
+S.SIM_DIR = TMP / "sim_lanes_notp"
+reset_state()
+S._BOX.clear()
+_notp0, S.ORB_NO_TP = S.ORB_NO_TP, 10.0     # ⛔ 暫時調小：12051 進場、漲到 12200 一定碰得到「停利」
+try:
+    _D_u = SL.load_day(UD)
+    try:
+        _exc = "⛔ 沒有丟例外，回傳 %r" % (S.orb_eval(UD, _D_u, S.box_window(UD)),)
+    except RuntimeError as _e:
+        _exc = _e
+    say(isinstance(_exc, RuntimeError), "  哨兵被碰到 ⇒ orb_eval 丟 RuntimeError", _exc)
+    say(isinstance(_exc, RuntimeError) and "停利" in str(_exc), "  例外訊息講得出是「走到停利」", str(_exc))
+    S._BOX.clear()
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    S.ORB_NO_TP = _notp0
+    S._BOX.clear()
+_rows_tp = S.read_rows()[0]
+chk("  ⛔ 面板那條路吞掉 ⇒ 開箱與多方聯軍那天**一列都沒落地**",
+    [("orb", UD) in _rows_tp, ("union", UD) in _rows_tp], [False, False])
+chk("  記成 pending「計算出錯」＋錯誤計數",
+    (S.STATE["pending"]["orb"].get(UD, {}).get("why"), S.STATE["errors"] >= 1), ("error", True))
+say(_rows_tp.get(("fast", UD), {}).get("decision") == "做空",
+    "  自證：同一天快攻照樣有定論（⇒ step 真的跑過，也證明不是整天停擺）",
+    _rows_tp.get(("fast", UD), {}).get("decision"))
+say(S.orb_eval(UD, SL.load_day(UD), S.box_window(UD)).get("decision") == "做多",
+    "  自證：哨兵還原之後同一天又算得出來（尺是活的）")
+S._BOX.clear()
+
 SL.LAB_DIR, S.SIM_DIR, S.FAST_HIST = _lab_u, _sim_u, _fh_u
 S._BOX.clear()
 print("\n=== ⑫ 規則一律用注入的那一份（⛔ sim_lanes 裡沒有第二把尺）===")
