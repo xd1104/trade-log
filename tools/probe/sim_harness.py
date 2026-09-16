@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-【模擬】分頁的前端治具：端 `live_panel.PAGE` ＋ 一份**捏造的** `GET /api/sim/state`（六條）。
+【模擬】分頁的前端治具：端 `live_panel.PAGE` ＋ 一份**捏造的** `GET /api/sim/state`（七條）。
 
 ⛔ 不連永豐、⛔ 不 import broker 的下單路徑、⛔ 不碰 8770（他正在用的那個面板）。
 ⛔ 所有寫檔出口（sim_lanes/、tick_hist/、autofire/、fast_hist.jsonl、tmf_1min.csv）

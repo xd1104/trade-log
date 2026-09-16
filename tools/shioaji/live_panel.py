@@ -5395,7 +5395,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          愈往右愈接近真錢。⛔ 不可以把【自動下單】往左搬。
          ⚠️ 被拿掉的兩頁**後端沒有跟著拆**（/api/tick/*、/api/review、/api/bars 不帶 full）：
             /api/bars 與 day_bars() 是即時分頁也在用的，tick_logs 的逐筆落地更是獨立的資料線。 -->
-    <!-- 【模擬】：六條策略每天事後照規則算一次，⛔ 一口單都不會送（後端 sim_lanes.py）。
+    <!-- 【模擬】：七條策略每天事後照規則算一次，⛔ 一口單都不會送（後端 sim_lanes.py）。
          放在【即時】右邊：它講的是「同一天，如果照規則做會怎樣」，跟研究頁是兩件事。 -->
     <button data-tab="sim">模擬</button>
     <!-- 【策略實驗室】放右邊倒數第二：這一頁是研究性質，接在模擬後面。⛔ 不可以插在【即時】前面。
@@ -5442,14 +5442,14 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   </div></div>
 </div>
 
-<!-- ══════════ 【模擬】：六條策略每天事後照規則算一次（⛔ 不會下單）══════════
+<!-- ══════════ 【模擬】：七條策略每天事後照規則算一次（⛔ 不會下單）══════════
      後端 sim_lanes.py，唯讀端點 GET /api/sim/state。
      ⚠️ 2026-09-16 從【策略實驗室】最上面那張卡搬出來獨立成一頁（Benson 交辦），
         class 一律沿用原本的 `sm-` 前綴 ⛔ 不改名。
      ⛔ 跟【自動下單】的真單紀錄完全分開：不同的檔、不同的端點、不同的卡，⛔ 不准混進同一個清單。
      ⛔ 只放空容器：規則句、月合計、今天狀態、最近一筆全部從後端來（前端不寫死時刻與點數）；一顆按鈕都沒有。
      ⛔ 只列歷史模擬結果：不放勝率估計、不放預估、不給進場提示。
-     ⚠️ .sm-lanes 是**獨立節點**：六條的骨架只在條數變動時重建，每條的內容各自比對自己的字串
+     ⚠️ .sm-lanes 是**獨立節點**：七條的骨架只在條數變動時重建，每條的內容各自比對自己的字串
         （整塊重繪會把捲動位置與剛畫好的內容一起換掉）。 -->
 <div id="tab-sim" hidden>
  <div class="card sm-card" id="smcard">
@@ -7455,12 +7455,12 @@ document.addEventListener('keydown',function(e){
  else if(e.key==='Escape'&&pickOpen){ pickOpen=false; tick(); }
 });
 
-/* ══════════════ 【模擬】分頁：六條策略（⛔ 不會下單）══════════════
+/* ══════════════ 【模擬】分頁：七條策略（⛔ 不會下單）══════════════
 
    ⛔ 只打 GET /api/sim/state（唯讀）。一顆按鈕、一個 POST 都沒有。
    ⛔ 規則句、月合計、今天狀態、最近一筆全部從後端來（⛔ 前端不寫死任何時刻／點數／百分比）。
    ⛔ 跟【自動下單】的真單紀錄完全分開（不讀 /api/fire/*、不共用 AL 的清單）。
-   ⛔ 六條的**順序與有哪幾條**由後端決定（x.lanes 的 key 順序），⛔ 前端不寫死 lane 名字。
+   ⛔ 七條的**順序與有哪幾條**由後端決定（x.lanes 的 key 順序），⛔ 前端不寫死 lane 名字。
    ⚠️ 不掛在 500ms 的 tick 上：切進這一頁問一次，停在這一頁時每 60 秒再問一次（離開就停）。
    ⚠️ 「沒變就別動 DOM」用節點上快取的字串比（⛔ 不讀回 innerHTML 比，見 CLAUDE.md）。
    ⚠️ 請求帶流水號，只認最後一次的回應。
@@ -7491,7 +7491,9 @@ function smLane(L){
   let h='<div class="sm-lt"><b>'+esc(L.name)+'</b><small>資料：'+esc(L.src)+'</small></div>'
     +'<div class="sm-mh">每月累計點數</div><div class="sm-months">';
   (L.months||[]).forEach(m=>{
-    h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+'<i>'+m.trades+' 筆</i></span>'
+    // ⛔ 筆數旁邊一定要帶「算到幾天」：資料補得多寡不同時，兩條的月合計**不可比** ——
+    //    只寫「2 筆」看不出來是「這個月只算到 9 天」還是「20 天只做了 2 筆」（lab-qa 退件 S2）。
+    h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+'<i>'+m.trades+' 筆／'+m.days+' 天</i></span>'
       +'<b class="lb-mono '+smCls(m.points)+'">'+(m.days?smPts(m.points):'—')+'</b></div>';
   });
   h+='</div><div class="sm-lh">今天</div><div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>':'')

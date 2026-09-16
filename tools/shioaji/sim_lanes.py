@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-【模擬】分頁的後端：六條策略每天**事後**照規則算一次、記下來。
+【模擬】分頁的後端：七條策略每天**事後**照規則算一次、記下來。
 
 ⛔⛔ 這是**模擬**，一口單都不會送：
    ・⛔ 一行都不 import broker／auto_fire（`test_sim_lanes.py` 用 AST 在守）。
@@ -12,7 +12,7 @@
    ・⛔ 跟【自動下單】的真單紀錄**完全分開**：不同的檔、不同的端點（/api/sim/state）、不同的卡。
    ・⛔ 不碰 4Hz 主迴圈：全部跑在自己的 daemon 執行緒（`loop()`），任何例外吞掉但**計數＋主控台＋畫面**。
 
-六條（lane）。⛔ 前五條都吃**同一份逐筆**，同一天只讀一次（`_step_ticks`）：
+七條（lane）。⛔ 前六條都吃**同一份逐筆**，同一天只讀一次、也只建一次 `day_pack`（`_step_ticks`）：
 ■ fast「早盤快攻」＝真單「快攻回馬槍」的前半（口徑＝研究 search3.py／build_fast_hist.py）
   資料：tick_hist/ticks/YYYY-MM-DD.csv.gz（strategy_lab 每天 13:50~15:00 抓；缺的這裡背景補抓）
   ref＝09:00:00.000（含）以前最後一筆；px＝09:03:30.000（含）以前最後一筆（⛔ 要落在 ref 之後）
@@ -92,6 +92,11 @@ ORB_FEE = 5.0                             # ⚠️ 跟快攻同一把尺（手�
 # ⛔ **不設停利**：run_bracket 一定要收一個停利點數 ⇒ 給一個價格永遠碰不到的哨兵。
 #    真的被碰到就是程式壞了 ⇒ orb_eval 會攔下來記成錯誤，⛔ 不准把 10 億點當成績寫進檔案。
 ORB_NO_TP = 10 ** 9
+# ⛔⛔ **窗口跨度**上限（日曆天；lab-qa 2026-09-16 退件 S1）：他的 tick_hist 中間有 16 個月的洞
+#    （2025-06~2026-08 全空），所以「過去 20 天」可能有 12 天是一年多以前的。規則的語意是
+#    「**跟最近的波動比**」，跨一年就不是那個意思了；而定論只 append 不重算，寫錯會永久留著。
+#    ⇒ 跨度超過這個數就 **⛔ 不做定論、記成資料缺**，並在卡上寫明原因（CLAUDE.md「資料不完整時不可以猜」）。
+ORB_SPAN_MAX_DAYS = 90
 
 # ── 多方聯軍（union）：三個候選裡「做多而且觸發最早」的那一個
 UNION_FROM = ("fast", "orb", "rev")       # 三個候選（顯示名字用 LANE_NAME）
@@ -513,9 +518,20 @@ def orb_box_pct(day, D):
 
 def orb_med(box_vals):
     """箱子寬度%的中位數（過去 ORB_HIST_N 個交易日）。⚠️ 天數不夠 ⇒ None（呼叫端當「資料缺」）。"""
-    if box_vals is None or len(box_vals) < ORB_HIST_N:
+    v = _box_win(box_vals)["vals"]
+    if v is None or len(v) < ORB_HIST_N:
         return None
-    return float(np.median(np.asarray(box_vals, dtype=float)[-ORB_HIST_N:]))
+    return float(np.median(np.asarray(v, dtype=float)[-ORB_HIST_N:]))
+
+
+def orb_span_bad(box_vals):
+    """窗口跨度太寬 ⇒ 回那句原因（⛔ 呼叫端要當成**資料缺**，不可以做定論）；沒問題 ⇒ None。"""
+    w = _box_win(box_vals)
+    if w.get("span") is None or w["span"] <= ORB_SPAN_MAX_DAYS:
+        return None
+    return ("箱子寬度歷史跨了 %d 天（%s~%s），超過 %d 天 ⇒ 不做定論"
+            "（資料有洞，這 %d 天不是「最近的波動」）"
+            % (w["span"], w["d0"], w["d1"], ORB_SPAN_MAX_DAYS, len(w.get("vals") or [])))
 
 
 def _orb_enter(lane, day, D, o, cutoff, why, reason, base, extra=None):
@@ -554,27 +570,31 @@ def orb_eval(day, D, box_hist, cfg=None, pack=None):
     if D is None:
         return _pending("no_ticks", "沒有當天逐筆")
     bh = pack["box"] if pack is not None else box_hist
-    if bh is None:
+    if _box_win(bh)["vals"] is None:
         return _pending("no_box_hist", "算不出過去的箱子寬度（沒有歷史逐筆）")
     o = pack["orb"] if pack is not None else orb_calc(day, D)
     if o is None:
         return _none_row("orb", day, "no_box", "%s 沒有成交，畫不出箱子" % ORB_BOX_AT)
     base = {"box_hi": o["hi"], "box_lo": o["lo"], "box_w": round(o["w"], 1),
             "box_pct": round(o["box_pct"], 4)}
+    _w = _box_win(bh)
     med = orb_med(bh)
     if med is None:
         return _pending("few_box_hist", "箱子寬度歷史不夠（這天以前只有 %d 天，要 %d 天）"
-                        % (len(bh), ORB_HIST_N))
-    base["box_med_pct"] = round(med, 4)
+                        % (len(_w["vals"]), ORB_HIST_N))
+    bad = orb_span_bad(bh)                        # ⛔ 跨度太寬 ⇒ 資料缺（⛔ 不寫檔）
+    if bad:
+        return _pending("box_span", bad)
+    base.update({"box_med_pct": round(med, 4), "box_win": box_win_txt(_w), "box_span": _w["span"]})
     if o["box_pct"] < med:
-        return _none_row("orb", day, "narrow_box", "箱子太窄，不做（%.3f%%，過去 %d 天中位數 %.3f%%）"
-                         % (o["box_pct"], ORB_HIST_N, med), base)
+        return _none_row("orb", day, "narrow_box", "箱子太窄，不做（%.3f%%，%s中位數 %.3f%%）"
+                         % (o["box_pct"], box_win_txt(_w), med), base)
     if o["i"] is None:
         return _none_row("orb", day, "no_break", "整天沒有突破箱子（%s ~ %s）" % (_px(o["lo"]), _px(o["hi"])), base)
     at = _hms_ms(int(D["t"][o["i"]]))
-    reason = ("%s箱子（%s ~ %s，寬 %.3f%% ≥ 中位數 %.3f%%），停損＝箱子另一端 %s"
+    reason = ("%s箱子（%s ~ %s，寬 %.3f%% ≥ %s中位數 %.3f%%），停損＝箱子另一端 %s"
               % ("突破" if o["d"] > 0 else "跌破", _px(o["lo"]), _px(o["hi"]),
-                 o["box_pct"], med, _px(o["lo"] if o["d"] > 0 else o["hi"])))
+                 o["box_pct"], box_win_txt(_w), med, _px(o["lo"] if o["d"] > 0 else o["hi"])))
     return _orb_enter("orb", day, D, o, _day_cutoff(day), "break", reason, base, {"at": at})
 
 
@@ -607,7 +627,8 @@ def union_cands(day, D, p):
         return None, None, stop                 # ⛔ 只有「資料缺」那三種才整條停
     out, miss = [], []
     if ctx is None:                             # 定論級的算不出來（no_ref／no_px／no_hist／no_move）
-        miss.append("%s／%s：%s" % (LANE_NAME["fast"], LANE_NAME["hmq"], stop.get("reason") or ""))
+        # ⛔ 名字一律用候選自己的正式名字：快攻／**純回馬**（「回馬槍」是 hmq 那一條，不是候選）
+        miss.append("%s／%s：%s" % (LANE_NAME["fast"], LANE_NAME["rev"], stop.get("reason") or ""))
     else:
         if ctx["fast"] and ctx["d"] != 0:
             out.append({"kind": "fast", "dir": ctx["d"], "at_ms": FAST_PX_MS, "at": FAST_PX_AT, "i": ctx["i_px"]})
@@ -617,10 +638,12 @@ def union_cands(day, D, p):
                 out.append({"kind": "rev", "dir": d2, "at_ms": int(c["rev_sec"]) * 1000,
                             "at": _hms_sec(c["rev_sec"]), "i": i15})
     bh, o = p["box"], p["orb"]
-    med = orb_med(bh)
+    med, _span_bad = orb_med(bh), orb_span_bad(bh)
     if med is None:                             # ⛔ 只是少一個候選，不是整條沒資料
         miss.append("%s：箱子寬度歷史不夠（這天以前只有 %d 天，要 %d 天）"
-                    % (LANE_NAME["orb"], 0 if bh is None else len(bh), ORB_HIST_N))
+                    % (LANE_NAME["orb"], len(_box_win(bh)["vals"] or []), ORB_HIST_N))
+    elif _span_bad:                             # ⛔ 跨度太寬 ⇒ 同樣只是「少一個候選」
+        miss.append("%s：%s" % (LANE_NAME["orb"], _span_bad))
     elif o is not None and o["i"] is not None and o["box_pct"] >= med:
         out.append({"kind": "orb", "dir": o["d"], "at_ms": int(D["t"][o["i"]]),
                     "at": _hms_ms(int(D["t"][o["i"]])), "i": o["i"]})
@@ -1014,11 +1037,11 @@ def _tick_days_before(day, n):
     return out
 
 
-def box_hist(day, n=ORB_HIST_N):
+def _box_pairs(day, n=ORB_HIST_N):
     """
-    ORB 濾網的歷史：**這一天以前**最近 n 個算得出箱子的交易日的箱子寬度%（舊到新）。
+    ORB 濾網的歷史：**這一天以前**最近 n 個算得出箱子的交易日 ⇒ [(日期, 箱子寬度%)]（舊到新）。
     ⚠️ 每天要重讀一次逐筆很貴 ⇒ 算過的放 `_BOX` 記憶體快取（⛔ 不另外開檔案來寫）。
-    ⚠️ 找不到足額**就讓它不足**（orb_eval 會記「資料缺」等逐筆補回來），⛔ 不補 0、不放寬 n。
+    ⚠️ 找不到足額**就讓它不足**（呼叫端會記「資料缺」等逐筆補回來），⛔ 不補 0、不放寬 n。
     """
     out = []
     _BOX_ST.update(busy=True, day=str(day), done=0, need=n)
@@ -1037,7 +1060,41 @@ def box_hist(day, n=ORB_HIST_N):
                     break
     finally:
         _BOX_ST["busy"] = False                    # ⛔ 例外也要收掉旗標，不然畫面永遠說「計算中」
-    return [v for _d, v in sorted(out)]
+    return sorted(out)
+
+
+def box_window(day, n=ORB_HIST_N):
+    """
+    ⛔ 窗口**要帶起訖日期與跨度**（lab-qa 2026-09-16 退件 S1）：資料有洞的時候，
+    「過去 20 天」可能橫跨一年多 —— 卡上只寫「過去 20 天」會騙人。
+    ⇒ {"vals": [...], "d0": 最舊, "d1": 最新, "span": 起訖跨幾個日曆天}
+    """
+    pairs = _box_pairs(day, n)
+    d0 = pairs[0][0] if pairs else None
+    d1 = pairs[-1][0] if pairs else None
+    span = None if not pairs else (date.fromisoformat(d1) - date.fromisoformat(d0)).days + 1
+    return {"vals": [v for _d, v in pairs], "d0": d0, "d1": d1, "span": span}
+
+
+def box_hist(day, n=ORB_HIST_N):
+    """只要那串數字（探針與測試用）。⚠️ 面板那條路一律走 `box_window()` —— 它才帶得出跨度。"""
+    return box_window(day, n)["vals"]
+
+
+def _box_win(box_vals):
+    """
+    把 `box_vals` 正規化成窗口 dict。⚠️ 直接傳 list 進來＝**沒有日期資訊**（治具／探針用），
+    這種情況跨度是 None ⇒ 跨度那道閘門跳過（⛔ 面板那條路一律傳 `box_window()` 的 dict）。
+    """
+    if isinstance(box_vals, dict):
+        return box_vals
+    return {"vals": None if box_vals is None else list(box_vals), "d0": None, "d1": None, "span": None}
+
+
+def box_win_txt(w):
+    """窗口的字面：「過去 20 天（2025-05-14~2026-09-14）」；沒有日期資訊就只寫天數。"""
+    n = len(w.get("vals") or [])
+    return ("過去 %d 天（%s~%s）" % (n, w["d0"], w["d1"])) if w.get("d0") else ("過去 %d 天" % n)
 
 
 def box_scan_msg():
@@ -1088,7 +1145,7 @@ def _step_ticks(now, rows, get_api, has_position):
                 continue
             # ⛔ 一天只算一次：箱子歷史只有「開箱／多方聯軍」要用才掃（很貴）
             need_box = any(ln in ("orb", "union") for ln in want)
-            bh = box_hist(ds) if (D is not None and need_box) else None
+            bh = box_window(ds) if (D is not None and need_box) else None
             pk = day_pack(ds, D, hist, bh)
             for ln in want:
                 try:
@@ -1199,10 +1256,11 @@ def _rule_text(lane):
                 "同一分鐘兩邊都碰到算停損，沒碰到就 04:58 平" % (NIGHT_TPSL_FRAC * 100))
     if lane == "union":
         at = _hms_sec(_CFG["rev_sec"]) if _CFG.get("rev_sec") else "?"
+        # ⛔ 候選的名字是「快攻／開箱／**純回馬**」（「回馬槍」是 hmq 那一條，⛔ 不要混用）
         return ("把三個候選收齊（%s %s／%s 第一次突破／%s %s），只取做多的，"
                 "取觸發最早的那一個，照它自己的進出場規則做，一天最多一口；"
                 "沒有做多的候選就不做" % (LANE_NAME["fast"], FAST_PX_AT, LANE_NAME["orb"],
-                                    LANE_NAME["hmq"], at))
+                                    LANE_NAME["rev"], at))
     if lane == "orb":
         return ("%s 的最高最低當箱子；箱子寬度%%（箱寬÷進場價）比過去 %d 個交易日的中位數窄就不做，"
                 "否則第一次突破上緣做多、跌破下緣做空（一天最多 1 次）；停損＝箱子另一端、不設停利，"
@@ -1240,9 +1298,13 @@ def _months(now, lane_rows):
     for i, (y, m) in enumerate(ym):
         key = "%04d-%02d" % (y, m)
         rs = [r for r in lane_rows if r["date"][:7] == key]
+        # ⛔ 端點不可以被一列壞資料打成 500：只加「真的是數字」的點數（`_valid_row` 已經擋在前面，
+        #    這裡是第二道 —— 萬一以後有人放寬了那道，`/api/sim/state` 也不會整個掛掉）。
         tr = [r for r in rs if r["decision"] != "不做"]
+        pts = [r["points"] for r in tr
+               if not isinstance(r.get("points"), bool) and isinstance(r.get("points"), (int, float))]
         out.append({"month": key, "label": "本月" if i == 0 else "%d 月" % m, "this": i == 0,
-                    "points": round(sum(r["points"] for r in tr), 1), "trades": len(tr), "days": len(rs)})
+                    "points": round(sum(pts), 1), "trades": len(tr), "days": len(rs)})
     return out
 
 

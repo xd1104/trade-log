@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-【策略實驗室】「模擬（不會下單）」—— 拿研究資料實跑 sim_lanes 的計算函式，逐日印出來給 PM 抽查（2026-09-15，lab-dev）。
+【模擬】分頁 —— 拿研究資料實跑 sim_lanes 的計算函式，逐日印出來給 PM 抽查
+（2026-09-15 lab-dev；2026-09-16 補上逐筆那六條：快攻／早收／回馬槍／純回馬／開箱／多方聯軍）。
 
-  ・早盤快攻：tick-research 的 `ticks2026/ticks/YYYY-MM-DD.csv.gz`（strategy_lab.load_csv_day 讀，⛔ 不建快取）
+  ・逐筆那六條：tick-research 的 `ticks2026/ticks/YYYY-MM-DD.csv.gz`（strategy_lab.load_csv_day 讀，⛔ 不建快取）
              ＋ 門檻歷史＝`--hist` 指的 fast_hist.jsonl（真單在用的那一份，唯讀）
              ⇒ sim_lanes.fast_eval()（規則函式注入 auto_fire 的正本＋live_panel.FAST_PCTL，跟面板 main() 同一組）
   ・美股開盤順勢：tick-research 的 `nights/ticks/*.csv.gz`（夜盤逐筆，21:25~05:00）先合成 1 分 K
@@ -52,24 +53,58 @@ def main():
     ap.add_argument("--to", dest="d1", default="2026-09-15")
     ap.add_argument("--night-to", dest="n1", default="2026-09-12")
     a = ap.parse_args()
-    assert S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE)
+    # ⛔ configure() 是**全有全無**：2026-09-16 加了 reversal_fn／rev_sec，少傳就整個回 False
+    #    （這支當場掛在這一行 —— lab-qa 退件 R2）。⛔ 以後 configure 加參數要一起改這裡。
+    assert S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                       reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC), "configure 接不上（參數少傳？）"
     hist, bad, dup = AF.hist_read(pathlib.Path(a.hist))
     print("fast_hist：%d 列（%s ~ %s），壞列 %d、重複 %d" % (len(hist), hist[0]["date"], hist[-1]["date"], bad, dup))
 
-    print("\n■ 早盤快攻（sim_lanes.fast_eval）")
-    print("%-10s %-4s %8s %8s %6s %9s %9s %-4s %7s  %s" % ("日期", "判定", "走幅%", "門檻%", "天數", "進場", "出場", "出場", "點數", "原因"))
-    for f in sorted(pathlib.Path(a.ticks).glob("*.csv.gz")):
+    # ⛔ 逐筆那六條**共用同一天的 day_pack**（跟面板 _step_ticks 同一條路），⛔ 不要一條算一次。
+    #    ⚠️ 開箱／多方聯軍要「這一天以前 20 天的箱子寬度%」—— 這裡邊跑邊累積（研究資料是連續的），
+    #       跟面板去掃 tick_hist 的來源不同，但口徑（orb_box_pct）是同一支。
+    _hdr = ("日期", "判定", "走幅%", "門檻%", "天數", "進場", "出場", "出場", "點數", "原因")
+    _fmt = "%-10s %-4s %8s %8s %6s %9s %9s %-4s %7s  %s"
+    _all = sorted(pathlib.Path(a.ticks).glob("*.csv.gz"))
+    # ⚠️ 只多讀「要印的第一天」往前 ORB_HIST_N×2 個檔（湊得出 20 天箱子歷史就好）——
+    #    整個資料夾全讀很慢，而且更早的檔時間欄格式不一樣（load_csv_day 會炸）。
+    _i0 = next((i for i, f in enumerate(_all) if f.name[:10] >= a.d0), len(_all))
+    _files = _all[max(0, _i0 - S.ORB_HIST_N * 2):]
+    _box, _skip = {}, []                        # 日期 ⇒ 箱子寬度%（照日期順序邊跑邊累積）
+    _rows = {ln: [] for ln in S.TICK_LANES}
+    for f in _files:
         d = f.name[:10]
-        if not (a.d0 <= d <= a.d1):
+        try:
+            D = SL.load_csv_day(f)
+        except Exception as e:                  # ⛔ 讀不動就跳過並**講出來**（不可以安靜地少一天歷史）
+            _skip.append("%s（%s）" % (d, str(e)[:40]))
             continue
-        r = S.fast_eval(d, SL.load_csv_day(f), hist)
-        if r.get("pending"):
-            print("%-10s 資料缺：%s" % (d, r["msg"]))
-            continue
-        print("%-10s %-4s %8s %8s %6s %9s %9s %-4s %7s  %s" % (
-            d, r["decision"], r.get("move_pct"), r.get("thr_pct"), r.get("n_hist"),
-            r["entry"] if r["entry"] is not None else "—", r["exit"] if r["exit"] is not None else "—",
-            r["exit_reason"] or "—", r["points"] if r["points"] is not None else "—", r["reason"]))
+        past = [v for _d, v in sorted(_box.items()) if _d < d][-S.ORB_HIST_N:]
+        pk = S.day_pack(d, D, hist, past)
+        if a.d0 <= d <= a.d1:
+            for ln in S.TICK_LANES:
+                _rows[ln].append((d, S.TICK_EVAL[ln](d, D, hist, past, pack=pk)))
+        v = S.orb_box_pct(d, D)                 # ⚠️ 先算結果再把今天加進歷史（⛔ 不可以偷看今天）
+        if v is not None:
+            _box[d] = v
+    print("箱子寬度歷史：%d 天可用（%s ~ %s）%s"
+          % (len(_box), min(_box) if _box else "—", max(_box) if _box else "—",
+             ("；讀不動 %d 天：%s" % (len(_skip), "、".join(_skip[:3]))) if _skip else ""))
+    for ln in S.TICK_LANES:
+        print("\n■ %s（sim_lanes.%s）" % (S.LANE_NAME[ln], ln))
+        print(_fmt % _hdr)
+        tot, n = 0.0, 0
+        for d, r in _rows[ln]:
+            if r.get("pending"):
+                print("%-10s 資料缺：%s" % (d, r["msg"]))
+                continue
+            if r.get("points") is not None:
+                tot, n = tot + r["points"], n + 1
+            print(_fmt % (
+                d, r["decision"], r.get("move_pct"), r.get("thr_pct"), r.get("n_hist"),
+                r["entry"] if r["entry"] is not None else "—", r["exit"] if r["exit"] is not None else "—",
+                r["exit_reason"] or "—", r["points"] if r["points"] is not None else "—", r["reason"]))
+        print("  合計 %+.1f 點（%d 筆）" % (tot, n))
 
     if a.min1:
         px = pd.read_csv(a.min1, usecols=["ts", "High", "Low", "Close"])
