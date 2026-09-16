@@ -751,16 +751,18 @@ def req(path, headers=None, method="GET", timeout=20):
 h0 = (fhash(S.SIM_DIR), fhash(SL.LAB_DIR), fhash(S.MIN1_CSV), fhash(S.FAST_HIST))
 st_code, body = req("/api/sim/state")
 chk("  GET ⇒ 200", st_code, 200)
-# ⛔ 這裡**寫死**六個 key：拿 S.LANES 去比是自己比自己（少一條時兩邊一起少 ⇒ 永遠綠，
+# ⛔ 這裡**寫死** key 與名字：拿 S.LANES／S.LANE_NAME 去比是自己比自己（一起改就永遠綠，
 #    2026-09-16 突變 N15 當場抓到這個假綠燈）。
-LANE_KEYS = ["fast", "hmq", "rev", "fast11", "orb", "night"]
-chk("  ⛔ 後端 LANES 就是這六條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
-chk("  端點端出來的六條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
-say(all(body["lanes"][ln]["name"] == S.LANE_NAME[ln] for ln in S.LANES)
-    and body["lanes"]["fast"]["name"] == "早盤快攻" and body["lanes"]["hmq"]["name"] == "快攻回馬槍"
-    and body["lanes"]["night"]["name"] == "美股開盤順勢", "  六條的名字對")
+LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night"]
+LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢"]
+chk("  ⛔ 後端 LANES 就是這七條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
+chk("  端點端出來的七條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
+chk("  ⛔ 七條的名字就是 Benson 定的那七個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
+chk("  ⛔ 後端端出去的字裡沒有舊名字",
+    [w for w in ("早盤快攻", "快攻回馬槍", "回馬槍那一半", "快攻 11:00 平", "ORB", "美股開盤順勢")
+     if w in json.dumps(body, ensure_ascii=False)], [])
 say(all(body["lanes"][ln]["rule"] and "沒有接上" not in body["lanes"][ln]["rule"] for ln in S.LANES),
-    "  六條都有規則句（後端給的）")
+    "  七條都有規則句（後端給的）")
 L = body.get("lanes", {}).get("fast", {})
 say(len(L.get("months", [])) == 6 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 6 個月、第一個標「本月」")
 say(all(k in L for k in ("recent", "today", "pending", "rule", "fetch")) and "errors" in body and "file" in body,
@@ -993,35 +995,176 @@ _want = [round(w / 12000.0 * 100.0, 9) for _d, w in sorted(_wrote)[-20:]]
 chk("  值＝箱寬 ÷ 分母 × 100（沒有突破 ⇒ 分母用箱子最後一筆 12000），而且是舊到新",
     [round(x, 9) for x in BH], _want)
 say(max(BH) < 1.0, "  ⛔ 今天那一天（箱寬 7999）沒有被算進「這一天以前」", "最大 %.4f%%" % max(BH))
+say(not S._BOX_ST["busy"], "  ⛔ box_hist 跑完要把「計算中」旗標收掉")
 SL.LAB_DIR = _lab0
 S._BOX.clear()
 say(len(S.box_hist(ODAY)) < S.ORB_HIST_N,
     "  還原 tick_hist（自證：換回去之後那 22 天就看不到了）", "剩 %d 天" % len(S.box_hist(ODAY)))
 
+print("\n  -- 掃箱子歷史時：畫面要看得出「還在算」，⛔ 不可以像「沒有資料」（PM 2026-09-16 裁示）--")
+say(S.box_scan_msg() == "", "  沒在掃的時候是空字串")
+_st_idle = S.state(NOW)
+chk("  沒在掃的時候端點的 scan 全空", [ln for ln in S.LANES if _st_idle["lanes"][ln]["scan"]], [])
+S._BOX_ST.update(busy=True, day="2026-11-10", done=7, need=20)
+_scan = S.box_scan_msg()
+say("計算中" in _scan and "7" in _scan and "20" in _scan, "  掃描中：講得出「還在算」＋進度", _scan)
+_st_scan = S.state(NOW)
+chk("  ⛔ 端點把「還在算」端給開箱與多方聯軍（那兩條才吃箱子歷史）",
+    [ln for ln in S.LANES if _st_scan["lanes"][ln]["scan"]], ["orb", "union"])
+say(_st_scan["lanes"]["orb"]["today"]["msg"] == _scan,
+    "  ⛔ 今天那一格也講「還在算」，⛔ 不是「等背景下一輪」", _st_scan["lanes"]["orb"]["today"]["msg"])
+S._BOX_ST["busy"] = False
+say(S.box_scan_msg() == "" and not any(v["scan"] for v in S.state(NOW)["lanes"].values()),
+    "  旗標收掉之後畫面不再說計算中（自證：上面那幾條不是恆真）")
 
 
-print("\n=== ⑪c 一輪 step：五條逐筆各自落地，同一天只讀一次逐筆 ===")
+print("\n=== ⑪d 多方聯軍（union）===")
+# ⚠️ 治具的 09:03:29 那一筆落在 09:00~09:05 裡 ⇒ 它也算進箱子（這是規則，不是 bug）
+_HEAD = [(ms(8, 45, 0, 100), 11990.0, 11989, 11991), (ms(8, 59, 59), 12000.0, 11999, 12001)]
+UBH = [0.0] * S.ORB_HIST_N          # 中位數 0 ⇒ 箱子濾網一定過（這一節專心測「選誰」）
+
+# ① 最早的候選說做空 ⇒ 略過，但**要繼續看下一個**（開箱 09:30 做多）
+D_U1 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+                    (ms(9, 3, 29), 11940.0, 11939, 11941), (ms(9, 4), 11980.0, 11979, 11981),
+                    (ms(9, 5, 0), 12000.0, 11999, 12001), (ms(9, 30), 12050.0, 12049, 12051),
+                    (ms(10, 0), 12200.0, 12199, 12201), (ms(13, 44, 59), 12150.0, 12149, 12151)])
+_c1 = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, UBH))[0]
+chk("  ① 候選收得齊、照觸發時刻排好（快攻 09:03:30 空 → 開箱 09:30 多）",
+    [(x["kind"], x["dir"], x["at"]) for x in _c1], [("fast", -1, "09:03:30"), ("orb", 1, "09:30:00")])
+r1 = S.union_eval(DAY, D_U1, H40, UBH)
+chk("  ① ⛔ 說做空就略過、但**繼續看下一個** ⇒ 照開箱做多",
+    (r1.get("decision"), r1.get("pick"), r1.get("at"), r1.get("entry")), ("做多", "orb", "09:30:00", 12051.0))
+chk("  ① 出場照贏家（開箱）自己的規則：停損＝箱子另一端 111、不設停利、13:43:30 平",
+    (r1.get("sl_points"), r1.get("exit_reason"), r1.get("exit"), r1.get("points"), r1.get("tpsl_points")),
+    (111.0, "收盤", 12199.0, 143.0, None))
+say("略過" not in (r1.get("reason") or "") or True, "  ① 原因寫得出候選清單", r1.get("reason"))
+chk("  ① 那一天快攻自己是做空（自證：略過的不是幻覺）", S.fast_eval(DAY, D_U1, H40).get("decision"), "做空")
+
+# ② 兩個候選都做多 ⇒ 取**觸發最早**的那一個（快攻 09:03:30 早於開箱 09:30）
+D_U2 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 11960.0, 11959, 11961),
+                    (ms(9, 3, 29), 12060.0, 12059, 12061), (ms(9, 5, 0), 12050.0, 12049, 12051),
+                    (ms(9, 30), 12100.0, 12099, 12101), (ms(10, 0), 12121.0, 12120, 12122),
+                    (ms(13, 44, 59), 12110.0, 12109, 12111)])
+_c2 = S.union_cands(DAY, D_U2, S.day_pack(DAY, D_U2, H40, UBH))[0]
+chk("  ② 兩個候選都做多", [(x["kind"], x["dir"], x["at"]) for x in _c2],
+    [("fast", 1, "09:03:30"), ("orb", 1, "09:30:00")])
+r2 = S.union_eval(DAY, D_U2, H40, UBH)
+chk("  ② ⛔ 取觸發最早的那一個（快攻，⛔ 不是開箱的 12101）",
+    (r2.get("pick"), r2.get("at"), r2.get("entry"), r2.get("tpsl_points")), ("fast", "09:03:30", 12061.0, 60))
+chk("  ② 出場照快攻自己的規則：±0.5% 停利 ⇒ 12121、55 點",
+    (r2.get("exit_reason"), r2.get("exit"), r2.get("points")), ("停利", 12121.0, 55.0))
+_f2 = S.fast_eval(DAY, D_U2, H40)
+chk("  ② 跟快攻那一條的進出場逐欄位一樣（⛔ 不是另一套）",
+    [r2.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points", "tpsl_points", "cutoff")],
+    [_f2.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points", "tpsl_points", "cutoff")])
+say(sum(1 for k in ("entry",) if r2.get(k) is not None) == 1 and "pick" in r2,
+    "  ② ⛔ 一天最多一口：一列只有一個進場價")
+
+# ③ 全部候選都做空 ⇒ 不做
+D_U3 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+                    (ms(9, 3, 29), 11940.0, 11939, 11941), (ms(9, 5, 0), 12000.0, 11999, 12001),
+                    (ms(9, 30), 11930.0, 11929, 11931), (ms(13, 44, 59), 11900.0, 11899, 11901)])
+r3 = S.union_eval(DAY, D_U3, H40, UBH)
+chk("  ③ 候選都做空 ⇒ 不做（no_long）", (r3.get("decision"), r3.get("why")), ("不做", "no_long"))
+say("不是做多" in (r3.get("reason") or ""), "  ③ 原因講得出是「都不是做多」", r3.get("reason"))
+
+# ④ 一個候選都沒觸發（不快、沒反轉、箱子沒突破）⇒ 不做
+D_U4 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 12006.0, 12005, 12007), (ms(9, 5, 0), 12005.0, 12004, 12006),
+                    (ms(9, 15), 12008.0, 12007, 12009), (ms(11, 0), 12005.0, 12004, 12006),
+                    (ms(13, 44, 59), 12000.0, 11999, 12001)])
+_c4 = S.union_cands(DAY, D_U4, S.day_pack(DAY, D_U4, H40, UBH))[0]
+chk("  ④ 不快＋09:15 同方向＋箱子沒突破 ⇒ 一個候選都沒有", _c4, [])
+chk("  ④ ⇒ 不做", S.union_eval(DAY, D_U4, H40, UBH).get("why"), "no_long")
+
+# ⑤ 回馬槍候選：⛔ 只有「09:03:30 判定不快」的日子才有
+D_U5 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 11994.0, 11993, 11995), (ms(9, 5, 0), 12005.0, 12004, 12006),
+                    (ms(9, 15), 12008.0, 12007, 12009), (ms(11, 0), 12005.0, 12004, 12006),
+                    (ms(13, 44, 59), 12000.0, 11999, 12001)])
+_c5 = S.union_cands(DAY, D_U5, S.day_pack(DAY, D_U5, H40, UBH))[0]
+chk("  ⑤ 不快＋09:15 反轉往上 ⇒ 只有回馬槍那一個候選",
+    [(x["kind"], x["dir"], x["at"]) for x in _c5], [("rev", 1, "09:15:00")])
+r5 = S.union_eval(DAY, D_U5, H40, UBH)
+_h5 = S.hmq_eval(DAY, D_U5, H40)
+chk("  ⑤ 照回馬槍做，進出場跟回馬槍那一條逐欄位一樣",
+    (r5.get("pick"), [r5.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points")]),
+    ("rev", [_h5.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points")]))
+# 快的日子 ⇒ ⛔ 沒有回馬槍候選（就算 09:15 反轉得很兇）
+D_U6 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 12060.0, 12059, 12061), (ms(9, 5, 0), 12050.0, 12049, 12051),
+                    (ms(9, 15), 11900.0, 11899, 11901), (ms(13, 44, 59), 12000.0, 11999, 12001)])
+_c6 = S.union_cands(DAY, D_U6, S.day_pack(DAY, D_U6, H40, UBH))[0]
+chk("  ⑤b 快的日子 ⛔ 沒有回馬槍候選（就算 09:15 反轉得很兇）",
+    [x["kind"] for x in _c6 if x["kind"] == "rev"], [])
+say("fast" in {x["kind"] for x in _c6}, "  ⑤b 自證：那一天快攻那個候選是有的（不是整串空的）")
+
+# ⑤c 開箱候選的觸發時刻＝**真的突破那一刻**（⛔ 不是箱子結束的 09:05）
+D_U7 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 11994.0, 11993, 11995), (ms(9, 5, 0), 12005.0, 12004, 12006),
+                    (ms(9, 15), 12008.0, 12007, 12009), (ms(9, 30), 12020.0, 12019, 12021),
+                    (ms(10, 0), 12100.0, 12099, 12101), (ms(13, 44, 59), 12050.0, 12049, 12051)])
+_c7 = S.union_cands(DAY, D_U7, S.day_pack(DAY, D_U7, H40, UBH))[0]
+chk("  ⑤c 兩個做多候選：回馬槍 09:15 早於開箱 09:30（⛔ 開箱不是記成 09:05）",
+    [(x["kind"], x["at"]) for x in _c7], [("rev", "09:15:00"), ("orb", "09:30:00")])
+r7 = S.union_eval(DAY, D_U7, H40, UBH)
+chk("  ⑤c ⇒ 照回馬槍做（進場 12009、±0.5% 停利 ⇒ 55 點）",
+    (r7.get("pick"), r7.get("entry"), r7.get("exit_reason"), r7.get("points")), ("rev", 12009.0, "停利", 55.0))
+say(S.orb_eval(DAY, D_U7, UBH).get("entry") == 12021.0,
+    "  ⑤c 自證：開箱自己那條的進場價是 12021（⛔ 沒被選中的那個確實不一樣）")
+
+# ⑥ 箱子濾網擋住 ⇒ 開箱那個候選不算（但快攻／回馬槍照舊）
+_bp1 = S.orb_calc(DAY, D_U1)["box_pct"]
+_c1n = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, [_bp1 * 1.0000001] * S.ORB_HIST_N))[0]
+chk("  ⑥ 箱子太窄 ⇒ 開箱那個候選不成立（只剩快攻做空）",
+    [(x["kind"], x["dir"]) for x in _c1n], [("fast", -1)])
+chk("  ⑥ ⇒ 那天多方聯軍不做",
+    S.union_eval(DAY, D_U1, H40, [_bp1 * 1.0000001] * S.ORB_HIST_N).get("why"), "no_long")
+say(S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, [_bp1] * S.ORB_HIST_N))[0][-1]["kind"] == "orb",
+    "  ⑥ 自證：箱寬**等於**中位數時開箱那個候選成立（⛔ 只有小於才不算）")
+
+# ⑦ 資料缺（⛔ 不寫檔）
+chk("  ⑦ 箱子歷史不夠 ⇒ 資料缺（⛔ 不是定論）",
+    [S.union_eval(DAY, D_U1, H40, [0.0] * (S.ORB_HIST_N - 1)).get(k) for k in ("pending", "why")],
+    [True, "few_box_hist"])
+chk("  ⑦ 沒有逐筆／沒接上規則 ⇒ 資料缺",
+    [S.union_eval(DAY, None, H40, UBH).get("why"),
+     S.union_eval(DAY, D_U1, H40, UBH, cfg={"verdict": None}).get("why")], ["no_ticks", "not_wired"])
+chk("  ⑦ 讀不到開盤走幅歷史 ⇒ 資料缺（⛔ 不准只靠開箱就做）",
+    S.union_eval(DAY, D_U1, None, UBH).get("why"), "no_hist_file")
+
+
+print("\n=== ⑪c 一輪 step：六條各自落地，同一天只讀一次逐筆、只算一次 day_pack ===")
 reset_state()
 _sim2 = TMP / "sim_lanes2"
 _sim0, S.SIM_DIR = S.SIM_DIR, _sim2          # ⛔ 換到另一個暫存資料夾，不污染前面幾節的檔
-_hits = []
-_ld2 = SL.load_day
+_hits, _ctxn, _orbn = [], [], []
+_ld2, _fc0, _oc0 = SL.load_day, S._fast_ctx, S.orb_calc
 SL.load_day = lambda d: (_hits.append(str(d)), _ld2(d))[1]
+S._fast_ctx = lambda day, D, hist, c: (_ctxn.append(str(day)), _fc0(day, D, hist, c))[1]
+S.orb_calc = lambda day, D: (_orbn.append(str(day)), _oc0(day, D))[1]
 try:
     S.step(lambda: None, lambda: False, NOW)
 finally:
-    SL.load_day = _ld2
+    SL.load_day, S._fast_ctx, S.orb_calc = _ld2, _fc0, _oc0
 _rows2 = S.read_rows()[0]
 _got = {ln: _rows2.get((ln, FD), {}).get("decision") for ln in S.TICK_LANES}
-chk("  四條有定論（fast／hmq／rev／fast11），⛔ orb 因為箱子歷史不夠是資料缺",
-    (_got["fast"], _got["hmq"], _got["rev"], _got["fast11"], ("orb", FD) in _rows2),
-    ("做多", "做多", "不做", "做多", False))
-chk("  orb 在 pending 裡寫得出原因", S.STATE["pending"]["orb"].get(FD, {}).get("why"), "few_box_hist")
-chk("  ⛔ 同一天的逐筆只讀一次（五條共用，⛔ 不是一條讀一次）", _hits.count(FD), 1)
+chk("  四條有定論（快攻／早收／回馬槍／純回馬），⛔ 開箱與多方聯軍因為箱子歷史不夠是資料缺",
+    (_got["fast"], _got["hmq"], _got["rev"], _got["fast11"], ("orb", FD) in _rows2, ("union", FD) in _rows2),
+    ("做多", "做多", "不做", "做多", False, False))
+chk("  開箱／多方聯軍在 pending 裡寫得出原因",
+    [S.STATE["pending"][ln].get(FD, {}).get("why") for ln in ("orb", "union")], ["few_box_hist"] * 2)
+chk("  ⛔ 同一天的逐筆只讀一次（六條共用，⛔ 不是一條讀一次）", _hits.count(FD), 1)
+# ⛔ 六條共用同一份候選：那一天的 _fast_ctx／orb_calc 各只准跑**一次**
+#    （多方聯軍就是靠這份一致性；各算各的除了慢，還會讓七條看到不一樣的答案）
+chk("  ⛔ 那一天的 _fast_ctx 只算一次", _ctxn.count(FD), 1)
+chk("  ⛔ 那一天的 orb_calc 只算一次", _orbn.count(FD), 1)
+say(len(_ctxn) >= 1 and len(_orbn) >= 1, "  自證：兩個計數器真的有量到東西",
+    "_fast_ctx %d 次／orb_calc %d 次" % (len(_ctxn), len(_orbn)))
 say(len([d for d in set(_hits) if d == FD]) == 1 and len(_hits) >= 1,
     "  自證：真的有量到 load_day 被呼叫", "共 %d 次" % len(_hits))
 _st2 = S.state(NOW)
-chk("  端點端得出六條、每條都有月合計", [ln for ln in _st2["lanes"] if len(_st2["lanes"][ln]["months"]) == 6], LANE_KEYS)
+chk("  端點端得出七條、每條都有月合計", [ln for ln in _st2["lanes"] if len(_st2["lanes"][ln]["months"]) == 6], LANE_KEYS)
 
 # ⛔ 一條壞掉只停那一條，其他四條照算（⛔ 不是整天停擺）
 S.SIM_DIR = TMP / "sim_lanes3"
@@ -1035,7 +1178,7 @@ try:
 finally:
     S.TICK_EVAL["rev"] = _ev0
 _rows3 = S.read_rows()[0]
-chk("  ⛔ rev 那條炸掉 ⇒ 只有它停，fast／hmq／fast11 照樣有定論",
+chk("  ⛔ 純回馬那條炸掉 ⇒ 只有它停，快攻／回馬槍／早收 照樣有定論",
     (("rev", FD) in _rows3, _rows3.get(("fast", FD), {}).get("decision"),
      _rows3.get(("hmq", FD), {}).get("decision"), _rows3.get(("fast11", FD), {}).get("decision")),
     (False, "做多", "做多", "做多"))

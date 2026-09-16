@@ -5233,16 +5233,18 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 #tab-lab .card{margin-bottom:0}
 /* ══ 【模擬】分頁（class 一律 sm- 開頭，⛔ 不借別頁的名字；2026-09-16 從 #tab-lab 搬過來，class 名一個都沒改）══
    ⛔ 紅漲綠跌：沿用全站的 .up／.down 變數，這一頁不另立顏色。
-   ⚠️ 六條**並排**是 Benson 指定的（一眼比得出來）：1536 寬時六欄各約 228px ⇒ 每一條都是
-      窄直欄，⛔ 不要在裡面再放兩欄的表格（塞不下會自己換行，變成高矮不一的爛版）。
-      每一條由上而下：名字 → **每月累計點數（他最在意的，放第一個）** → 今天 → 最近一筆 → 規則句。 */
+   ⚠️ **並排**是 Benson 指定的（一眼比得出來）：2026-09-16 第七條「多方聯軍」加進來之後，
+      1536 寬時七欄各約 194px ⇒ 每一條都是很窄的直欄，⛔ 不要在裡面再放兩欄的表格
+      （塞不下會自己換行，變成高矮不一的爛版）。視窗窄一點就掉成 4＋3 兩列（PM 定案的退路）。
+      每一條由上而下：名字 → **每月累計點數（他最在意的，放第一個）** → 今天 → 最近一筆 → 規則句。
+   ⛔ 條數是後端決定的 ⇒ 這裡用 repeat(N) 寫死欄數只是**版面**，不是條數；加減條不必改 JS。 */
 #tab-sim .sm-card{padding:14px 16px 12px}
 .sm-note{font-size:11.5px; color:var(--faint); margin:-2px 2px 10px}
-.sm-lanes{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px}
-@media(max-width:1480px){ .sm-lanes{grid-template-columns:repeat(3,minmax(0,1fr))} }
-@media(max-width:980px){ .sm-lanes{grid-template-columns:repeat(2,minmax(0,1fr))} }
+.sm-lanes{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:9px}
+@media(max-width:1460px){ .sm-lanes{grid-template-columns:repeat(4,minmax(0,1fr))} }
+@media(max-width:1080px){ .sm-lanes{grid-template-columns:repeat(2,minmax(0,1fr))} }
 @media(max-width:640px){ .sm-lanes{grid-template-columns:minmax(0,1fr)} }
-.sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:11px 12px 10px; min-width:0}
+.sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:10px 11px 9px; min-width:0}
 .sm-lt{display:flex; flex-direction:column; gap:1px}
 .sm-lt b{font-size:14px; color:var(--text); font-weight:650; line-height:1.3; overflow-wrap:anywhere}
 .sm-lt small{font-size:10.5px; color:var(--faint)}
@@ -7499,6 +7501,8 @@ function smLane(L){
     h+='<div class="sm-pend">等資料：'+L.pending.map(p=>smDay(p.date)+' '+esc(p.msg)).join('；')+'</div>';
   }
   if(L.fetch&&L.fetch.msg){ h+='<div class="sm-pend">補資料：'+esc(L.fetch.msg)+(L.fetch.at?'（'+esc(L.fetch.at.slice(5,16))+'）':'')+'</div>'; }
+  // ⛔ 正在掃箱子寬度歷史時要說「還在算」，⛔ 不可以讓他以為是「沒有資料」
+  if(L.scan){ h+='<div class="sm-pend">'+esc(L.scan)+'</div>'; }
   return h+'<div class="sm-rule">'+esc(L.rule)+'</div>';
 }
 function smPaint(x){

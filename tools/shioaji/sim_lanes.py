@@ -62,12 +62,15 @@ SIM_DIR = HERE / "sim_lanes"          # ⚠️ 測試會導到暫存區；函式
 FAST_HIST = HERE / "fast_hist.jsonl"  # ⛔ 唯讀（真單在用的那一份，寫它的是 auto_fire）
 MIN1_CSV = HERE / "tmf_1min.csv"      # ⛔ 唯讀（夜盤 1 分 K 先看本機，缺的才跟永豐要）
 
-LANES = ("fast", "hmq", "rev", "fast11", "orb", "night")
-# 逐筆那五條：同一天只讀一次 tick_hist（load_day 很貴，⛔ 不要一條讀一次）
-TICK_LANES = ("fast", "hmq", "rev", "fast11", "orb")
-LANE_NAME = {"fast": "早盤快攻", "hmq": "快攻回馬槍", "rev": "回馬槍那一半",
-             "fast11": "快攻 11:00 平", "orb": "ORB 5 分＋箱子濾網", "night": "美股開盤順勢"}
-SRC_NAME = {"fast": "逐筆", "hmq": "逐筆", "rev": "逐筆", "fast11": "逐筆", "orb": "逐筆", "night": "1 分 K"}
+LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night")
+# 逐筆那六條：同一天只讀一次 tick_hist、也只算一次 day_pack（⛔ 不要一條算一次）
+TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
+# ⛔ 2026-09-16 Benson 定名：**面板文字一律用這些名字**。
+#    lane key 刻意沒改（`sim_lanes/*.jsonl` 裡已經落地的舊資料照樣讀得到，⛔ 不做資料遷移）。
+LANE_NAME = {"fast": "快攻", "fast11": "早收", "hmq": "回馬槍", "rev": "純回馬",
+             "orb": "開箱", "union": "多方聯軍", "night": "夜盤順勢"}
+SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐筆",
+            "orb": "逐筆", "union": "逐筆", "night": "1 分 K"}
 
 # ── 早盤快攻（fast／hmq／rev／fast11 共用的前半）
 FAST_REF_MS = SL.ms(9, 0, 0)              # 09:00:00.000（含）以前最後一筆
@@ -90,7 +93,12 @@ ORB_FEE = 5.0                             # ⚠️ 跟快攻同一把尺（手�
 #    真的被碰到就是程式壞了 ⇒ orb_eval 會攔下來記成錯誤，⛔ 不准把 10 億點當成績寫進檔案。
 ORB_NO_TP = 10 ** 9
 
-# ── 美股開盤順勢
+# ── 多方聯軍（union）：三個候選裡「做多而且觸發最早」的那一個
+UNION_FROM = ("fast", "orb", "rev")       # 三個候選（顯示名字用 LANE_NAME）
+# 觸發時刻**一樣**時的先後（⛔ 一定要有定序，不然同一份資料算兩次會給不同答案）
+UNION_TIE = {"fast": 0, "orb": 1, "rev": 2}
+
+# ── 夜盤順勢
 NIGHT_FROM_MIN = 15 * 60 + 1              # 夜盤第一根的標籤 15:01
 NIGHT_TO_MIN = 5 * 60 + 1440              # 最後一根標籤 05:00（隔天）；研究不收 05:01
 NIGHT_EXIT_MIN = 4 * 60 + 58 + 1440       # 標籤 ≤ 04:58 平
@@ -130,7 +138,10 @@ STATE = {"errors": 0, "last_err": None, "last_err_at": None, "steps": 0, "last_s
 _FAIL_AT = {"ticks": None, "kbars": None}     # 上一次失敗的時刻（隔 RETRY_S 才再試）
 _TRIED = set()                                # (kind, 日期, 今天) ⇒ 今天問過而且對方說沒有 ⇒ ⛔ 今天不重抓
 _NIGHT_API = {}                               # E ⇒ 從永豐補齊的那一晚（只放到齊的）
-_BOX = {}                                     # 日期 ⇒ 那天的箱子寬度%（orb 的中位數濾網用；重算很貴，只放記憶體）
+_BOX = {}                                     # 日期 ⇒ 那天的箱子寬度%（開箱的中位數濾網用；重算很貴，只放記憶體）
+# ⛔ 掃箱子歷史時畫面要看得出「**還在算**」而不是「沒有資料」（PM 2026-09-16 裁示）：
+#    面板剛啟動的第一輪要重掃過去 20 天的逐筆，全程在背景執行緒、⛔ 不擋面板啟動。
+_BOX_ST = {"busy": False, "day": None, "done": 0, "need": ORB_HIST_N}
 _FILE_LOCK = threading.Lock()                 # ⛔ 只保護 sim_lanes/ 的讀寫，跟面板任何鎖無關
 _CSV = {"key": None, "df": None}
 _LOGGED = {"bad": None}
@@ -245,6 +256,11 @@ def _hms_sec(sec):
     return "%02d:%02d:%02d" % (sec // 3600, sec % 3600 // 60, sec % 60)
 
 
+def _hms_ms(msec):
+    """當日毫秒數 ⇒ HH:MM:SS（開箱的突破時刻是**那一筆成交的時間**，不是固定時刻）"""
+    return _hms_sec(int(msec) // 1000)
+
+
 def _day_cutoff(day):
     """日盤收盤平倉的時刻：結算日 13:30，其他 13:43:30（⛔ 用 strategy_lab 的正本，不另寫 is_expiry）"""
     return SL.T1330 if SL.is_expiry(date.fromisoformat(str(day))) else SL.T1343_30
@@ -255,37 +271,66 @@ def _cut_at(cutoff):
     return {SL.T1330: "13:30:00", SL.T1343_30: "13:43:30", FAST11_CUT_MS: FAST11_CUT_AT}.get(cutoff, "")
 
 
-def _fast_setup(lane, day, D, hist_rows, c):
+def _fast_ctx(day, D, hist_rows, c):
     """
-    fast／hmq／rev／fast11 **共用的前半**：09:00 的 ref、09:03:30 的 px、開盤走幅、快不快。
-    回 (ctx, stop)。stop 不是 None ⇒ 那就是結果（定論那一列或 `_pending`），呼叫端直接回傳它。
+    fast／fast11／hmq／rev／union **共用的前半**：09:00 的 ref、09:03:30 的 px、開盤走幅、快不快。
+    回 (ctx, stop)。⚠️ stop 是**中性的**（沒有 lane）—— 由 `_stop_row(lane, ...)` 具體化成那一條的列，
+    這樣同一天只算一次、六條共用（⛔ 不准每條各算一次）。
     ⛔ 走幅與快不快一律呼叫注入的 `move_pct`／`fast_verdict`（跟真單同一份正本）。
     """
     if c.get("verdict") is None:
-        return None, _pending("not_wired", "規則函式沒有接上（面板 main() 沒有呼叫 configure）")
+        return None, {"pending": True, "why": "not_wired", "msg": "規則函式沒有接上（面板 main() 沒有呼叫 configure）"}
     if D is None:
-        return None, _pending("no_ticks", "沒有當天逐筆")
+        return None, {"pending": True, "why": "no_ticks", "msg": "沒有當天逐筆"}
     if hist_rows is None:
-        return None, _pending("no_hist_file", "讀不到開盤走幅歷史（fast_hist.jsonl）")
+        return None, {"pending": True, "why": "no_hist_file", "msg": "讀不到開盤走幅歷史（fast_hist.jsonl）"}
     t = D["t"]
     i_ref = int(np.searchsorted(t, FAST_REF_MS, side="right")) - 1
     i_px = int(np.searchsorted(t, FAST_PX_MS, side="right")) - 1
     if i_ref < 0:
-        return None, _none_row(lane, day, "no_ref", "09:00 以前沒有成交")
+        return None, {"why": "no_ref", "reason": "09:00 以前沒有成交"}
     if i_px <= i_ref:
-        return None, _none_row(lane, day, "no_px", "09:00~09:03:30 沒有成交")
+        return None, {"why": "no_px", "reason": "09:00~09:03:30 沒有成交"}
     ref, px = float(D["p"][i_ref]), float(D["p"][i_px])
     mv = c["move_pct"](px, ref)
     v = c["verdict"](day, mv, hist_rows, pctl=c["pctl"])       # ⛔ 傳的是「這一天」：門檻只准用這天以前的列
     base = {"ref": ref, "px": px, "move_pct": None if mv is None else round(mv, 4),
             "thr_pct": None if v.get("thr_pct") is None else round(v["thr_pct"], 4), "n_hist": v.get("n")}
     if v.get("verdict") == "no_hist":
-        return None, _none_row(lane, day, "no_hist", "歷史不夠（這天以前只有 %s 天，要 %s 天）"
-                               % (v.get("n"), (c.get("rule") or {}).get("min_n", "?")), base)
+        return None, {"why": "no_hist", "base": base,
+                      "reason": "歷史不夠（這天以前只有 %s 天，要 %s 天）"
+                                % (v.get("n"), (c.get("rule") or {}).get("min_n", "?"))}
     if v.get("verdict") is None:
-        return None, _none_row(lane, day, "no_move", "算不出開盤走幅", base)
+        return None, {"why": "no_move", "reason": "算不出開盤走幅", "base": base}
     return {"i_px": i_px, "ref": ref, "px": px, "mv": mv, "v": v, "base": base,
             "d": (px > ref) - (px < ref), "fast": v["verdict"] == "fast"}, None
+
+
+def _stop_row(lane, day, stop):
+    """把 `_fast_ctx` 的中性 stop 變成**那一條**的列（資料缺 ⇒ pending、⛔ 不寫檔；其餘是定論「不做」）"""
+    if stop.get("pending"):
+        return _pending(stop["why"], stop["msg"])
+    return _none_row(lane, day, stop["why"], stop["reason"], stop.get("base"))
+
+
+def day_pack(day, D, hist_rows, box_vals=None, cfg=None):
+    """
+    ⛔⛔ **一天只算一次**的共用結果：快攻那半的 ctx ＋ 開箱的箱子＋箱子寬度歷史。
+    逐筆那六條全部吃這一份（`_step_ticks` 每天建一次）——
+    ⛔ 不准每條各算一次：`load_day`、`_fast_ctx`、`orb_calc`、`box_hist` 每一支都很貴，
+    而且各算一次還會讓六條有機會算出**不一致**的候選（多方聯軍就是靠這份一致性）。
+    """
+    c = cfg or _CFG
+    ctx, stop = _fast_ctx(day, D, hist_rows, c)
+    return {"day": str(day), "cfg": c, "ctx": ctx, "stop": stop,
+            "orb": None if D is None else orb_calc(day, D), "box": box_vals}
+
+
+def _fast_setup(lane, day, D, hist_rows, c, pack=None):
+    """`_fast_ctx` ＋ 具體化成那一條的列（單獨呼叫某一條時用；`_step_ticks` 一律走 pack）"""
+    p = pack if pack is not None else day_pack(day, D, hist_rows, None, c)
+    ctx, stop = p["ctx"], p["stop"]
+    return ctx, (None if stop is None else _stop_row(lane, day, stop))
 
 
 def _enter(lane, day, D, i, d, cutoff, why, reason, base, c, extra=None):
@@ -309,9 +354,9 @@ def _enter(lane, day, D, i, d, cutoff, why, reason, base, c, extra=None):
     return row
 
 
-def _fast_like(lane, day, D, hist_rows, c, cutoff):
+def _fast_like(lane, day, D, hist_rows, c, cutoff, pack=None):
     """fast 與 fast11：⛔ 兩條**只差收盤平倉的時刻**，所以共用這一支（避免兩份會分岔的規則）。"""
-    ctx, stop = _fast_setup(lane, day, D, hist_rows, c)
+    ctx, stop = _fast_setup(lane, day, D, hist_rows, c, pack)
     if stop is not None:
         return stop
     v, base = ctx["v"], ctx["base"]
@@ -321,36 +366,44 @@ def _fast_like(lane, day, D, hist_rows, c, cutoff):
     if ctx["d"] == 0:
         return _none_row(lane, day, "flat", "09:03:30 跟 09:00 一樣價，沒有方向", base)
     return _enter(lane, day, D, ctx["i_px"], ctx["d"], cutoff, "fast",
-                  "快（走 %.3f%%，門檻 %.3f%%）" % (ctx["mv"], v["thr_pct"]), base, c)
+                  "快（走 %.3f%%，門檻 %.3f%%）" % (ctx["mv"], v["thr_pct"]), base, c, {"at": FAST_PX_AT})
 
 
-def fast_eval(day, D, hist_rows, cfg=None):
+def fast_eval(day, D, hist_rows, cfg=None, pack=None):
     """
-    一天的早盤快攻。D＝strategy_lab.load_day 的逐筆（t 毫秒、p、bid、ask，已排序）或 None；
+    一天的「快攻」。D＝strategy_lab.load_day 的逐筆（t 毫秒、p、bid、ask，已排序）或 None；
     hist_rows＝hist_read 的 rows（舊到新）或 None（讀不到歷史檔）。
     回 **定論那一列**（dict，lane/date/decision…）或 `_pending(...)`（資料缺，⛔ 不寫檔）。
     """
     day = str(day)
-    return _fast_like("fast", day, D, hist_rows, cfg or _CFG, _day_cutoff(day))
+    return _fast_like("fast", day, D, hist_rows, cfg or _CFG, _day_cutoff(day), pack)
 
 
-def fast11_eval(day, D, hist_rows, cfg=None):
-    """快攻 11:00 平：⛔ 跟 fast 完全一樣，只把收盤平倉時刻換成 11:00:00（先碰到停利停損一樣先出）。"""
-    return _fast_like("fast11", str(day), D, hist_rows, cfg or _CFG, FAST11_CUT_MS)
+def fast11_eval(day, D, hist_rows, cfg=None, pack=None):
+    """「早收」：⛔ 跟快攻完全一樣，只把收盤平倉時刻換成 11:00:00（先碰到停利停損一樣先出）。"""
+    return _fast_like("fast11", str(day), D, hist_rows, cfg or _CFG, FAST11_CUT_MS, pack)
+
+
+def _rev_at(D, ctx, c):
+    """不快那半的「09:15（注入的 rev_sec）以前最後一筆」⇒ (索引, 方向 d2)；沒成交／沒反轉 ⇒ 索引或 d2 是 None。
+    ⛔ 「有沒有反轉」一律呼叫注入的 `reversal_dir`（跟真單同一支），⛔ 不在這裡自己比方向。"""
+    i15 = int(np.searchsorted(D["t"], int(c["rev_sec"]) * 1000, side="right")) - 1
+    if i15 <= ctx["i_px"]:
+        return None, None
+    return i15, c["reversal"](ctx["px"], ctx["d"], float(D["p"][i15]))
 
 
 def _rev_leg(lane, day, D, ctx, c, cutoff):
     """
     不快的日子那一半：等 09:15（注入的 rev_sec）以前最後一筆，方向跟 09:03:30 **相反**才順新方向做 1 口。
-    ⛔ 「有沒有反轉」一律呼叫注入的 `reversal_dir`（跟真單同一支），⛔ 不在這裡自己比方向。
     """
     at = _hms_sec(c["rev_sec"])
     i15 = int(np.searchsorted(D["t"], int(c["rev_sec"]) * 1000, side="right")) - 1
     if i15 <= ctx["i_px"]:
         return _none_row(lane, day, "no_p15", "%s~%s 沒有成交" % (FAST_PX_AT, at), ctx["base"])
     p15 = float(D["p"][i15])
-    ex = {"p15": p15, "rev_at": at}
-    d2 = c["reversal"](ctx["px"], ctx["d"], p15)
+    ex = {"p15": p15, "rev_at": at, "at": at}
+    d2 = _rev_at(D, ctx, c)[1]
     tail = "（%s %s → %s %s）" % (FAST_PX_AT, _px(ctx["px"]), at, _px(p15))
     if d2 is None:
         return _none_row(lane, day, "no_rev", "不快；%s 沒有反轉，不做%s" % (at, tail), dict(ctx["base"], **ex))
@@ -358,14 +411,14 @@ def _rev_leg(lane, day, D, ctx, c, cutoff):
                   "不快；%s 反轉，順新方向%s" % (at, tail), ctx["base"], c, ex)
 
 
-def hmq_eval(day, D, hist_rows, cfg=None):
+def hmq_eval(day, D, hist_rows, cfg=None, pack=None):
     """
-    快攻回馬槍（＝真單現在跑的那一套）：快 ⇒ 09:03:30 順勢；不快 ⇒ 等 09:15 反轉才做。
+    「回馬槍」（＝真單現在跑的那一套）：快 ⇒ 09:03:30 順勢；不快 ⇒ 等 09:15 反轉才做。
     ⛔ 一天最多一口：快的日子**不會**再看 09:15。
     """
     c = cfg or _CFG
     day = str(day)
-    ctx, stop = _fast_setup("hmq", day, D, hist_rows, c)
+    ctx, stop = _fast_setup("hmq", day, D, hist_rows, c, pack)
     if stop is not None:
         return stop
     cutoff = _day_cutoff(day)
@@ -373,15 +426,16 @@ def hmq_eval(day, D, hist_rows, cfg=None):
         if ctx["d"] == 0:
             return _none_row("hmq", day, "flat", "09:03:30 跟 09:00 一樣價，沒有方向", ctx["base"])
         return _enter("hmq", day, D, ctx["i_px"], ctx["d"], cutoff, "fast",
-                      "快（走 %.3f%%，門檻 %.3f%%）" % (ctx["mv"], ctx["v"]["thr_pct"]), ctx["base"], c)
+                      "快（走 %.3f%%，門檻 %.3f%%）" % (ctx["mv"], ctx["v"]["thr_pct"]), ctx["base"], c,
+                      {"at": FAST_PX_AT})
     return _rev_leg("hmq", day, D, ctx, c, cutoff)
 
 
-def rev_eval(day, D, hist_rows, cfg=None):
-    """回馬槍那一半：⛔ **只做**「慢且 09:15 反轉」那一半，快的日子不做（hmq 減掉 fast）。"""
+def rev_eval(day, D, hist_rows, cfg=None, pack=None):
+    """「純回馬」：⛔ **只做**「慢且 09:15 反轉」那一半，快的日子不做（回馬槍減掉快攻）。"""
     c = cfg or _CFG
     day = str(day)
-    ctx, stop = _fast_setup("rev", day, D, hist_rows, c)
+    ctx, stop = _fast_setup("rev", day, D, hist_rows, c, pack)
     if stop is not None:
         return stop
     if ctx["fast"]:
@@ -431,8 +485,10 @@ def orb_calc(day, D):
     """
     一天的箱子＋突破 ⇒ dict（hi／lo／w／box_pct／i／d／fill）或 None（09:00~09:05 沒有成交）。
     **箱子寬度%＝箱寬 ÷ 進場價 × 100**（濾網比的就是這個值）。
-    ⚠️ 沒有突破的日子沒有「進場價」⇒ 分母改用箱子最後一筆成交價。兩者差不到 1%，
-       但**每個交易日都要有值**才算得出中位數 —— 只收有突破的日子等於那把尺被挑過。
+    ⛔⛔ **規則原文沒有涵蓋「沒有突破的日子」**（那種日子根本沒有進場價）——
+       這裡的處理是**實作決定**（PM 2026-09-16 裁示照做，並要求寫在這裡）：
+       分母改用箱子最後一筆成交價。兩者差 < 1%，對中位數濾網沒有影響；
+       而**每個交易日都要有值**才算得出中位數 —— 只收有突破的日子，那把尺就被挑過了。
     """
     b = orb_box(D)
     if b is None:
@@ -455,53 +511,148 @@ def orb_box_pct(day, D):
     return None if o is None else o["box_pct"]
 
 
-def orb_eval(day, D, box_hist, cfg=None):
+def orb_med(box_vals):
+    """箱子寬度%的中位數（過去 ORB_HIST_N 個交易日）。⚠️ 天數不夠 ⇒ None（呼叫端當「資料缺」）。"""
+    if box_vals is None or len(box_vals) < ORB_HIST_N:
+        return None
+    return float(np.median(np.asarray(box_vals, dtype=float)[-ORB_HIST_N:]))
+
+
+def _orb_enter(lane, day, D, o, cutoff, why, reason, base, extra=None):
     """
-    一天的 ORB。box_hist＝**這一天以前**最近 ORB_HIST_N 個交易日的箱子寬度%（list）或 None（算不出來）。
+    突破箱子之後的那一口：**停損＝箱子另一端**、⛔ **不設停利**、cutoff 前沒碰到就收盤平。
+    ⛔ 「開箱」與「多方聯軍」共用這一支（兩份會分岔的出場規則是找死）。
+    """
+    d, fill = o["d"], o["fill"]
+    sl = round(fill - o["lo"], 1) if d > 0 else round(o["hi"] - fill, 1)
+    if sl <= 0:
+        return _pending("bad_sl", "箱子另一端算不出停損")
+    raw, w = SL.run_bracket(D, o["i"], fill, d, ORB_NO_TP, sl, cutoff, cost=True)
+    if w == "tp":
+        # ⛔ 不設停利：哨兵被碰到 ＝ 程式壞了。往外丟給 step() 吞（計數＋畫面），
+        #    ⛔ 絕對不可以把 10 億點當成一天的成績寫進檔案。
+        raise RuntimeError("開箱不設停利，卻走到停利（哨兵 %s 被碰到）" % ORB_NO_TP)
+    row = {"lane": lane, "date": str(day), "decision": "做多" if d > 0 else "做空", "why": why,
+           "reason": reason, "entry": fill, "exit": round(fill + d * raw, 1),
+           "exit_reason": {"sl": "停損", "eod": "收盤"}[w],
+           "points": round(raw - ORB_FEE, 1), "cost": ORB_FEE, "sl_points": sl,
+           "cutoff": _cut_at(cutoff), "src": SRC_NAME[lane]}
+    row.update(base or {})
+    row.update(extra or {})
+    return row
+
+
+def orb_eval(day, D, box_hist, cfg=None, pack=None):
+    """
+    一天的「開箱」。box_hist＝**這一天以前**最近 ORB_HIST_N 個交易日的箱子寬度%（list）或 None（算不出來）。
     ⛔ 箱子太窄（< 中位數）是**定論**「不做」；歷史不夠是**資料缺**（⛔ 不寫檔 —— 逐筆之後可能補得回來）。
     """
     day = str(day)
     if D is None:
         return _pending("no_ticks", "沒有當天逐筆")
-    if box_hist is None:
+    bh = pack["box"] if pack is not None else box_hist
+    if bh is None:
         return _pending("no_box_hist", "算不出過去的箱子寬度（沒有歷史逐筆）")
-    o = orb_calc(day, D)
+    o = pack["orb"] if pack is not None else orb_calc(day, D)
     if o is None:
         return _none_row("orb", day, "no_box", "%s 沒有成交，畫不出箱子" % ORB_BOX_AT)
     base = {"box_hi": o["hi"], "box_lo": o["lo"], "box_w": round(o["w"], 1),
             "box_pct": round(o["box_pct"], 4)}
-    if len(box_hist) < ORB_HIST_N:
+    med = orb_med(bh)
+    if med is None:
         return _pending("few_box_hist", "箱子寬度歷史不夠（這天以前只有 %d 天，要 %d 天）"
-                        % (len(box_hist), ORB_HIST_N))
-    med = float(np.median(np.asarray(box_hist, dtype=float)[-ORB_HIST_N:]))
+                        % (len(bh), ORB_HIST_N))
     base["box_med_pct"] = round(med, 4)
     if o["box_pct"] < med:
         return _none_row("orb", day, "narrow_box", "箱子太窄，不做（%.3f%%，過去 %d 天中位數 %.3f%%）"
                          % (o["box_pct"], ORB_HIST_N, med), base)
     if o["i"] is None:
         return _none_row("orb", day, "no_break", "整天沒有突破箱子（%s ~ %s）" % (_px(o["lo"]), _px(o["hi"])), base)
-    d, fill = o["d"], o["fill"]
-    sl = round(fill - o["lo"], 1) if d > 0 else round(o["hi"] - fill, 1)
-    if sl <= 0:
-        return _pending("bad_sl", "箱子另一端算不出停損")
-    raw, w = SL.run_bracket(D, o["i"], fill, d, ORB_NO_TP, sl, o["cutoff"], cost=True)
-    if w == "tp":
-        # ⛔ ORB 不設停利：哨兵被碰到 ＝ 程式壞了。往外丟給 step() 吞（計數＋畫面），
-        #    ⛔ 絕對不可以把 10 億點當成一天的成績寫進檔案。
-        raise RuntimeError("ORB 不設停利，卻走到停利（哨兵 %s 被碰到）" % ORB_NO_TP)
-    row = {"lane": "orb", "date": day, "decision": "做多" if d > 0 else "做空", "why": "break",
-           "reason": "%s箱子（%s ~ %s，寬 %.3f%% ≥ 中位數 %.3f%%），停損＝箱子另一端 %s"
-                     % ("突破" if d > 0 else "跌破", _px(o["lo"]), _px(o["hi"]),
-                        o["box_pct"], med, _px(o["lo"] if d > 0 else o["hi"])),
-           "entry": fill, "exit": round(fill + d * raw, 1),
-           "exit_reason": {"sl": "停損", "eod": "收盤"}[w],
-           "points": round(raw - ORB_FEE, 1), "cost": ORB_FEE, "sl_points": sl,
-           "cutoff": _cut_at(o["cutoff"]), "src": SRC_NAME["orb"]}
-    row.update(base)
-    return row
+    at = _hms_ms(int(D["t"][o["i"]]))
+    reason = ("%s箱子（%s ~ %s，寬 %.3f%% ≥ 中位數 %.3f%%），停損＝箱子另一端 %s"
+              % ("突破" if o["d"] > 0 else "跌破", _px(o["lo"]), _px(o["hi"]),
+                 o["box_pct"], med, _px(o["lo"] if o["d"] > 0 else o["hi"])))
+    return _orb_enter("orb", day, D, o, _day_cutoff(day), "break", reason, base, {"at": at})
 
 
-TICK_EVAL = {"fast": fast_eval, "hmq": hmq_eval, "rev": rev_eval, "fast11": fast11_eval}
+# ══ 多方聯軍（union）══════════════════════════════════════════════════
+
+def union_cands(day, D, p):
+    """
+    當天把**三個候選**收齊（快攻／開箱／回馬槍），每個都有「觸發時刻」與「方向」。
+    ⛔ 一律用同一份 `day_pack`（跟那三條看到的是同一份答案），⛔ 不重算逐筆。
+      ・快攻　　09:03:30，走幅 ≥ 過去 40 天第 80 百分位才算觸發
+      ・開箱　　箱子寬度% ≥ 過去 20 天中位數才算數；**第一次**突破那一刻觸發
+      ・回馬槍　只有「09:03:30 判定不快」的日子才有；09:15:00 價與 09:03:30 價**方向相反**才算觸發
+    回 (候選 list（照觸發時刻排好，早的在前）, 擋住的原因 or None)。
+    """
+    c = p["cfg"]
+    ctx, stop = p["ctx"], p["stop"]
+    if stop is not None:
+        return None, stop                       # 快攻那半算不出來 ⇒ 三個候選裡有兩個不成立，整條交給 _stop_row
+    bh, o = p["box"], p["orb"]
+    if bh is None:
+        return None, {"pending": True, "why": "no_box_hist", "msg": "算不出過去的箱子寬度（沒有歷史逐筆）"}
+    med = orb_med(bh)
+    if med is None:
+        return None, {"pending": True, "why": "few_box_hist",
+                      "msg": "箱子寬度歷史不夠（這天以前只有 %d 天，要 %d 天）" % (len(bh), ORB_HIST_N)}
+    out = []
+    if ctx["fast"] and ctx["d"] != 0:
+        out.append({"kind": "fast", "dir": ctx["d"], "at_ms": FAST_PX_MS, "at": FAST_PX_AT, "i": ctx["i_px"]})
+    if not ctx["fast"]:                         # ⛔ 回馬槍只有「不快」的日子才有這個候選
+        i15, d2 = _rev_at(D, ctx, c)
+        if i15 is not None and d2 is not None:
+            out.append({"kind": "rev", "dir": d2, "at_ms": int(c["rev_sec"]) * 1000,
+                        "at": _hms_sec(c["rev_sec"]), "i": i15})
+    if o is not None and o["i"] is not None and o["box_pct"] >= med:
+        out.append({"kind": "orb", "dir": o["d"], "at_ms": int(D["t"][o["i"]]),
+                    "at": _hms_ms(int(D["t"][o["i"]])), "i": o["i"]})
+    out.sort(key=lambda x: (x["at_ms"], UNION_TIE[x["kind"]]))
+    return out, None
+
+
+def _cand_txt(x):
+    return "%s %s %s" % (LANE_NAME[x["kind"]], x["at"], "多" if x["dir"] > 0 else "空")
+
+
+def union_eval(day, D, hist_rows, box_vals=None, cfg=None, pack=None):
+    """
+    「多方聯軍」：三個候選裡**只取方向為做多**的（⛔ 說做空的略過，但當天要**繼續看下一個**，
+    不是收工），在剩下的做多候選裡取**觸發時刻最早**的那一個，照它自己的進出場規則做，
+    ⛔ **一天最多一口**。當天沒有任何做多候選 ⇒ 不做。
+    """
+    day = str(day)
+    c = cfg or _CFG
+    p = pack if pack is not None else day_pack(day, D, hist_rows, box_vals, c)
+    cands, stop = union_cands(day, D, p)
+    if stop is not None:
+        return _stop_row("union", day, stop)
+    base = {"cands": [_cand_txt(x) for x in cands]}
+    longs = [x for x in cands if x["dir"] > 0]     # ⛔ 用濾的（不是「碰到做空就 break」）
+    if not longs:
+        return _none_row("union", day, "no_long",
+                         ("候選都不是做多（%s），不做" % "、".join(_cand_txt(x) for x in cands))
+                         if cands else "今天三個候選一個都沒觸發，不做", base)
+    pick = longs[0]                               # cands 已經照 (觸發時刻, 定序) 排過 ⇒ 這就是最早的做多候選
+    reason = ("照「%s」做多（%s 觸發，最早）；候選：%s"
+              % (LANE_NAME[pick["kind"]], pick["at"], "、".join(_cand_txt(x) for x in cands)))
+    ex = {"pick": pick["kind"], "pick_name": LANE_NAME[pick["kind"]], "at": pick["at"]}
+    cutoff = _day_cutoff(day)
+    if pick["kind"] == "orb":
+        return _orb_enter("union", day, D, p["orb"], cutoff, "union", reason, base, ex)
+    return _enter("union", day, D, pick["i"], pick["dir"], cutoff, "union", reason, base, c, ex)
+
+
+# ⛔ 逐筆那六條的統一入口：`_step_ticks` 一天建一次 `day_pack` 再餵給每一條（⛔ 不准各算各的）
+TICK_EVAL = {
+    "fast":   lambda day, D, hist, bh, pack=None: fast_eval(day, D, hist, pack=pack),
+    "fast11": lambda day, D, hist, bh, pack=None: fast11_eval(day, D, hist, pack=pack),
+    "hmq":    lambda day, D, hist, bh, pack=None: hmq_eval(day, D, hist, pack=pack),
+    "rev":    lambda day, D, hist, bh, pack=None: rev_eval(day, D, hist, pack=pack),
+    "orb":    lambda day, D, hist, bh, pack=None: orb_eval(day, D, bh, pack=pack),
+    "union":  lambda day, D, hist, bh, pack=None: union_eval(day, D, hist, bh, pack=pack),
+}
 
 
 def night_frame(bars, E):
@@ -840,22 +991,35 @@ def box_hist(day, n=ORB_HIST_N):
     ⚠️ 找不到足額**就讓它不足**（orb_eval 會記「資料缺」等逐筆補回來），⛔ 不補 0、不放寬 n。
     """
     out = []
-    for ds in _tick_days_before(day, n * 2):        # 多找一些：那天 09:00~09:05 沒成交的要跳過
-        if ds not in _BOX:
-            try:
-                Dh = SL.load_day(ds)
-            except Exception:
-                Dh = None
-            _BOX[ds] = None if Dh is None else orb_box_pct(ds, Dh)
-        if _BOX[ds] is not None:
-            out.append((ds, _BOX[ds]))
-            if len(out) >= n:
-                break
+    _BOX_ST.update(busy=True, day=str(day), done=0, need=n)
+    try:
+        for ds in _tick_days_before(day, n * 2):    # 多找一些：那天 09:00~09:05 沒成交的要跳過
+            if ds not in _BOX:
+                try:
+                    Dh = SL.load_day(ds)
+                except Exception:
+                    Dh = None
+                _BOX[ds] = None if Dh is None else orb_box_pct(ds, Dh)
+            if _BOX[ds] is not None:
+                out.append((ds, _BOX[ds]))
+                _BOX_ST["done"] = len(out)
+                if len(out) >= n:
+                    break
+    finally:
+        _BOX_ST["busy"] = False                    # ⛔ 例外也要收掉旗標，不然畫面永遠說「計算中」
     return [v for _d, v in sorted(out)]
 
 
+def box_scan_msg():
+    """正在掃箱子歷史時給畫面的一句話（⛔ 空字串＝沒在掃）。⚠️ 只有面板剛啟動的第一輪會慢。"""
+    if not _BOX_ST["busy"]:
+        return ""
+    return ("箱子寬度歷史計算中（%s：已掃 %d／%d 天）—— 只有面板剛啟動的第一輪會這樣"
+            % (_BOX_ST["day"], _BOX_ST["done"], _BOX_ST["need"]))
+
+
 def _step_ticks(now, rows, get_api, has_position):
-    """逐筆那五條。⛔ **同一天只讀一次逐筆**（load_day 很貴），讀回來之後五條各算各的。"""
+    """逐筆那六條。⛔ **同一天只讀一次逐筆、只建一次 day_pack**，六條共用同一份答案。"""
     pend = {k: {} for k in TICK_LANES}
     hist = None
     try:
@@ -892,10 +1056,13 @@ def _step_ticks(now, rows, get_api, has_position):
                     if append_row(res):
                         rows[(ln, ds)] = res
                 continue
+            # ⛔ 一天只算一次：箱子歷史只有「開箱／多方聯軍」要用才掃（很貴）
+            need_box = any(ln in ("orb", "union") for ln in want)
+            bh = box_hist(ds) if (D is not None and need_box) else None
+            pk = day_pack(ds, D, hist, bh)
             for ln in want:
                 try:
-                    res = (orb_eval(ds, D, box_hist(ds) if D is not None else None) if ln == "orb"
-                           else TICK_EVAL[ln](ds, D, hist))
+                    res = TICK_EVAL[ln](ds, D, hist, bh, pack=pk)
                     if res.get("pending") and res["why"] == "no_ticks" and ("ticks", ds, str(now.date())) in _TRIED:
                         res = _pending("no_ticks", "沒有當天逐筆（問過永豐：那天沒有日盤成交，休市？）")
                     if res.get("pending"):
@@ -1000,6 +1167,12 @@ def _rule_text(lane):
     if lane == "night":
         return ("美股開盤（夏令 21:30、冬令 22:30）後 5 分鐘往哪走就順勢做 1 口；停利停損 ±%g%%，"
                 "同一分鐘兩邊都碰到算停損，沒碰到就 04:58 平" % (NIGHT_TPSL_FRAC * 100))
+    if lane == "union":
+        at = _hms_sec(_CFG["rev_sec"]) if _CFG.get("rev_sec") else "?"
+        return ("把三個候選收齊（%s %s／%s 第一次突破／%s %s），只取做多的，"
+                "取觸發最早的那一個，照它自己的進出場規則做，一天最多一口；"
+                "沒有做多的候選就不做" % (LANE_NAME["fast"], FAST_PX_AT, LANE_NAME["orb"],
+                                    LANE_NAME["hmq"], at))
     if lane == "orb":
         return ("%s 的最高最低當箱子；箱子寬度%%（箱寬÷進場價）比過去 %d 個交易日的中位數窄就不做，"
                 "否則第一次突破上緣做多、跌破下緣做空（一天最多 1 次）；停損＝箱子另一端、不設停利，"
@@ -1060,7 +1233,11 @@ def _today(lane, now, rows):
         if now.time() < SL.FETCH_FROM:
             return {"date": str(t), "msg": "今天 13:50 收盤後抓到當天逐筆才算"}
         p = STATE["pending"][lane].get(str(t))
-        return {"date": str(t), "msg": p["msg"] if p else "等背景下一輪（每分鐘一次）"}
+        if p:
+            return {"date": str(t), "msg": p["msg"]}
+        # ⛔ 掃箱子歷史時要說「還在算」，⛔ 不可以看起來像「沒有資料」（PM 2026-09-16 裁示）
+        scan = box_scan_msg() if lane in ("orb", "union") else ""
+        return {"date": str(t), "msg": scan or "等背景下一輪（每分鐘一次）"}
     # 夜盤：今晚那一場要等 E+1 05:10；凌晨還沒到 05:10 時講的是昨晚那一場
     E = t if now.time() >= NIGHT_READY else t - timedelta(days=1)
     if E.weekday() > 4:
@@ -1084,7 +1261,8 @@ def state(now=None):
                        "n_rows": len(lr), "today": _today(lane, now, rows),
                        "pending": [{"date": d, "why": p["why"], "msg": p["msg"]}
                                    for d, p in sorted(pend.items(), reverse=True)],
-                       "fetch": STATE["fetch"]["ticks" if lane in TICK_LANES else "kbars"]}
+                       "fetch": STATE["fetch"]["ticks" if lane in TICK_LANES else "kbars"],
+                       "scan": box_scan_msg() if lane in ("orb", "union") else ""}
     eq = st["lines"] == st["ok"] + st["bad"] + st["dup"] + st["blank"]
     return {"ok": True, "now": now.strftime("%Y-%m-%d %H:%M:%S"), "wired": wired(),
             "note": "成本已扣；夜盤用 1 分 K 近似",
