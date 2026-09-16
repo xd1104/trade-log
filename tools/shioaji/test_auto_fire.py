@@ -3415,6 +3415,17 @@ reset()
 _st = AF.state()
 chk("  state() 端出 rev_at 與 leg 名字", (_st.get("rev_at"), _st.get("leg_names")),
     (LP.REV_AT, {"fast": "快攻", "reversal": "回馬槍"}))
+# ⭐⭐ 2026-09-16：關著的時候他看到的是 `alOnHTML` 那一段（規則句只在開著時才畫）——
+#    那一段也要講完三個候選，⛔ 特別是「開箱不設停利／券商端一張掛單都沒有」。
+_on = page[page.index("每個交易日<b>最多做 1 口"):]
+_on = _on[:_on.index("按下去會")]
+for _w in ("只做多", "最早觸發", "快攻", "開箱", "純回馬", "不設停利",
+           "券商端一張掛單都沒有"):
+    say(_w in _on, "  ⛔ 關著時那段規則說明有「%s」" % _w)
+for _w in ("09:15", "09:30", "09:00~09:05"):
+    say(_w not in _on, "  ⛔ 而且沒有寫死「%s」（時刻一律從後端）" % _w)
+for _k in ("D.signal_at", "D.rev_at", ".box_at", ".break_by", ".orb_hist_n"):
+    say(_k in _on, "  ⛔ 時刻／天數從後端 %s 來" % _k)
 _rt = page[page.index("function alRuleTxt("):page.index("function alFastHTML(")]
 _rt_nc = _re.sub(r"/\*.*?\*/", " ", _rt, flags=_re.S)
 # ⭐ 2026-09-16「多方聯軍」：規則句要講出**三個候選**、**只做多**、**取最早觸發的**，
