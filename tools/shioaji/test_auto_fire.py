@@ -381,16 +381,22 @@ def run_signal(st, hh=None, mm=None, ss=None, ms=100):
         LP._AUTO_Q.get()
 
 
-def run_eod(hh=13, mm=43, ss=30):
+def run_eod(hh=None, mm=None, ss=None):
     """
     走**完整的一條路**：4Hz 主迴圈跨過收盤平倉那一刻 → `_auto_tick` → 掛勾 → 佇列 → 平倉。
 
     ⚠️ `done=True` 是為了不讓同一次 tick 順手觸發 09:03:30 那一段
        （這一節測的是收盤平倉，兩件事要分開量）。
+    ⭐ 2026-09-16：**時刻不再寫死 13:43:30** —— 今天是不是結算日由 `LP.eod_plan()` 決定
+       （結算日日盤 13:30 收盤 ⇒ 平倉提前到 13:28:30）。⛔ 寫死的話，這一支在結算日當天
+       會整段變成假紅燈（實際踩到過：2026-09-16 就是結算日）。
     """
     LP.AUTO["started"] = True
     LP.AUTO.update({"day": DAY, "done": True, "settled": True, "eod": False,
                     "gaps": 0.0})
+    if hh is None:
+        _sec = LP.eod_plan(TODAY)["sec"]
+        hh, mm, ss = _sec // 3600, _sec // 60 % 60, _sec % 60
     now = datetime.datetime.combine(TODAY, datetime.time(hh, mm, ss, 100000))
     LP._auto_tick(None, now, "day")
     n = 0
@@ -908,11 +914,24 @@ def wiring_fails(text):
     #    ⚠️ 上界不可以靠 `sess != "day"` 代勞：那是 market_session() 那把尺算的，
     #    改了那邊這裡就靜靜地沒有上界（＝守衛蓋不到的那一半）。
     _tk1 = tk.replace(" ", "")
-    if "EOD_CLOSE_SEC<=secs" not in _tk1:
-        bad.append("_auto_tick 的收盤平倉觸發沒有用 EOD_CLOSE_SEC 當下界（⛔ 比名稱不比數值）")
-    if "secs<DAY_END_SEC" not in _tk1:
-        bad.append("_auto_tick 的收盤平倉觸發沒有 DAY_END_SEC 上界"
+    # ⭐⭐ 2026-09-16：**結算日 13:30 收盤** ⇒ 下界與上界都改成「今天那一組」
+    #    （`eod_plan()` 算出來的 `_eod["sec"]`／`_eod["end"]`）。守的東西一個都沒少：
+    #      ① 下界比**名稱**不比數值　② 上界一定要在（時鐘往前跳的防護）
+    #      ③ 上界的來源只准是 eod_plan 的 end 或 DAY_END_SEC（⛔ 不准靠 sess 代勞）
+    #      ④ 掛勾要收到**今天實際用的時刻**（不然帳本那一列會寫成 13:43:30 ＝ 一句假話）
+    if "_eod_sec=_eod['sec']" not in _tk1:
+        bad.append("_auto_tick 的收盤平倉下界不是 eod_plan 算出來的（⛔ 寫死數字＝比數值不比名稱）")
+    if "_eod_sec<=secs" not in _tk1:
+        bad.append("_auto_tick 的收盤平倉觸發沒有用 eod_plan 算出來的下界（⛔ 比名稱不比數值）")
+    if "secs<_eod_end" not in _tk1:
+        bad.append("_auto_tick 的收盤平倉觸發沒有上界"
                    "（⛔ 時鐘往前跳就會在早上平掉他的單）")
+    if "_eod_end=_eod['end']orDAY_END_SEC" not in _tk1:
+        bad.append("_auto_tick 的上界不是「結算日那一組 or DAY_END_SEC」（⛔ 兩把尺／沒有上界）")
+    if "_eod=EOD_DAYifEOD_DAY['date']==delseeod_plan(d)" not in _tk1:
+        bad.append("_auto_tick 沒有用 eod_plan()（結算日 13:30 那一組不會生效）")
+    if "_eod['at']" not in _tk1:
+        bad.append("_auto_tick 沒有把今天實際用的平倉時刻傳給掛勾（帳本會寫成 13:43:30）")
     if "'eod': False" not in tk and '"eod": False' not in tk:
         bad.append("_auto_tick 跨日時沒有把 AUTO['eod'] 重置（隔天不會再平）")
     # ⑤c ⭐ 2026-09-15 晚上：回馬槍（09:15）的掛勾 —— 規矩跟 AUTO_SIG_HOOK 一模一樣（它會送進場單）
@@ -976,19 +995,27 @@ MUT = [
     ("收盤平倉的預設值直接接上（治具與 --replay 會開始送平倉單）",
      "AUTO_EOD_HOOK = _auto_eod_noop", "AUTO_EOD_HOOK = auto_fire.on_eod"),
     ("主迴圈不呼叫收盤平倉的掛勾",
-     "        AUTO_EOD_HOOK(d, (secs - EOD_CLOSE_SEC) * 1000 + now.microsecond // 1000)",
+     "        AUTO_EOD_HOOK(d, (secs - _eod_sec) * 1000 + now.microsecond // 1000, _eod[\"at\"])",
      "        pass"),
+    # ── ⭐ 2026-09-16 結算日 13:30 的四個突變
+    ("⛔ 結算日分支拿掉（結算日 13:43:30 才平 ⇒ 市場已經關了、抱過夜）",
+     '    _eod = EOD_DAY if EOD_DAY["date"] == d else eod_plan(d)',
+     '    _eod = {"sec": EOD_CLOSE_SEC, "end": None, "at": EOD_CLOSE_AT}'),
+    ("⛔ 上界沒跟著換成結算日那一組（13:30~13:45 之間才觸發 ⇒ 送不出去）",
+     '    _eod_end = _eod["end"] or DAY_END_SEC', '    _eod_end = DAY_END_SEC'),
+    ("⛔ 上界整個拿掉（時鐘往前跳 ⇒ 早上平掉他剛開的單）",
+     '    if not AUTO["eod"] and _eod_sec <= secs < _eod_end:',
+     '    if not AUTO["eod"] and _eod_sec <= secs:'),
+    ("⛔ 掛勾沒收到今天實際用的時刻（帳本那一列會寫成 13:43:30 ＝ 一句假話）",
+     "        AUTO_EOD_HOOK(d, (secs - _eod_sec) * 1000 + now.microsecond // 1000, _eod[\"at\"])",
+     "        AUTO_EOD_HOOK(d, (secs - _eod_sec) * 1000 + now.microsecond // 1000)"),
     ("收盤平倉的時刻寫死（EOD_CLOSE_AT 改了不會跟著改）",
      "eod_at=EOD_CLOSE_AT", 'eod_at="13:43:30"'),
     ("收盤平倉的秒數寫死（⛔ 比名稱不比數值）",
-     "    if not AUTO[\"eod\"] and EOD_CLOSE_SEC <= secs < DAY_END_SEC:",
-     "    if not AUTO[\"eod\"] and 49410 <= secs < DAY_END_SEC:"),
-    ("⛔ 時鐘防護：上界拿掉（NTP 往前跳過 13:43:30 ⇒ 早上就平掉他剛開的單）",
-     "    if not AUTO[\"eod\"] and EOD_CLOSE_SEC <= secs < DAY_END_SEC:",
-     "    if not AUTO[\"eod\"] and EOD_CLOSE_SEC <= secs:"),
+     '    _eod_sec = _eod["sec"]', '    _eod_sec = 49410'),
     ("⛔ 時鐘防護：上界改用 sess 代勞（另一把尺，改了那邊這裡靜靜地沒有上界）",
-     "    if not AUTO[\"eod\"] and EOD_CLOSE_SEC <= secs < DAY_END_SEC:",
-     "    if not AUTO[\"eod\"] and EOD_CLOSE_SEC <= secs and sess == \"day\":"),
+     '    if not AUTO["eod"] and _eod_sec <= secs < _eod_end:',
+     '    if not AUTO["eod"] and _eod_sec <= secs and sess == "day":'),
     ("跨日沒有重置 AUTO['eod']（隔天不會再平）",
      '        AUTO.update({"day": d, "done": False, "settled": False, "eod": False,',
      '        AUTO.update({"day": d, "done": False, "settled": False,'),
@@ -1165,7 +1192,8 @@ chk("    方向是反向的（做多 ⇒ 賣出）", str(covers[-1].action), "Ac
 chk("    IOC", str(covers[-1].order_type), "OrderType.IOC")
 chk("  平完之後本機沒有部位了", broker._state["position"], None)
 say((r or {}).get("at"), "  落地寫得出幾點平的", (r or {}).get("at"))
-say((r or {}).get("eod_at") == LP.EOD_CLOSE_AT, "  落地寫得出設定的時刻",
+# ⭐ 2026-09-16：落地的是**今天實際用的**那一刻（結算日 13:28:30），⛔ 不是寫死的 13:43:30
+say((r or {}).get("eod_at") == LP.eod_plan(TODAY)["at"], "  落地寫得出今天實際用的時刻",
     (r or {}).get("eod_at"))
 say((r or {}).get("exit") is not None or (r or {}).get("exit_time") is not None,
     "  落地帶得出出場那一筆（成績單上撈回來的）", str(r))
@@ -1681,15 +1709,30 @@ reset_eod()
 LP.AUTO["started"] = True
 LP.AUTO.update({"day": DAY, "done": True, "settled": True, "eod": False, "gaps": 0.0})
 LP.AUTO_EOD_HOOK = AF.on_eod
+# ⭐ 2026-09-16：時刻改成「今天實際用的那一組」（結算日是 13:28:30~13:30），⛔ 不寫死
+_EP = LP.eod_plan(TODAY)
+_EOD_SEC, _EOD_END = _EP["sec"], (_EP["end"] or LP.DAY_END_SEC)
+print(f"    （今天用的是 {_EP['at']}～{_EOD_END // 3600:02d}:{_EOD_END // 60 % 60:02d}"
+      + ("，⭐ 今天是結算日）" if _EP["expiry"] else "）"))
+
+
+def _hms3(sec):
+    return (sec // 3600, sec // 60 % 60, sec % 60)
+
+
 for _i in range(12):        # 4Hz 跑三秒
+    _h, _m, _s = _hms3(_EOD_SEC + _i // 4)
     LP._auto_tick(None, datetime.datetime.combine(
-        TODAY, datetime.time(13, 43, 30 + _i // 4, (_i % 4) * 250000)), "day")
+        TODAY, datetime.time(_h, _m, _s, (_i % 4) * 250000)), "day")
 chk("  ⛔ 跑 12 圈只丟進佇列 1 件（⛔ 不是 12 件）", AF._EQ.qsize(), 1)
 while not AF._EQ.empty():
     AF._EQ.get()
-# ⛔ 時鐘往前跳：NTP 校時把早上跳到 13:43:30 之後才會觸發，跳到別的時間都不准。
-for _hh, _mm, _ss, _want in ((9, 3, 31, 0), (13, 43, 29, 0), (13, 44, 59, 1),
-                             (13, 45, 0, 0), (10, 0, 0, 0)):
+# ⛔ 時鐘往前跳：NTP 校時把早上跳到平倉那一刻之後才會觸發，跳到別的時間都不准。
+for _hh, _mm, _ss, _want in ((9, 3, 31, 0),
+                             _hms3(_EOD_SEC - 1) + (0,),
+                             _hms3(_EOD_END - 1) + (1,),
+                             _hms3(_EOD_END) + (0,),
+                             (10, 0, 0, 0)):
     reset_eod()
     LP.AUTO["started"] = True
     LP.AUTO.update({"day": DAY, "done": True, "settled": True, "eod": False,

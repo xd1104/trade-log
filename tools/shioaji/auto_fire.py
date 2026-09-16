@@ -1940,7 +1940,7 @@ def _eod_exit_of(ent):
     return {}
 
 
-def _eod(day, lag_ms, put_at):
+def _eod(day, lag_ms, put_at, at=None):
     """
     ⚠️ **跑在自己的 daemon 執行緒上**（⛔ 不是主迴圈）：這裡會跟券商對帳、
        會送平倉單並等成交（`broker.close()` 最壞十幾秒）、會寫檔。
@@ -1949,14 +1949,17 @@ def _eod(day, lag_ms, put_at):
        「為什麼不平」然後收工。
     """
     d = day
+    # ⭐ 2026-09-16：**結算日 13:30 收盤** ⇒ 平倉時刻由呼叫端（live_panel）決定並傳進來。
+    #    ⛔ 這個模組不自己判結算日（要讀行事曆，而呼叫這條路的是 4Hz 主迴圈）。
+    at = at or _CFG["eod_at"]
     if _eod_settled(d):
         return None                      # 一天一次（看門狗在 13:43~13:45 重啟會重觸發）
     ent, why = _auto_entry(d)
     if ent is None:
-        return _eod_row(d, why, {"at_lag_ms": lag_ms})
+        return _eod_row(d, why, {"at_lag_ms": lag_ms, "eod_at": at})
     base = {"dir": ent.get("dir"), "entry": _num(ent.get("entry")),
             "entry_time": ent.get("entry_time"), "method": ent.get("method"),
-            "at_lag_ms": lag_ms}
+            "at_lag_ms": lag_ms, "eod_at": at}
 
     # ── ② 那一口是不是早就平掉了（他中途自己平掉、又自己開了一口新的）
     #    ⛔⛔ 三種狀態，⛔ 不是兩種。「查不到」有自己的一句話而且會示警 ——
@@ -2017,15 +2020,18 @@ def _eod(day, lag_ms, put_at):
                         tries, str(last_err or "沒有說原因")))
 
 
-def on_eod(day, lag_ms):
+def on_eod(day, lag_ms, at=None):
     """
     ⚠️⚠️ **這個函式跑在 4Hz 主迴圈上，而那條迴圈就是他的停損。**
     ⛔ 裡面只准有 `put_nowait` —— 一行 I/O、一次網路、一個鎖都不准有，
        **而且永遠不可以往外丟例外**（跟 `on_signal` 同一套規矩）。
 
+    ⭐ `at`（2026-09-16）＝**今天實際用的收盤平倉時刻**（結算日是 13:28:30，
+       其他日子 13:43:30）。⛔ 一定要由呼叫端傳進來：這個模組**不判斷結算日**
+       （那要讀行事曆＝磁碟 I/O，而這裡是主迴圈）。沒傳 ⇒ 用 configure 接的那個。
     """
     try:
-        _EQ.put_nowait((day, lag_ms, time.time()))
+        _EQ.put_nowait((day, lag_ms, time.time(), at))
     except Exception as e:
         _ST["err"] = WHY["eod_queue_full"] + ("（%s）" % str(e)[:80] if str(e) else "")
         _ST["err_n"] += 1

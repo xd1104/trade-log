@@ -2116,6 +2116,55 @@ FAST_PCTL = 80
 EOD_CLOSE_AT = "13:43:30"
 EOD_CLOSE_SEC = 13 * 3600 + 43 * 60 + 30
 
+# ⭐⭐⭐ 2026-09-16：**結算日日盤 13:30 就收盤**（不是 13:45）。
+#   舊版 `EOD_CLOSE_AT` 只有一個值、沒有結算日分支 ⇒ 結算日那天 13:43:30 才要平倉，
+#   而市場 13:30 就關了 ⇒ **單子送不出去、部位抱過夜，而且 13:45 起停損也停了**。
+#   （約每 20 個交易日就來一次 —— 一個月一天。）
+#   ⚠️ 兩個數字的關係跟平常那一組一模一樣：**收盤前 90 秒**（13:45−90s＝13:43:30／
+#      13:30−90s＝13:28:30），因為 `auto_fire.EOD_WINDOW_S` 那 75 秒的重試窗口是實測值，
+#      換一個收盤時刻不會改變它要多久。
+#   ⛔ 要改的話兩件事一起改：字串與秒數（`test_auto_fire.py` 在守）。
+EOD_CLOSE_AT_EXPIRY = "13:28:30"
+EOD_CLOSE_SEC_EXPIRY = 13 * 3600 + 28 * 60 + 30
+# 結算日的日盤收盤（＝觸發區間的上界；平常是 DAY_END 13:45）
+DAY_END_SEC_EXPIRY = 13 * 3600 + 30 * 60
+# 今天是不是結算日 —— **一天只算一次**（`_auto_tick` 在 4Hz 主迴圈上，
+# ⛔ 那裡不准讀檔；`strategy_lab.is_expiry_cal` 會讀 days.jsonl）。
+EOD_DAY = {"date": None, "expiry": False, "at": EOD_CLOSE_AT, "sec": EOD_CLOSE_SEC,
+           "end": None, "err": None}
+
+
+def eod_plan(d):
+    """
+    今天的收盤平倉時刻。回 `EOD_DAY`（同一天只算一次，之後都讀記憶體）。
+
+    ⚠️ **讀行事曆是磁碟 I/O** ⇒ 只在「跨日的第一圈」算一次，之後 4Hz 主迴圈只讀 dict。
+    ⛔ 判不出來（行事曆讀不到／出錯）⇒ 退回平常那一組（13:43:30），並把原因留在 `err`
+       讓畫面看得到 —— ⛔ 不可以安靜地用錯的時刻。
+    ⚠️ **方向是刻意的**：判成結算日而其實不是 ⇒ 早 15 分鐘平掉（少賺／少賠一點）；
+       判成不是而其實是 ⇒ **單子送不出去、抱過夜、13:45 起連停損都沒有**。
+       所以行事曆本身有疑慮時寧可早平，⛔ 不要賭。
+    """
+    ds = str(d)
+    if EOD_DAY["date"] == ds:
+        return EOD_DAY
+    exp, err = False, None
+    try:
+        if strategy_lab is None:
+            raise RuntimeError("策略實驗室模組沒載起來（行事曆讀不到）")
+        exp = bool(strategy_lab.is_expiry_cal(d if isinstance(d, date) else
+                                              date.fromisoformat(ds)))
+    except Exception as e:
+        err = "判不出今天是不是結算日（%s）—— 收盤平倉用平常那一組" % str(e)[:80]
+        print("⚠️ [自動下單] " + err, flush=True)
+    EOD_DAY.update({"date": ds, "expiry": exp, "err": err,
+                    "at": EOD_CLOSE_AT_EXPIRY if exp else EOD_CLOSE_AT,
+                    "sec": EOD_CLOSE_SEC_EXPIRY if exp else EOD_CLOSE_SEC,
+                    "end": DAY_END_SEC_EXPIRY if exp else None})
+    if exp:
+        print("[自動下單] 今天是結算日（日盤 13:30 收盤）⇒ 收盤平倉提前到 %s"
+              % EOD_CLOSE_AT_EXPIRY, flush=True)
+    return EOD_DAY
 C_THRESH = 30.0                         # C：|訊號| 要**超過**這麼多點才做
 RATE_MIN_N = 30                         # 少於這麼多筆就不給勝率 %（是選的，不是算的）
 CUM_MIN_N = 10                          # 少於這麼多筆就不畫累計線
@@ -2681,8 +2730,9 @@ def _auto_noop(snap, day, lag_ms):
 AUTO_SIG_HOOK = _auto_noop
 
 
-def _auto_eod_noop(day, lag_ms):
-    """預設的收盤平倉掛勾：**什麼都不做**（跟 `_auto_noop` 同一套規矩）。"""
+def _auto_eod_noop(day, lag_ms, at=None):
+    """預設的收盤平倉掛勾：**什麼都不做**（跟 `_auto_noop` 同一套規矩）。
+    ⭐ `at`（2026-09-16）＝今天實際用的平倉時刻（結算日 13:28:30）。"""
     return None
 
 
@@ -2769,9 +2819,17 @@ def _auto_tick(st, now, sess):
     #        平錯是把他的單平掉 —— 沿用同一條不對稱原則）。
     #        ⚠️ 上界不能靠上面那句 `sess != "day"` 代勞：那把尺是**另一個**函式
     #        （market_session）算的，改了那邊這裡就靜靜地沒有上界了。
-    if not AUTO["eod"] and EOD_CLOSE_SEC <= secs < DAY_END_SEC:
+    #     ⭐⭐ 2026-09-16：**結算日日盤 13:30 收盤** ⇒ 平倉時刻與上界都要跟著換
+    #        （13:28:30 ~ 13:30）。⛔ 舊版只有一組數字 ⇒ 結算日那天 13:43:30 才要平，
+    #        那時市場已經關了 ⇒ 送不出去、抱過夜、13:45 起連停損都沒有。
+    #        ⚠️ `eod_plan()` **一天只算一次**（跨日那一圈讀一次行事曆），之後只讀 dict ——
+    #           這一段仍然只有整數比較與 put_nowait。
+    _eod = EOD_DAY if EOD_DAY["date"] == d else eod_plan(d)
+    _eod_sec = _eod["sec"]
+    _eod_end = _eod["end"] or DAY_END_SEC
+    if not AUTO["eod"] and _eod_sec <= secs < _eod_end:
         AUTO["eod"] = True
-        AUTO_EOD_HOOK(d, (secs - EOD_CLOSE_SEC) * 1000 + now.microsecond // 1000)
+        AUTO_EOD_HOOK(d, (secs - _eod_sec) * 1000 + now.microsecond // 1000, _eod["at"])
     if not AUTO["settled"] and secs >= AUTO_SETTLE_AFTER:
         AUTO["settled"] = True
         _auto_put("settle", d)
@@ -9758,7 +9816,11 @@ def main():
     print("【自動下單】" + ("已開啟：" + _arm["msg"] +
                            ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")
                            if _arm["on"] else "關閉中 —— " + _arm["msg"]))
-    print(f"【自動下單】收盤平倉 {EOD_CLOSE_AT}（⛔ 只平自動下單開的那一口）")
+    _ep = eod_plan(date.today())
+    print(f"【自動下單】收盤平倉 {_ep['at']}"
+          + ("（⭐ 今天是結算日，日盤 13:30 收盤）" if _ep["expiry"] else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）")
+          + "（⛔ 只平自動下單開的那一口）"
+          + (f"　⚠️ {_ep['err']}" if _ep["err"] else ""))
 
     # 啟動時一定要建立狀態，不能等到 08:30 ——
     # 否則半夜啟動的話 session["state"] 是 None，收到的報價全部被丟掉。

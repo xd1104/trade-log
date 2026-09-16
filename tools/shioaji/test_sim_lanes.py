@@ -1457,8 +1457,41 @@ if not head and os.environ.get("SIM_BASELINE_LIVE_PANEL"):
         head_src = "SIM_BASELINE_LIVE_PANEL"
     except Exception:
         head = ""
+# ⭐⭐ 2026-09-16 **有授權的例外**（PM 裁示：「收盤平倉要有結算日分支」）。
+#   背景：`is_expiry()` 是用「每月第三個星期三」算的，**農曆年會把結算日往後移**
+#   （實例 2026-02-23、2023-01-30，那兩天的逐筆都停在 13:30）⇒ 結算日那天要等到
+#   13:43:30 才平倉，而市場 13:30 就關了 ⇒ 單子送不出去、部位抱過夜、13:45 起連停損都沒有。
+#   ⛔⛔ **這不是把基準往前搬**（那等於把防線變成橡皮圖章）——
+#      做法是把下面這份**一個字一個字寫死的授權修改**套到**基準**上再比對：
+#      `_auto_tick` 與 `main()` 除了這兩段以外**還是要一模一樣**；
+#      其餘五支（_auto_tick_guarded／check_real_position／on_tick／_auto_snap／_auto_put）
+#      一個字都沒動 ＝ 這一輪的**對照組**。
+AUTH_PATCH = [
+    # (為什麼, 基準裡的原文, 換成什麼)
+    ("結算日 13:30 ⇒ 收盤平倉的時刻與上界都要換一組",
+     '    if not AUTO["eod"] and EOD_CLOSE_SEC <= secs < DAY_END_SEC:\n'
+     '        AUTO["eod"] = True\n'
+     '        AUTO_EOD_HOOK(d, (secs - EOD_CLOSE_SEC) * 1000 + now.microsecond // 1000)\n',
+     '    _eod = EOD_DAY if EOD_DAY["date"] == d else eod_plan(d)\n'
+     '    _eod_sec = _eod["sec"]\n'
+     '    _eod_end = _eod["end"] or DAY_END_SEC\n'
+     '    if not AUTO["eod"] and _eod_sec <= secs < _eod_end:\n'
+     '        AUTO["eod"] = True\n'
+     '        AUTO_EOD_HOOK(d, (secs - _eod_sec) * 1000 + now.microsecond // 1000, _eod["at"])\n'),
+    ("啟動那一行要印出今天實際用的平倉時刻（結算日看得出來）",
+     '    print(f"【自動下單】收盤平倉 {EOD_CLOSE_AT}（⛔ 只平自動下單開的那一口）")\n',
+     '    _ep = eod_plan(date.today())\n'
+     '    print(f"【自動下單】收盤平倉 {_ep[\'at\']}"\n'
+     '          + ("（⭐ 今天是結算日，日盤 13:30 收盤）" if _ep["expiry"] else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）")\n'
+     '          + "（⛔ 只平自動下單開的那一口）"\n'
+     '          + (f"　⚠️ {_ep[\'err\']}" if _ep["err"] else ""))\n'),
+]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")
+    for _why, _old, _new in AUTH_PATCH:
+        # ⛔ 基準裡找不到原文 ＝ 這張授權清單過期了（⛔ 不准安靜跳過）
+        say(_old in head, f"  授權修改的原文在基準裡找得到：{_why}")
+        head = head.replace(_old, _new)
     hfn = {}
     for n in ast.walk(ast.parse(head)):
         if isinstance(n, ast.FunctionDef):
