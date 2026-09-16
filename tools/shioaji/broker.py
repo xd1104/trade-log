@@ -427,7 +427,9 @@ def broker_position():
 # ⛔⛔ reconcile() 在 4Hz 主迴圈上被叫（reconcile_tick），而且這裡拿著 _lock ⇒
 #    掛上去的函式**只准讀記憶體**：一行 I/O、一次網路、一個鎖都不准有。
 RECOVER_HOOK = None
-_RECOVER_KEYS = ("sl_points", "tp_points", "sl_src", "sl_warn")
+# ⭐ `no_tp`（2026-09-16）：撿回來的那一口若對得上「開箱」開出來的部位，要把
+#    「這一口沒有停利」也補回去 —— 少了它，畫面會顯示一個不存在的停利 130 點。
+_RECOVER_KEYS = ("sl_points", "tp_points", "sl_src", "sl_warn", "no_tp")
 
 
 def _recover_meta(got):
@@ -643,6 +645,17 @@ def enter(direction, price, tp_points, sl_points=None):
     `sl_points`（2026-09-15 加）：**這一口自己的停損點數**，存進部位裡給面板的停損迴圈讀
     （`live_panel.check_real_position`）。⛔ 手動真單不帶 ⇒ 部位裡沒有這個欄位 ⇒
     面板照舊用 SL_POINTS。自動下單帶 ±0.5% 算出來的點數。
+
+    ⭐⭐ `tp_points=None`（2026-09-16 加，PM 裁示「選項 A」）：**這一口不設停利** ——
+       ⛔ 一次 `place_target()` 都不呼叫，部位裡也**不寫 `tp_points`**，改寫 `no_tp=True`。
+       「開箱」那個候選的規則就是不設停利（停損＝箱子另一端，其餘到收盤平）。
+       ⚠️ 為什麼不用「塞一個碰不到的哨兵價」：那在真錢上會變成**一張真的掛在場上的
+          限價單**，而且 `_send()` 在演練模式直接回 ok=True ⇒ 演練永遠驗不出來。
+       ⚠️ `no_tp=True` 是**必要的**，不可以只留「沒有 tp_points 這個欄位」——
+          `live_panel._pos_points()` 在欄位不存在時會回 default（TP_POINTS 130），
+          畫面就會顯示一個**根本不存在的停利 130 點**（2026-09-16 實跑確認過）。
+       ⚠️⚠️ 券商端因此**一張單都沒有**（永豐又沒有停損單）⇒ 整口靠面板活著：
+          面板死掉／斷線／電腦睡著 ⇒ 停損與收盤平倉都不會發生。這件事要寫在畫面上。
     """
     import shioaji as sj
     act = sj.Action.Buy if direction == "long" else sj.Action.Sell
@@ -662,6 +675,7 @@ def enter(direction, price, tp_points, sl_points=None):
     if is_live() and fill is None:
         # IOC 沒成交。**絕對不可以掛停利** —— 那張 Cover 單留在場上，
         # 成交之後就變成一個反向的新部位。
+        # （tp_points=None 那一口本來就不掛停利，這一段照樣要走 —— 沒成交就沒有部位。）
         _log("entry_nofill", {"ok": False, "why": "IOC 沒有成交，不掛停利"})
         with _lock:
             _state["position"] = None
@@ -672,11 +686,19 @@ def enter(direction, price, tp_points, sl_points=None):
         _state["position"] = {"dir": direction, "entry": entry, "qty": QTY,
                               "entry_time": datetime.now().strftime("%H:%M:%S"),
                               "target_trade": None, "recovered": False,
-                              "ref_price": float(price),
-                              "tp_points": float(tp_points)}
+                              "ref_price": float(price)}
+        if tp_points is None:
+            # ⛔⛔ 這一口**不設停利**：不寫 tp_points（寫了就是一個假的停利價），
+            #     改掛一面旗子讓面板看得出「不是忘了寫，是真的沒有」。
+            _state["position"]["no_tp"] = True
+        else:
+            _state["position"]["tp_points"] = float(tp_points)
         if sl_points is not None:
             # ⛔ 只有帶了才存：沒有這個欄位 ＝「用手動那一套」，那是停損迴圈的判準
             _state["position"]["sl_points"] = float(sl_points)
+    if tp_points is None:
+        # ⛔⛔ **一次 place_target 都不呼叫**（選項 A）。券商端這一口沒有任何掛單。
+        return True, None, _state["position"]
     # 停利一律用**實際成交價**算，不是送單當下的參考價
     tp = entry + (tp_points if direction == "long" else -tp_points)
     tok, terr = place_target(tp)

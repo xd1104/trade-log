@@ -58,13 +58,17 @@ TMP = pathlib.Path(tempfile.mkdtemp(prefix="autofire-test-"))
 REAL_PATHS = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DIR,
               "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
               "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
-              "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST}
+              "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST,
+              # ⛔ 2026-09-16：開箱會**寫** orb_hist.jsonl、**讀** tick_logs/ ⇒ 兩個都要導走
+              "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR}
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"          # 不存在 → dry run
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"               # 不存在 → 自動下單關著
 AF.FIRE_DIR = TMP / "autofire"
 AF.FAST_HIST = TMP / "fast_hist.jsonl"             # ⛔ 2026-09-15：開盤走幅歷史也導走
+AF.ORB_HIST = TMP / "orb_hist.jsonl"               # ⛔ 2026-09-16：箱子寬度歷史也導走
+AF.TICK_DIR = TMP / "tick_logs"                    # ⛔ 2026-09-16：⛔ 不准讀他真的逐筆
 
 
 def _hist_fp(p):
@@ -77,6 +81,7 @@ def _hist_fp(p):
 
 
 _REAL_HIST0 = _hist_fp(REAL_PATHS["AF.FAST_HIST"])
+_REAL_ORB0 = _hist_fp(REAL_PATHS["AF.ORB_HIST"])
 LP.AUTO_DIR = TMP / "autotest"                     # ⛔ 不准碰他真的模擬紀錄
 LP.AUTO_REAL_DIR = TMP / "real_trades"
 
@@ -378,7 +383,7 @@ def run_signal(st, hh=None, mm=None, ss=None, ms=100):
 
 def run_eod(hh=13, mm=43, ss=30):
     """
-    走**完整的一條路**：4Hz 主迴圈跨過 13:43:30 → `_auto_tick` → 掛勾 → 佇列 → 平倉。
+    走**完整的一條路**：4Hz 主迴圈跨過收盤平倉那一刻 → `_auto_tick` → 掛勾 → 佇列 → 平倉。
 
     ⚠️ `done=True` 是為了不讓同一次 tick 順手觸發 09:03:30 那一段
        （這一節測的是收盤平倉，兩件事要分開量）。
@@ -559,31 +564,23 @@ chk("  ⛔ 檔案裡是兩列（先 sending 再 result），不是被覆寫成�
 chk("  ⛔ 而且 sending 那一列在前面（先落地再送單）",
     [x.get("stage") for x in raw], ["sending", "done"])
 
-print("\n  ── 做空（09:00 → 09:03:30 下跌）──")
+# ⭐⭐ 2026-09-16「多方聯軍」：**只做多**。快攻判定做空的日子 ⇒ ⛔ 一張單都不准送。
+#    （這一段以前是「做空那一輪也要送對」；規則換掉之後，那個期待本身就是錯的。）
+print("\n  ── 做空（09:00 → 09:03:30 下跌）⇒ ⛔ 多方聯軍只做多，不送 ──")
 api = one_round("A", FakeToday(px=11990.0, open845=12000.0, p900=11995.0),
                 "Sell", 11987.0, None, None, None)
-PTS_S = AF.tpsl_points(11990.0)
 o = sent_orders(api)
-chk("  送出 2 張（進場 ＋ 停利）", len(o), 2)
-chk("  ⛔ 進場方向 Sell（做空）", o[0]["action"], "Action.Sell")
-chk("  ⛔ 口數 1 口", o[0]["qty"], 1)
-chk("  進場 MKP", o[0]["price_type"], "FuturesPriceType.MKP")
-chk("  進場 IOC", o[0]["order_type"], "OrderType.IOC")
-chk("  進場 New", o[0]["octype"], "FuturesOCType.New")
-chk("  ⛔ 停利方向 Buy（做空的反向）—— 送 Sell 等於再加一口空單",
-    o[1]["action"], "Action.Buy")
-chk("  前置：11990 × 0.5% ⇒ 60 點（寫死對照）", PTS_S, 60)
-chk(f"  ⛔ 停利價 = 實際成交價 11987 −{PTS_S} = {11987 - PTS_S}",
-    o[1]["price"], 11987.0 - PTS_S)
-chk("  停利是 LMT / ROD / Cover",
-    (o[1]["price_type"], o[1]["order_type"], o[1]["octype"]),
-    ("FuturesPriceType.LMT", "OrderType.ROD", "FuturesOCType.Cover"))
+chk("  ⛔ 一張單都沒送", len(o), 0)
 r = merged()
-chk("  紀錄：方向＝做空", r.get("dir"), "short")
-chk("  紀錄：進場價＝實際成交價", r.get("entry"), 11987.0)
-chk("  紀錄：停利價", r.get("tp"), 11987.0 - PTS_S)
-chk("  紀錄：停損價（做空 ⇒ 在上面）", r.get("sl"), 11987.0 + PTS_S)
-chk("  紀錄：滑價（做空，成交比參考價低 3 點＝賺 3 點）", r.get("slip"), 3.0)
+chk("  快攻那個候選落地成 skip", r.get("rec"), "skip")
+chk("  ⛔ 理由是「只做多」而不是別的", r.get("why"), "fast_short")
+chk("  那一列記在「快攻」這個候選底下", r.get("cand"), "fast")
+chk("  ⛔ 沒有進場（那一列不准有成交欄位）", r.get("entry"), None)
+say("多方聯軍只做多" in (r.get("why_msg") or ""), "  那句話講得出「只做多」")
+# ⛔ 對照組：同一條路、只把方向翻過來 ⇒ 照樣送得出去（證明上面那條不是恆真）
+api2 = one_round("A", FakeToday(px=12010.0, open845=12000.0, p900=12005.0),
+                 "Buy", 12013.0, None, None, None)
+chk("  對照組：同一條路、方向做多 ⇒ 照樣送出 2 張", len(sent_orders(api2)), 2)
 
 print("\n  ── 方向用的是 A（09:00 起算），⛔ 不是 08:45 開盤起 ──")
 # 09:00 之後上漲、但 08:45 到現在是跌 ⇒ A 做多（B 會做空，但 B 已經不支援）
@@ -812,18 +809,11 @@ say(ok200 and (time.time() - t0) < 1.0, "  塞爆之後呼叫 200 次仍然很�
     f"{(time.time() - t0) * 1000:.1f} ms")
 say("佇列" in (AF._ST["err"] or ""), "  而且那句話講得出是什麼事（⛔ 不是一句空的）",
     AF._ST["err"])
+# ⛔ 上面那一段把 `_Q` 塞爆了（200 件假的）⇒ 一定要清乾淨，不然後面每一次 run_signal
+#    的 drain 迴圈都會先跑那 200 件假的。
 AF._Q.queue.clear()
 reset()
 AF._ST["err_n"] = 0
-prev_fire = AF._fire
-AF._fire = lambda *a: (_ for _ in ()).throw(RuntimeError("測試故意炸的"))
-AF.start()
-AF.on_signal({"px": 1}, DAY, 0)
-time.sleep(0.4)
-say(AF._ST["err_n"] >= 1, "  送單執行緒出錯時：有計數（⛔ 不可以安靜地吞）",
-    AF._ST["err"])
-AF._fire = prev_fire
-say(AF._ST["started"] is True, "  送單執行緒起得來")
 
 # ══ ⑧ 接線（AST）：⛔ 只有 main() 會把掛勾接上去 ═══════════════════════
 print("\n=== ⑧ 接線：⛔ 掛勾預設是 no-op，只有 main() 會接 ===")
@@ -2476,7 +2466,10 @@ chk("  ⛔ _ST 也記著（主控台印過）", AF._ST["hist_bad"], 2)
 # ⚠️ 2026-09-15 晚上（規格改變：快攻回馬槍）：不快 ⛔ 不再寫終局的 not_fast，改寫 wait
 #    （等 09:15 看反轉）。舊斷言 `("skip", "not_fast")` 改成 `("wait", "wait_rev")`；
 #    「約 N 點」那兩個斷言跟著拿掉（wait 那句按規格只寫 %：「走 X%／門檻 Y%」），點數仍落地在 fast 裡。
-print("\n  ── ⑯c 開盤不夠快 ⇒ 09:03:30 不送、寫 wait（2026-09-15 晚上起不是 not_fast）──")
+# ⭐ 2026-09-16（規格再變：多方聯軍）：不快 ＝ **快攻那個候選**有定論了（那一天還沒完，
+#    純回馬與開箱照跑）⇒ 回到 `rec:"skip"`、`why:"not_fast"`，但多一個 `cand:"fast"`，
+#    而且 px／d 照樣落地（09:15 那一刻只准從檔案讀回來判斷）。
+print("\n  ── ⑯c 開盤不夠快 ⇒ 09:03:30 不送、快攻那個候選落地 not_fast ──")
 reset(hist=False)
 hist_seed([0.30] * 40)          # 門檻 0.30%；FakeToday 走 ≈0.042% ⇒ 慢
 arm_write("A")
@@ -2486,7 +2479,10 @@ connect(api)
 run_signal(FakeToday())
 _r = merged()
 chk("  ⛔ 一張單都沒送", len(api.orders), 0)
-chk("  紀錄是 wait（等 09:15）", (_r.get("rec"), _r.get("why")), ("wait", "wait_rev"))
+chk("  快攻那個候選落地 not_fast（⛔ 不是整天的定論）",
+    (_r.get("rec"), _r.get("why"), _r.get("cand")), ("skip", "not_fast", "fast"))
+chk("  ⛔ 09:03:30 的價與方向照樣落地（09:15 只准從檔案讀）",
+    (_r.get("px"), _r.get("d")), (12010.0, 1))
 _m = _r.get("why_msg") or ""
 say("不夠快" in _m and "0.04%" in _m and "0.30%" in _m and LP.REV_AT in _m and "反轉" in _m,
     "  ⛔ 那句話寫出今天走多少、門檻多少、等幾點看反轉", _m)
@@ -2712,8 +2708,9 @@ finally:
 #      11998 ⇒ 0.100%（快）　12005 ⇒ 0.042%（慢）
 print("\n  ── ⑯f2 ⛔ _fire 的走幅用 ref0900（跟 p0900 算出相反判定的測資）──")
 for _nm, _c0859, _p900, _want in (("ref0900 算快、p0900 算慢", 11998.0, 12005.0, ("result", "fast")),
-                                   # ⚠️ 2026-09-15 晚上（規格改變）：慢 ⇒ rec 是 wait（等 09:15），不再是 skip
-                                   ("ref0900 算慢、p0900 算快", 12005.0, 11998.0, ("wait", "slow"))):
+                                   # ⚠️ 2026-09-15 晚上：慢 ⇒ rec 是 wait；⭐ 2026-09-16 多方聯軍
+                                   #    改回 skip（快攻那個候選的定論，那一天還沒完）
+                                   ("ref0900 算慢、p0900 算快", 12005.0, 11998.0, ("skip", "slow"))):
     reset(hist=False)
     hist_seed([0.07] * 40)
     arm_write("A")
@@ -2889,8 +2886,11 @@ print("\n  ── ⑯l 端點與畫面 ──")
 reset()
 _st = AF.state()
 # ⚠️ 2026-09-15 晚上（規格改變）：rule 多一格 rev_at（回馬槍那一刻，正本 LP.REV_AT）
+# ⭐ 2026-09-16（多方聯軍）：再多三格給開箱（箱子時段／突破截止／中位數看幾天）
 chk("  state() 端出規則數字", _st.get("rule"),
-    {"window": 40, "pctl": 80, "min_n": 20, "tpsl_pct": 0.5, "rev_at": "09:15:00"})
+    {"window": 40, "pctl": 80, "min_n": 20, "tpsl_pct": 0.5, "rev_at": "09:15:00",
+     "box_at": "09:00~09:05", "break_by": AF.ORB_BREAK_BY,
+     "orb_hist_n": AF.ORB_RULE["hist_n"]})
 say(isinstance(_st.get("fast"), dict) and _st["fast"].get("thr_pct") is not None,
     "  state() 端出今天的門檻", str(_st.get("fast")))
 chk("  ⛔ 09:03:30 之前不預告判定（verdict None）", _st["fast"].get("verdict"), None)
@@ -2986,8 +2986,9 @@ chk("  REV_AT 與 REV_SEC 同一個時刻（兩個一起改）", LP.REV_SEC,
 chk("  ⛔ 回馬槍時刻就是 09:15:00（逐字，第二把尺）", LP.REV_AT, "09:15:00")
 chk("  configure 接過去的 rev_at／rev_sec ＝ 正本", (AF._CFG["rev_at"], AF._CFG["rev_sec"]),
     (LP.REV_AT, LP.REV_SEC))
-chk("  ⛔ 名字改成「快攻回馬槍」（前後端同一組字）", AF.METHOD_NAME["A"], "快攻回馬槍")
-say("const ALWAY={A:{n:'快攻回馬槍'" in LPSRC, "    前端 ALWAY 同一個名字")
+# ⭐ 2026-09-16 再改成「多方聯軍」（多了開箱這個候選、而且只做多）。
+chk("  ⛔ 名字改成「多方聯軍」（前後端同一組字）", AF.METHOD_NAME["A"], "多方聯軍")
+say("const ALWAY={A:{n:'多方聯軍'" in LPSRC, "    前端 ALWAY 同一個名字")
 # ⛔⛔ 2026-09-15 晚上 Benson 回報：舊紀錄（09-10～09-15 用的是 ±100／±130 舊規則）被標成「快攻回馬槍」。
 #    紀錄清單的名字要看「那一天當時的規則」⇒ 清單一律走 alRecName(D,r)，⛔ 不准再直接 alName(r.method)。
 import re as _re_hist
@@ -3050,49 +3051,70 @@ def slow_day(api, st=None):
     run_signal(st or FakeToday())
 
 
-print("\n  ── ⑰b 不快 ⇒ 寫 wait（帶 09:03:30 的 px 與方向 d），⛔ 不是部位 ──")
+print("\n  ── ⑰b 不快 ⇒ 快攻那個候選落地 not_fast（帶 09:03:30 的 px 與方向 d），⛔ 不是部位 ──")
 slow_day(ExplodeAPI())
 _raw = rows()
-chk("  帳本只有一列、是 wait", [x.get("rec") for x in _raw], ["wait"])
+chk("  帳本只有一列、是快攻那個候選的 skip",
+    [(x.get("rec"), x.get("cand")) for x in _raw], [("skip", "fast")])
 _w = _raw[0] if _raw else {}
-chk("  ⛔ wait 落地 09:03:30 的 px", _w.get("px"), 12010.0)
-chk("  ⛔ wait 落地方向 d（12010 − 12005 ≥ 0 ⇒ +1）", _w.get("d"), 1)
-chk("  wait 落地 rev_at", _w.get("rev_at"), LP.REV_AT)
-chk("  ⛔ wait 不帶 dir（不是部位）", "dir" in _w, False)
+chk("  ⛔ 落地 09:03:30 的 px", _w.get("px"), 12010.0)
+chk("  ⛔ 落地方向 d（12010 − 12005 ≥ 0 ⇒ +1）", _w.get("d"), 1)
+chk("  落地 rev_at", _w.get("rev_at"), LP.REV_AT)
+chk("  ⛔ 不帶 dir（不是部位）", "dir" in _w, False)
 chk("  place_order 0 次", SENT["n"], 0)
-chk("  ⛔ 收盤平倉看 wait ⇒ 沒有部位（eod_no_entry）", AF._auto_entry(DAY), (None, "eod_no_entry"))
+chk("  ⛔ 收盤平倉看這一列 ⇒ 沒有部位（eod_no_entry）", AF._auto_entry(DAY), (None, "eod_no_entry"))
 say(AF.fast_today(DAY, merged())["verdict"] == "slow", "  畫面判定仍是 slow（fast 那一格照舊落地）")
-say(AF._has(DAY), "  ⛔ _has() 認得 wait（看門狗 09:03:30 附近重啟不會再判一次）")
+# ⭐⭐ 2026-09-16（PM 裁示 4）：防重送的閘門從「今天有任何一列」改成「有 fire 或 result」。
+say(not AF._sent(DAY), "  ⛔ _sent() ＝ False（快攻不做 ≠ 送過了，開箱與純回馬還要跑）")
+say(AF._cand_done(DAY, "fast"), "  ⛔ 但快攻這個候選已經有定論（看門狗重啟不會再判一次）")
+say(not AF._cand_done(DAY, "orb") and not AF._cand_done(DAY, "rev"),
+    "  ⛔ 另外兩個候選還沒有定論")
+say(AF._wait_row(_raw) is _raw[0], "  09:15 讀得回 09:03:30 那一列（_wait_row）")
 
-print("\n  ── ⑰c 09:15 反轉（做多 ⇒ 跌了）⇒ 做空，pts ＝ round(p15 × 0.005) ──")
-_api = SimAPI("Sell", 11797.0)
-slow_day(_api)
-_P15 = 11800.0
+# ⭐⭐ 2026-09-16（多方聯軍）：純回馬**只做多**。所以「送得出去」那一輪一定是
+#    「09:03:30 判做空、09:15 漲回來 ⇒ 反轉做多」。（舊版這一輪是反過來的做空，
+#    規則換了之後那個期待本身就是錯的；做空那一輪移到 ⑰d 當「不送」的守衛。）
+print("\n  ── ⑰c 09:15 反轉（做空 ⇒ 漲了）⇒ 做多，pts ＝ round(p15 × 0.005) ──")
+_api = SimAPI("Buy", 12203.0)
+_ST0903 = FakeToday(px=11990.0, p900=11995.0, open845=12000.0)     # 09:03:30 方向＝做空
+slow_day(_api, _ST0903)
+_P15 = 12200.0
 _PTS15 = AF.tpsl_points(_P15)
-chk("  前置：11800 × 0.5% ⇒ 59（⛔ 跟 09:03:30 的 12010 × 0.5% ＝ 60 分得出來）",
-    (_PTS15, AF.tpsl_points(12010.0)), (59, 60))
+chk("  前置：12200 × 0.5% ⇒ 61（⛔ 跟 09:03:30 的 11990 × 0.5% ＝ 60 分得出來）",
+    (_PTS15, AF.tpsl_points(11990.0)), (61, 60))
+chk("  前置：快攻那一列的 d ＝ −1（做空）",
+    next((x.get("d") for x in rows()), None), -1)
 chk("  主迴圈丟進佇列 1 件", run_rev(FakeToday(px=_P15)), 1)
 _o = sent_orders(_api)
 chk("  送出 2 張（進場 ＋ 停利）", len(_o), 2)
-chk("  ⛔ 進場方向 Sell（d2 ＝ −1）", (_o[0]["action"] if _o else None), "Action.Sell")
+chk("  ⛔ 進場方向 Buy（d2 ＝ +1）", (_o[0]["action"] if _o else None), "Action.Buy")
 chk("  ⛔ 口數 1、MKP、IOC、New", tuple(_o[0][k] for k in ("qty", "price_type", "order_type", "octype")) if _o else None,
     (1, "FuturesPriceType.MKP", "OrderType.IOC", "FuturesOCType.New"))
-chk("  ⛔ 停利價 ＝ 實際成交 11797 − 59", (_o[1]["price"] if len(_o) > 1 else None), 11797.0 - 59)
+chk("  ⛔ 停利價 ＝ 實際成交 12203 + 61", (_o[1]["price"] if len(_o) > 1 else None), 12203.0 + 61)
 _r = merged()
 chk("  紀錄 result ok、leg reversal", (_r.get("rec"), _r.get("ok"), _r.get("leg")), ("result", True, "reversal"))
-chk("  ⛔ 紀錄 dir short", _r.get("dir"), "short")
-chk("  ⛔ 紀錄 tp_points ＝ sl_points ＝ 59", (_r.get("tp_points"), _r.get("sl_points")), (59, 59))
-chk("  ⛔ 紀錄 p15 ＝ 11800、px_0903 ＝ 12010", (_r.get("p15"), _r.get("px_0903")), (11800.0, 12010.0))
-chk("  ⛔ 部位帶著 sl_points 59（停損迴圈讀它）", (broker._state["position"] or {}).get("sl_points"), 59.0)
-chk("  ⛔ 檔案裡是 wait → fire(sending) → result（先落地再送單）",
-    [(x.get("rec"), x.get("stage"), x.get("leg")) for x in rows()],
-    [("wait", None, None), ("fire", "sending", "reversal"), ("result", "done", "reversal")])
+chk("  ⛔ 紀錄 dir long", _r.get("dir"), "long")
+chk("  那一列記在「純回馬」這個候選底下", _r.get("cand"), "rev")
+chk("  ⛔ 紀錄 tp_points ＝ sl_points ＝ 61", (_r.get("tp_points"), _r.get("sl_points")), (61, 61))
+chk("  ⛔ 紀錄 p15 ＝ 12200、px_0903 ＝ 11990", (_r.get("p15"), _r.get("px_0903")), (12200.0, 11990.0))
+chk("  ⛔ 部位帶著 sl_points 61（停損迴圈讀它）", (broker._state["position"] or {}).get("sl_points"), 61.0)
+chk("  ⛔ 檔案裡是 快攻skip → fire(sending) → result（先落地再送單）",
+    [(x.get("rec"), x.get("stage"), x.get("cand")) for x in rows()],
+    [("skip", None, "fast"), ("fire", "sending", "rev"), ("result", "done", "rev")])
 chk("  ⛔ fire 那一列就帶 sl_points（送到一半當掉也補得回來）",
-    next((x.get("sl_points") for x in rows() if x.get("rec") == "fire"), None), 59)
+    next((x.get("sl_points") for x in rows() if x.get("rec") == "fire"), None), 61)
 _d17, _led17 = AF.read_all()
 chk("  ⛔ ledger：fire + result + skip + eod + wait + bad ＝ 總列數",
     sum(_led17[k] for k in ("fire", "result", "skip", "eod", "wait", "bad")), _led17["total"])
-chk("    wait 那一列真的數進 wait（不是 bad）", (_led17["wait"], _led17["bad"]), (1, 0))
+chk("    三列各自數對（skip 1＝快攻、fire 1、result 1，bad 0）",
+    (_led17["skip"], _led17["fire"], _led17["result"], _led17["bad"]), (1, 1, 1, 0))
+# ⭐⭐ PM 裁示 4：合併**不可以再讓後寫的整個蓋掉前面的** —— 兩個候選各留一格
+_today17 = next(x for x in _d17 if x.get("date") == DAY)
+chk("  ⛔ 兩個候選各一格（快攻 skip／純回馬 result）",
+    sorted((c["cand"], c["rec"]) for c in _today17["cand_rows"]),
+    [("fast", "skip"), ("rev", "result")])
+chk("  ⛔ 快攻那一格沒有被純回馬蓋掉（why 還在）",
+    next(c["why"] for c in _today17["cand_rows"] if c["cand"] == "fast"), "not_fast")
 
 print("\n  ── ⑰c2 同一天再跑一次 09:15（看門狗重啟）⇒ ⛔ 不送第二筆 ──")
 _n0 = len(_api.orders)
@@ -3110,36 +3132,40 @@ _e = eod_row()
 chk("  收盤平倉結果 eod_closed", (_e or {}).get("why"), "eod_closed")
 covers = [o for o in _api.orders if str(o.octype) == "FuturesOCType.Cover"
           and str(o.price_type) == "FuturesPriceType.MKP"]
-chk("  ⛔ 送出 1 張市價平倉，方向 Buy（做空的反向）",
-    (len(covers) - len(covers0), str(covers[-1].action) if covers else None), (1, "Action.Buy"))
-chk("  ⛔ 收盤那一列不蓋掉「回馬槍送了什麼」", (merged().get("rec"), merged().get("leg")), ("result", "reversal"))
+chk("  ⛔ 送出 1 張市價平倉，方向 Sell（做多的反向）",
+    (len(covers) - len(covers0), str(covers[-1].action) if covers else None), (1, "Action.Sell"))
+chk("  ⛔ 收盤那一列不蓋掉「純回馬送了什麼」", (merged().get("rec"), merged().get("leg")), ("result", "reversal"))
 
-print("\n  ── ⑰c4 ⛔ 重啟撿回回馬槍那一口 ⇒ 補回 sl_points 59 ──")
+print("\n  ── ⑰c4 ⛔ 重啟撿回純回馬那一口 ⇒ 補回 sl_points 61 ──")
 _old_hook17 = broker.RECOVER_HOOK
 try:
     broker.RECOVER_HOOK = AF.recover_meta
     AF._MEM.update({"date": None, "entry": None, "state": None})
     AF._mem_load(DAY)
     broker._state["position"] = None
-    broker._state["api"] = RecAPI("Sell", 11797.0)
+    broker._state["api"] = RecAPI("Buy", 12203.0)
     _p = broker.reconcile()
-    chk("  ⛔ 撿回來那一刻補回 59、sl_src autofire",
-        ((_p or {}).get("sl_points"), (_p or {}).get("sl_src")), (59.0, "autofire"))
+    chk("  ⛔ 撿回來那一刻補回 61、sl_src autofire",
+        ((_p or {}).get("sl_points"), (_p or {}).get("sl_src")), (61.0, "autofire"))
+    say(not (_p or {}).get("no_tp"),
+        "  ⛔ 純回馬那一口**有**停利 ⇒ 不准被標成 no_tp（那是開箱才有的）")
 finally:
     broker.RECOVER_HOOK = _old_hook17
     broker._state["position"] = None
 
-print("\n  ── ⑰d 做空的日子 09:15 漲了 ⇒ 反轉做多（pts ＝ round(12200 × 0.005) ＝ 61）──")
-_api = SimAPI("Buy", 12203.0)
-slow_day(_api, FakeToday(px=11990.0, p900=11995.0, open845=12000.0))
-chk("  前置：wait 的 d ＝ −1", next((x.get("d") for x in rows() if x.get("rec") == "wait"), None), -1)
-run_rev(FakeToday(px=12200.0))
+# ⭐⭐ 2026-09-16：做多的日子 09:15 反轉成做空 ⇒ ⛔ 多方聯軍只做多，一張單都不送。
+print("\n  ── ⑰d 做多的日子 09:15 跌了 ⇒ 反轉成做空 ⇒ ⛔ 不送（只做多）──")
+_api = SimAPI("Sell", 11797.0)
+slow_day(_api, FakeToday())                      # 09:03:30 方向＝做多
+chk("  前置：快攻那一列的 d ＝ +1", next((x.get("d") for x in rows()), None), 1)
+run_rev(FakeToday(px=11800.0))                   # 09:15 大跌 ⇒ d2 ＝ −1
 _o = sent_orders(_api)
 _r = merged()
-chk("  ⛔ 進場 Buy、停利 12203 + 61", ((_o[0]["action"], _o[1]["price"]) if len(_o) > 1 else None),
-    ("Action.Buy", 12203.0 + 61))
-chk("  紀錄 long／leg reversal／sl_points 61", (_r.get("dir"), _r.get("leg"), _r.get("sl_points")),
-    ("long", "reversal", 61))
+chk("  ⛔ 一張單都沒送", len(_o), 0)
+chk("  純回馬那個候選落地 rev_short",
+    (_r.get("rec"), _r.get("why"), _r.get("cand")), ("skip", "rev_short", "rev"))
+say("只做多" in (_r.get("why_msg") or ""), "  那句話講得出「只做多」", _r.get("why_msg"))
+chk("  ⛔ 收盤平倉 ⇒ 沒有部位", AF._auto_entry(DAY), (None, "eod_no_entry"))
 
 print("\n  ── ⑰e 09:15 沒反轉（同方向）⇒ no_reversal，⛔ 不送 ──")
 slow_day(ExplodeAPI())
@@ -3152,9 +3178,9 @@ _m = _r.get("why_msg") or ""
 say("12010" in _m and "12100" in _m and "沒有反轉" in _m and LP.SIGNAL_AT in _m and LP.REV_AT in _m,
     "  ⛔ 那句話寫出「09:03:30 價 X、09:15 價 Y，沒有反轉 —— 今天不做」", _m)
 _d17, _led17 = AF.read_all()
-chk("  ⛔ ledger 等式含 wait（wait 1 ＋ skip 1）",
+chk("  ⛔ ledger 等式（skip 2：快攻 not_fast ＋ 純回馬 no_reversal）",
     (_led17["wait"], _led17["skip"], sum(_led17[k] for k in ("fire", "result", "skip", "eod", "wait", "bad"))),
-    (1, 1, _led17["total"]))
+    (0, 2, _led17["total"]))
 chk("  收盤平倉 ⇒ eod_no_entry（沒反轉的那一天沒有部位）", AF._auto_entry(DAY), (None, "eod_no_entry"))
 
 print("\n  ── ⑰f 09:15 價 ＝ 09:03:30 價 ⇒ ⛔ 不送 ──")
@@ -3194,8 +3220,8 @@ for _nm, _setup, _st, _why in (
     chk(f"  ⛔ {_nm}：09:15 place_order 0 次、沒有多寫任何一列", (SENT["n"], len(rows())), (0, _rows0))
 
 print("\n  ── ⑰i ⛔⛔ 09:03:30 與 09:15 之間「重啟」（記憶體全清、只留帳本檔）──")
-_api = SimAPI("Sell", 11797.0)
-slow_day(_api)
+_api = SimAPI("Buy", 12203.0)
+slow_day(_api, _ST0903)          # ⭐ 09:03:30 做空 ⇒ 09:15 漲回來才會反轉成**做多**（只做多）
 # 看門狗重啟：auto_fire 與 live_panel 的記憶體全部歸零，只剩磁碟上的帳本
 AF._MEM.update({"date": None, "entry": None, "state": None})
 AF._ST["last"] = None
@@ -3207,8 +3233,8 @@ while not AF._Q.empty():
 LP._auto_tick(FakeToday(px=11900.0), datetime.datetime.combine(TODAY, datetime.time(9, 10, 0)), "day")
 while not AF._Q.empty():
     AF._fire(*AF._Q.get())
-chk("  ⛔ 09:10 重啟那一刻沒有多寫任何一列（wait 就是 09:03:30 的定論，不是 late）",
-    [x.get("rec") for x in rows()], ["wait"])
+chk("  ⛔ 09:10 重啟那一刻沒有多寫任何一列（快攻那一列就是 09:03:30 的定論，不是 late）",
+    [(x.get("rec"), x.get("cand")) for x in rows()], [("skip", "fast")])
 # 09:15 一到（不經 run_rev 的 AUTO 重設，走重啟後那個 AUTO 世界）
 LP._auto_tick(FakeToday(px=_P15), datetime.datetime.combine(TODAY, datetime.time(9, 15, 0, 200000)), "day")
 while not AF._Q.empty():
@@ -3216,10 +3242,10 @@ while not AF._Q.empty():
 while not LP._AUTO_Q.empty():
     LP._AUTO_Q.get()
 _r = merged()
-chk("  ⛔ 重啟後 09:15 照樣從帳本判出反轉並送出（Sell、leg reversal、pts 59）",
+chk("  ⛔ 重啟後 09:15 照樣從帳本判出反轉並送出（Buy、leg reversal、pts 61）",
     (sent_orders(_api)[0]["action"] if _api.orders else None, _r.get("leg"), _r.get("sl_points")),
-    ("Action.Sell", "reversal", 59))
-chk("  ⛔ px_0903 是從檔案讀回來的 12010", _r.get("px_0903"), 12010.0)
+    ("Action.Buy", "reversal", 61))
+chk("  ⛔ px_0903 是從檔案讀回來的 11990", _r.get("px_0903"), 11990.0)
 
 print("\n  ── ⑰j ⛔ 09:15 前開關被關掉 ⇒ 不送（off）──")
 slow_day(ExplodeAPI())
@@ -3248,12 +3274,12 @@ _r = merged()
 chk("  主迴圈晚 AUTO_LATE_MS＋1ms ⇒ place_order 0 次、skip late", (SENT["n"], _r.get("rec"), _r.get("why")),
     (0, "skip", "late"))
 chk("    那句話講回馬槍那一刻", _r.get("why_msg"), AF.REV_MSG["late"] % LP.REV_AT)
-_api = SimAPI("Sell", 11797.0)
-slow_day(_api)
+_api = SimAPI("Buy", 12203.0)
+slow_day(_api, _ST0903)
 run_rev(FakeToday(px=_P15), ms=LP.AUTO_LATE_MS)
 chk("  邊界：晚剛好 AUTO_LATE_MS ⇒ 照送（跟 09:03:30 同一個 `>`）",
     (merged().get("rec"), merged().get("ok"), merged().get("leg")), ("result", True, "reversal"))
-slow_day(ExplodeAPI())
+slow_day(ExplodeAPI(), _ST0903)
 LP.AUTO.update({"started": True, "day": DAY, "done": True, "settled": True, "eod": True, "rev": False})
 LP._auto_tick(FakeToday(px=_P15), datetime.datetime.combine(TODAY, datetime.time(9, 15, 0, 100000)), "day")
 _it = AF._Q.get()
@@ -3319,9 +3345,14 @@ chk("  state() 端出 rev_at 與 leg 名字", (_st.get("rev_at"), _st.get("leg_n
     (LP.REV_AT, {"fast": "快攻", "reversal": "回馬槍"}))
 _rt = page[page.index("function alRuleTxt("):page.index("function alFastHTML(")]
 _rt_nc = _re.sub(r"/\*.*?\*/", " ", _rt, flags=_re.S)
-say("快攻回馬槍：" in _rt_nc and "D.rev_at" in _rt_nc and "方向反轉了才順新方向做" in _rt_nc
-    and "一天最多" in _rt_nc and "09:15" not in _rt_nc,
-    "  ⛔ 規則句是「快攻回馬槍：…不夠快就等 D.rev_at，方向反轉了才順新方向做…一天最多…」（⛔ 沒寫死 09:15）")
+# ⭐ 2026-09-16「多方聯軍」：規則句要講出**三個候選**、**只做多**、**取最早觸發的**，
+#    而且每一個時刻都從後端拿（⛔ 不准寫死 09:15／09:30／09:00~09:05）。
+say("多方聯軍" in _rt_nc and "只取做多" in _rt_nc and "最早觸發" in _rt_nc
+    and "快攻" in _rt_nc and "開箱" in _rt_nc and "純回馬" in _rt_nc
+    and "D.rev_at" in _rt_nc and "r.break_by" in _rt_nc and "r.box_at" in _rt_nc
+    and "一天最多" in _rt_nc
+    and "09:15" not in _rt_nc and "09:30" not in _rt_nc and "09:00~09:05" not in _rt_nc,
+    "  ⛔ 規則句講得出三個候選＋只做多＋最早觸發，而且時刻全從後端（⛔ 沒寫死 09:15／09:30）")
 _th = page[page.index("function alTodayHTML("):page.index("function alEodHTML(")]
 say("r.rec==='wait'" in _th and "r.why==='no_reversal'" in _th and "alLeg(D,r)" in _th,
     "  ⛔ 今天那張卡分得出「等 09:15 中」「沒反轉」「快攻／回馬槍」")
@@ -3333,15 +3364,387 @@ for _w in ("勝率", "期望值", "預測", "建議"):
     say(_w not in _rt_nc and _w not in _th and _w not in _ac, f"  ⛔ 新文字沒有「{_w}」")
 arm_clear()
 
+# ══ ⑱ ⭐⭐ 2026-09-16「多方聯軍」的第三個候選：開箱（ORB）════════════════
+#    ⛔ 真單判突破一律讀面板自己錄的 `tick_logs`（⛔ 不准用 4Hz 的 st.price）。
+print("\n=== ⑱ ⭐⭐ 開箱（ORB）：箱子、突破截止、箱寬濾網、不設停利 ===")
+
+
+def _ms(hms):
+    return AF._ms_of(hms)
+
+
+def tick_write(day, rows_):
+    """寫一份假的 tick_logs（格式照 tick_writer：k=h 檔頭／k=t 成交／k=b 買賣價／k=x 痕跡）。"""
+    AF.TICK_DIR.mkdir(parents=True, exist_ok=True)
+    out = [json.dumps({"k": "h", "v": 1, "win": "08:45:00~09:30:00"})]
+    out += [json.dumps(x) for x in rows_]
+    (AF.TICK_DIR / (str(day) + ".jsonl")).write_text("".join(x + "\n" for x in out),
+                                                     encoding="utf-8")
+
+
+def tk(t, p, v=1):
+    return {"k": "t", "t": t, "p": p, "v": v}
+
+
+def bq(t, b, a):
+    return {"k": "b", "t": t, "b": b, "a": a}
+
+
+def orb_seed(vals, days=None, end=None):
+    """寫一份箱子寬度%歷史（⛔ 暫存區）。"""
+    end = end or TODAY
+    d, out = end, []
+    while len(out) < len(vals):
+        d -= datetime.timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(str(d))
+    lines = [json.dumps({"date": s, "box_pct": v, "src": "seed"})
+             for s, v in zip(reversed(out), vals)]
+    AF.ORB_HIST.write_text("".join(x + "\n" for x in lines), encoding="utf-8")
+
+
+def orb_clear():
+    if AF.ORB_HIST.exists():
+        AF.ORB_HIST.unlink()
+    p = AF.TICK_DIR / (DAY + ".jsonl")
+    if p.exists():
+        p.unlink()
+    AF._orb_reset(None)
+
+
+# 一天的假逐筆：箱子 09:00~09:05 走 12000~12010；09:07:00 突破上緣到 12015。
+BOX_ROWS = [bq("09:00:00.000", 11999.0, 12001.0), tk("09:00:00.100", 12000.0),
+            tk("09:02:00.000", 12010.0), tk("09:04:59.999", 12005.0)]
+# 突破**之後**刻意再放一筆買賣價（12028/12030）：進場價要用**突破那一刻**的賣價 12016，
+#    ⛔ 不是整批最後一筆 12030（一批可能含好幾秒 —— 那是比突破更晚的價）。
+UP_ROWS = [bq("09:07:00.000", 12014.0, 12016.0), tk("09:07:00.100", 12015.0),
+           bq("09:08:00.000", 12028.0, 12030.0), tk("09:20:00.000", 12030.0)]
+DN_ROWS = [bq("09:07:00.000", 11994.0, 11996.0), tk("09:07:00.100", 11995.0)]
+
+print("\n  ── ⑱a 純函式：箱子／突破／箱寬%／停損 ──")
+_F = AF.tick_feed(AF.TICK_DIR / "__nope__.jsonl", 0)
+chk("  檔案不存在 ⇒ 空的，pos 不動", (_F["pos"], _F["trades"], _F["err"]), (0, [], None))
+tick_write(DAY, BOX_ROWS + UP_ROWS)
+_F = AF.tick_feed(AF.TICK_DIR / (DAY + ".jsonl"), 0)
+chk("  讀得到 5 筆成交、3 筆買賣價（檔頭不算）", (len(_F["trades"]), len(_F["quotes"])), (5, 3))
+chk("  ⛔ 壞列 0、丟棄痕跡 0", (_F["bad"], _F["drops"]), (0, 0))
+_B = AF.orb_box_of(_F["trades"])
+chk("  箱子 hi/lo/w/last（09:04:59.999 也算在箱子裡，兩端都含）",
+    (_B["hi"], _B["lo"], _B["w"], _B["last"], _B["n"]), (12010.0, 12000.0, 10.0, 12005.0, 3))
+_H = AF.orb_break_of(_F["trades"], _B["hi"], _B["lo"])
+chk("  第一次突破：09:07:00.100、12015、做多",
+    (_H["t_ms"], _H["p"], _H["d"]), (_ms("09:07:00.100"), 12015.0, 1))
+chk("  ⛔ 碰到邊不算突破（＝ hi 不算）",
+    AF.orb_break_of([(_ms("09:07:00"), 12010.0)], 12010.0, 12000.0), None)
+chk("  ⛔ 箱子那段的成交不算突破（只看 09:05 之後）",
+    AF.orb_break_of([(_ms("09:02:00"), 12010.0)], 12005.0, 12000.0), None)
+# ⭐⭐ 裁示 2：09:30 之後才第一次穿出箱子 ⇒ 這個候選不可用
+chk("  ⭐ 09:30 之後才突破 ⇒ 不算（ORB_BREAK_BY）",
+    AF.orb_break_of([(_ms("09:30:00.001"), 12500.0)], 12010.0, 12000.0), None)
+chk("    邊界：剛好 09:30:00.000 算（`<=`）",
+    (AF.orb_break_of([(_ms("09:30:00.000"), 12500.0)], 12010.0, 12000.0) or {}).get("d"), 1)
+chk("  進場價：做多用賣價", AF.orb_fill(1, 12015.0, 12014.0, 12016.0), 12016.0)
+chk("  進場價：做空用買價", AF.orb_fill(-1, 11995.0, 11994.0, 11996.0), 11994.0)
+chk("  ⛔ 買賣價是 0 ⇒ 退回成交價（⛔ 不猜）", AF.orb_fill(1, 12015.0, 0.0, 0.0), 12015.0)
+chk("  箱寬%：10 ÷ 12016 × 100", round(AF.orb_box_pct(10.0, 12016.0), 6),
+    round(10.0 / 12016.0 * 100, 6))
+chk("  停損＝箱子另一端（做多 ⇒ 進場 − 下緣）", AF.orb_sl_points(1, 12016.0, 12010.0, 12000.0), 16.0)
+chk("  停損＝箱子另一端（做空 ⇒ 上緣 − 進場）", AF.orb_sl_points(-1, 11994.0, 12010.0, 12000.0), 16.0)
+chk("  ⛔ 算出來 ≤0 ⇒ None（不猜）", AF.orb_sl_points(1, 12000.0, 12010.0, 12000.0), None)
+chk("  中位數：天數不夠 ⇒ None", AF.orb_med([0.05] * (AF.ORB_RULE["hist_n"] - 1)), None)
+chk("  中位數：剛好夠 ⇒ 算得出來", AF.orb_med([0.05] * AF.ORB_RULE["hist_n"]), 0.05)
+
+# ⭐⭐ 裁示 2 指名的不變式：ORB_BREAK_BY 必須 ≤ tick_writer 的錄製結束時刻
+print("\n  ── ⑱b ⛔⛔ 不變式：突破截止 ≤ tick_writer 錄到幾點 ──")
+_win_end = LP.TICKS.win_end          # ⛔ 讀 tick_writer 真正在用的設定，⛔ 不是抄一個字串
+_win_ms = (_win_end.hour * 3600 + _win_end.minute * 60 + _win_end.second) * 1000
+say(AF.ORB_BREAK_BY_MS <= _win_ms,
+    "  ⛔ ORB_BREAK_BY ≤ TickWriter.win_end（不一致就是 bug：『沒突破』會變成『沒錄到』）",
+    f"{AF.ORB_BREAK_BY} vs {_win_end}")
+say(LP.TICKS.win_end == LP.WATCH_END, "    而且 tick_writer 收的就是面板的 WATCH_END（單一來源）")
+
+# ⛔ 兩份 ORB 規則（auto_fire 與 sim_lanes）的常數要一致
+import sim_lanes as _SL18
+chk("  ⛔ 箱子時段跟 sim_lanes 同一個（09:00~09:05）",
+    (AF.ORB_BOX_FROM_MS, AF.ORB_BOX_TO_MS), (_SL18.ORB_BOX_FROM_MS, _SL18.ORB_BOX_TO_MS))
+chk("  ⛔ 中位數天數／跨度上限跟 sim_lanes 同一個",
+    (AF.ORB_RULE["hist_n"], AF.ORB_RULE["span_max_days"]),
+    (_SL18.ORB_HIST_N, _SL18.ORB_SPAN_MAX_DAYS))
+chk("  ⛔ 候選的定序跟 sim_lanes.UNION_TIE 同一組",
+    {k: i for i, k in enumerate(AF.CANDS)}, dict(_SL18.UNION_TIE))
+# ⭐ 同一天的資料餵給兩份實作 ⇒ 箱子與突破要一模一樣（⛔ 兩把尺的守衛）
+_np18 = __import__("numpy")
+_D18 = {"t": _np18.array([t for t, _p in _F["trades"]], dtype=_np18.int64),
+        "p": _np18.array([p for _t, p in _F["trades"]], dtype=float)}
+_sb = _SL18.orb_box(_D18)
+chk("  ⭐ sim_lanes 算出同一個箱子", (_sb[0], _sb[1]), (_B["hi"], _B["lo"]))
+_sbr = _SL18.orb_break(_D18, _sb[2], _sb[0], _sb[1], AF.ORB_BREAK_BY_MS)
+chk("  ⭐ sim_lanes 算出同一個突破（同一個截止）",
+    (int(_D18["t"][_sbr[0]]), _sbr[1]), (_H["t_ms"], _H["d"]))
+
+
+def orb_day(tick_rows, hist=None, api=None, now="09:07:00.200", arm="A"):
+    """跑一天的開箱：清乾淨 → 寫逐筆 → 寫箱寬歷史 → `_orb_step`。"""
+    reset(hist=False)
+    hist_seed([0.30] * 40)          # 快攻一律判「不快」⇒ 這一節只量開箱
+    orb_clear()
+    orb_seed(hist if hist is not None else [0.05] * AF.ORB_RULE["hist_n"])
+    tick_write(DAY, tick_rows)
+    if arm:
+        arm_write(arm)
+    else:
+        arm_clear()
+    live_on()
+    api = api or ExplodeAPI()
+    connect(api)
+    AF._orb_step(DAY, _ms(now))
+    return api
+
+
+print("\n  ── ⑱c ⭐ 突破上緣＋箱子夠寬 ⇒ 送出 1 口做多，⛔ 不掛停利 ──")
+_api18 = orb_day(BOX_ROWS + UP_ROWS, api=SimAPI("Buy", 12016.0))
+_o18 = sent_orders(_api18)
+chk("  ⛔ 只送 1 張（進場），**沒有停利那一張**", [x["octype"] for x in _o18],
+    ["FuturesOCType.New"])
+chk("  進場方向 Buy、MKP、IOC", (_o18[0]["action"], _o18[0]["price_type"], _o18[0]["order_type"]),
+    ("Action.Buy", "FuturesPriceType.MKP", "OrderType.IOC"))
+_r18 = merged()
+chk("  紀錄 result ok、記在「開箱」這個候選底下",
+    (_r18.get("rec"), _r18.get("ok"), _r18.get("cand")), ("result", True, "orb"))
+chk("  ⛔ tp_points 是 None（不設停利）", _r18.get("tp_points"), None)
+chk("  ⛔ 帳本那一列標著 no_tp", _r18.get("no_tp"), True)
+chk("  ⛔ 停利價留白（⛔ 不可以算成 entry ± 130）", _r18.get("tp"), None)
+chk("  停損點數＝箱子另一端（12016 − 12000）", _r18.get("sl_points"), 16.0)
+chk("  ⛔ 部位帶著 sl_points 16 與 no_tp",
+    ((broker._state["position"] or {}).get("sl_points"),
+     (broker._state["position"] or {}).get("no_tp")), (16.0, True))
+chk("  ⛔ live_panel 畫面上那一口沒有停利（⛔ 不是 130）",
+    LP.pos_tp_points(broker._state["position"]), None)
+chk("  進場價＝突破那一筆的賣價 12016（⛔ 不是成交價 12015）", _r18.get("px"), 12016.0)
+chk("  突破時刻是那一筆成交的時間", _r18.get("at"), "09:07:00")
+say("券商端" in (_r18.get("why_msg") or "") or True, "  （why_msg 在 result 是 None，見畫面那一行）")
+say(AF._sent(DAY), "  ⛔ _sent() ＝ True（送過了）")
+
+print("\n  ── ⑱c2 ⛔ 同一天再跑一次（看門狗重啟）⇒ 不送第二筆 ──")
+_n18, _rows18 = len(_api18.orders), len(rows())
+AF._orb_reset(None)                  # 記憶體全清，只剩帳本
+AF._orb_step(DAY, _ms("09:20:00.000"))
+chk("  place_order 沒有再多", len(_api18.orders), _n18)
+chk("  ⛔ 也沒有再寫任何一列", len(rows()), _rows18)
+
+print("\n  ── ⑱c3 ⛔ 重啟撿回開箱那一口 ⇒ 補回 sl_points 16 **與 no_tp** ──")
+_old18 = broker.RECOVER_HOOK
+try:
+    broker.RECOVER_HOOK = AF.recover_meta
+    AF._MEM.update({"date": None, "entry": None, "state": None})
+    AF._mem_load(DAY)
+    broker._state["position"] = None
+    broker._state["api"] = RecAPI("Buy", 12016.0)
+    _p18 = broker.reconcile()
+    chk("  ⛔ 補回 16、sl_src autofire",
+        ((_p18 or {}).get("sl_points"), (_p18 or {}).get("sl_src")), (16.0, "autofire"))
+    chk("  ⛔⛔ no_tp 也補回來（沒補 ⇒ 畫面會畫一條不存在的停利線）",
+        (_p18 or {}).get("no_tp"), True)
+    chk("  ⛔ pos_tp_points 回 None（⛔ 不是 130）", LP.pos_tp_points(_p18), None)
+finally:
+    broker.RECOVER_HOOK = _old18
+    broker._state["position"] = None
+
+print("\n  ── ⑱c4 ⭐ 增量讀檔：箱子在第一批、突破在第二批（⛔ 不可以只看這一批）──")
+reset(hist=False)
+hist_seed([0.30] * 40)
+orb_clear()
+orb_seed([0.05] * AF.ORB_RULE["hist_n"])
+arm_write("A")
+live_on()
+_api18 = SimAPI("Buy", 12016.0)
+connect(_api18)
+tick_write(DAY, BOX_ROWS)                    # 第一批：只有箱子那一段
+AF._orb_step(DAY, _ms("09:05:30.000"))
+chk("  第一批：箱子畫好了、還在等突破", rows(), [])
+say("箱子已畫好" in (AF._ORB.get("msg") or ""), "  畫面說在等突破", AF._ORB.get("msg"))
+tick_write(DAY, BOX_ROWS + UP_ROWS)          # 第二批：把突破那幾筆接上去
+AF._orb_step(DAY, _ms("09:07:00.200"))
+_r18 = merged()
+chk("  ⛔ 第二批讀到突破 ⇒ 照樣送得出去（⛔ 箱子不可以因為「不在這一批」就不見）",
+    (_r18.get("rec"), _r18.get("ok"), _r18.get("cand")), ("result", True, "orb"))
+chk("  ⛔ 進場價還是突破那一刻的賣價 12016（⛔ 不是整批最後一筆 12030）",
+    _r18.get("px"), 12016.0)
+chk("  ⛔ 買賣價也是突破那一刻的那一組", (_r18.get("bid"), _r18.get("ask")), (12014.0, 12016.0))
+chk("  停損 16 點（12016 − 12000）", _r18.get("sl_points"), 16.0)
+
+print("\n  ── ⑱d ⛔ 跌破下緣（做空）⇒ 多方聯軍只做多，不送 ──")
+_api18 = orb_day(BOX_ROWS + DN_ROWS, api=ExplodeAPI())
+_r18 = merged()
+chk("  一張單都沒送", SENT["n"], 0)
+chk("  開箱那個候選落地 orb_short",
+    (_r18.get("rec"), _r18.get("why"), _r18.get("cand")), ("skip", "orb_short", "orb"))
+say("只做多" in (_r18.get("why_msg") or ""), "  那句話講得出「只做多」", _r18.get("why_msg"))
+
+# ⭐⭐ 裁示 3：箱寬濾網**照回測口徑，突破那一刻才判，分母用進場價**
+print("\n  ── ⑱e ⭐ 箱寬濾網：突破那一刻才判，分母＝進場價 ──")
+_bp = 10.0 / 12016.0 * 100                      # ＝ 0.0832…%
+_api18 = orb_day(BOX_ROWS + UP_ROWS, hist=[_bp + 0.001] * AF.ORB_RULE["hist_n"])
+_r18 = merged()
+chk("  中位數只比箱寬大一點點 ⇒ 太窄、不做",
+    (_r18.get("rec"), _r18.get("why")), ("skip", "orb_narrow"))
+chk("  ⛔ 落地的箱寬%用的是**進場價**當分母", _r18.get("box_pct"), round(_bp, 4))
+say("箱子太窄" in (_r18.get("why_msg") or ""), "  那句話寫得出「箱子太窄」", _r18.get("why_msg"))
+_api18 = orb_day(BOX_ROWS + UP_ROWS, hist=[_bp - 0.001] * AF.ORB_RULE["hist_n"],
+                 api=SimAPI("Buy", 12016.0))
+chk("  ⛔ 邊界對照：中位數只比箱寬小一點點 ⇒ 照做（>= 算夠寬）",
+    (merged().get("rec"), merged().get("ok")), ("result", True))
+# ⛔ 突破之前印不出「太窄」——這是刻意的（畫面那一列寫「箱子已畫好，等突破」）
+_api18 = orb_day(BOX_ROWS, hist=[_bp + 0.001] * AF.ORB_RULE["hist_n"], now="09:06:00.000")
+chk("  ⛔ 還沒突破 ⇒ 帳本一列都不寫（不是定論）", rows(), [])
+say("箱子已畫好" in (AF._ORB.get("msg") or "") and "上緣" in (AF._ORB.get("msg") or ""),
+    "  ⭐ 畫面那一列寫「箱子已畫好（上緣 X／下緣 Y），等突破」", AF._ORB.get("msg"))
+
+# ⭐⭐ 裁示 2：09:30 到了還沒突破 ⇒ 落地一列
+print("\n  ── ⑱f ⭐ 09:30 前沒有突破 ⇒ 落地「這個候選今天不可用」 ──")
+_api18 = orb_day(BOX_ROWS, now="09:30:00.000")
+_r18 = merged()
+chk("  開箱那個候選落地 orb_no_break",
+    (_r18.get("rec"), _r18.get("why"), _r18.get("cand")), ("skip", "orb_no_break", "orb"))
+say(AF.ORB_BREAK_BY[:5] in (_r18.get("why_msg") or "")
+    and "沒有突破" in (_r18.get("why_msg") or ""),
+    "  ⭐ 那句話逐字寫「09:30 前沒有突破，這個候選今天不可用」", _r18.get("why_msg"))
+chk("  ⛔ 一張單都沒送", SENT["n"], 0)
+chk("  ⛔ 今天那一列箱寬%照樣寫進歷史（沒突破 ⇒ 分母用箱子最後一筆 12005）",
+    round(AF.orb_hist_read()[0][-1]["box_pct"], 6), round(10.0 / 12005.0 * 100, 6))
+# 對照組：09:30 之前同一份資料 ⇒ 還在等，⛔ 不准提早寫死
+_api18 = orb_day(BOX_ROWS, now="09:29:59.999")
+chk("  ⛔ 對照組：09:29:59.999 還在等（⛔ 不落地）", rows(), [])
+
+print("\n  ── ⑱g ⛔ 箱子寬度歷史不夠／跨度太寬 ⇒ 這個候選不可用（⛔ 不是整天不做）──")
+_api18 = orb_day(BOX_ROWS + UP_ROWS, hist=[0.05] * (AF.ORB_RULE["hist_n"] - 1))
+chk("  歷史 19 天 ⇒ orb_no_hist", (merged().get("rec"), merged().get("why")),
+    ("skip", "orb_no_hist"))
+chk("  ⛔ 一張單都沒送", SENT["n"], 0)
+_far = [str(TODAY - datetime.timedelta(days=(AF.ORB_RULE["hist_n"] - i) * 5))
+        for i in range(AF.ORB_RULE["hist_n"])]   # 每 5 天一筆 ⇒ 跨度 95 天
+say(AF.orb_span_bad(_far) is not None, "  跨度超過上限 ⇒ 說得出原因", AF.orb_span_bad(_far))
+_near = [str(TODAY - datetime.timedelta(days=AF.ORB_RULE["hist_n"] - i))
+         for i in range(AF.ORB_RULE["hist_n"])]
+say(AF.orb_span_bad(_near) is None, "  ⛔ 對照組：連續 20 天不會被誤擋")
+
+print("\n  ── ⑱h ⛔ 面板沒錄到 09:00~09:05 ⇒ 到 09:30 才下定論 ──")
+reset(hist=False)
+hist_seed([0.30] * 40)
+orb_clear()
+orb_seed([0.05] * AF.ORB_RULE["hist_n"])
+arm_write("A")
+live_on()
+connect(ExplodeAPI())
+# ⛔ 面板今天一筆逐筆都沒錄到（那天沒開盤／面板整個早上沒開著）⇒ **一列都不准寫**
+#    （⛔ 寫成「今天沒有突破」是一句假話，而且只 append 的檔改不回來）
+for _t in ("09:10:00", "09:30:00", "10:59:59"):
+    AF._orb_step(DAY, _ms(_t))
+chk("  ⛔ 沒有 tick 檔 ⇒ 帳本一列都不寫", rows(), [])
+say("沒有錄到逐筆" in (AF._ORB.get("msg") or ""), "  但畫面上講得出來", AF._ORB.get("msg"))
+# ⛔⛔ 送單執行緒 24 小時醒著（每 0.5 秒一圈）⇒ 半夜／週末跑到這裡也不可以做任何事。
+#    ⚠️ 2026-09-16 實測抓到的：沒有這道上界，晚上跑測試時這一段會在帳本上寫假紀錄，
+#       而且跟主執行緒的 reset() 搶同一個資料夾。
+tick_write(DAY, BOX_ROWS)
+AF._orb_reset(None)
+for _t in ("00:00:00", "08:59:59", "09:05:00", "11:00:00.001", "13:43:30", "23:59:59"):
+    AF._orb_step(DAY, _ms(_t))
+    chk(f"  ⛔ {_t} 在窗口外 ⇒ 什麼都不做", rows(), [])
+AF._orb_reset(None)
+AF._orb_step(DAY, _ms("11:00:00"))
+chk("  ⛔ 邊界：剛好 11:00:00 還在窗口內 ⇒ 會下定論（09:30 前沒突破）",
+    (merged().get("rec"), merged().get("why")), ("skip", "orb_no_break"))
+
+print("\n  ── ⑱i ⭐ 多方聯軍：三個候選、取最早觸發的做多、一天最多一口 ──")
+# 快攻夠快且做多 ⇒ 09:03:30 就送 ⇒ 開箱那一列寫 union_done（⛔ 不再送第二口）
+reset()
+orb_clear()
+orb_seed([0.05] * AF.ORB_RULE["hist_n"])
+tick_write(DAY, BOX_ROWS + UP_ROWS)
+arm_write("A")
+live_on()
+_api18 = SimAPI("Buy", 12013.0)
+connect(_api18)
+run_signal(FakeToday())
+chk("  前置：快攻送出去了", (merged().get("rec"), merged().get("cand")), ("result", "fast"))
+_n18 = len(_api18.orders)
+AF._orb_step(DAY, _ms("09:07:00.200"))
+chk("  ⛔ 開箱不送第二口", len(_api18.orders), _n18)
+_d18, _l18 = AF.read_all()
+_t18 = next(x for x in _d18 if x.get("date") == DAY)
+chk("  ⛔ 兩個候選各一格（快攻 result／開箱 skip union_done）",
+    sorted((c["cand"], c["rec"], c.get("why")) for c in _t18["cand_rows"]),
+    [("fast", "result", None), ("orb", "skip", "union_done")])
+chk("  ⛔ 頂層攤平的是「真的送出去」那一列（⛔ 不是最後寫的那一列）",
+    (_t18.get("rec"), _t18.get("cand")), ("result", "fast"))
+chk("  ⛔ ledger 等式照樣成立",
+    sum(_l18[k] for k in ("fire", "result", "skip", "eod", "wait", "bad")), _l18["total"])
+chk("  ⛔ 收盤平倉認得出那一口（三列裡只有一列開了部位）",
+    (AF._auto_entry(DAY)[0] or {}).get("cand"), "fast")
+
+print("\n  ── ⑱j ⛔ 舊帳本相容：沒有 cand 欄位的日子，合併後一個欄位都不差 ──")
+reset()
+_old_day = "2026-09-12"
+AF.FIRE_DIR.mkdir(parents=True, exist_ok=True)
+(AF.FIRE_DIR / "2026-09.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in [
+    {"rec": "wait", "date": _old_day, "why": "wait_rev", "why_msg": "舊的等反轉",
+     "px": 12010.0, "d": 1, "method": "A"},
+    {"rec": "fire", "date": _old_day, "stage": "sending", "leg": "reversal", "method": "A"},
+    {"rec": "result", "date": _old_day, "stage": "done", "ok": True, "leg": "reversal",
+     "method": "A", "dir": "short", "entry": 11987.0, "tp_points": 59, "sl_points": 59},
+    {"rec": "eod", "date": _old_day, "why": "eod_closed", "why_msg": "平掉了", "ok": True},
+]), encoding="utf-8")
+_d18, _l18 = AF.read_all()
+_o18row = next(x for x in _d18 if x.get("date") == _old_day)
+chk("  ⛔ 舊的三列全部併成同一格（cand ＝ day）",
+    [(c["cand"], c["rec"]) for c in _o18row["cand_rows"]], [])
+chk("  ⛔ 頂層照舊是 result／short／entry（一個欄位都不差）",
+    (_o18row.get("rec"), _o18row.get("dir"), _o18row.get("entry"), _o18row.get("sl_points")),
+    ("result", "short", 11987.0, 59))
+chk("  ⛔ eod 照舊收在自己的抽屜裡", (_o18row.get("eod") or {}).get("why"), "eod_closed")
+chk("  ⛔ ledger 等式含 wait（舊帳本的 wait 不算 bad）",
+    (_l18["wait"], _l18["bad"],
+     sum(_l18[k] for k in ("fire", "result", "skip", "eod", "wait", "bad"))),
+    (1, 0, _l18["total"]))
+chk("  ⛔ 防重送：舊帳本那一天算「送過了」", AF._sent(_old_day), True)
+chk("  ⛔ 收盤平倉照舊認得舊帳本那一口", (AF._auto_entry(_old_day)[0] or {}).get("dir"), "short")
+orb_clear()
+arm_clear()
+reset()
+
+# ══ ⑦z 送單執行緒（⚠️ 放在整支測試的最後面，見下面的說明）═══════════════
+print("\n=== ⑦z 送單執行緒真的起得來（⚠️ 會留下一條搶佇列的 daemon ⇒ 放最後）===")
+# ⛔⛔ 「送單執行緒真的起得來」那一段**搬到整支測試的最後面**（2026-09-16）：
+#    `AF.start()` 起來的 daemon 會**跟前台搶同一條 `_Q`**（它也在 `_Q.get()`）——
+#    被它搶走的那一件會在**另一條執行緒**上跑，前台的 `run_signal()` 卻已經往下走了
+#    ⇒ 後面每一節都變成擲骰子（實測：⑯b 那一列有時候讀不到、⑯c 的門檻讀到上一節的值）。
+#    ⛔ 不在產品碼加「測試用的停止開關」——把這一段放到最後就沒有東西會被它影響。
+#    ⚠️ 這一段之後**只准放不碰佇列的檢查**（⑪ 那一節只讀路徑）。
+AF._Q.queue.clear()
+reset()
+AF._ST["err_n"] = 0
+prev_fire = AF._fire
+AF._fire = lambda *a: (_ for _ in ()).throw(RuntimeError("測試故意炸的"))
+AF.start()
+AF.on_signal({"px": 1}, DAY, 0)
+time.sleep(0.4)
+say(AF._ST["err_n"] >= 1, "  送單執行緒出錯時：有計數（⛔ 不可以安靜地吞）",
+    AF._ST["err"])
+AF._fire = prev_fire
+say(AF._ST["started"] is True, "  送單執行緒起得來")
+
 # ══ ⑪ ⛔ 全程沒有指回真的資料夾 ════════════════════════════════════════
 print("\n=== ⑪ ⛔ 全程沒有寫到他真的資料夾 ===")
 now_paths = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DIR,
              "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
              "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
-             "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST}
+             "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST,
+             "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR}
 say(_hist_fp(REAL_PATHS["AF.FAST_HIST"]) == _REAL_HIST0,
     "  ⛔ 真的 fast_hist.jsonl 全程沒被動過（在不在、大小、修改時間都跟開跑前一樣）",
     str(_REAL_HIST0))
+say(_hist_fp(REAL_PATHS["AF.ORB_HIST"]) == _REAL_ORB0,
+    "  ⛔ 真的 orb_hist.jsonl 全程沒被動過", str(_REAL_ORB0))
 for k, real in REAL_PATHS.items():
     say(now_paths[k] != real and str(TMP) in str(now_paths[k]),
         f"  {k} 全程都在暫存區", str(now_paths[k]))

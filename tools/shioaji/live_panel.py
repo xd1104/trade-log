@@ -586,7 +586,17 @@ def pos_sl_points(pos):
 
 
 def pos_tp_points(pos):
-    """這一口的停利點數（畫面用；真正的停利單在券商那邊）。沒有就 TP_POINTS。"""
+    """
+    這一口的停利點數（畫面用；真正的停利單在券商那邊）。沒有就 TP_POINTS。
+
+    ⭐⭐ 部位掛著 `no_tp`（2026-09-16，「開箱」那個候選不設停利）⇒ 回 **None**。
+       ⛔⛔ 不可以掉回 `_pos_points(...)` 的 default —— 那一口**沒有 tp_points 這個欄位**，
+       `_pos_points` 會安靜地回 TP_POINTS（130）⇒ 畫面畫出一條**根本不存在的停利線**
+       （2026-09-16 實跑確認：entry 23000 的無停利部位被畫成停利 23130）。
+       ⚠️ 呼叫端拿到 None 要自己處理（`real_state` 的 `snap["tp"]`、前端那張卡）。
+    """
+    if isinstance(pos, dict) and pos.get("no_tp"):
+        return None
     return _pos_points(pos, "tp_points", TP_POINTS)
 
 
@@ -2105,6 +2115,7 @@ FAST_PCTL = 80
 #   ⚠️ 要改的話兩件事一起改：這裡的字串與秒數，⛔ 不可以只改一個。
 EOD_CLOSE_AT = "13:43:30"
 EOD_CLOSE_SEC = 13 * 3600 + 43 * 60 + 30
+
 C_THRESH = 30.0                         # C：|訊號| 要**超過**這麼多點才做
 RATE_MIN_N = 30                         # 少於這麼多筆就不給勝率 %（是選的，不是算的）
 CUM_MIN_N = 10                          # 少於這麼多筆就不畫累計線
@@ -5144,6 +5155,16 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-fast .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px; margin-right:8px}
 .al-fast b{color:var(--text); font-weight:700}
 .al-fast .warn{color:var(--gold)}
+/* ⭐ 2026-09-16 多方聯軍：今天三個候選各一列（⛔ 沿用這一頁既有的灰階，紅綠只給損益） */
+.al-cands{margin-top:11px; border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden}
+.al-cands .hd{font-size:10.5px; color:var(--faint); letter-spacing:.4px;
+  padding:7px 12px 6px; background:var(--surface-2); border-bottom:1px solid var(--line)}
+.al-cand{display:flex; gap:10px; align-items:baseline; padding:7px 12px;
+  font-size:12px; line-height:1.6; color:var(--dim); background:var(--surface)}
+.al-cand+.al-cand{border-top:1px solid var(--line)}
+.al-cand .k{flex:none; width:52px; font-weight:700; color:var(--text)}
+.al-cand .w{min-width:0; flex:1}
+.al-cand.gold .w{color:var(--gold); font-weight:650}
 .al-today{margin-top:2px}
 .al-today .t{font-size:17px; font-weight:700; color:var(--text); line-height:1.35}
 .al-today .t.off{font-size:15px; color:var(--dim); font-weight:650}
@@ -5788,6 +5809,12 @@ function xalHTML(R){
       '<span class="num" id="xalsec"></span> 秒　停損現在沒人在看'+
       '<div class="s">停損活在這台電腦裡，收不到報價就判斷不了。'+
       '請立刻到大戶投確認部位。</div></div>'+go+'</div>';
+  /* ⛔ 「開箱」那一口照規則就沒有停利（P.no_tp）⇒ ⛔ 不可以跳「停利沒有掛上券商」的警報
+     （那是出事了才該跳的），但**券商端一張單都沒有**這件事要照實講。 */
+  if(P.no_tp)
+    return '<div class="n-x n-att"><div class="g">&#9888; 開箱：券商端無掛單'+
+      '<div class="s">這一口沒有停利單、永豐又沒有停損單 —— '+
+      '停損與收盤平倉<b>都靠面板</b>。面板關掉或電腦睡著就都不會發生。</div></div>'+go+'</div>';
   if(!P.has_target)
     return '<div class="n-x n-att"><div class="g">&#9888; 停利沒有掛上券商　賺的那一邊沒有保護'+
       '<div class="s">請到大戶投自己補掛一張 '+f(R.tp)+' 的平倉限價單，或直接平倉。</div></div>'+
@@ -5929,18 +5956,26 @@ function realBody(s){
        '</div></div></div>';
     // 【顏色分工】紅綠只描述錢；系統狀態一律中性灰階＋填滿程度。
     // ⚠️「已掛在券商」不可以寫死，一定要讀 has_target（QC 退件第 4 條）。
-    const noTp=!P.has_target, blind=R.stale_sec!=null;
+    /* ⭐⭐ 2026-09-16「開箱」那一口**規則上就不設停利**（P.no_tp）——
+       跟「停利單沒掛上去」（noTp）是**完全不同的兩件事**，⛔ 不可以共用同一句：
+       前者是照規則沒有、後者是出事了要他立刻補掛。 */
+    const planNoTp=!!P.no_tp, noTp=!planNoTp&&!P.has_target, blind=R.stale_sec!=null;
     h+='<div class="n-guard">'+
-       '<div class="n-g'+(noTp?' n-att':'')+'"><span class="ic '+(noTp?'bad':'solid')+'"></span>'+
-       '<span class="lb">停利 <b>'+f(R.tp)+'</b></span><span class="st">'+
-       (noTp?'<b>沒掛上</b><br>賺的那一邊沒有保護，請自己補掛或平倉'
+       '<div class="n-g'+((noTp||planNoTp)?' n-att':'')+'"><span class="ic '+
+       ((noTp||planNoTp)?'bad':'solid')+'"></span>'+
+       '<span class="lb">停利 <b>'+(planNoTp?'不設':f(R.tp))+'</b></span><span class="st">'+
+       (planNoTp?'<b>這一口沒有停利</b><br>照「開箱」的規則跑到停損或收盤平倉'
+        :noTp?'<b>沒掛上</b><br>賺的那一邊沒有保護，請自己補掛或平倉'
             :'<b>已掛在券商</b><br>電腦關機也有效')+'</span></div>'+
        '<div class="n-g'+(blind?' n-att':'')+'"><span class="ic '+(blind?'bad':'hollow')+'"></span>'+
        '<span class="lb">停損 <b>'+f(R.sl)+'</b></span><span class="st">'+
        (blind?'<b>監控不到</b><br>收不到報價'
              :'<b>由這台電腦監控</b><br>券商端做不到停損')+'</span></div>'+
        '<div class="n-gfoot">停損靠這台電腦：面板關掉、電腦睡著、網路斷掉都會失效 —— '+
-       '這是 2026-08-28 拍板承擔的風險。</div></div>';
+       '這是 2026-08-28 拍板承擔的風險。</div></div>'+
+       /* ⛔ 這一句是 PM 2026-09-16 指定要寫出來的事實：開箱那一口券商端**一張單都沒有**。 */
+       (planNoTp?'<div class="n-why"><b>開箱：券商端無掛單</b> —— 這一口沒有停利單，'+
+         '永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。面板關掉／電腦睡著就都不會發生。</div>':'');
     // 【平倉鈕中性底】做空的平倉送出去的是「買進」，09-01 出過送錯邊、變成再加一口空單的事故。
     // 【不跳確認視窗】要平倉的時候通常是急的，多一個對話框是在最糟的時機加摩擦。
     h+='<button class="n-close"'+(closing?' disabled':'')+' data-rclose="1">'+
@@ -5954,7 +5989,12 @@ function realBody(s){
     /* ⭐ 2026-09-15：這一區的標頭寫的是手動真單的 ±RULE_TP，但【自動下單】那一口是 ±0.5%
        （部位自己帶 sl_points）⇒ 兩套數字同時在畫面上，要講出「這一口是哪一套」。
        停損價 R.sl 已經是後端用這一口自己的點數算的（pos_sl_points）。 */
-    if(P.sl_points!=null)
+    if(P.sl_points!=null&&P.no_tp)
+      /* ⭐ 「開箱」那一口：停損＝箱子另一端（不是按比例算的），而且沒有停利。 */
+      h+='<div class="n-why">這一口是<b>【自動下單】的開箱</b>開的：<b>沒有停利</b>、'+
+        '停損 <b>'+esc(String(Math.round(P.sl_points)))+' 點</b>（＝箱子的另一端），'+
+        '不是上面寫的 &plusmn;'+RULE_TP+' 點。</div>';
+    else if(P.sl_points!=null)
       h+='<div class="n-why">這一口是<b>【自動下單】</b>開的：停利停損各 <b>'+esc(String(Math.round(P.sl_points)))+
         ' 點</b>（自動下單的規則：照 '+esc(RULE_SIGNAL_AT)+' 那一刻的價格按比例算），'+
         '不是上面寫的 &plusmn;'+RULE_TP+' 點。</div>';
@@ -6608,8 +6648,10 @@ function chartSVG(s){
  // 【真實部位也要畫在圖上】舊版 chartSVG 只畫 s.position（練習部位），
  // 真實部位在 s.real.position ⇒ **假單有標記、真單一條線都沒有**（提案 §3.H）。
  // 圖是兩個分頁共用的，所以站在練習分頁也看得到這三條線。
- const RQ=(s.real&&s.real.position&&s.real.tp!=null&&s.real.sl!=null)?s.real:null;
- if(RQ&&live&&G.live){ hi=Math.max(hi,RQ.tp,RQ.sl); lo=Math.min(lo,RQ.tp,RQ.sl); }
+ /* ⭐ 2026-09-16：「開箱」那一口**沒有停利**（s.real.tp 是 null）—— 條件只能看 sl，
+    ⛔ 不可以連 tp 一起要求，不然那一口連**停損線**都不會畫（那是最該看到的一條）。 */
+ const RQ=(s.real&&s.real.position&&s.real.sl!=null)?s.real:null;
+ if(RQ&&live&&G.live){ [RQ.tp,RQ.sl].forEach(v=>{ if(v!=null){ hi=Math.max(hi,v); lo=Math.min(lo,v); } }); }
  const pad=(hi-lo)*0.08||10;
  // ⛔ 【價格軸要黏住，不可以每根新 K 棒就重算一次】2026-09-02 他回報「開盤時 K 線圖
  //    一直變來變去」。實測回放今天的資料：**08:45~09:30 之間軸變了 7 次、09:30 之後 0 次**。
@@ -7851,9 +7893,15 @@ var ALON={step:'idle',mode:null,busy:false,err:''};
 /* ⚠️ 2026-09-15 自動下單只剩 A，名字改成「開盤快才做」（跟後端 auto_fire.METHOD_NAME 同一組字）。
    B 從這張表拿掉 ⇒ 舊紀錄裡 method:"B" 的那幾天，alName() 回空字串、畫面照舊印「—」。 */
 /* ⭐ 2026-09-15 晚上再改成「快攻回馬槍」（慢的日子 09:15 反轉也會做；跟後端 METHOD_NAME 同一組字）。 */
-const ALWAY={A:{n:'快攻回馬槍',s:'09:00 起算'}};
-/* 帳本那一天是哪一段送的（快攻／回馬槍）。⛔ 名字從後端 D.leg_names（auto_fire.LEG_NAME），這裡只是退路。 */
-function alLeg(D,r){ const k=r&&r.leg, T=(D&&D.leg_names)||{}; return k?(T[k]||''):''; }
+/* ⭐ 2026-09-16 再改成「多方聯軍」（多了「開箱」這個候選，而且只做多）。 */
+const ALWAY={A:{n:'多方聯軍',s:'三個候選裡最早觸發的那個做多'}};
+/* 帳本那一天是哪一段送的。⛔ 名字從後端（新帳本走 D.cand_names＝auto_fire.CAND_NAME，
+   舊帳本走 D.leg_names＝LEG_NAME），這裡只是退路。⛔ 兩張表都不准在前端寫死。 */
+function alLeg(D,r){
+  const T=(D&&D.cand_names)||{}, L=(D&&D.leg_names)||{};
+  if(r&&r.cand&&T[r.cand]) return T[r.cand];
+  const k=r&&r.leg; return k?(L[k]||''):'';
+}
 function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
 /* ⛔⛔ 2026-09-15 晚上 Benson 回報：紀錄清單把 09-10～09-15 標成「快攻回馬槍」，但那幾天用的是舊規則
    （09-10／11／14 是 09:03:30 ±100、09-15 是 09:03:00 ±130）。alName() 只看做法代號 A，
@@ -7861,9 +7909,20 @@ function alName(k){ const w=ALWAY[k]; return w?w.n:''; }
    判準：帳本有 leg（快攻回馬槍才會落地）或日期在上線那天之後 ⇒ 現在的名字；
    否則照帳本那一天的送單時刻（at）與停利點數（tp_points）寫出當時的規則，⛔ 不准套現在的名字。 */
 const AL_HMQ_FROM='2026-09-16';
+/* ⭐⭐ 2026-09-16 第二次改名（「快攻回馬槍」→「多方聯軍」）。上線那一天起才是新名字。
+   ⛔⛔ **日期閘門一定要排在 `r.leg` 前面**：舊版寫成 `if(r.leg||日期>=…)`，
+      而 09-16 那一版的紀錄**每一列都有 leg** ⇒ `r.leg` 會短路掉日期閘門 ⇒
+      `METHOD_NAME["A"]` 一改，09-16 那幾天的紀錄當場被改名成「多方聯軍」。
+      （同一個坑 09-15 晚上已經踩過一次：一筆紀錄叫什麼名字，要看**那一天當時的規則**。）
+   ⚠️ `AL_HMQ_NAME` 是**寫死的歷史名字**，⛔ 不准改成 alName(...)（那又會跟著現在的常數跑）。
+   ⚠️ 要是多方聯軍延後上線，這個日期要跟著往後改（⛔ 不改就是把 hmq 那幾天標成多方聯軍）。 */
+const AL_UNION_FROM='2026-09-17';
+const AL_HMQ_NAME='快攻回馬槍';
 function alRecName(D,r){
   if(!r) return '';
-  if(r.leg||String(r.date||'')>=AL_HMQ_FROM) return alName(r.method);
+  const d=String(r.date||'');
+  if(d>=AL_UNION_FROM) return alName(r.method);
+  if(d>=AL_HMQ_FROM||r.leg) return AL_HMQ_NAME;
   const at=String(r.at||'').slice(0,8), tp=alN(r.tp_points);
   return '舊規則'+(at?(' '+at):'')+(tp!=null?(' ±'+tp.toFixed(0)+'點'):'');
 }
@@ -7887,13 +7946,18 @@ function alPctlTxt(D){
  if(w==null||q==null) return '';
  return '比過去 '+w+' 天裡'+(q%10===0?(' '+(q/10)+' 成的日子'):('第 '+q+' 百分位'))+'快';
 }
-/* ⭐ 2026-09-15 晚上「快攻回馬槍」：規則句照 PM 規格逐字組（⛔ 回馬槍時刻從後端 D.rev_at，不寫死）。 */
+/* ⭐ 2026-09-16「多方聯軍」：規則句一個地方組、三個地方用。
+   ⛔ 時刻／百分位／±% 全部從後端（D.signal_at／D.rule）—— 前端不准寫死 09:15／09:30／0.5%。
+   ⚠️ 只做多、取最早觸發的那一個 —— 這兩句是這條規則跟舊的「快攻回馬槍」最大的差別，必須寫出來。 */
 function alRuleTxt(D){
- const p=alPct(D), t=alPtsToday(D), c=alPctlTxt(D), q=String(D.qty||1);
- return '快攻回馬槍：'+(D.signal_at||'')+' 開盤'+(c||'夠快')+'就順勢做 '+q+' 口；'+
-   '不夠快就等 '+(D.rev_at||'—')+'，方向反轉了才順新方向做 '+q+' 口；'+
-   '停利停損 ±'+(p==null?'—':p)+'%'+
-   (t?('（今天約 '+t.v+' 點'+(t.est?'，照現價估':'')+'）'):'')+'；一天最多 '+q+' 口';
+ const p=alPct(D), t=alPtsToday(D), c=alPctlTxt(D), q=String(D.qty||1), r=(D&&D.rule)||{};
+ return '多方聯軍：三個候選裡**只取做多**、而且最早觸發的那一個，做 '+q+' 口 ——'+
+   '　①快攻 '+(D.signal_at||'')+' 開盤'+(c||'夠快')+'就順勢做（停利停損 ±'+(p==null?'—':p)+'%'+
+   (t?('，今天約 '+t.v+' 點'+(t.est?'、照現價估':'')):'')+'）；'+
+   '　②開箱 '+(r.box_at||'')+' 畫箱子，箱子夠寬的話第一次突破上緣就做（⛔ 不設停利，停損＝箱子另一端；'+
+   (r.break_by||'—')+' 以後才突破就不算）；'+
+   '　③純回馬：'+(D.signal_at||'')+' 不夠快的日子等 '+(D.rev_at||'—')+'，反轉成做多才做（±'+
+   (p==null?'—':p)+'%）；　一天最多 '+q+' 口';
 }
 /* 今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 D.fast 來（fast_verdict 那一支），
    ⛔ 09:03:30 之前不預告（verdict 是 null 時只講門檻）。 */
@@ -8094,7 +8158,7 @@ function alPaint(){
  const merged=alTodayMerged(D,row);
  const tcard=document.getElementById('altodaycard');
  if(tcard) tcard.hidden=merged;
- setEl('altoday',merged?'':(alTodayHTML(D,row)+alEodHTML(D,row)));
+ setEl('altoday',merged?'':(alTodayHTML(D,row)+alCandsHTML(D,row)+alEodHTML(D,row)));
 
  /* ── 紀錄（要能跟【自動下單（模擬）】那一頁對得起來）───────────── */
  setEl('allogn',days.length?(days.length+' 天'):'');
@@ -8248,17 +8312,23 @@ function alTodayHTML(D,r){
             (R.exit_time?('（'+esc(String(R.exit_time).slice(0,8))+'）'):'')+
             (alN(R.points)!=null?('　<b>'+esc(alSigned(R.points))+'</b> 點'):
               '　<span style="color:var(--gold)">問不到成交價，點數留白</span>'))
-          :('　停利 <b>'+esc(alF(r.tp))+'</b>'+
+          :(/* ⭐ 「開箱」那一口**沒有停利**（r.no_tp）⇒ ⛔ 不可以印一個空的停利格 */
+            (r.no_tp?'　停利 <b>不設</b>':'　停利 <b>'+esc(alF(r.tp))+'</b>')+
             /* 2026-09-15：自動下單那一口的停損是 ±0.5%（帳本落地的 sl），不是手動那個 ±RULE_SL */
             (alN(r.sl)!=null?('　停損 <b>'+esc(alF(r.sl))+'</b>'):'')+
-            (alN(r.sl_points)!=null?('（各 '+esc(alF(r.sl_points,0))+' 點）'):'')))+
+            (alN(r.sl_points)!=null?((r.no_tp?'（'+esc(alF(r.sl_points,0))+' 點＝箱子另一端）'
+                                             :'（各 '+esc(alF(r.sl_points,0))+' 點）')):'')))+
      /* 回馬槍那一口的參考價是 09:15 的價（帳本 p15），⛔ 不可以標成 09:03:30 的價 */
      (r.leg==='reversal'
        ? '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px_0903))+'</b>　'+esc(r.rev_at||D.rev_at||'')+
          ' 的價 <b>'+esc(alF(r.p15))+'</b>'
        : '　'+esc(D.signal_at||'')+' 的價 <b>'+esc(alF(r.px))+'</b>')+
      '　滑價 <b>'+esc(alSigned(r.slip))+'</b> 點'+
-     ((!done&&r.has_target)||done?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>')+
+     /* ⛔ 「開箱」那一口照規則就沒有停利單 ⇒ ⛔ 不可以跳「停利單沒掛上去」那句（那是出事才該說的），
+        但**券商端一張單都沒有**這件事要照實講（PM 2026-09-16 指定）。 */
+     (r.no_tp?'<br><span style="color:var(--gold)">開箱：券商端無掛單 —— '+
+        '這一口沒有停利單、永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。</span>'
+       :(((!done&&r.has_target)||done)?'':'　<span style="color:var(--gold)">停利單沒掛上去，請自己到大戶投補掛</span>'))+
      (r.warn?'<br><span style="color:var(--gold)">'+esc(r.warn)+'</span>':'')+
      /* ⛔ 對不起來要**說出來**（示警但不擋）：留白跟「那口其實沒平掉」長得一樣。 */
      ((st==='none'||st==='many')?'<br><span style="color:var(--gold)">'+
@@ -8318,6 +8388,42 @@ function alEodHTML(D,r){
    (alN(e.points)!=null?'　<b>'+esc(alSigned(e.points))+'</b> 點':'');
  if(e.alarm) return '<div class="al-alarm">'+body+'</div>';
  return '<div class="d">'+body+'</div>';
+}
+/* ⭐⭐ 2026-09-16「多方聯軍」：今天**三個候選各一列**（PM 裁示 4 的帳本形狀直接上畫面）。
+   ⛔ 名字與時刻一律從後端 D.cands（auto_fire.CANDS／CAND_NAME／CAND_AT），⛔ 前端不准寫死。
+   每一列的字從哪來（⛔ 不在前端重寫規則）：
+     ・帳本那個候選有列 ⇒ 用那一列的 why_msg（那是送單那一刻寫下的定論）
+     ・開箱還沒有定論 ⇒ 用後端 D.orb 的 stage／msg
+       （09:05~突破之間就是 PM 裁示 3 指定的那句「箱子已畫好（上緣 X／下緣 Y），等突破」）
+     ・純回馬還沒有定論 ⇒ 照快攻那一列推（只有「不快」的日子才有這個候選）
+   ⚠️ 箱寬濾網**照回測口徑在突破那一刻才判** ⇒ 突破之前印不出「箱子太窄」，這是刻意的
+      （⛔ 不准為了畫面好看改成「09:05 用箱子最後一筆當分母」—— 那是第二把尺）。 */
+function alCandRow(D,r,c){
+ const rows=(r&&r.cand_rows)||[], hit=rows.filter(x=>x.cand===c.k)[0]||null;
+ let txt='', tone='';
+ if(hit){
+   if(hit.rec==='result'&&hit.ok){ txt='✔ 這一口是它送的'; tone='gold'; }
+   else if(hit.rec==='fire'){ txt='送出去了，還不知道結果'; tone='gold'; }
+   else txt=String(hit.why_msg||hit.why||'');
+ }else if(c.k==='orb'){
+   const O=D.orb||{};
+   txt=O.msg||(O.stage==='before'?('箱子畫的是 '+esc(O.box_at||'')+'，'+esc(O.box_at||'').slice(6)+' 之後才看得出來'):'');
+   if(!txt) txt='等 '+esc(O.box_at||'')+' 畫完箱子';
+ }else if(c.k==='rev'){
+   const f=rows.filter(x=>x.cand==='fast')[0]||null;
+   txt=(f&&f.why==='not_fast')?('等 '+esc((D.rule||{}).rev_at||D.rev_at||'')+' 看有沒有反轉')
+       :(f?'今天沒有這個候選（只有 09:03:30 判定「不快」的日子才有）':'等 '+esc(D.signal_at||''));
+ }else{
+   txt='等 '+esc(D.signal_at||'');
+ }
+ return '<div class="al-cand'+(tone?' '+tone:'')+'"><span class="k">'+esc(c.name||'')+
+   '</span><span class="w">'+esc(String(txt))+'</span></div>';
+}
+function alCandsHTML(D,r){
+ const cs=(D&&D.cands)||[];
+ if(!cs.length) return '';
+ return '<div class="al-cands"><div class="hd">今天三個候選（只做多，取最早觸發的那一個）</div>'+
+   cs.map(c=>alCandRow(D,r,c)).join('')+'</div>';
 }
 function live_word(r){ return r.live?'已送出委託單':'演練（沒有真的送出去）'; }
 /* 「今天」卡要不要併進紀錄第一列：只有「送出去了 ＋ 已對到出場（state ok）＋ 收盤那段沒有警示」
@@ -9210,9 +9316,12 @@ def real_state(price, quote, age):
                                  if price else None)
             # ⛔ 用**這一口自己的**點數（跟 check_real_position 同一支 pos_sl_points），
             #    不然自動下單那一口畫面寫停損 −130、實際卻是 −230 ⇒ 畫面那句是假的。
-            snap["tp"] = pos["entry"] + d * pos_tp_points(pos)
+            # ⭐ 「開箱」那一口**沒有停利**（pos_tp_points 回 None）⇒ tp 一律 None，
+            #    ⛔ 不可以算成 entry ± 130（那是一條不存在的線）。
+            tpp = pos_tp_points(pos)
+            snap["tp"] = None if tpp is None else pos["entry"] + d * tpp
             snap["sl"] = pos["entry"] - d * pos_sl_points(pos)
-            snap["tp_pts"], snap["sl_pts"] = pos_tp_points(pos), pos_sl_points(pos)
+            snap["tp_pts"], snap["sl_pts"] = tpp, pos_sl_points(pos)
         stale = REAL_STALE["since"]
         snap["stale_sec"] = round(time.time() - stale) if stale else None
         ok, why = broker.can_enter(price, quote == "live")

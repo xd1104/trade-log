@@ -434,6 +434,51 @@ chk("  有記到進場與停利兩筆", [r["kind"] for r in recs], ["entry", "ta
 chk("  兩筆都標記 dry_run", all(r.get("dry_run") for r in recs), True)
 chk("  停利掛在 45100（做多 +100）", recs[1]["price"], 45100)
 chk("  dry run 不計入當日真實進場次數", broker.entries_today(), 0)
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
+# ══ ⭐⭐ tp_points=None ＝ 這一口不設停利（2026-09-16，PM 裁示「選項 A」）═══════════
+#    ⛔ 守的是：`place_target` **一次都不能被呼叫**（不是「掛一張碰不到的價」——
+#       那在真錢上會變成一張真的掛在場上的限價單，而且演練模式回 ok=True 驗不出來）。
+print("\n=== ⭐ 不設停利（tp_points=None）：一張停利單都不准送 ===")
+broker._state["position"] = None
+connect(FakeAPI())
+_target_calls = {"n": 0}
+_real_place_target = broker.place_target
+
+
+def _spy_place_target(tp_price):
+    _target_calls["n"] += 1
+    return _real_place_target(tp_price)
+
+
+broker.place_target = _spy_place_target
+try:
+    ok, err, pos = broker.enter("long", 45000, None, sl_points=57)
+    chk("  進得了場", ok, True)
+    chk("  沒有警告訊息（不掛停利是規則，不是出事）", err, None)
+    chk("  ⛔ place_target 一次都沒被呼叫", _target_calls["n"], 0)
+    recs = [json.loads(l) for l in
+            (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines()
+            if l.strip()]
+    chk("  ⛔ 只送出進場那一張，沒有 target", [r["kind"] for r in recs], ["entry"])
+    chk("  ⛔ 部位裡沒有 tp_points 這個欄位", "tp_points" in (pos or {}), False)
+    chk("  部位掛著 no_tp 旗子（畫面靠它分辨『沒有』與『沒掛上』）",
+        (pos or {}).get("no_tp"), True)
+    chk("  券商端沒有停利單（target_trade 是 None）", (pos or {}).get("target_trade"), None)
+    chk("  sl_points 照樣存得進去", (pos or {}).get("sl_points"), 57.0)
+    # ⚠️ 這兩條守的是 PM 2026-09-16 指名的風險：「畫面可能顯示一個根本不存在的停利 130 點」。
+    #    ⛔ 一定要呼叫 live_panel 真正那一支 pos_tp_points，不是在測試裡重寫一份判斷。
+    import live_panel as _LP
+    chk("  ⭐ live_panel.pos_tp_points 回 None（⛔ 不可以掉回 130）",
+        _LP.pos_tp_points(pos), None)
+    chk("  ⭐ 停損點數照樣讀得到這一口自己的", _LP.pos_sl_points(pos), 57.0)
+    # 對照組：一般那一口（有 tp_points）⇒ 這兩支要照舊（證明上面那條不是恆真）
+    chk("  對照組：有停利的部位 pos_tp_points 照舊",
+        _LP.pos_tp_points({"dir": "long", "entry": 45000.0, "tp_points": 230.0}), 230.0)
+finally:
+    broker.place_target = _real_place_target
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
 
 print("\n=== 對帳查不到 ≠ 沒成交（送出去了但問不到，絕不可以說沒成交）===")
 
