@@ -167,6 +167,30 @@ Benson 早上下單前要看得到昨晚怎麼走（2026-08-21 提的），只�
 
 ## ⚠️ 面板開發鐵律
 
+### ⭐ 2026-09-16 分頁重整：現在只有四個分頁
+
+`即時(live) / 模擬(sim) / 策略實驗室(lab) / 自動下單(fire)`——愈往右愈接近真錢。
+
+- **新增【模擬】(`#tab-sim`)**：原本塞在【策略實驗室】最上面的「模擬（不會下單）」整張卡搬出來獨立成一頁，
+  class 一律**沿用 `sm-` 前綴、一個都沒改名**。同一輪從兩條擴到**六條並排**（見下面「【模擬】分頁」那節）。
+- **拿掉【細節】(`#tab-tick`) 與【回顧】(`#tab-review`)**（Benson：他已經不看了），連同「重播練習」（Bar Replay）。
+  - **前端**：兩個 `<div>`、專屬 CSS（`.tk-*`／`#tab-review`／`#rpane`／`.rp*`／`.tfsw`／`.dt*`／`.cmp`／
+    `.verdict`／`.tally`／`.chips`／`.kbd`／`.hr`／`.trade.sel`／`.tr-note`／`.cday`／`.ctag`／`.daysel`／
+    `.jinput`／`.hold`／`.btn.gw`）、專屬 JS（`TK*`／`tk*` 一整段、`RV`／`RB`／`RP`／`rv*`／`rp*`／
+    `paneReview`／`paneReplay`／`fstrip`…）全部刪掉。前端探針 `tools/probe/tick-tab.mjs` 一起刪。
+  - ⛔⛔ **後端一行都沒拆**（刻意）：`/api/tick/days`／`/api/tick/day`（逐筆落地 `tick_writer.py` → `tick_logs/`
+    是**獨立的資料線**，跟那一頁沒關係）、`/api/review`、`/api/replay`、`/api/bars`（不帶 `full`）、
+    `day_bars(full=False)`、`replay_log/`。**`day_bars()` 是【即時】也在用的同一支**，只是 `full` 參數不同 ——
+    那行「回顧分頁用」的註解講的是 `full=False` 那個分支，不是整支函式。
+  - **留下來的共用件**（⛔ 別跟著刪）：`TAB`、開場動畫那三行、`esc()`、`today10()`、`.tabs`、
+    `.noteline`／`.nedit`／`.empty`／`.btn.gold`（心得編輯在【即時】也在用）、`[data-nedit]` 那整條存心得的路。
+  - **分頁切換那行**（`[data-tab]` → `setTab()`）原本**寄生在【回顧】那個 click 監聽器的第一行**，
+    刪的時候差點一起帶走 —— 現在獨立成自己的監聽器。
+  - ⚠️ 【策略實驗室】那段 HTML 的結束標記從 `<!-- 【回顧】` 換成
+    「`══ 【策略實驗室】到此 ══`」那行註解。**全檔只准出現一次**（抄第二份會被 `page.index()` 先找到、
+    切片變成負的，第一版就踩到）。⛔ 改那行要一起改 `autotest-backend.py` ①、
+    `test_strategy_lab.py` ⑥、`test_sim_lanes.py` ⑦。
+
 - **有 `max-height` 的 flex 直欄，子元素一定要 `flex:none`**（2026-08-25 踩到）。
   預設 `flex-shrink:1` ⇒ 內容超過高度時不是捲動，而是把每一列**壓扁**
   （實測 `.trade` 從 107px 被壓成 21.6px，字整片切掉）。
@@ -195,7 +219,7 @@ Benson 早上下單前要看得到昨晚怎麼走（2026-08-21 提的），只�
   且資料沒有縮到小於舊軸的 55%，就沿用。修完同一份資料回放：**開盤 8 次 → 1 次**。
   ⚠️ 縮放／平移／換日要能重新貼合，所以 `VIEW.n`／`VIEW.end`／日期都要進遲滯的 key；
   刻度線要從 `lo` 往上取第一個 step 整數倍開始畫（vz/voff 之後 hi/lo 不再是 step 的倍數）。
-  ⚠️ 回顧分頁的圖（`#rsvg`）是另一段程式，不共用 `chartSVG()`。
+  ⚠️ （2026-09-16 前）回顧分頁的圖（`#rsvg`）是另一段程式，不共用 `chartSVG()` —— 那一頁已經拿掉。
 - ⛔ **背景輪詢的節奏要扣掉工作時間**（同一天）。加權指數「更新有點慢」：實測期貨成交價
   0.4 秒跳一次、**指數 6.2 秒才動一次**，但程式寫的是 3 秒 —— 因為 `api.snapshots()`
   本身要約 3 秒，`sleep(3)` 又疊在後面 ⇒ **實際週期 = 工作時間 ＋ 設定值**。
@@ -304,7 +328,11 @@ Benson 早上下單前要看得到昨晚怎麼走（2026-08-21 提的），只�
   （每 N 列 `time.sleep(0)` 讓出 GIL），代價是解析變慢一點；
   動之前先量一次現況，別憑感覺調。
 
-### 【細節】分頁（逐筆早盤圖）— 2026-09-07 加
+### 【細節】分頁（逐筆早盤圖）— 2026-09-07 加，**2026-09-16 畫面整個拿掉**
+
+> ⚠️ **這一整節的「前端」部分已經是歷史**：Benson 2026-09-16 交辦把【細節】與【回顧】兩頁拿掉。
+> **後端還在**（逐筆落地 `tick_writer.py`／`tick_logs/`／`/api/tick/*`，探針 `tools/probe/tick-backend.py`
+> 照樣要跑），所以下面關於**落地與資料格式**的段落仍然有效；關於 canvas／版面／`tick-tab.mjs` 的段落留作紀錄。
 
 第三個分頁「細節」（`data-tab="tick"`，放在**即時與回顧中間**）：08:45~09:30 的**逐秒**圖。
 規格 `tools/shioaji/TICK-TAB-SPEC.md`。跟另外兩張圖的區隔**不是「今天 vs 那 45 分鐘」，是多細**
@@ -2401,19 +2429,47 @@ tools/probe/fire_harness.py        ⛔ 不 start()、⛔ 不動 AUTO_SIG_HOOK／
   `ORDER_DIR`／`TRADE_DIR`／`REAL_FLAG`／`AUTO_DIR`／`AUTO_REAL_DIR`，收尾有一節在斷言），
   而且 ⛔ **斷言真的 `AUTO_ORDERS_ON` 不存在**。價格一律 12000 附近。
 
-### 模擬（策略實驗室最上面那張卡）— 2026-09-15 晚上加，⛔ 不會下單
+### 【模擬】分頁（六條）— 2026-09-15 晚上加兩條，2026-09-16 獨立成一頁＋擴到六條，⛔ 不會下單
 
-Benson 要在面板上**模擬**兩條策略、跟真單（快攻回馬槍）分開觀察。後端 `tools/shioaji/sim_lanes.py`、唯讀端點 `GET /api/sim/state`、
-畫面是【策略實驗室】分頁**第一張卡**「模擬（不會下單）」，兩條並排（寬度 < 1180px 疊成一欄）。
+Benson 要在面板上**模擬**幾條策略、跟真單（快攻回馬槍）分開觀察。後端 `tools/shioaji/sim_lanes.py`、
+唯讀端點 `GET /api/sim/state`、畫面是獨立的【模擬】分頁（`#tab-sim`），**六條並排**
+（1536 寬實測每條 228px；≤1480 三欄、≤980 兩欄、≤640 一欄）。
+
+**每一條由上而下**：名字 → **每月累計點數（他最在意的，放第一個）** → 今天的判斷 → 最近一筆 → 規則句。
+⛔ 窄直欄裡**不要再放兩欄的表格**（塞不下會換行，變成高矮不一）。最近幾筆的清單 2026-09-16 收掉，
+只留**最近一筆**（後端 `recent` 還是給 15 筆，前端只畫第 0 筆）。
+
+⛔ **六條有哪幾條、順序是什麼由後端決定**（`sim_lanes.LANES`）：前端照 `x.lanes` 的 key 順序生
+`<div class="sm-lane" id="sm-<key>">`，⛔ 不准在前端寫死 lane 名字。骨架只在「有哪幾條」變動時重建。
 
 | 條（lane） | 資料 | 規則（口徑＝研究） |
 |---|---|---|
 | `fast`「早盤快攻」＝真單的前半 | `tick_hist/ticks/YYYY-MM-DD.csv.gz`（strategy_lab 13:50~15:00 抓；缺的背景補抓） | ref＝09:00:00.000（含）以前最後一筆、px＝09:03:30.000（含）以前最後一筆；門檻＝`fast_hist.jsonl` **這一天以前**最近 40 列的 `numpy.percentile(…,80)`（少於 20 ⇒ 歷史不夠）；快 ⇒ sign(px−ref)，進場＝px 那筆賣價（多）／買價（空）；停利停損 `tpsl_points(進場價)`；停損用觸發那筆成交價；13:43:30（結算日 13:30）前沒碰到 ⇒ 最後一筆對手價平（`strategy_lab.run_bracket`，cost=True）；−5 |
+| `hmq`「快攻回馬槍」＝真單現在跑的那一套 | 同上 | 快 ⇒ 跟 `fast` 一模一樣；**不快** ⇒ 等 09:15:00（含）以前最後一筆，方向跟 09:03:30 **相反**才順新方向做（注入的 `reversal_dir`）。⛔ 一天最多一口：**快的日子不會再看 09:15** |
+| `rev`「回馬槍那一半」 | 同上 | `hmq` 減掉 `fast`：**只做「慢且 09:15 反轉」**那一半，快的日子記「不做（fast_skip）」 |
+| `fast11`「快攻 11:00 平」 | 同上 | 跟 `fast` **完全一樣**，只把收盤平倉時刻換成 `11:00:00`（先碰到停利停損一樣先出）。11:00 早於結算日的 13:30 ⇒ 結算日不必另外處理 |
+| `orb`「ORB 5 分＋箱子濾網」（⛔ 這條是新規則，不在 auto_fire 裡） | 同上 | 箱子＝09:00:00.000~09:05:00.000（**兩端都含**）的最高／最低，寬 `w`；**箱子寬度%（w ÷ 進場價 × 100）< 過去 20 個交易日該值的中位數 ⇒ 今天不做**；之後**第一次**突破上緣（`>`）做多、跌破下緣（`<`）做空（一天最多 1 次，碰到邊不算）；**停損＝箱子另一端**、**⛔ 不設停利**；13:43:30（結算日 13:30）平；手續費 5 點 |
 | `night`「美股開盤順勢」 | 夜盤 1 分 K（**標籤＝結束時間**，本機 `tmf_1min.csv` 優先、缺的跟永豐 kbars 一天一天要） | T＝美股開盤（E 在美國夏令 ⇒ 21:30，否則 22:30；夏令＝3 月第二個週日起到 11 月第一個週日前）；ref＝標籤 ≤T 最後一根收盤、c＝標籤 (T,T+5] 最後一根收盤（少於 4 根 ⇒ 不做）；d=0 不做；±1%×c，看標籤 (T+5, 04:58] 每根高低，**同一根兩邊都碰算停損**；沒碰到 ⇒ 標籤 ≤04:58 最後一根收盤平；−(5+2) |
 
 - ⛔⛔ **`sim_lanes.py` 一行都不 import broker／auto_fire／live_panel**（`test_sim_lanes.py` ⑧ 用 AST 守，含負控組）。
-  規則函式（`auto_fire.fast_verdict`／`move_pct`／`tpsl_points`／`hist_read`、`FAST_PCTL`、`FAST_RULE`）由 `live_panel.start_sim_lanes()`
-  用 `sim_lanes.configure()` **注入** —— 真單與模擬是同一份正本，⛔ 不准在 sim_lanes 另寫一份「>= 門檻」或「× 0.005」。沒接上 ⇒ 快攻那條記「沒接上」、不猜。
+  規則函式（`auto_fire.fast_verdict`／`move_pct`／`tpsl_points`／**`reversal_dir`**／`hist_read`、`FAST_PCTL`、
+  **`REV_SEC`**、`FAST_RULE`）由 `live_panel.start_sim_lanes()` 用 `sim_lanes.configure()` **注入** ——
+  真單與模擬是同一份正本，⛔ 不准在 sim_lanes 另寫一份「>= 門檻」「× 0.005」或「09:15 有沒有反轉」。
+  `configure()` 是**全有全無**：少接一支（例如 `reversal_fn`）⇒ 整個 `wired=False`、逐筆那幾條記「沒接上」、不猜。
+  守衛除了 AST（程式碼裡不准有 `0.005`／`percentile`／`33300` 秒），還有 ⑫「**換掉注入的那一支，結果一定要跟著變**」
+  —— 那是活的證據，AST 只證明「沒寫第二份」，⑫ 證明「真的在用第一份」。
+- **ORB 的箱子寬度歷史**（這條沒有 `fast_hist.jsonl` 那種現成檔）：`box_hist(day)` 直接去掃
+  `tick_hist/ticks/` 裡**早於 day** 的檔名、取最近 20 個算得出箱子的日子，算過的放 `_BOX` 記憶體快取
+  （⛔ 不另外開檔案來寫；面板重啟會重算，第一輪大約多花數秒，跑在背景執行緒）。
+  ⚠️ **沒有突破的日子沒有「進場價」** ⇒ 分母改用箱子最後一筆成交價（兩者差不到 1%）——
+  **每個交易日都要有值**才算得出中位數，只收有突破的日子等於那把尺被挑過。這是 dev 的取捨，PM 知情。
+  湊不到 20 天 ⇒ **資料缺**（⛔ 不是定論、不寫檔）：逐筆之後補得回來，寫死就永遠錯了。
+  箱子太窄（`<` 中位數）則是**定論**。⛔ 「等於中位數」要做（只有小於才不做）。
+- **`ORB_NO_TP`（10 的 9 次方）是哨兵**：`run_bracket` 一定要收一個停利點數，而 ORB **不設停利** ⇒ 給一個碰不到的數。
+  真的走到 `tp` 就是程式壞了 ⇒ `orb_eval` 丟例外給 `step()` 吞（計數＋畫面），
+  ⛔ 絕對不可以把 10 億點當成一天的成績寫進檔案。
+- **逐筆那五條共用同一份逐筆**：`_step_ticks()` 一天只 `load_day()` 一次（⛔ 不是一條讀一次）。
+  一條算爆了只停那一條，其他四條照算（內層 `except Exception`，⛔ 不准縮成特定型別 —— 縮了就會冒到外層、整天停擺）。
 - ⛔ 門檻「只用這天以前的列」靠 `fast_verdict(day, …)` 自己的 `date < day`，sim_lanes 傳的是**那一天**（突變 M1：傳 9999-12-31 ⇒ ① 紅）。
   ⚠️ fast_hist 那一天的 move_pct 是真單 09:03:30 用 `minute_close` 記的；模擬的 move_pct 是逐筆重算的 —— 門檻一樣、當天走幅可能差一點點。
 - **落地 `tools/shioaji/sim_lanes/YYYY-MM.jsonl`**（⛔ gitignore）：一列＝一個（lane, date）的**定論**，只 append；寫之前在鎖裡重讀，
@@ -2453,7 +2509,7 @@ Benson 要在面板上**模擬**兩條策略、跟真單（快攻回馬槍）分
   ⑧ 主迴圈比對基準**固定 `a71087e`**（R2；⛔ 不用 HEAD —— commit 之後比自己等於沒比）；沒有 git ⇒ 吃環境變數 `SIM_BASELINE_LIVE_PANEL` 指的檔；
   兩個都沒有 ⇒ 印「未驗」、總結寫「其餘通過；未驗 N 項」（⛔ 不寫全部通過）。另有不靠 git 的接線檢查（主迴圈那幾支不引用 sim_lanes）。
   ⚠️ 之後若**刻意**改主迴圈，基準要跟著換 commit 並在這裡留紀錄。
-  突變 `tools/probe/sim-mutate.py`（59 個全紅；在暫存複本上改、跑完還原並驗 SHA-256；先抽 a71087e 的 live_panel.py 給複本當基準；
+  突變 `tools/probe/sim-mutate.py`（**86 個全紅**，2026-09-16；在暫存複本上改、跑完還原並驗 SHA-256；先抽 a71087e 的 live_panel.py 給複本當基準；
   **先跑一次不改的對照組，不是乾淨的綠（或有未驗）就停**；總結分得出「沒跑」與「紅」）。
 
 ## 桌面 App（panel_app.pyw）
@@ -2505,12 +2561,18 @@ tools/shioaji/
                          YYYY-MM-DD-polled.jsonl ＝取樣，兩種 schema 不可混
   practice_trades/       模擬練習紀錄（gitignore，會同步到 data/practice.json）
   replay_log/            重播練習紀錄（gitignore）★ 絕不可與 practice_trades 混用
-  TICK-TAB-SPEC.md       【細節】分頁（逐筆早盤圖）的設計規格
+  TICK-TAB-SPEC.md       【細節】分頁的設計規格（⚠️ 2026-09-16 畫面已拿掉，只留紀錄；後端還在）
+  REVIEW-SPEC.md         【回顧】分頁的設計規格（⚠️ 同上）
+  sim_lanes.py           【模擬】分頁六條的後端（⛔ 不 import broker／auto_fire，規則靠注入）
+  sim_lanes/             【模擬】的定論（gitignore）YYYY-MM.jsonl
 data/practice.json       練習紀錄的雲端同步檔（面板自動 push，手機 App 自動拉）
 tools/probe/
   tick_synth.py          合成逐筆資料產生器（治具與探針共用；⛔ 價格一律 12000 附近）
   tick-backend.py        【細節】後端探針（離線，58 項，唯讀他的 tick_logs）
-  tick-tab.mjs           【細節】前端探針（真瀏覽器＋真滑鼠，108 項；要先起 fe_harness.py）
+  （tick-tab.mjs 已於 2026-09-16 刪除：它量的那一頁不存在了；tick-backend.py 照舊要跑）
+  sim_harness.py         【模擬】分頁的治具（假的六條 /api/sim/state；⛔ 全部寫檔出口都在暫存區）
+  sim-lanes-replay.py    模擬那幾條的離線對照（唯讀 tick-research）
+  sim-mutate.py          模擬那一包的突變測試（86 個）
 ```
 ```
 tools/shioaji/

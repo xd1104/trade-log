@@ -4210,7 +4210,7 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 /* 報價區三層：52px 價格（主角）／有底色的漲跌膠囊／第三行灰字（即時燈・昨收・合約・更新時間）。
    標頭右邊是兩行的翻頁列，一定要底部對齊（flex-end）：baseline 會把右欄「第一行的基線」
    對到大字的基線，第二行整條就掛到大字底線以下，整塊白白多吃 22px（實測 45→67）。
-   回顧分頁的 #rhead 也是同一套 qblock，所以這條可以掛在 .chead 上。 */
+   （2026-09-16 前回顧分頁的 #rhead 也是同一套 qblock；那一頁拿掉了，規則不變。） */
 .chead{display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:10px;
   gap:16px; flex-wrap:wrap}
 .qblock{display:flex; flex-direction:column; gap:6px; min-width:0}
@@ -4374,8 +4374,6 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .rail .track i{position:absolute; top:0; bottom:0; left:0; border-radius:2px; background:var(--dim)}
 .rail .track i.hot{background:var(--gold)}
 .rail .muted .v{color:var(--dim)}
-/* 回顧分頁的資料軌自己包在一張卡裡，卡片本身就是分隔，不用再畫上邊線 */
-#rfstrip{margin-top:0; padding-top:0; border-top:0}
 .btns{display:flex; gap:10px}
 .btn{flex:1; padding:14px; border-radius:var(--r-md); cursor:pointer; border:1px solid transparent;
   font-family:var(--font-sans); font-size:15.5px; font-weight:700; letter-spacing:1px;
@@ -4884,7 +4882,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .dot.off{background:var(--faint)}
 .dl{display:inline-block; margin-top:12px; font-size:12px; color:var(--gold); text-decoration:none}
 
-/* ================= 【回顧】分頁（沿用上面的顏色變數，不另立一套） ================= */
+/* ================= 分頁列 ＋ 心得編輯（跨分頁共用；⛔ 不另立一套顏色） ================= */
+/* ⚠️ 2026-09-16【回顧】整頁拿掉，它專屬的 CSS（#tab-review／#rpane／.rp*／.tfsw／.dt*／.cmp／.verdict／.tally／.chips／.kbd／.hr／.trade.sel／.tr-note／.cday／.ctag／.daysel／.jinput／.hold／.btn.gw）一起刪掉。
+   ⛔ 留下來的 .tabs／.noteline／.nedit／.empty／.btn.gold 是**即時分頁也在用**的（心得編輯就在那裡）。 */
 [hidden]{display:none !important}
 .tabs{display:flex; gap:3px; background:var(--surface-2); border-radius:12px; padding:3px;
   border:1px solid var(--line-soft)}
@@ -4893,94 +4893,6 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   transition:color .15s var(--ease), background .15s var(--ease)}
 .tabs button:hover{color:var(--text)}
 .tabs button.on{background:var(--gold-soft); color:var(--gold)}
-#tab-review .card{padding:16px 18px; margin-bottom:10px}
-#tab-review .card.chart{padding:16px 18px 13px}
-#tab-review .chead{gap:14px}
-/* 回顧的大字比即時小一階：這一頁的主角是「那一筆交易」，不是現在的價格 */
-#tab-review .cpx{font-size:40px; letter-spacing:-1.2px} #tab-review .cchg{font-size:14px}
-#tab-review .cwrap svg{cursor:crosshair}
-.cday{font-size:13px; color:var(--dim); font-family:var(--font-mono)}
-.ctag{font-size:11px; color:var(--faint); border:1px solid var(--line); border-radius:6px;
-  padding:2px 8px; margin-left:6px}
-.tfsw{display:flex; gap:3px; background:var(--surface-2); border-radius:var(--r-sm); padding:3px;
-  border:1px solid var(--line-soft)}
-.tfsw button{border:0; background:transparent; color:var(--dim); cursor:pointer;
-  font-family:var(--font-sans); font-size:11.5px; font-weight:600; padding:5px 12px; border-radius:7px}
-.tfsw button.on{background:var(--gold-soft); color:var(--gold)}
-/* 重播控制列：放在圖的正下方，眼睛不用離開圖。
-   舊版是一排長得都一樣的方框按鈕，看不出哪個是主要動作、也看不出「走到哪了」。
-   新版兩行：上行運鏡（播放鍵是唯一的金色）、下行時間軸（可點著跳）。 */
-.rpbar{margin-top:10px; padding:10px 12px 9px; background:var(--surface-2);
-  border:1px solid var(--line-soft); border-radius:14px}
-.rprow{display:flex; align-items:center; gap:8px}
-.rpbtn{border:1px solid var(--line); background:var(--surface); color:var(--dim); cursor:pointer;
-  font-family:var(--font-sans); font-size:13px; font-weight:600; padding:8px 12px;
-  border-radius:var(--r-sm); min-width:40px;
-  transition:color .15s var(--ease), border-color .15s var(--ease)}
-.rpbtn:hover:not(:disabled){color:var(--text); border-color:var(--faint)}
-.rpbtn.play{background:var(--gold-soft); color:var(--gold); border-color:transparent;
-  min-width:104px; font-size:13.5px; padding:9px 14px}
-.rpbtn.play:hover:not(:disabled){background:rgba(227,169,81,.24); color:var(--gold)}
-.rpbtn:disabled{opacity:.35; cursor:default}
-.rpsp{display:flex; gap:2px; background:var(--surface); border-radius:var(--r-sm); padding:3px;
-  border:1px solid var(--line-soft)}
-.rpsp button{border:0; background:transparent; color:var(--faint); cursor:pointer;
-  font-family:var(--font-mono); font-size:11.5px; font-weight:600; padding:5px 9px;
-  border-radius:var(--r-xs)}
-.rpsp button:hover{color:var(--text)}
-.rpsp button.on{background:var(--gold-soft); color:var(--gold)}
-.rppos{flex:1; font-family:var(--font-mono); font-size:12.5px; color:var(--faint);
-  font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
-.rppos b{color:var(--text); font-size:14px; font-weight:650}
-/* 時間軸：.win＝08:45~09:30（他真正下單的時段）、.jm＝這次按下判斷的那一根 */
-.rpscrub{position:relative; height:20px; margin-top:8px; cursor:pointer}
-.rpscrub .trk{position:absolute; left:0; right:0; top:5px; height:4px; border-radius:2px;
-  background:var(--surface)}
-.rpscrub .win{position:absolute; top:5px; height:4px; background:var(--gold-soft)}
-.rpscrub .fill{position:absolute; left:0; top:5px; height:4px; border-radius:2px;
-  background:linear-gradient(90deg,rgba(227,169,81,.5),var(--gold))}
-.rpscrub .knob{position:absolute; top:2px; width:10px; height:10px; border-radius:50%;
-  background:var(--gold); box-shadow:0 0 0 3px rgba(227,169,81,.18); margin-left:-5px}
-.rpscrub .jm{position:absolute; top:0; width:2px; height:14px; border-radius:1px; margin-left:-1px}
-.rpscrub .tk{position:absolute; top:12px; font-size:9.5px; color:var(--ghost);
-  font-family:var(--font-mono); transform:translateX(-50%)}
-.rpscrub.locked{cursor:default}
-.kbd{font-family:var(--font-mono); font-size:10.5px; color:var(--faint);
-  border:1px solid var(--line); border-radius:5px; padding:1px 5px; background:var(--surface-2)}
-#tab-review .seg{margin-bottom:0}
-.chips{display:flex; gap:6px; flex-wrap:wrap; margin:0 0 12px}
-.chips button{font-size:11.5px; padding:5px 11px; border-radius:20px; cursor:pointer;
-  background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft);
-  font-family:var(--font-sans); transition:color .15s var(--ease), background .15s var(--ease)}
-.chips button:hover{color:var(--text)}
-.chips button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
-/* 目標：1600×950 一頁看完、不捲整頁。右欄本身留一道安全閥（視窗更矮時右欄自己捲，
-   整頁還是不捲），清單則維持自己的捲動區。 */
-#tab-review .right{max-height:calc(100vh - 96px); overflow-y:auto; padding-right:2px}
-#tab-review .right::-webkit-scrollbar{width:6px}
-#tab-review .right::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
-#rpane .list{max-height:196px; gap:6px}
-#rpane .card{padding:13px 15px}
-#rpane .dt{gap:5px}
-#rpane .dt-big{padding:0 0 4px}
-#rpane .dt-big .v{font-size:32px}
-#rpane .noteline{padding:7px 10px}
-#rpane .btn{padding:10px}
-#rpane .trade{padding:9px 12px}
-#rpane .trade{cursor:pointer}
-#rpane .trade:hover{border-color:var(--faint)}
-.trade.sel{border-color:var(--gold-line); background:rgba(227,169,81,.08)}
-.tr-note{font-size:11.5px; color:var(--faint); margin-top:6px; padding-left:51px;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.dt{display:flex; flex-direction:column; gap:9px}
-.dt-row{display:flex; justify-content:space-between; align-items:baseline; font-size:12.5px}
-.dt-row .k{color:var(--dim)}
-.dt-row .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13.5px}
-.dt-big{text-align:center; padding:0 0 6px}
-.dt-big .v{font-size:38px; font-weight:700; font-family:var(--font-mono); line-height:1;
-  font-variant-numeric:tabular-nums; letter-spacing:-1px}
-.dt-big .l{font-size:12px; color:var(--dim); margin-top:6px}
-.hr{height:1px; background:var(--line-soft); margin:2px 0}
 .noteline{font-size:12.5px; color:var(--text); background:var(--surface-2);
   border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:9px 11px; line-height:1.6}
 .noteline.empty{color:var(--faint)}
@@ -5000,154 +4912,6 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .empty{text-align:center; padding:32px 16px; color:var(--faint); font-size:12.5px; line-height:1.8}
 .btn.gold{background:var(--gold-soft); color:var(--gold); border-color:transparent}
 .btn.gold:hover:not(:disabled){background:rgba(227,169,81,.24)}
-.btn.gw{flex:1}                     /* 回顧頁的次要按鈕要跟主按鈕一樣寬 */
-.daysel{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
-.daysel button{font-size:12px; padding:6px 10px; border-radius:var(--r-sm); cursor:pointer;
-  background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft);
-  font-family:var(--font-mono)}
-.daysel button:hover{color:var(--text)}
-.daysel button.on{background:var(--gold-soft); color:var(--gold); border-color:transparent}
-.daysel button .m{font-size:9.5px; color:var(--faint); margin-left:4px}
-.jinput{width:100%; background:var(--surface-2); border:1px solid var(--line); border-radius:9px;
-  color:var(--text); font-family:var(--font-sans); font-size:13px; padding:10px 11px; margin-top:9px}
-.jinput::placeholder{color:var(--faint)}
-.jinput:focus{outline:none; border-color:var(--gold-line)}
-.hold{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
-  padding:12px 14px}
-.hold .v{font-size:34px; font-weight:700; font-family:var(--font-mono); line-height:1;
-  font-variant-numeric:tabular-nums; text-align:center; letter-spacing:-1px}
-.hold .l{font-size:12px; color:var(--dim); text-align:center; margin-top:6px}
-.cmp{display:flex; flex-direction:column; gap:8px}
-.cmp .side{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md);
-  padding:10px 12px}
-.cmp .side.mine{border-color:var(--gold-line)}
-.cmp .side .h{font-size:11px; color:var(--dim); margin-bottom:5px; letter-spacing:.5px}
-.cmp .side .b{display:flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:13px}
-.cmp .side .b .res{margin-left:auto; font-size:16px; font-weight:700}
-.verdict{border-radius:var(--r-md); padding:10px 12px; font-size:12.5px; line-height:1.6;
-  text-align:center; font-weight:600}
-.verdict.same{background:var(--gold-soft); color:var(--gold)}
-.verdict.diff{background:var(--surface-2); color:var(--dim); border:1px solid var(--line-soft)}
-.tally{display:flex; gap:14px; justify-content:center; font-family:var(--font-mono); font-size:12px;
-  color:var(--faint); padding-top:8px; flex-wrap:wrap}
-.tally b{color:var(--text); font-size:14px}
-
-/* ══ 【細節】分頁：逐筆早盤圖 ═══════════════════════════════════════════
-   ⛔ class 一律 `tk-` 前綴 —— **不可以用 `dt-`**，回顧分頁的「當天資料」
-      （.dt / .dt-row / .dt-big）已經佔走了，撞了會互相污染。
-   ⛔ 一個新顏色都不准加：全部用 :root 既有的 token。
-   ⚠️ 有 max-height 的 flex 直欄，子元素一律 flex:none（面板鐵律，2026-08-25 踩過：
-      預設 flex-shrink:1 會把每一列壓扁而不是捲動，筆數少的時候完全看不出來）。 */
-.tk-head{display:flex; align-items:flex-end; justify-content:space-between; gap:16px;
-  margin-bottom:10px; flex-wrap:wrap}
-.tk-title{min-width:0}
-.tk-title .h{font-size:21px; font-weight:700; letter-spacing:.3px; line-height:1.15}
-.tk-title .s{font-size:11.5px; color:var(--faint); font-family:var(--font-mono);
-  font-variant-numeric:tabular-nums; margin-top:5px; display:flex; gap:8px;
-  align-items:center; flex-wrap:wrap; line-height:1.3}
-.tk-title .s .sep{color:var(--ghost)}
-.tk-title .s .warn{color:var(--gold)}
-.tk-tools{display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:9px}
-/* 這裡的 .seg 不吃滿寬（頂列那個分頁 seg 才要），按鈕也不要 flex:1 平分 */
-.tk-tools .seg{flex:none; width:auto}
-.tk-tools .seg button{flex:none; min-width:0; padding:5px 11px; font-size:12px;
-  white-space:nowrap}
-.tk-tools .lab{font-size:10.5px; color:var(--faint); letter-spacing:.6px}
-.tk-tools .gap{width:1px; height:20px; background:var(--line-soft)}
-.tk-chip{border:1px solid var(--line); background:var(--surface-2); color:var(--dim);
-  border-radius:999px; padding:4px 11px 5px; font-size:11.5px; cursor:pointer;
-  line-height:1.3; font-family:var(--font-sans); white-space:nowrap;
-  transition:color .12s var(--ease), border-color .12s var(--ease)}
-.tk-chip:hover:not(:disabled){color:var(--text); border-color:var(--gold-line)}
-.tk-chip.on{background:var(--gold-soft); color:var(--gold); border-color:var(--gold-line)}
-.tk-chip:disabled{color:var(--ghost); cursor:default; border-color:var(--line-soft);
-  background:transparent}
-.tk-chip:focus-visible{outline:1px solid var(--gold); outline-offset:1px}
-/* 讀值列**固定高度**：沒有 hover 時整列消失的話，底下整張圖會跳一格 */
-.tk-read{height:27px; min-height:27px; flex:none; display:flex; align-items:center;
-  gap:9px; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
-  font-size:11.5px; color:var(--dim); overflow:hidden; white-space:nowrap;
-  margin-bottom:6px}
-.tk-read .lt{color:var(--faint)}
-.tk-read b{color:var(--text); font-weight:650}
-.tk-read .sep{color:var(--ghost)}
-.tk-read .up{color:var(--up)} .tk-read .down{color:var(--down)}
-.tk-read .warn{color:var(--gold)}
-/* aspect-ratio 撐高度 ⇒ 骨架與真圖的高度**結構上就一樣**，不必靠量測對齊
-   ⚠️ 2026-09-08 Benson：「早盤細節的 K 圖區也可以幫我縮小嗎？現在感覺有點大」
-      ⇒ 1040/470 → **1040/380**（高度 −19%，跟【程式下單】那張同一個比例，
-        他看過那張說剛好）。1500px 視窗實測 canvas 631 → **510px**。
-   ⛔ 這張圖的下緣有兩樣東西，縮之前量過（探針 ⑪b 把新值斷言死了）：
-      ① 成交量疊圖佔繪圖區 **22%**（TKVOLH）—— 是**比例**不是固定像素，
-         所以它跟著等比縮：130.5 → **103.8px**（即時分頁那張同視窗下是 115px，同一個量級）。
-      ② 時間軸 TKBOT=26px 是**固定像素**，不吃這一刀；而標籤密度 `maxLab=floor(PW/110)`
-         只跟**寬度**有關 ⇒ 縮高度**不會**讓 HH:MM:SS 擠在一起（實測相鄰標籤邊緣間距
-         縮前縮後都是 60.7px，一模一樣）。⛔ 別再拿「怕標籤重疊」當不敢縮的理由。
-      ③ 取樣金籤掛在**價格區底緣**（TKTOP+priceH-22、tkChip 高 17）⇒ 跟著上移，
-         餘裕不變（籤 462~479、價格區 12~484 ⇒ 底下還有 5px）。
-   ⛔ 不可以改成縮量柱佔比（22%）或縮 TKBOT 來換高度 —— 要縮就縮價格區。 */
-.tk-wrap{position:relative; aspect-ratio:1040/380; border-radius:10px; overflow:hidden;
-  background:var(--bg)}
-.tk-wrap canvas{position:absolute; inset:0; width:100%; height:100%; display:block;
-  cursor:crosshair; touch-action:none; user-select:none}
-/* 骨架：假 K 棒一律**絕對定位** —— 當成一般 flex 子元素的話，它們的百分比高度會
-   反過來把容器撐高，骨架比真圖高一截，換過去照樣跳（面板踩過 351→553）。 */
-.tk-skel{position:absolute; inset:0; display:flex; align-items:flex-end;
-  gap:4px; padding:22px 66px 30px 6px; pointer-events:none}
-.tk-skel i{flex:1; border-radius:2px;
-  background:linear-gradient(180deg,var(--surface-2),var(--line-soft));
-  animation:tkpulse 1.4s var(--ease) infinite}
-@keyframes tkpulse{0%,100%{opacity:.45} 50%{opacity:.8}}
-.tk-empty{position:absolute; inset:0; display:flex; flex-direction:column;
-  align-items:center; justify-content:center; gap:9px; text-align:center; padding:0 32px}
-.tk-empty .t{font-size:14px; color:var(--text); font-weight:600; line-height:1.6}
-.tk-empty .d{font-size:11.5px; color:var(--faint); line-height:1.6}
-.tk-empty .go{margin-top:4px}
-/* 「回到最新」：使用者拖走之後才出現。⛔ 不可以直接把他拉回去 —— 他可能正在看某一段。 */
-.tk-back{position:absolute; right:74px; top:10px; background:var(--surface-2);
-  border:1px solid var(--gold-line); color:var(--gold); border-radius:999px;
-  font-size:11px; padding:3px 10px 4px; cursor:pointer; font-family:var(--font-sans)}
-.tk-back:hover{background:var(--gold-soft)}
-.tk-foot{font-size:11px; color:var(--faint); margin-top:7px; display:flex; gap:8px;
-  flex-wrap:wrap; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
-.tk-foot .sep{color:var(--ghost)}
-/* 日期清單（不是迷你月曆）：這裡的母體是「有逐筆檔的日子」，上線第一週只有 0~3 天，
-   一個 95% 格子都是灰的月曆傳達的是「壞了」而不是「沒有資料」。
-   清單每一列寫得出這一頁真正在意的東西：筆數與缺口 —— 全站沒有第二個地方看得到。 */
-/* ⚠️ 有 max-height 的 flex 直欄，子元素一律 flex:none（.row 與 .foot 兩個都要）——
-   預設 flex-shrink:1 時，筆數超過高度不是捲動而是把每一列壓扁，
-   而且**筆數少的時候完全看不出來**（面板鐵律，2026-08-25 實測 107px 被壓成 21.6px）。 */
-.tk-list{border:1px solid var(--line); border-radius:14px; padding:8px;
-  background:var(--surface-2); box-shadow:var(--shadow-2); width:max-content;
-  max-width:min(520px,86vw); max-height:320px; overflow:auto;
-  display:flex; flex-direction:column}
-.tk-list .row{display:flex; align-items:center; gap:12px; width:100%; text-align:left;
-  border:0; background:transparent; color:var(--text); cursor:pointer; padding:7px 9px;
-  border-radius:9px; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
-  font-size:12px; line-height:1.3; flex:none}
-.tk-list .row:hover:not(:disabled){background:var(--raise)}
-.tk-list .row.on{background:var(--gold-soft); color:var(--gold)}
-.tk-list .row:disabled{color:var(--ghost); cursor:default}
-.tk-list .row .dd{min-width:64px; font-weight:650}
-.tk-list .row .wd{font-family:var(--font-sans); color:var(--dim); min-width:1.2em}
-/* ⚠️ nowrap：meta 換行的話那一列會比別列高一截（.row 是 flex，撐高看得很清楚）。
-   清單本身是 width:max-content ＋ max-width，太長就整塊橫向捲，不會再影響列高。 */
-.tk-list .row .meta{margin-left:auto; color:var(--faint); font-size:11px; white-space:nowrap}
-.tk-list .row .meta .warn{color:var(--gold)}
-/* 種類標記：⛔ 逐筆與取樣**兩種都標**（只標一種的話，沒有標記等於「不知道」）。
-   ⛔ 一個新顏色都不准加 —— 逐筆走中性線框、取樣走既有的 gold token（＝要注意）。 */
-.tk-list .row .kind{flex:none; min-width:34px; text-align:center; font-size:10px;
-  font-family:var(--font-sans); line-height:1.5; padding:1px 6px 2px; border-radius:999px;
-  border:1px solid var(--line); color:var(--dim); background:var(--surface-2)}
-.tk-list .row .kind.polled{border-color:var(--gold-line); color:var(--gold);
-  background:var(--gold-soft)}
-.tk-list .row .meta .alt{color:var(--ghost); margin-left:6px}
-.tk-list .foot{border-top:1px solid var(--line-soft); margin-top:6px; padding:8px 9px 3px;
-  font-size:11px; color:var(--faint); line-height:1.5; flex:none}
-@media(max-width:1024px){
-  .tk-tools{gap:7px}
-  .tk-title .h{font-size:19px}
-}
 
 /* ══ 【程式下單】分頁：四種方向判斷的模擬對照 ═══════════════════════════
    ⛔ class 一律 `at-` 前綴 —— `tk-`（細節）／`dt-`（回顧當天資料）／`n-`（真實區）
@@ -5467,43 +5231,43 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    ⛔ class 一律 lb- 開頭：這個面板的 .tag／.hero／.sum／.step 早就被別頁用掉了，共用名字會互相污染。
    ⛔ 紅漲綠跌：.up／.down 沿用全站的變數，這一頁不另立顏色。 */
 #tab-lab .card{margin-bottom:0}
-/* ── 【策略實驗室】最上面那張「模擬（不會下單）」（class 一律 sm- 開頭，⛔ 不借別頁的名字）
-   ⛔ #tab-lab .card 把 margin 歸零了 ⇒ 這張要自己跟下面的條件／結果隔開（同特異度、排在後面才贏）。 */
-#tab-lab .sm-card{margin-bottom:14px; padding:14px 16px 12px}
+/* ══ 【模擬】分頁（class 一律 sm- 開頭，⛔ 不借別頁的名字；2026-09-16 從 #tab-lab 搬過來，class 名一個都沒改）══
+   ⛔ 紅漲綠跌：沿用全站的 .up／.down 變數，這一頁不另立顏色。
+   ⚠️ 六條**並排**是 Benson 指定的（一眼比得出來）：1536 寬時六欄各約 228px ⇒ 每一條都是
+      窄直欄，⛔ 不要在裡面再放兩欄的表格（塞不下會自己換行，變成高矮不一的爛版）。
+      每一條由上而下：名字 → **每月累計點數（他最在意的，放第一個）** → 今天 → 最近一筆 → 規則句。 */
+#tab-sim .sm-card{padding:14px 16px 12px}
 .sm-note{font-size:11.5px; color:var(--faint); margin:-2px 2px 10px}
-.sm-lanes{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px}
-@media(max-width:1180px){ .sm-lanes{grid-template-columns:minmax(0,1fr)} }
-.sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:12px 14px; min-width:0}
-.sm-lt{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
-.sm-lt b{font-size:15px; color:var(--text); font-weight:650}
-.sm-lt small{font-size:11px; color:var(--faint)}
-.sm-rule{font-size:12px; color:var(--dim); line-height:1.55; margin:4px 0 2px}
-.sm-today{font-size:12px; color:var(--dim); margin:6px 0 10px}
-.sm-today em{font-style:normal; color:var(--faint)}
-.sm-body{display:grid; grid-template-columns:150px minmax(0,1fr); gap:12px; align-items:start}
-@media(max-width:620px){ .sm-body{grid-template-columns:minmax(0,1fr)} }
+.sm-lanes{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px}
+@media(max-width:1480px){ .sm-lanes{grid-template-columns:repeat(3,minmax(0,1fr))} }
+@media(max-width:980px){ .sm-lanes{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media(max-width:640px){ .sm-lanes{grid-template-columns:minmax(0,1fr)} }
+.sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:11px 12px 10px; min-width:0}
+.sm-lt{display:flex; flex-direction:column; gap:1px}
+.sm-lt b{font-size:14px; color:var(--text); font-weight:650; line-height:1.3; overflow-wrap:anywhere}
+.sm-lt small{font-size:10.5px; color:var(--faint)}
+.sm-mh,.sm-lh{font-size:10.5px; color:var(--faint); letter-spacing:1px; margin:9px 0 4px}
 .sm-months{display:flex; flex-direction:column; gap:2px}
 .sm-months>*{flex:none}
-.sm-mh,.sm-lh{font-size:10.5px; color:var(--faint); letter-spacing:1px; margin-bottom:4px}
-.sm-m{display:flex; justify-content:space-between; gap:8px; font-size:12.5px; padding:3px 6px; border-radius:var(--r-sm)}
+.sm-m{display:flex; justify-content:space-between; gap:6px; font-size:12px; padding:3px 5px; border-radius:var(--r-sm)}
 .sm-m.this{background:var(--surface-2)}
 .sm-m span{color:var(--dim)} .sm-m.this span{color:var(--gold)}
-.sm-m i{font-style:normal; font-size:10.5px; color:var(--faint); margin-left:4px}
-/* ⚠️ max-height 壓在 300：這張卡在回測條件上面（規格要求最上面），清單 420 時 1536×816 實測整張 693px、改 300 後 573px。
-      ⚠️ 就算 573px，「回測」鈕還是在第一屏下面（實測 top 1265），要往下捲 —— 這是「放最上面」的代價，不是 bug。 */
-.sm-list{display:flex; flex-direction:column; max-height:300px; overflow-y:auto}
-.sm-list>*{flex:none}
-.sm-r{display:grid; grid-template-columns:78px 40px minmax(0,1fr) 62px; gap:8px; align-items:baseline;
- font-size:12.5px; padding:5px 2px; border-bottom:1px solid var(--line-soft)}
-.sm-r:last-child{border-bottom:none}
-.sm-r .d{color:var(--dim)}
+.sm-m i{font-style:normal; font-size:10px; color:var(--faint); margin-left:3px}
+.sm-today{font-size:11.5px; color:var(--dim); line-height:1.5; overflow-wrap:anywhere}
+.sm-today em{font-style:normal; color:var(--faint); margin-right:4px}
+/* 最近一筆：窄欄放不下四欄的表格 ⇒ 第一列（日期／做多做空／點數）＋第二列（進出與原因）堆疊 */
+.sm-r{font-size:12px}
+.sm-rh{display:flex; align-items:baseline; gap:6px}
+.sm-r .d{color:var(--dim); font-family:var(--font-mono)}
 .sm-r .k{font-weight:650} .sm-r .k.none{color:var(--faint); font-weight:500}
-.sm-r .x{color:var(--dim); overflow-wrap:anywhere}
-.sm-r .x small{display:block; color:var(--faint); font-size:11px}
-.sm-r .p{text-align:right}
-.sm-pend{font-size:11.5px; color:var(--faint); margin-top:8px; line-height:1.6}
-.sm-empty{font-size:12px; color:var(--faint); padding:6px 2px}
-.sm-foot{font-size:11px; color:var(--faint); margin-top:8px}
+.sm-r .p{margin-left:auto; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.sm-r .x{display:block; color:var(--faint); font-size:11px; line-height:1.5; margin-top:2px; overflow-wrap:anywhere}
+.sm-r .x small{display:block}
+.sm-rule{font-size:10.5px; color:var(--faint); line-height:1.5; margin-top:9px;
+  border-top:1px solid var(--line-soft); padding-top:7px}
+.sm-pend{font-size:10.5px; color:var(--faint); margin-top:6px; line-height:1.5; overflow-wrap:anywhere}
+.sm-empty{font-size:11.5px; color:var(--faint); padding:4px 0}
+.sm-foot{font-size:11px; color:var(--faint); margin-top:10px}
 .sm-foot.bad{color:var(--down)}
 .lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
 @media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
@@ -5623,13 +5387,16 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
     <div><div class="nm">早盤儀表板</div><div class="sub" id="sub">連線中…</div></div></div>
   <div class="tabs">
     <button data-tab="live" class="on">即時</button>
-    <!-- 【細節】放中間：時間上它介於「現在」與「回頭看」之間，而且跟即時共用同一天。
-         分頁名只有兩個字（跟左右等寬）—— 分頁列是導航不是說明，
-         「早盤細節」四個字塞進來會讓這一格比左右寬約 30px，語意交給卡片標題補。 -->
-    <button data-tab="tick">細節</button>
-    <button data-tab="review">回顧</button>
-    <!-- 【策略實驗室】放右邊倒數第二：前三顆是「現在 → 更細 → 回頭看自己」的
-         時間動線，這一頁是研究性質，接在後面。⛔ 不可以插在中間。
+    <!-- ⚠️ 2026-09-16 分頁重整（Benson 交辦）：拿掉【細節】與【回顧】（他已經不看了），
+         把「模擬（不會下單）」從【策略實驗室】最上面搬出來獨立成一頁。
+         現在四顆的動線是「現在 → 規則自己在跑（不下單）→ 研究 → 會真的送單」，
+         愈往右愈接近真錢。⛔ 不可以把【自動下單】往左搬。
+         ⚠️ 被拿掉的兩頁**後端沒有跟著拆**（/api/tick/*、/api/review、/api/bars 不帶 full）：
+            /api/bars 與 day_bars() 是即時分頁也在用的，tick_logs 的逐筆落地更是獨立的資料線。 -->
+    <!-- 【模擬】：六條策略每天事後照規則算一次，⛔ 一口單都不會送（後端 sim_lanes.py）。
+         放在【即時】右邊：它講的是「同一天，如果照規則做會怎樣」，跟研究頁是兩件事。 -->
+    <button data-tab="sim">模擬</button>
+    <!-- 【策略實驗室】放右邊倒數第二：這一頁是研究性質，接在模擬後面。⛔ 不可以插在【即時】前面。
          ⚠️ 2026-09-14 取代原本的【自動下單（模擬）】（Benson 玩過 lab-ux demo 後拍板）。
             那一頁的**畫面**拿掉了，但 autotest/ 的模擬紀錄（_auto_tick／_auto_record／
             _auto_settle、/api/auto/*）照樣在後端跑 —— 【自動下單】每一筆的「模擬那邊」就是讀它。
@@ -5673,29 +5440,21 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   </div></div>
 </div>
 
-<!-- 【細節】：08:45~09:30 的逐秒圖。容器只建這一次，之後只換 canvas 內容與幾個文字節點
-     （整塊 innerHTML 重繪會打斷使用者的縮放／拖曳並閃爍）。
-     ⚠️ #tkpager 是**獨立節點**，不可以跟會重繪的東西寫在同一串 innerHTML ——
-        即時分頁踩過 #cupd 那個坑：報價每秒跳，翻頁列跟著被重建，◀ 會在滑鼠底下被換掉。 -->
-<div id="tab-tick" hidden>
- <div class="card chart l1">
-  <div class="cheadwrap">
-   <div class="tk-head">
-    <div class="tk-title">
-     <div class="h">早盤細節</div>
-     <div class="s" id="tksub"></div>
-    </div>
-    <div id="tkpager"></div>
-   </div>
-   <div class="calpop" id="tkpick"></div>
-  </div>
-  <div class="tk-tools" id="tktools"></div>
-  <div class="tk-read" id="tkread"></div>
-  <div class="tk-wrap" id="tkwrap">
-   <canvas id="tkcv"></canvas>
-   <div id="tkover"></div>
-  </div>
-  <div class="tk-foot" id="tkfoot"></div>
+<!-- ══════════ 【模擬】：六條策略每天事後照規則算一次（⛔ 不會下單）══════════
+     後端 sim_lanes.py，唯讀端點 GET /api/sim/state。
+     ⚠️ 2026-09-16 從【策略實驗室】最上面那張卡搬出來獨立成一頁（Benson 交辦），
+        class 一律沿用原本的 `sm-` 前綴 ⛔ 不改名。
+     ⛔ 跟【自動下單】的真單紀錄完全分開：不同的檔、不同的端點、不同的卡，⛔ 不准混進同一個清單。
+     ⛔ 只放空容器：規則句、月合計、今天狀態、最近一筆全部從後端來（前端不寫死時刻與點數）；一顆按鈕都沒有。
+     ⛔ 只列歷史模擬結果：不放勝率估計、不放預估、不給進場提示。
+     ⚠️ .sm-lanes 是**獨立節點**：六條的骨架只在條數變動時重建，每條的內容各自比對自己的字串
+        （整塊重繪會把捲動位置與剛畫好的內容一起換掉）。 -->
+<div id="tab-sim" hidden>
+ <div class="card sm-card" id="smcard">
+  <div class="sec-head"><h2>模擬（不會下單）</h2><span class="count" id="smcount"></span></div>
+  <div class="sm-note" id="smnote"></div>
+  <div class="sm-lanes" id="smlanes"></div>
+  <div class="sm-foot" id="smfoot"></div>
  </div>
 </div>
 
@@ -5713,8 +5472,12 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          換做法牽涉到「今天已經進場了怎麼辦」，這一輪不做；再按一次開的話後端回 409）。
          守衛：fire-tab.mjs ②／⑧c／⑩／⑪。
      ⛔ 這一段刻意放在 #tab-lab **之前**：autotest-backend.py ① 掃的是
-        #tab-lab 那個 div 到【回顧】那段註解之間（研究頁的紅線
-        「一行都不碰下單路徑」），放進去會讓那把尺量到不該量的東西。 -->
+        #tab-lab 那個 div 到「【策略實驗室】到此」那行註解之間（研究頁的紅線
+        「一行都不碰下單路徑」），放進去會讓那把尺量到不該量的東西。
+        ⚠️ 2026-09-16【回顧】拿掉之後，那個結束標記換成【策略實驗室】後面那行
+           「到此」註解（⛔ 全檔只准出現一次，這裡刻意不把它原字抄下來 ——
+           抄一份就會被 page.index() 先找到、把切片切成負的）。
+           ⛔ 改那行要一起改 autotest-backend.py ①、test_strategy_lab.py ⑥、test_sim_lanes.py ⑦。 -->
 <div id="tab-fire" hidden>
 
  <div class="card l1">
@@ -5770,19 +5533,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         只打 GET /api/lab/meta 與 GET /api/lab/run（按「回測」才打）。
      ⚠️ 原本那一頁的**後端**（autotest/ 的模擬紀錄、/api/auto/*）照樣在跑，只是不畫了。 -->
 <div id="tab-lab" hidden>
- <!-- ⭐ 模擬（不會下單）：兩條策略每天事後照規則算一次（2026-09-15 晚上加，後端 sim_lanes.py，唯讀端點 GET /api/sim/state）。
-      ⛔ 跟【自動下單】的真單紀錄完全分開：不同的檔、不同的端點、不同的卡，⛔ 不准混進同一個清單。
-      ⛔ 只放空容器：規則句、月合計、清單全部從後端來（前端不寫死時刻與點數）；一顆按鈕都沒有。
-      ⛔ 只列歷史模擬結果：不放勝率估計、不放預估、不給進場提示。 -->
- <div class="card sm-card" id="smcard">
-  <div class="sec-head"><h2>模擬（不會下單）</h2><span class="count" id="smcount"></span></div>
-  <div class="sm-note" id="smnote"></div>
-  <div class="sm-lanes">
-   <div class="sm-lane" id="sm-fast"></div>
-   <div class="sm-lane" id="sm-night"></div>
-  </div>
-  <div class="sm-foot" id="smfoot"></div>
- </div>
+ <!-- ⚠️ 2026-09-16：原本掛在這裡最上面那張「模擬（不會下單）」已經搬到獨立的【模擬】分頁（#tab-sim）。 -->
  <div class="lb-grid">
   <!-- ===== 左：條件 ===== -->
   <div class="card l1 lb-cond" id="lbform">
@@ -5857,29 +5608,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  </div>
 </div>
 
-<!-- 【回顧】：容器只建這一次，之後只換裡面的內容（重繪不打斷縮放／拖曳、也不閃） -->
-<div id="tab-review" hidden>
- <div class="cols">
-  <div>
-   <div class="card chart l1">
-    <div class="chead" id="rhead"></div>
-    <div class="legend" id="rlegend"></div>
-    <div class="cwrap"><svg id="rsvg" preserveAspectRatio="none"></svg></div>
-    <div id="rctrl"></div>
-   </div>
-   <div class="sec-head" style="margin-top:16px"><h2 id="rftitle">進場當下的客觀盤面</h2>
-     <span class="count">只有已經發生的數字</span></div>
-   <div class="card"><div class="rail" id="rfstrip"></div></div>
-  </div>
-  <div class="right">
-   <div class="seg" id="rmode">
-     <button data-mode="review" class="on">翻紀錄</button>
-     <button data-mode="replay">重播練習</button>
-   </div>
-   <div id="rpane"></div>
-  </div>
- </div>
-</div>
+<!-- ══ 【策略實驗室】到此 ══ （⛔ 這行是 autotest-backend.py ①／test_strategy_lab.py ⑥／
+     test_sim_lanes.py ⑦ 切「研究頁那一段 HTML」的結束標記，⛔ 改字要三個檔一起改）
+     ⚠️ 2026-09-16【回顧】(#tab-review) 整頁拿掉（Benson 已經不看）—— 連同「重播練習」。
+        後端 /api/review、/api/replay、/api/bars（不帶 full）與 day_bars(full=False) **刻意留著**：
+        day_bars() 是即時分頁也在用的同一支，replay_log/ 的舊紀錄也還在。 -->
 
 <!-- 頁尾那兩行（「只顯示已經發生的客觀數字…」「練習下單與【自動下單（模擬）】都是模擬…」）
      2026-09-14 依 lab-ux 定案 A 拿掉：第一句是給工程的原則（正本在 CLAUDE.md），
@@ -6592,8 +6325,8 @@ function nattr(t){
    所以刻意的重繪要帶 force 旗標繞過去。 */
 function nEditing(ns){ return NOTE.key!=null && NOTE.key[0]===ns; }
 function nrepaint(){
-  lastTrade=''; lastStats=''; lastPane='';
-  if(TAB==='review') rvRender(true); else tick(true);
+  lastTrade=''; lastStats='';
+  tick(true);
   setTimeout(function(){ const el=document.getElementById('tnote');
     if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } },0);
 }
@@ -7585,12 +7318,7 @@ document.addEventListener('click', function(e){
     .then(r=>r.json())
     .then(r=>{
       if(!r.ok){ sv.disabled=false; alert(r.msg||'存不起來'); return; }
-      // 回顧分頁的 RV 是進分頁時抓一次的快取，不順手更新的話畫面會停在舊的字
-      if(RV&&RV.trades) RV.trades.forEach(function(x){
-        if(x._source!=='app' && x.date===NOTE.date &&
-           String(x.time||'').slice(0,5)===NOTE.time &&
-           Math.round(x.entry)===Number(NOTE.entry)) x.note=txt;
-      });
+      // ⚠️ 2026-09-16【回顧】拿掉之後，這裡原本還要順手更新回顧分頁的 RV 快取 —— 那段一起拿掉了。
       NOTE={key:null,text:''}; statsAt=0; nrepaint();
     })
     .catch(()=>{ sv.disabled=false; alert('存不起來，面板可能剛好在重啟'); });
@@ -7666,27 +7394,16 @@ document.addEventListener('click', function(e){
  lastStats=''; pickOpen=false; tick();
 });
 /* ============================================================================
-   【回顧】分頁
+   分頁狀態 ＋ 全站共用的小工具
    ----------------------------------------------------------------------------
-   兩個目的：翻自己的紀錄（看當時的盤面與 MFE/MAE），以及 Bar Replay
-   —— 把後面的 K 棒蓋住、在不知道結果的狀態下練習判斷，之後才揭曉並跟當天實際的決定對照。
-
-   【紅線】這一頁只顯示已經發生的客觀數字：不預測、不算勝率、不給買賣建議。
-   重播的成績只記次數（停利幾次／停損幾次／與當天同向幾次），不換算成百分比 ——
-   那會被讀成「我這套有 X% 勝率」，但 08:45~09:30 已經被走查驗證證明沒有統計優勢。
+   ⚠️ 2026-09-16【細節】(#tab-tick) 與【回顧】(#tab-review) 兩頁整個拿掉（Benson 已經不看），
+      連同它們專屬的 JS／CSS —— 包含「重播練習」（Bar Replay）。
+   ⛔ 留在這裡的都是**別頁也在用**的：TAB（分頁狀態）、開場動畫、esc、today10。
+   ⚠️ 後端刻意留著：/api/tick/*（逐筆落地 tick_logs 是獨立的資料線）、/api/review、
+      /api/replay、/api/bars（不帶 full）與 day_bars(full=False)——
+      day_bars() 是【即時】也在用的同一支，只是 full 參數不同。
    ============================================================================ */
-var TAB='live', MODE='review', FILTER='all', SEL=null, TF=5;
-var RV=null;                 // /api/review：全部紀錄 + 日期清單 + 重播累計
-var RB={};                   // K 棒快取：'日期|週期' → {bars,feats}
-var RVIEW={n:60,end:null,vz:1,voff:0};
-var RHOVER={i:null}, RDRAG=null, FOCUSPEND=false, lastPane='';
-var RP={date:null,state:'idle',rev:0,speed:1,timer:null,end:null,
-        judge:null,note:'',result:null,axis:null,n:48};
-var TALLY={n:0,tp:0,sl:0,same:0};
-const SPEEDS=[[0.5,1200],[1,600],[2,300],[4,150]];
-const FUT=10;                // 重播時右邊固定留幾格空白
-const RFEE=5, RTP=RULE_TP;   // 跟練習下單同一把尺：±TP_POINTS 點（從 Python 注入）、來回 5 點成本
-const REASON={tp:'停利',sl:'停損',manual:'手動',close:'收盤'};
+var TAB='live';
 /* 進場動畫只在開站後的頭 1.1 秒有效。過了就把 class 拿掉 ——
    不然之後每次卡片內容變動（下單、成績更新）都會整張再飛一次。 */
 document.body.classList.add('boot');
@@ -7694,716 +7411,26 @@ setTimeout(function(){ document.body.classList.remove('boot'); }, 1100);
 
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-const mmin=t=>parseInt(t.slice(0,2))*60+parseInt(t.slice(3,5));
-const RW=1040,RH=430,RR=64,RTOP=10,RBOT=24,RVOLH=64,RGAP=12,RPB=RH-RBOT-RVOLH-RGAP;
-
-function rset(id,html){ const e=document.getElementById(id);
-  if(e&&e.innerHTML!==html) e.innerHTML=html; }
-function idxAt(bars,t){ let r=-1;
-  for(let i=0;i<bars.length;i++){ if(bars[i].t<=t) r=i; else break; } return r; }
 const today10=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000)
   .toISOString().slice(0,10);
-
-/* ---------------- 資料 ---------------- */
-function rvFetch(){
- fetch('/api/review').then(r=>r.json()).then(x=>{
-   RV=x; TALLY=x.tally||TALLY;
-   if(SEL==null&&x.trades&&x.trades.length) SEL=x.trades.length-1;
-   if(!RP.date) RP.date=(x.trades&&x.trades.length?x.trades[x.trades.length-1].date
-                          :((x.days||[])[0]||null));
-   focusTrade(); rvRender();
- }).catch(()=>{});
-}
-/* 沒抓過就去抓，抓回來再重畫。回傳 null＝還在載入 */
-function rvBars(day,tf){
- if(!day) return null;
- const k=day+'|'+tf, c=RB[k];
- if(c&&!c.loading){
-   // 今天的 K 棒還在長，隔一段時間補抓一次（過去的日子不會變）
-   if(day===today10()&&Date.now()-c.at>20000&&!c.busy){ c.busy=true;
-     fetch('/api/bars?date='+day+'&tf='+tf).then(r=>r.json()).then(x=>{
-       RB[k]={loading:false,at:Date.now(),bars:x.bars||[],feats:x.feats||null,error:x.error||null};
-       rvRender(); }).catch(()=>{ c.busy=false; }); }
-   return c;
- }
- if(c) return null;
- RB[k]={loading:true};
- fetch('/api/bars?date='+day+'&tf='+tf).then(r=>r.json()).then(x=>{
-   RB[k]={loading:false,at:Date.now(),bars:x.bars||[],feats:x.feats||null,error:x.error||null};
-   if(FOCUSPEND) focusTrade();
-   rvRender();
- }).catch(()=>{ RB[k]={loading:false,at:Date.now(),bars:[],feats:null,error:'讀取失敗'};
-   rvRender(); });
- return null;
-}
-function rvList(){
- const T=(RV&&RV.trades)||[];
- return T.map((t,i)=>({t:t,i:i})).filter(x=>{
-   if(FILTER==='win') return x.t._net>0;
-   if(FILTER==='loss') return x.t._net<=0;
-   if(FILTER==='long') return x.t.dir==='long';
-   if(FILTER==='short') return x.t.dir==='short';
-   return true;
- }).reverse();                                  // 新的排在上面
-}
-function selTrade(){ const L=rvList(); if(!L.length) return null;
-  return L.find(x=>x.i===SEL)||L[0]; }
-/* 當天實際那一筆（App 匯入的沒有出場時間，不列入重播對照） */
-function dayTrade(day){ const T=(RV&&RV.trades)||[];
-  return T.find(t=>t.date===day&&t._source!=='app')||null; }
-function dayTrades(day){ const T=(RV&&RV.trades)||[];
-  return T.map((t,i)=>({t:t,i:i})).filter(x=>x.t.date===day); }
-function rvCtx(){
- if(MODE==='replay') return {day:RP.date,tf:1};
- const s=selTrade();
- return {day:s?s.t.date:((RV&&RV.days||[])[0]||null), tf:TF};
-}
-/* 把畫面對準目前選到的那一筆（不是顯示整天） */
-function focusTrade(){
- const s=selTrade(); if(!s){ RVIEW={n:60,end:null,vz:1,voff:0}; return; }
- const D=RB[s.t.date+'|'+TF];
- if(!D||D.loading||!D.bars||!D.bars.length){ FOCUSPEND=true; return; }
- FOCUSPEND=false;
- const all=D.bars, ei=Math.max(0,idxAt(all,s.t.time));
- const xt=s.t._exit_time?String(s.t._exit_time).slice(0,5):null;
- const xi=xt?Math.max(ei,idxAt(all,xt)):ei;
- const span=Math.max(TF===1?45:12,(xi-ei)*2+(TF===1?30:8));
- RVIEW={n:Math.min(all.length,Math.round(span)),
-        end:Math.min(all.length,xi+Math.round(span*0.35)),vz:1,voff:0};
-}
-
-/* ---------------- K 線圖 ---------------- */
-function rvGeom(all){
- if(MODE==='replay'){
-   const n=Math.max(16,Math.min(RP.n,all.length));
-   // RP.end＝null 時視窗跟著揭曉進度走；揭曉後才固定視窗（對準判斷的那一段）
-   const end=Math.min(all.length,RP.end!=null?RP.end:RP.rev+1+FUT);
-   return {from:Math.max(0,end-n),to:end,n:n,rev:Math.min(RP.rev,all.length-1)};
- }
- const n=Math.max(8,Math.min(RVIEW.n,all.length));
- const end=RVIEW.end==null?all.length:Math.max(n,Math.min(RVIEW.end,all.length));
- return {from:Math.max(0,end-n),to:end,n:n,rev:all.length-1};
-}
-function rvBlank(msg,loading){
- const sv=document.getElementById('rsvg');
- sv.setAttribute('viewBox','0 0 '+RW+' '+RH);
- let g='<rect x="0" y="0" width="'+RW+'" height="'+RH+'" fill="#151A22"/>';
- if(loading){
-   // 換一天要 0.4~1 秒（伺服器每次都要重篩 54 萬列）。單一行「載入中…」看起來像當掉，
-   // 所以先畫出格線與呼吸中的假 K 棒 —— 跟即時分頁的骨架同一套語言。
-   for(let k=1;k<5;k++){ const y=RTOP+(RPB-RTOP)*k/5;
-     g+='<line x1="0" y1="'+y.toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+y.toFixed(1)+
-        '" stroke="#232A35" stroke-width="1"/>'; }
-   const H=[38,52,44,61,55,70,64,48,57,72,66,80,74,59,68,52,63,47,58,66,51,71,60,45];
-   const cw=(RW-RR)/H.length;
-   H.forEach(function(h,i){
-     const bh=(RPB-RTOP)*h/140, y=RTOP+(RPB-RTOP)*0.5-bh/2;
-     g+='<rect x="'+(i*cw+cw*0.22).toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+(cw*0.56).toFixed(1)+
-        '" height="'+bh.toFixed(1)+'" rx="2" fill="#1C222C">'+
-        '<animate attributeName="opacity" values="0.35;0.7;0.35" dur="1.6s" begin="'+
-        (i*0.045).toFixed(2)+'s" repeatCount="indefinite"/></rect>';
-   });
- }
- g+='<text x="'+(RW/2)+'" y="'+(loading?RPB+34:RH/2)+'" fill="#5C6472" font-size="'+
-    (loading?13:16)+'" text-anchor="middle">'+msg+'</text>';
- sv.innerHTML=g;
- rset('rlegend','');
-}
-function rvDraw(C,D){
- if(!C.day){ rvBlank('還沒有任何練習紀錄'); rset('rhead',''); return; }
- if(!D){ rvBlank('載入中…',true); return; }
- const all=D.bars||[];
- if(!all.length){ rvBlank(D.error?('這天讀不到 K 棒：'+D.error):'這天沒有本機資料');
-   rset('rhead','<div><span class="cday">'+C.day+'</span></div>'); return; }
- const G=rvGeom(all), B=all.slice(G.from,G.to);
- const vis=B.filter((b,i)=>G.from+i<=G.rev);        // 重播時只有揭曉過的才算數
- if(!vis.length){ rvBlank('還沒開始'); return; }
- const sel=MODE==='review'?selTrade():null;
- const T=sel?sel.t:null;
-
- /* ---- 價格軸 ---- */
- let hi,lo;
- if(MODE==='replay'){
-   let h=Math.max.apply(null,vis.map(b=>b.h)), l=Math.min.apply(null,vis.map(b=>b.l));
-   if(RP.judge){ h=Math.max(h,RP.judge.tp); l=Math.min(l,RP.judge.sl); }
-   const p0=Math.max(40,(h-l)*0.28); h+=p0; l-=p0;
-   // 【最容易洩漏答案的地方】價格軸只能用已揭曉的 K 棒算，而且只擴不縮：
-   // 照整天高低點定軸的話，光看軸有多寬就知道等一下會走多大。
-   if(RP.axis){ hi=Math.max(RP.axis.hi,h); lo=Math.min(RP.axis.lo,l); } else { hi=h; lo=l; }
-   RP.axis={hi:hi,lo:lo};
- } else {
-   hi=Math.max.apply(null,B.map(b=>b.h)); lo=Math.min.apply(null,B.map(b=>b.l));
-   dayTrades(C.day).forEach(x=>{ const i=idxAt(all,x.t.time);
-     if(i>=G.from&&i<G.to){ hi=Math.max(hi,x.t.entry); lo=Math.min(lo,x.t.entry); } });
-   if(T){ const ei=idxAt(all,T.time);
-     // 選到的那一筆在畫面內時，價格軸要容得下它的停利／停損線
-     if(ei>=G.from&&ei<G.to){ hi=Math.max(hi,T.entry+110); lo=Math.min(lo,T.entry-110); } }
-   const p=(hi-lo)*0.08||10; hi+=p; lo-=p;
-   const mid=(hi+lo)/2+RVIEW.voff, half=((hi-lo)/2)/RVIEW.vz; hi=mid+half; lo=mid-half;
- }
- const y=v=>RTOP+(hi-v)/(hi-lo)*(RPB-RTOP);
- const cw=(RW-RR)/B.length, bw=Math.max(1.5,Math.min(16,cw*0.62));
- const x=i=>i*cw+cw/2, gi=i=>i-G.from;
- const vmax=Math.max.apply(null,[1].concat(vis.map(b=>b.v)));
- const vy=v=>RH-RBOT-(v/vmax)*RVOLH;
-
- let g='<defs><pattern id="hatch" width="9" height="9" patternUnits="userSpaceOnUse" '+
-   'patternTransform="rotate(45)"><rect width="9" height="9" fill="#141922"/>'+
-   '<line x1="0" y1="0" x2="0" y2="9" stroke="#1D2430" stroke-width="4"/></pattern></defs>';
-
- /* 下單時段 08:45~09:30 底色 */
- { let a=-1,b=-1; B.forEach((bar,i)=>{ if(bar.t>='08:45'&&bar.t<'09:30'){ if(a<0)a=i; b=i; } });
-   if(a>=0) g+='<rect x="'+(a*cw).toFixed(1)+'" y="'+RTOP+'" width="'+((b+1-a)*cw).toFixed(1)+
-     '" height="'+(RH-RTOP-RBOT)+'" fill="#E3A951" opacity=".05"/>'; }
-
- /* 持倉區間著色（賺紅賠綠）＋整條時間帶淡白底 —— 畫在 K 棒底下 */
- if(T&&T._exit_time){
-   const a=gi(idxAt(all,T.time)), b=gi(idxAt(all,String(T._exit_time).slice(0,5)));
-   if(b>=0&&a<B.length){
-     const x0=Math.max(0,a*cw), x1=Math.min(RW-RR,(b+1)*cw);
-     const col=T._net>0?'#EE5A54':'#34B37E', yA=y(T.entry), yB=y(T.exit);
-     g+='<rect x="'+x0.toFixed(1)+'" y="'+Math.min(yA,yB).toFixed(1)+'" width="'+(x1-x0).toFixed(1)+
-        '" height="'+Math.abs(yB-yA).toFixed(1)+'" fill="'+col+'" opacity=".16"/>'+
-        '<rect x="'+x0.toFixed(1)+'" y="'+RTOP+'" width="'+(x1-x0).toFixed(1)+'" height="'+(RPB-RTOP)+
-        '" fill="#E9ECF1" opacity=".025"/>';
-   }
- }
-
- /* 價格格線 */
- g+='<rect x="'+(RW-RR)+'" y="0" width="'+RR+'" height="'+RH+'" fill="#1C222C" opacity=".45"/>';
- for(let k=0;k<=5;k++){
-   const v=lo+(hi-lo)*k/5, yy=y(v);
-   g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+yy.toFixed(1)+
-      '" stroke="#232A35" stroke-width="1"/><text x="'+(RW-RR+8)+'" y="'+(yy+4).toFixed(1)+
-      '" fill="#5C6472" font-size="12" font-family="ui-monospace,monospace">'+v.toFixed(0)+'</text>';
- }
-
- /* 停利／停損線 */
- const lines=[];
- if(T){ const d=T.dir==='long'?1:-1;
-   lines.push([T.entry+d*RTP,'#EE5A54','停利'],[T.entry-d*RTP,'#34B37E','停損']); }
- if(MODE==='replay'&&RP.judge) lines.push([RP.judge.tp,'#EE5A54','停利'],[RP.judge.sl,'#34B37E','停損']);
- lines.forEach(z=>{ const yy=y(z[0]); if(yy<RTOP||yy>RPB) return;
-   g+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+yy.toFixed(1)+
-      '" stroke="'+z[1]+'" stroke-width="1.2" stroke-dasharray="5 4" opacity=".75"/>'+
-      '<text x="6" y="'+(yy-5).toFixed(1)+'" fill="'+z[1]+'" font-size="12">'+z[2]+' '+z[0].toFixed(0)+'</text>'; });
-
- /* K 棒（重播時只畫揭曉過的） */
- B.forEach((b,i)=>{
-   if(G.from+i>G.rev) return;
-   const up=b.c>=b.o, col=up?'#EE5A54':'#34B37E', X=x(i);
-   g+='<line x1="'+X.toFixed(1)+'" y1="'+y(b.h).toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+
-      y(b.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
-   const yo=y(b.o),yc=y(b.c),tp=Math.min(yo,yc),hh=Math.max(1.2,Math.abs(yc-yo));
-   g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+tp.toFixed(1)+'" width="'+bw.toFixed(1)+
-      '" height="'+hh.toFixed(1)+'" fill="'+col+'"/>';
- });
-
- /* 未揭曉區 */
- if(MODE==='replay'&&G.rev<G.to-1){
-   const x0=(gi(G.rev)+0.5)*cw+cw*0.2;
-   g+='<rect x="'+x0.toFixed(1)+'" y="'+RTOP+'" width="'+(RW-RR-x0).toFixed(1)+'" height="'+
-      (RH-RTOP-RBOT)+'" fill="url(#hatch)" opacity=".85"/>'+
-      '<text x="'+(x0+(RW-RR-x0)/2).toFixed(1)+'" y="'+(RTOP+26)+'" fill="#5C6472" font-size="12.5" '+
-      'text-anchor="middle">後面還沒揭曉</text>';
- }
-
- /* 成交量 */
- g+='<line x1="0" y1="'+(RH-RBOT-RVOLH-RGAP/2).toFixed(1)+'" x2="'+(RW-RR)+'" y2="'+
-    (RH-RBOT-RVOLH-RGAP/2).toFixed(1)+'" stroke="#232A35" stroke-width="1"/>';
- B.forEach((b,i)=>{ if(G.from+i>G.rev) return;
-   const col=b.c>=b.o?'#EE5A54':'#34B37E', X=x(i), yy=vy(b.v);
-   g+='<rect x="'+(X-bw/2).toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+bw.toFixed(1)+
-      '" height="'+Math.max(0.8,RH-RBOT-yy).toFixed(1)+'" fill="'+col+'" opacity=".5"/>'; });
- g+='<text x="'+(RW-RR+8)+'" y="'+(RH-RBOT-RVOLH+10)+'" fill="#5C6472" font-size="11" '+
-    'font-family="ui-monospace,monospace">'+(vmax>=10000?(vmax/1000).toFixed(0)+'k':vmax.toFixed(0))+'</text>';
-
- /* 09:30 下單時段結束 */
- { const i=B.findIndex(b=>b.t>='09:30');
-   if(i>0){ const X=(i*cw).toFixed(1);
-     g+='<line x1="'+X+'" y1="'+RTOP+'" x2="'+X+'" y2="'+(RH-RBOT)+'" stroke="#E3A951" '+
-        'stroke-width="1" stroke-dasharray="2 5" opacity=".5"/>'+
-        '<text x="'+(+X+5)+'" y="'+(RH-RBOT-6)+'" fill="#5C6472" font-size="10.5">09:30</text>'; } }
-
- /* ---- 進出場標記（跟即時分頁同一套）--------------------------------------
-    圖區只留形狀（三角形＝進場、菱形＝出場、中間一條連線與淡色持有區間），
-    所有文字搬到本來就空著的兩條軌：右側價格軸掛價位、底部時間軸帶掛時間與損益。
-    Benson 2026-08-17 回報「時間標示有點擋路」—— 他的單 5~15 分鐘就結束，
-    進出場在 x 軸上非常近，舊版兩塊描邊文字必然互相推擠、還壓住那幾根關鍵 K 棒。 */
- const AXB=[], LANE=[], laneX=[];
- function txtW(s,fs){ let w=0;
-   for(let i=0;i<s.length;i++) w+=(s.charCodeAt(i)>255?1.0:0.6)*fs;
-   return w; }
- function axisChip(aY,txt,col,dim){
-   const h=17; let py=aY-h/2;
-   for(let k=0;k<6;k++){
-     py=Math.max(RTOP,Math.min(RPB-h,aY-h/2+(k%2?1:-1)*Math.ceil(k/2)*(h+2)));
-     if(!AXB.some(b=>py<b+h&&b<py+h)) break;
-   }
-   AXB.push(py);
-   const o=dim?'.55':'1';
-   return '<rect x="'+(RW-RR+1)+'" y="'+py.toFixed(1)+'" width="'+(RR-2)+'" height="'+h+
-     '" rx="4" fill="'+col+'" opacity="'+o+'"/>'+
-     '<text x="'+(RW-RR+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0E1116" font-size="11.5"'+
-     ' font-weight="700" font-family="ui-monospace,monospace" opacity="'+o+'">'+txt+'</text>';
- }
- function lanePill(X,txt,col,dim){
-   const fs=10.5, w=txtW(txt,fs)+13, h=17;
-   let px=Math.max(1,Math.min(RW-RR-w-1,X-w/2));
-   for(let k=0;k<8;k++){
-     if(!LANE.some(b=>px<b.x+b.w+3&&b.x<px+w+3)) break;
-     px=Math.min(RW-RR-w-1,px+w+5);
-   }
-   LANE.push({x:px,w:w});
-   const o=dim?'.55':'1';
-   return '<g opacity="'+o+'"><rect x="'+px.toFixed(1)+'" y="'+(RH-RBOT+3)+'" width="'+w.toFixed(1)+
-     '" height="'+h+'" rx="5" fill="#0E1116" fill-opacity=".92" stroke="'+col+
-     '" stroke-opacity=".55"/>'+
-     '<text x="'+(px+w/2).toFixed(1)+'" y="'+(RH-RBOT+15)+'" text-anchor="middle" fill="'+col+
-     '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text></g>';
- }
- /* r＝{entry,time,exit,exit_time,dir,net}；pre＝膠囊前綴（揭曉後的「當天」那一筆） */
- function markTrade(r,dim,pre){
-   const ia=idxAt(all,r.time), i=gi(ia);
-   if(ia<0||i<0||i>=B.length) return '';
-   const X=x(i), Y=y(r.entry), long=r.dir==='long', col=long?'#EE5A54':'#34B37E';
-   const o=dim?' opacity=".55"':'';
-   const je=r.exit_time?gi(idxAt(all,String(r.exit_time).slice(0,5))):-1;
-   const hasExit=r.exit!=null&&je>=0&&je<B.length;
-   const XE=hasExit?x(je):null, YE=hasExit?y(r.exit):null;
-   const ec=(r.net!=null&&r.net>0)?'#EE5A54':'#34B37E';
-   let s='';
-   if(hasExit){
-     const yTop=Math.min(Y,YE), yBot=Math.max(Y,YE);
-     s+='<g'+o+'><rect x="'+(X-cw/2).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+
-        Math.max(cw,(XE-X)+cw).toFixed(1)+'" height="'+Math.max(2,yBot-yTop).toFixed(1)+
-        '" fill="'+ec+'" opacity=".10"/>'+
-        '<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
-        '" y2="'+Y.toFixed(1)+'" stroke="'+col+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>'+
-        '<line x1="'+(X-cw/2).toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+(XE+cw/2).toFixed(1)+
-        '" y2="'+YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.1" stroke-dasharray="4 3" opacity=".7"/>'+
-        '<line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+XE.toFixed(1)+'" y2="'+
-        YE.toFixed(1)+'" stroke="'+ec+'" stroke-width="1.8" opacity=".9" stroke-linecap="round"/></g>';
-   }
-   const tri=long?('M'+(X-7.5)+' '+(Y+16)+' L'+X+' '+(Y+3.5)+' L'+(X+7.5)+' '+(Y+16)+' Z')
-                 :('M'+(X-7.5)+' '+(Y-16)+' L'+X+' '+(Y-3.5)+' L'+(X+7.5)+' '+(Y-16)+' Z');
-   s+='<g'+o+'><line x1="'+X.toFixed(1)+'" y1="'+Y.toFixed(1)+'" x2="'+X.toFixed(1)+'" y2="'+
-      (RH-RBOT)+'" stroke="'+col+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>'+
-      '<path d="'+tri+'" fill="'+col+'" stroke="#0E1116" stroke-width="1.8" stroke-linejoin="round"/>'+
-      '<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="2.6" fill="'+col+
-      '" stroke="#0E1116" stroke-width="1.2"/></g>';
-   s+=axisChip(Y,String(Math.round(r.entry)),col,dim);
-   const near=hasExit&&(XE-X)<110;
-   const xt=hasExit?String(r.exit_time).slice(0,5):'';
-   const money=(r.net==null?'':'　'+pm(r.net));
-   if(!near) laneX.push([X,(pre||'')+(long?'▲ 進 ':'▼ 進 ')+r.time,col,dim]);
-   else laneX.push([(X+XE)/2,(pre||'')+(long?'▲ ':'▼ ')+r.time+'→'+xt+money,ec,dim]);
-   if(hasExit){
-     s+='<g'+o+'><line x1="'+XE.toFixed(1)+'" y1="'+YE.toFixed(1)+'" x2="'+XE.toFixed(1)+
-        '" y2="'+(RH-RBOT)+'" stroke="'+ec+'" stroke-width="1" stroke-dasharray="2 4" opacity=".32"/>'+
-        '<rect x="'+(XE-5.6).toFixed(1)+'" y="'+(YE-5.6).toFixed(1)+'" width="11.2" height="11.2"'+
-        ' rx="2.4" transform="rotate(45 '+XE.toFixed(1)+' '+YE.toFixed(1)+')" fill="'+ec+
-        '" stroke="#0E1116" stroke-width="1.8"/></g>';
-     s+=axisChip(YE,String(Math.round(r.exit)),ec,dim);
-     if(!near) laneX.push([XE,(pre||'')+'出 '+xt+money,ec,dim]);
-   }
-   return s;
- }
- let mk='';
- if(MODE==='review'){
-   // 一天多筆時全部畫出來：選中那筆實心，其餘半透明
-   dayTrades(C.day).forEach(v=>{
-     const t=v.t;
-     mk+=markTrade({entry:t.entry,time:t.time,exit:t.exit,exit_time:t._exit_time,
-                    dir:t.dir,net:t._net},!(T&&sel&&v.i===sel.i));
-   });
- } else if(RP.judge){
-   const J=RP.judge, Rr=RP.result;
-   mk+=markTrade({entry:J.entry,time:J.time,exit:Rr?Rr.exit:null,
-                  exit_time:Rr?Rr.time:null,dir:J.dir,net:Rr?Rr.net:null});
-   if(RP.state==='revealed'){
-     const rt=dayTrade(RP.date);            // 揭曉後把當天實際那筆疊上去對照
-     if(rt) mk+=markTrade({entry:rt.entry,time:rt.time,exit:rt.exit,
-                           exit_time:rt._exit_time,dir:rt.dir,net:rt._net},true,'當天 ');
-   }
- }
-
- /* 游標十字線（重播時不能指到未揭曉的地方） */
- let lb=vis[vis.length-1], hovering=false;
- if(RHOVER.i!=null&&RHOVER.i>=G.from&&RHOVER.i<G.to&&RHOVER.i<=G.rev){
-   lb=all[RHOVER.i]; hovering=true;
-   const X=x(gi(RHOVER.i));
-   g+='<line x1="'+X.toFixed(1)+'" y1="'+RTOP+'" x2="'+X.toFixed(1)+'" y2="'+(RH-RBOT)+
-      '" stroke="#8D95A3" stroke-width="1" stroke-dasharray="3 3" opacity=".6"/>';
- }
- /* 膠囊先算（避讓後位置才確定），時間刻度再依 LANE 的實際落點閃避 */
- let pills='';
- laneX.forEach(p=>{ pills+=lanePill(p[0],p[1],p[2],p[3]); });
- const step=Math.max(1,Math.ceil(B.length/9));
- B.forEach((b,i)=>{ if(i%step) return;
-   const X=x(i);
-   if(LANE.some(z=>X+24>z.x-4&&X-24<z.x+z.w+4)) return;
-   g+='<text x="'+X.toFixed(1)+'" y="'+(RH-9)+'" fill="#5C6472" font-size="11" '+
-      'text-anchor="middle" font-family="ui-monospace,monospace">'+b.t+'</text>'; });
- g+=mk;                                   // 標記畫最後 → 壓在 K 棒上面，一眼看得到
- g+=pills;
-
- /* 容器只建一次，這裡只換 svg 內容 */
- const sv=document.getElementById('rsvg');
- if(sv.getAttribute('viewBox')!=='0 0 '+RW+' '+RH) sv.setAttribute('viewBox','0 0 '+RW+' '+RH);
- if(sv.innerHTML!==g) sv.innerHTML=g;
-
- /* 標題列與 OHLCV 圖例 */
- const op0=all[0].o, px=lb.c, chg=px-op0, pct=chg/op0*100;
- const wd=['日','一','二','三','四','五','六'][new Date(C.day+'T00:00:00').getDay()];
- const dts=dayTrades(C.day);
- // 跟即時分頁同一個 qblock：價格／漲跌膠囊／第三行灰字
- rset('rhead','<div class="qblock"><div class="qmain">'+
-   '<span class="cpx '+sgn(chg)+'">'+f(px)+'</span>'+
-   '<span class="cchg '+sgn(chg)+'">'+pm(chg)+'<span class="pct">'+pm(pct,2)+'%</span></span>'+
-   '</div><div class="qsub"><span>'+C.day+'（'+wd+'）</span><span class="sep">·</span>'+
-   '<span>日盤 08:45–13:45</span><span class="sep">·</span>'+
-   '<span>'+(dts.length?('當天有 '+dts.length+' 筆紀錄'):'當天沒下單')+'</span>'+
-   (MODE==='replay'?'<span class="sep">·</span><span style="color:var(--gold)">重播中（1 分 K）</span>':'')+
-   '</div></div>'+
-   (MODE==='review'
-     ?'<div class="tfsw"><button data-tf="1" class="'+(TF===1?'on':'')+'">1 分</button>'+
-      '<button data-tf="5" class="'+(TF===5?'on':'')+'">5 分</button></div>'
-     :''));
- const vol=lb.v>=10000?(lb.v/1000).toFixed(1)+'k':lb.v.toFixed(0);
- rset('rlegend','<span class="lt">'+lb.t+'</span><span>開 <b>'+f(lb.o)+'</b></span>'+
-   '<span>高 <b>'+f(lb.h)+'</b></span><span>低 <b>'+f(lb.l)+'</b></span>'+
-   '<span>收 <b style="color:'+(lb.c>=lb.o?'#EE5A54':'#34B37E')+'">'+f(lb.c)+'</b></span>'+
-   '<span>量 <b>'+vol+'</b></span>'+(hovering?'':'<span class="lt">（最新一根）</span>'));
-}
-
-/* ---------------- 進場當下的客觀盤面（跟即時分頁同一條資料軌） ---------------- */
-function fstrip(D){
- let ft='進場當下的客觀盤面', F=null;
- if(MODE==='replay'){
-   const fe=D&&D.feats;
-   if(fe&&fe.length){
-     // 已經判斷過就凍結在「按下去的那一刻」—— 那才是要檢討的盤面
-     const i=RP.judge?idxAt(D.bars,RP.judge.time):RP.rev;
-     F=fe[Math.max(0,Math.min(fe.length-1,i))];
-     ft=RP.judge?('進場當下的客觀盤面（'+RP.judge.time+'）')
-                :('目前這一刻的客觀盤面（'+(F?F.t:'')+'）');
-   }
- } else {
-   const s=selTrade();
-   if(s){ F=s.t._snap; ft='進場當下的客觀盤面（'+s.t.date.slice(5)+' '+s.t.time+'）'; }
- }
- document.getElementById('rftitle').textContent=ft;
- if(!F){ rset('rfstrip','<div class="grp"><div class="it" style="min-width:0">'+
-   '<div class="k">　</div><div class="v" style="color:var(--faint);font-size:12.5px">'+
-   '這一刻沒有本機 K 棒可以重建盤面</div></div></div>'); return; }
- rset('rfstrip',railHTML([
-   [{k:'最近 5 分',v:pm(F.mom5),cls:sgn(F.mom5)},{k:'最近 15 分',v:pm(F.mom15),cls:sgn(F.mom15)}],
-   [{k:'對開盤',v:pm(F.ret_open),cls:sgn(F.ret_open)},{k:'跳空',v:pm(F.gap)},
-    {k:'今日震幅',v:f(F.rng)},
-    {k:'位階',v:F.pos==null?'—':f(F.pos*100)+'%',
-     track:F.pos==null?null:F.pos*100,hot:F.pos>0.8||F.pos<0.2},
-    {k:'量能',v:F.vol_ratio==null?'—':f(F.vol_ratio,2),u:F.vol_ratio==null?'':'倍',
-     track:F.vol_ratio==null?null:F.vol_ratio/3*100,hot:F.vol_ratio>1.5}]
- ]));
-}
-
-/* ---------------- 右欄：翻紀錄 ---------------- */
-function rowHTML(x){
- const t=x.t, rs=REASON[t._reason]||'';
- return '<div class="trade '+(t._net>0?'win':'loss')+(x.i===SEL?' sel':'')+
-   '" data-rpick="'+x.i+'">'+
-   '<div class="tr-top"><span class="tr-date">'+(t.date||'').slice(5)+'</span>'+
-   '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
-   '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
-   (rs?' <span class="tag">'+rs+'</span>':'')+
-   (t._source==='app'?' <span class="tag">App 匯入</span>':'')+'</span>'+
-   '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div>'+
-   (t.note?'<div class="tr-note">「'+esc(t.note)+'」</div>':'')+'</div>';
-}
-function paneReview(){
- const L=rvList(), s=selTrade();
- const FT=[['all','全部'],['win','只看賺的'],['loss','只看賠的'],['long','做多'],['short','做空']];
- let h='<div class="chips">'+FT.map(x=>'<button data-rfilter="'+x[0]+'" class="'+
-       (FILTER===x[0]?'on':'')+'">'+x[1]+'</button>').join('')+'</div>';
- h+='<div class="sec-head" style="margin-top:8px"><h2>練習紀錄</h2><span class="count">'+
-    L.length+' 筆　'+pm(L.reduce((a,x)=>a+(x.t._net||0),0))+' 點</span></div>';
- if(!L.length){ h+='<div class="card"><div class="empty">這個條件下沒有紀錄</div></div>'; }
- else{
-   h+='<div class="list">'+L.map(rowHTML).join('')+'</div>'+
-      '<div class="note" style="margin-top:10px;text-align:center">'+
-      '<span class="kbd">←</span> <span class="kbd">→</span> 切換上一筆／下一筆　'+
-      '<span class="kbd">R</span> 重播這一天</div>';
- }
- if(s){
-   const t=s.t, win=t._net>0, ex=t._exit_time?String(t._exit_time).slice(0,5):null;
-   h+='<div class="sec-head" style="margin-top:14px"><h2>這一筆</h2><span class="count">'+
-      t.date+(t._source==='app'?'　App 匯入':'')+'</span></div>'+
-      '<div class="card"><div class="dt">'+
-      '<div class="dt-big"><div class="v '+(win?'up':'down')+'">'+pm(t._net)+'</div>'+
-      '<div class="l">'+(t.dir==='long'?'做多':'做空')+'　'+(REASON[t._reason]||'')+
-      '出場　NT$'+Math.round((t._net||0)*10).toLocaleString()+'</div></div>'+
-      '<div class="hr"></div>'+
-      '<div class="dt-row"><span class="k">進場</span><span class="v">'+t.time+'　'+t.entry+'</span></div>'+
-      '<div class="dt-row"><span class="k">出場</span><span class="v">'+(ex?ex+'　'+t.exit:'—　'+t.exit)+'</span></div>'+
-      '<div class="dt-row"><span class="k">抱了多久</span><span class="v">'+
-        (t._mins==null?'—':t._mins+' 分鐘')+'</span></div>'+
-      '<div class="dt-row"><span class="k">進場後最順</span><span class="v up">'+
-        (t._mfe==null?'—':pm(t._mfe)+' 點')+'</span></div>'+
-      '<div class="dt-row"><span class="k">進場後最逆</span><span class="v down">'+
-        (t._mae==null?'—':pm(t._mae)+' 點')+'</span></div>'+
-      '<div class="hr"></div>'+
-      '<div class="dt-row"><span class="k" style="font-size:11.5px">心得</span></div>'+
-      noteBox(nkey('r',t),t.note,nattr(t),'＋ 補寫這一筆的心得',
-              '現在回頭看，這一筆做對了什麼、做錯了什麼？')+
-      '<div class="btns" style="margin-top:4px">'+
-      '<button class="btn gold" data-ract="replayday">重播這一天（蓋住結果）</button></div>'+
-      '</div></div>';
- }
- return h;
-}
-
-/* ---------------- 右欄：Bar Replay ---------------- */
-function rpBars(){ const D=RB[RP.date+'|1']; return (D&&!D.loading&&D.bars)||null; }
-function rpStop(){ if(RP.timer){ clearInterval(RP.timer); RP.timer=null; } }
-function rpReset(day){
- rpStop();
- RP.date=day||RP.date; RP.state='idle'; RP.rev=0; RP.judge=null; RP.result=null;
- RP.axis=null; RP.note=''; RP.end=null; RP.n=48; RHOVER.i=null; lastPane='';
-}
-function rpPlay(){
- if(RP.state==='revealed') return;
- rpStop(); if(!RP.judge) RP.state='running';
- const ms=(SPEEDS.find(s=>s[0]===RP.speed)||SPEEDS[1])[1];
- RP.timer=setInterval(function(){ rpStep(); },ms);
- rvRender();
-}
-function rpPause(){ rpStop(); if(RP.state==='running') RP.state='paused'; rvRender(); }
-function rpStep(back){
- if(RP.state==='revealed') return;          // 揭曉後不再逐根走，要重玩請按按鈕
- const B=rpBars(); if(!B||!B.length) return;
- if(back){ RP.rev=Math.max(0,RP.rev-1); RP.axis=null; rvRender(); return; }
- if(RP.rev>=B.length-1){ rpReveal(); return; }
- RP.rev++;
- if(RP.judge&&!RP.result){
-   const b=B[RP.rev], J=RP.judge, d=J.dir==='long'?1:-1;
-   const hitSL=d>0?b.l<=J.sl:b.h>=J.sl, hitTP=d>0?b.h>=J.tp:b.l<=J.tp;
-   // 【約定】同一根同時觸及停利與停損時算停損 —— 保守，不能從 1 分 K 知道誰先到
-   if(hitSL||hitTP){
-     const tp=!hitSL;
-     RP.result={reason:tp?'tp':'sl',exit:tp?J.tp:J.sl,time:b.t,
-                points:tp?RTP:-RTP,net:tp?RTP-RFEE:-RTP-RFEE};
-     rpReveal(); return;
-   }
-   if(b.t>='11:00'){ const p=Math.round(d*(b.c-J.entry));
-     RP.result={reason:'close',exit:b.c,time:b.t,points:p,net:p-RFEE}; rpReveal(); return; }
- }
- if(!RP.judge&&B[RP.rev].t>='10:00'){ rpReveal(); return; }
- rvRender();
-}
-function rpJudge(dir){
- if(RP.state==='revealed'||RP.judge) return;
- const B=rpBars(); if(!B||!B.length) return;
- const b=B[Math.min(RP.rev,B.length-1)], d=dir==='long'?1:-1;
- const el=document.getElementById('jnote');
- RP.judge={dir:dir,entry:b.c,time:b.t,tp:b.c+d*RTP,sl:b.c-d*RTP,
-           note:(el?el.value:RP.note)||''};
- RP.state='holding'; rpPlay();
-}
-function rpReveal(){
- rpStop();
- const B=rpBars(); if(!B||!B.length) return;
- // 整天全部揭開，但畫面停在「判斷的那一段＋後續 40 分鐘」，不要跳到下午去
- const anchor=RP.result?idxAt(B,RP.result.time):RP.rev;
- RP.end=Math.min(B.length,Math.max(anchor+40,RP.rev+20));
- RP.n=Math.min(B.length,Math.max(60,RP.end));
- RP.rev=B.length-1; RP.axis=null; RP.state='revealed';
- const rt=dayTrade(RP.date), J=RP.judge, Rr=RP.result;
- // 落地存檔到 replay_log/：這是事後重播，絕不寫進 practice_trades/（會污染真實練習統計）
- pfetch('/api/replay',
-   JSON.stringify({date:RP.date,judged:!!J,
-     dir:J?J.dir:null,entry:J?J.entry:null,time:J?J.time:null,note:J?J.note:'',
-     exit:Rr?Rr.exit:null,exit_time:Rr?Rr.time:null,reason:Rr?Rr.reason:null,
-     points:Rr?Rr.points:null,net:Rr?Rr.net:null,
-     same_dir:!!(rt&&J&&rt.dir===J.dir),day_dir:rt?rt.dir:null,day_time:rt?rt.time:null}))
-  .then(r=>r.json()).then(x=>{ if(x&&x.tally){ TALLY=x.tally; rvRender(); } }).catch(()=>{});
- rvRender();
-}
-function paneReplay(D){
- const rt=dayTrade(RP.date);
- const days=((RV&&RV.days)||[]).slice(0,14);
- const traded=(RV&&RV.traded)||[];
- let h='<div class="sec-head" style="margin-top:6px"><h2>選一天重播</h2>'+
-   '<span class="count">從 08:45 開始逐根走</span></div><div class="daysel">'+
-   days.map(d=>'<button data-rday="'+d+'" class="'+(RP.date===d?'on':'')+'">'+d.slice(5)+
-     (traded.indexOf(d)>=0?'<span class="m">有下單</span>':'<span class="m">沒下單</span>')+
-     '</button>').join('')+'</div>';
- if(!D||!D.bars||!D.bars.length){
-   h+='<div class="card" style="margin-top:12px"><div class="empty">'+
-      (D?'這天沒有本機 K 棒可以重播<br>換一天試試':'載入中…')+'</div></div>';
-   return h;
- }
- if(RP.state==='idle'){
-   h+='<div class="card" style="margin-top:12px"><div class="note" style="border:0;padding:0">'+
-      '<b>怎麼玩</b><br>後面的 K 棒會被蓋住，你只看得到「已經走完的部分」。<br>'+
-      '按播放讓它一根一根走，覺得可以進場就按 ▲做多 或 ▼做空 —— 這時候你還<b>不知道結果</b>，'+
-      '跟早上真的在看盤一樣。<br>判斷完會繼續走到碰停利或停損，然後才揭曉後續走勢，'+
-      '並跟你當天實際的決定對照。</div>'+
-      '<div class="btns" style="margin-top:12px">'+
-      '<button class="btn gold" data-ract="rpplay">開始重播</button></div></div>';
- } else if(RP.state==='revealed'){
-   const J=RP.judge, Rr=RP.result;
-   h+='<div class="sec-head" style="margin-top:14px"><h2>揭曉・對照</h2><span class="count">'+
-      RP.date+'</span></div><div class="card"><div class="cmp">'+
-      '<div class="side mine"><div class="h">你這次的判斷</div><div class="b">';
-   if(J){ h+='<span class="dir '+(J.dir==='long'?'l':'s')+'">'+(J.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
-     '<span>'+J.time+'　'+J.entry+' → '+(Rr?Rr.exit:'—')+'</span>'+
-     '<span class="res '+(Rr&&Rr.net>0?'up':'down')+'">'+(Rr?pm(Rr.net):'—')+'</span>'; }
-   else { h+='<span style="color:var(--dim)">這次沒有下判斷（觀望）</span>'; }
-   h+='</div>'+(J&&J.note?'<div class="tr-note" style="padding-left:0;margin-top:6px">「'+
-      esc(J.note)+'」</div>':'')+'</div>'+
-      '<div class="side"><div class="h">當天你實際的決定</div><div class="b">';
-   if(rt){ h+='<span class="dir '+(rt.dir==='long'?'l':'s')+'">'+(rt.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
-     '<span>'+rt.time+'　'+rt.entry+' → '+rt.exit+'</span>'+
-     '<span class="res '+(rt._net>0?'up':'down')+'">'+pm(rt._net)+'</span>'; }
-   else { h+='<span style="color:var(--dim)">當天你沒有下單</span>'; }
-   h+='</div></div>';
-   let v='',cls='diff';
-   if(J&&rt){ const same=J.dir===rt.dir, dm=mmin(J.time)-mmin(rt.time);
-     v=(same?'方向一致':'方向相反')+'　'+
-       (dm===0?'時間也一樣':(dm>0?'你晚了 '+dm+' 分鐘':'你早了 '+(-dm)+' 分鐘'));
-     cls=same?'same':'diff';
-   } else if(J&&!rt){ v='當天你沒進場，這次你進了'; }
-   else if(!J&&rt){ v='當天你有進場，這次你選擇觀望'; }
-   else { v='兩次都沒進場'; }
-   h+='<div class="verdict '+cls+'">'+v+'</div></div>'+
-      '<div class="tally"><span>重播 <b>'+TALLY.n+'</b> 次</span>'+
-      '<span>停利 <b class="up">'+TALLY.tp+'</b></span>'+
-      '<span>停損 <b class="down">'+TALLY.sl+'</b></span>'+
-      '<span>與當天同向 <b>'+TALLY.same+'</b></span></div>'+
-      '<div style="text-align:center;font-size:10.5px;color:var(--faint);margin-top:6px">'+
-      '累計次數（存在 replay_log/，跟你的練習紀錄分開）</div>'+
-      '<div class="btns" style="margin-top:12px">'+
-      '<button class="btn" data-ract="rpagain">再玩一次這天</button>'+
-      '<button class="btn ghost gw" data-ract="rpnext">換下一天</button></div></div>';
- } else if(RP.judge){
-   const J=RP.judge, B=D.bars, cur=B[Math.min(RP.rev,B.length-1)].c;
-   const fl=(J.dir==='long'?1:-1)*(cur-J.entry);
-   h+='<div class="sec-head" style="margin-top:14px"><h2>你已經進場了</h2>'+
-      '<span class="count">等結果</span></div><div class="card">'+
-      '<div class="hold"><div class="v '+sgn(fl)+'">'+pm(Math.round(fl))+'</div>'+
-      '<div class="l">'+(J.dir==='long'?'做多':'做空')+'　'+J.time+' 進場 '+J.entry+'</div></div>'+
-      '<div class="dt-row" style="margin-top:10px"><span class="k">停利</span>'+
-      '<span class="v up">'+J.tp+'</span></div>'+
-      '<div class="dt-row"><span class="k">停損</span><span class="v down">'+J.sl+'</span></div>'+
-      (J.note?'<div class="noteline" style="margin-top:10px">「'+esc(J.note)+'」</div>':'')+
-      '<div class="btns" style="margin-top:12px">'+
-      '<button class="btn ghost gw" data-ract="rpreveal">直接看結果</button></div></div>';
- } else {
-   const fe=D.feats, i=Math.min(RP.rev,(fe?fe.length:1)-1);
-   const now=fe&&fe.length?fe[Math.max(0,i)]:{t:D.bars[RP.rev].t,price:D.bars[RP.rev].c};
-   h+='<div class="sec-head" style="margin-top:14px"><h2>你的判斷</h2><span class="count">現在 '+
-      now.t+'　'+f(now.price)+'</span></div><div class="card">'+
-      '<div class="btns"><button class="btn long" data-ract="jlong">&#9650; 做多</button>'+
-      '<button class="btn short" data-ract="jshort">&#9660; 做空</button></div>'+
-      '<input class="jinput" id="jnote" placeholder="為什麼進？（可不寫，回顧時會顯示）" value="'+
-      esc(RP.note)+'">'+
-      '<div class="btns" style="margin-top:10px">'+
-      '<button class="btn ghost gw" data-ract="rpreveal">今天不做，直接揭曉</button></div>'+
-      '<div class="note" style="margin-top:10px;text-align:center;border:0;padding:0">'+
-      '<span class="kbd">空白鍵</span> 播放／暫停　<span class="kbd">→</span> 下一根　'+
-      '<span class="kbd">↑</span> 做多　<span class="kbd">↓</span> 做空</div></div>';
- }
- return h;
-}
-/* 播放控制列（在圖的正下方，眼睛不用離開圖）。
-   兩行：上行運鏡（播放鍵是唯一的金色 ⇒ 一眼看得出主要動作），
-   下行時間軸 —— 看得出「現在走到哪、還有多長」，也可以點著跳。 */
-function ctrlHTML(D){
- if(MODE!=='replay'){
-   return '<div class="chint"><span style="color:var(--dim)">'+
-     (selTrade()?'進出場之間已著色：紅＝這一筆賺、綠＝賠':'選一筆紀錄看細節')+
-     '</span>　滾輪縮放・拖曳平移・雙擊回到這一筆</div>';
- }
- const B=(D&&D.bars)||[];
- if(!B.length) return '<div class="chint">這天沒有 K 棒</div>';
- const playing=RP.state==='running'||(RP.timer!=null);
- const cur=B[Math.min(RP.rev,B.length-1)];
- const last=Math.max(1,B.length-1);
- const pctOf=t=>{ const i=idxAt(B,t); return (i<0?0:i)/last*100; };
- const fill=Math.min(RP.rev,last)/last*100;
- const wa=pctOf('08:45'), wb=pctOf('09:30');
- let ticks='';
- ['08:45','09:30','11:00','13:40'].forEach(t=>{
-   const p=pctOf(t); if(p<=0&&t!=='08:45') return;
-   ticks+='<span class="tk" style="left:'+p.toFixed(2)+'%">'+t+'</span>';
- });
- // 判斷點：這次按下做多／做空的那一根（多紅、空綠）
- const jm=RP.judge?'<span class="jm" style="left:'+pctOf(RP.judge.time).toFixed(2)+'%;background:'+
-   (RP.judge.dir==='long'?'var(--up)':'var(--down)')+'"></span>':'';
- // 揭曉後不接受跳轉（那是對照用的定格）；已經進場、還在等結果時也不行 ——
- // 跳過去等於跳過中間那幾根的 ±100 觸價檢查，結果會算錯（紀錄正確性）。
- const locked=RP.state==='revealed'||!!RP.judge;
- return '<div class="rpbar"><div class="rprow">'+
-   '<button class="rpbtn" data-ract="rphome" title="回到 08:45">⏮</button>'+
-   '<button class="rpbtn" data-ract="rpback" title="退一根">◀</button>'+
-   '<button class="rpbtn play" data-ract="'+(playing?'rppause':'rpplay')+'">'+
-     (playing?'❚❚ 暫停':'▶ 播放')+'</button>'+
-   '<button class="rpbtn" data-ract="rpstep" title="下一根">▶▶</button>'+
-   '<div class="rpsp">'+SPEEDS.map(s=>'<button data-rspeed="'+s[0]+'" class="'+
-     (RP.speed===s[0]?'on':'')+'">×'+s[0]+'</button>').join('')+'</div>'+
-   // 「已揭曉」講的是狀態，不能拿 locked 來判 —— locked 還包含「已進場、等結果中」，
-   // 那時候後面明明還蓋著，卻會寫成已揭曉（QA 退件：走 20 根按做多就重現）。
-   '<div class="rppos"><b>'+cur.t+'</b>　'+(RP.rev+1)+' / '+B.length+' 根'+
-     (RP.state==='revealed'?'　已揭曉':'')+'</div></div>'+
-   '<div class="rpscrub'+(locked?' locked':'')+'"'+(locked?'':' data-rseek="1"')+
-   ' title="點著跳到那一根"><div class="trk"></div>'+
-   '<div class="win" style="left:'+wa.toFixed(2)+'%;width:'+Math.max(0,wb-wa).toFixed(2)+'%"></div>'+
-   '<div class="fill" style="width:'+fill.toFixed(2)+'%"></div>'+jm+
-   '<div class="knob" style="left:'+fill.toFixed(2)+'%"></div>'+ticks+'</div></div>';
-}
-
-/* ---------------- 繪製與事件 ---------------- */
-function rvRender(nf){
- if(TAB!=='review') return;
- const C=rvCtx(), D=C.day?rvBars(C.day,C.tf):null;
- if(FOCUSPEND&&D) focusTrade();
- rvDraw(C,D);
- rset('rctrl',ctrlHTML(D));
- // 重播每走一根就重繪右欄 → 先把使用者打到一半的「為什麼進」收起來，重繪後再放回去
- const jn=document.getElementById('jnote'); if(jn) RP.note=jn.value;
- const foc=document.activeElement&&document.activeElement.id==='jnote';
- const html=MODE==='review'?paneReview():paneReplay(D);
- if(lastPane!==html && (nf||!nEditing('r'))){
-   lastPane=html; document.getElementById('rpane').innerHTML=html;
-   if(foc){ const el=document.getElementById('jnote');
-     if(el){ el.focus(); el.setSelectionRange(el.value.length,el.value.length); } }
- }
- fstrip(D);
- const sel=document.querySelector('#rpane .trade.sel');
- if(sel&&sel.scrollIntoView) sel.scrollIntoView({block:'nearest'});
-}
 function setTab(t){
  if(t===TAB) return;
  TAB=t;
- if(t!=='review'){ rpStop(); if(RP.state==='running') RP.state='paused'; }
- // 離開【細節】就把 2 秒輪詢停掉（它只有在那一頁前景時才該跑）
- if(t!=='tick'&&TK.timer){ clearTimeout(TK.timer); TK.timer=null; }
- // 離開【自動下單】也把 5 秒輪詢停掉（它只在那一頁前景時才該跑）
+ // 離開【自動下單】就把 5 秒輪詢停掉（它只在那一頁前景時才該跑）
  if(t!=='fire'&&AL.timer){ clearTimeout(AL.timer); AL.timer=null; }
+ // 離開【模擬】也把 60 秒輪詢停掉（smEnter 的 again 自己也會檢查一次）
+ if(t!=='sim'&&SM.timer){ clearTimeout(SM.timer); SM.timer=null; }
  document.getElementById('tab-live').hidden=(t!=='live');
- document.getElementById('tab-tick').hidden=(t!=='tick');
- document.getElementById('tab-review').hidden=(t!=='review');
+ document.getElementById('tab-sim').hidden=(t!=='sim');
  document.getElementById('tab-lab').hidden=(t!=='lab');
  document.getElementById('tab-fire').hidden=(t!=='fire');
  document.querySelectorAll('.tabs button').forEach(b=>
    b.classList.toggle('on',b.getAttribute('data-tab')===t));
- if(t==='review'){ lastPane=''; if(!RV) rvFetch(); else rvRender(); }
- else if(t==='tick'){ tkEnter(); }
+ // 【模擬】不掛在 500ms 的 tick 上：切進來問一次，停在這一頁時每 60 秒再問（離開就停）。
+ if(t==='sim'){ smEnter(); }
  // 【策略實驗室】不掛在 500ms 的 tick 上：切進來問一次資料範圍，按「回測」才算。
  // 後端的即時報價、持倉監控、自動停利停損全程都在跑，切分頁完全不影響那一條路。
- // 「模擬（不會下單）」那張卡同樣：切進來問一次，停在這一頁時每 60 秒再問（smEnter 自己會在離開後停）。
- else if(t==='lab'){ lbEnter(); smEnter(); }
+ else if(t==='lab'){ lbEnter(); }
  // 【自動下單】同樣不掛在 500ms 的 tick 上：後端的送單、持倉監控、±100 停利停損
  // 全程都在跑，切不切進這一頁完全不影響。
  else if(t==='fire'){ alEnter(); }
@@ -8411,129 +7438,9 @@ function setTab(t){
  // 全程都在跑，切分頁完全不影響那一條路）
  else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); }
 }
-function setMode(m){
- if(m===MODE) return;
- MODE=m; rpStop(); RHOVER.i=null; lastPane='';
- document.querySelectorAll('#rmode button').forEach(b=>
-   b.classList.toggle('on',b.getAttribute('data-mode')===m));
- if(m==='review') focusTrade();
- else if(!RP.date){ const s=selTrade(); if(s) RP.date=s.t.date; }
- rvRender();
-}
-function rvPick(i){ SEL=i; focusTrade(); rvRender(); }
-function moveSel(step){
- const L=rvList(); if(!L.length) return;
- let k=L.findIndex(x=>x.i===SEL); if(k<0) k=0;
- k=Math.max(0,Math.min(L.length-1,k+step));
- rvPick(L[k].i);
-}
-function rvBind(){
- const sv=document.getElementById('rsvg');
- const AXIS=RR/RW;
- const onAxis=e=>{ const r=sv.getBoundingClientRect();
-   return (e.clientX-r.left)/r.width>1-AXIS; };
- const bars=()=>{ const C=rvCtx(), D=RB[C.day+'|'+C.tf];
-   return (D&&!D.loading&&D.bars)||[]; };
- sv.addEventListener('wheel',function(e){
-   e.preventDefault();
-   // 重播只准改「看幾根」——不能平移到未來，否則等於直接看答案
-   if(MODE==='replay'){ RP.n=Math.round(Math.min(120,Math.max(20,RP.n*(e.deltaY>0?1.15:0.87))));
-     rvRender(); return; }
-   if(e.shiftKey||onAxis(e)){ RVIEW.vz=Math.min(12,Math.max(0.25,RVIEW.vz*(e.deltaY>0?0.88:1.14)));
-     rvRender(); return; }
-   const all=bars(); if(!all.length) return;
-   const G=rvGeom(all), total=all.length, r=sv.getBoundingClientRect();
-   const frac=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));
-   const anchor=G.from+frac*G.n;
-   const n=Math.round(Math.min(total,Math.max(8,G.n*(e.deltaY>0?1.18:0.85))));
-   let end=Math.round(anchor+(1-frac)*n); end=Math.max(n,Math.min(total,end));
-   RVIEW.n=n; RVIEW.end=(end>=total)?null:end; rvRender();
- },{passive:false});
- sv.addEventListener('mousedown',function(e){
-   if(MODE==='replay') return;
-   const all=bars(); if(!all.length) return;
-   const G=rvGeom(all), r=sv.getBoundingClientRect();
-   RDRAG={x:e.clientX,y:e.clientY,end:G.to,n:G.n,w:r.width,h:r.height,
-          vz:RVIEW.vz,voff:RVIEW.voff,axis:onAxis(e)};
-   sv.style.cursor=RDRAG.axis?'ns-resize':'grabbing'; e.preventDefault();
- });
- window.addEventListener('mousemove',function(e){
-   if(!RDRAG) return;
-   if(RDRAG.axis){ RVIEW.vz=Math.min(12,Math.max(0.25,RDRAG.vz*Math.exp(-(e.clientY-RDRAG.y)/220)));
-     rvRender(); return; }
-   const all=bars(), total=all.length; if(!total) return;
-   const moved=Math.round((e.clientX-RDRAG.x)/(RDRAG.w/RDRAG.n));
-   let end=RDRAG.end-moved; end=Math.max(RDRAG.n,Math.min(total,end));
-   RVIEW.end=(end>=total)?null:end; rvRender();
- });
- window.addEventListener('mouseup',function(){
-   if(RDRAG){ RDRAG=null; sv.style.cursor=''; } });
- sv.addEventListener('mousemove',function(e){
-   if(RDRAG||TAB!=='review') return;
-   const all=bars(); if(!all.length) return;
-   const G=rvGeom(all), r=sv.getBoundingClientRect();
-   const frac=(e.clientX-r.left)/r.width;
-   if(frac<0||frac>1-AXIS){ if(RHOVER.i!=null){ RHOVER.i=null; rvRender(); } return; }
-   const i=G.from+Math.floor(frac/(1-AXIS)*G.n);
-   // 十字線也要 clamp 在已揭曉的範圍內
-   const ni=Math.max(G.from,Math.min(Math.min(G.to-1,G.rev),i));
-   if(ni!==RHOVER.i){ RHOVER.i=ni; rvRender(); }
- });
- sv.addEventListener('mouseleave',function(){
-   if(RHOVER.i!=null){ RHOVER.i=null; rvRender(); } });
- sv.addEventListener('dblclick',function(e){
-   if(MODE==='replay'){ RP.n=48; rvRender(); return; }
-   if(onAxis(e)){ RVIEW.vz=1; RVIEW.voff=0; } else focusTrade();
-   rvRender();
- });
-}
+/* 分頁切換。⛔ 這一段要留著 —— 它原本寄生在【回顧】那個 click 監聽器的第一行。 */
 document.addEventListener('click',function(e){
  const tb=e.target.closest('[data-tab]'); if(tb){ setTab(tb.getAttribute('data-tab')); return; }
- if(TAB!=='review') return;
- const md=e.target.closest('[data-mode]'); if(md){ setMode(md.getAttribute('data-mode')); return; }
- const tf=e.target.closest('[data-tf]');
- if(tf){ TF=parseInt(tf.getAttribute('data-tf')); focusTrade(); rvRender(); return; }
- const fl=e.target.closest('[data-rfilter]');
- if(fl){ FILTER=fl.getAttribute('data-rfilter');
-   const L=rvList(); if(L.length&&!L.find(x=>x.i===SEL)) SEL=L[0].i;
-   focusTrade(); rvRender(); return; }
- const pk=e.target.closest('[data-rpick]');
- if(pk){ rvPick(parseInt(pk.getAttribute('data-rpick'))); return; }
- const dy=e.target.closest('[data-rday]');
- if(dy){ rpReset(dy.getAttribute('data-rday')); rvRender(); return; }
- // 點時間軸跳到那一根：跳之前先停掉播放；已揭曉就不接受跳轉（那是對照用的定格）
- const sk=e.target.closest('[data-rseek]');
- if(sk){
-   const B=rpBars();
-   if(B&&B.length&&RP.state!=='revealed'&&!RP.judge){
-     const r=sk.getBoundingClientRect();
-     const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
-     rpStop();
-     if(RP.state==='idle') RP.state='paused';
-     RP.rev=Math.max(1,Math.round(p*(B.length-1)));
-     RP.axis=null;                       // 價格軸只擴不縮，跳轉後要重算
-     rvRender();
-   }
-   return;
- }
- const sp=e.target.closest('[data-rspeed]');
- if(sp){ RP.speed=parseFloat(sp.getAttribute('data-rspeed'));
-   if(RP.timer) rpPlay(); else rvRender(); return; }
- const a=e.target.closest('[data-ract]'); if(!a) return;
- const act=a.getAttribute('data-ract');
- if(act==='replayday'){ const s=selTrade(); if(s){ rpReset(s.t.date); setMode('replay'); } return; }
- if(act==='rpplay'){ if(RP.state==='idle') RP.state='paused'; rpPlay(); return; }
- if(act==='rppause'){ rpPause(); return; }
- if(act==='rpstep'){ rpStop(); if(RP.state==='idle') RP.state='paused'; rpStep(); return; }
- if(act==='rpback'){ rpStop(); rpStep(true); return; }
- if(act==='rphome'){ rpReset(); RP.state='paused'; rvRender(); return; }
- if(act==='jlong'||act==='jshort'){
-   const el=document.getElementById('jnote'); if(el) RP.note=el.value;
-   rpJudge(act==='jlong'?'long':'short'); return; }
- if(act==='rpreveal'){ rpReveal(); return; }
- if(act==='rpagain'){ rpReset(); rvRender(); return; }
- if(act==='rpnext'){ const D=(RV&&RV.days)||[]; const i=D.indexOf(RP.date);
-   if(D.length){ rpReset(D[(i+1)%D.length]); rvRender(); } return; }
 });
 /* 即時分頁：← → 換日、Home 回到即時。看圖時手不用離開鍵盤。 */
 document.addEventListener('keydown',function(e){
@@ -8545,1068 +7452,18 @@ document.addEventListener('keydown',function(e){
    viewDate=''; pickOpen=false; fetchBars(true); tick(); setTimeout(tick,250); }
  else if(e.key==='Escape'&&pickOpen){ pickOpen=false; tick(); }
 });
-document.addEventListener('keydown',function(e){
- if(TAB!=='review') return;
- if(e.target.tagName==='INPUT'){ if(e.key==='Escape') e.target.blur(); return; }
- if(MODE==='review'){
-   if(e.key==='ArrowLeft'||e.key==='ArrowUp'){ e.preventDefault(); moveSel(-1); }
-   else if(e.key==='ArrowRight'||e.key==='ArrowDown'){ e.preventDefault(); moveSel(1); }
-   else if(e.key==='r'||e.key==='R'){ const s=selTrade();
-     if(s){ rpReset(s.t.date); setMode('replay'); } }
-   return;
- }
- if(e.key===' '){ e.preventDefault(); if(RP.timer) rpPause(); else rpPlay(); }
- else if(e.key==='ArrowRight'){ e.preventDefault(); rpStop();
-   if(RP.state==='idle') RP.state='paused'; rpStep(); }
- else if(e.key==='ArrowLeft'){ e.preventDefault(); rpStop(); rpStep(true); }
- else if(e.key==='ArrowUp'){ e.preventDefault(); if(!RP.judge) rpJudge('long'); }
- else if(e.key==='ArrowDown'){ e.preventDefault(); if(!RP.judge) rpJudge('short'); }
- else if(e.key==='Enter'){ e.preventDefault(); rpReveal(); }
-});
-/* ══════════════════ 【細節】分頁：逐筆早盤圖（Canvas） ══════════════════
 
-   即時分頁回答「今天走到哪」，這一頁回答「**那 45 分鐘裡，每一秒發生什麼**」。
-   區隔不是「今天 vs 那 45 分鐘」（即時分頁本來就看得到那 45 分鐘），是**多細**：
-   他那一單 290 秒，在即時的 5 分 K 上是 1 根、30 秒桶約 10 根、1 秒桶 290 根。
-   K 棒比折線多給的是「這一段摸到多高多低」，那正是 ±100 觸價規則在意的
-   （觸價看有沒有摸到，不是看收在哪）—— 所以預設圖種是秒級 K 棒。
-
-   ⛔ **Canvas，不是 SVG。即時分頁的 chartSVG() 那套不能沿用。**
-      2026-09-07 實測（headless、真滑鼠拖 60 步、量每一步）：40,000 點的折線+價帶
-      SVG path 每步 155.1ms(6.4fps)／Canvas 全部點 152.8ms(6.5fps)／
-      **Canvas 像素分桶 15.4ms(65fps)**；秒K 6.95ms(144fps)。
-      SVG 版的 d 字串長 973,543 字元，每平移一格重建一次。
-      **像素分桶是必須不是優化** —— 另外兩條路的手感都是「黏住」。
-   ⛔ 這一頁一行都不碰下單路徑，也不碰 on_tick（理由見後端 tick_day 的註解）。
-   ⛔ 不得出現任何預測／勝率預估／期望值／買賣建議／訊號強度，
-      只畫已經發生的客觀事實：成交價、買賣價、成交量、他自己那一單、缺口。
-   ⛔ 效能數字、筆數、桶寬、缺口筆數一律不准用紅綠（那兩個顏色只代表漲跌／賺賠）。
-*/
-const TKSEC0=8*3600+45*60;      // 08:45:00 的當日秒數（＝後端的 sec0）
-const TKSPAN=45*60;             // 08:45:00 ~ 09:30:00 ＝ 2,700 秒
-const TKR=64, TKTOP=12, TKBOT=26;      // 右側價格軸寬／繪圖區上下留白（沿用面板）
-const TKBARSEC=[1,2,5,10,15,30,60];
-const TKHOLE=30;                // 秒。連續這麼久一筆成交都沒有 ＝ 沒錄到，不是行情靜止
-const TKVOLH=0.22;              // 成交量佔繪圖區高度的比例（疊在下緣，不開獨立副圖）
-/* TK.date（想看哪天）與 TK.data.date（手上這份是哪天）**必須是兩個欄位** ——
-   換日到新資料回來之間那一秒，只有一個欄位的話會把昨天的資料掛在今天的日期底下。 */
-var TK={date:'', data:null, days:null, since:null, skipped:[], today:'',
-        view:null, seq:0, pending:false, err:'', v:'C', bar:'auto',
-        ov:{trade:true, stop:true, vol:true, idx:false, fixed:true},
-        follow:true, hover:null, sel:0, pick:false, cache:{}, timer:null,
-        drawn:0, ms:0, times:[], booted:false};
-var TKC={W:0,H:0,DPR:0};                    // canvas 目前的尺寸（見 tkFit）
-var TKAXIS={key:null,hi:0,lo:0,step:0};     // 價格軸的遲滯（見 tkAxis）
-var TKBARC={key:'',bars:null};              // 秒K 聚合快取
-var TKDRAG=null;
-
-const tkN=x=>(typeof x==='number'&&isFinite(x))?x:null;
-/* ⚠️ 分鐘/秒的換算一律 Math.floor 不可以 round（demo 踩過：290 秒被印成「5 分 50 秒」） */
-function tkHMS(s){
- let t=Math.floor(s)+TKSEC0; if(!isFinite(t)) t=TKSEC0;
- const h=Math.floor(t/3600), m=Math.floor(t/60)%60, q=((t%60)+60)%60;
- return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(q).padStart(2,'0');
-}
-const tkNum=n=>n==null?'—':Number(n).toLocaleString();
-
-/* ---------------- 逐筆 vs 取樣 ----------------
-   這一頁吃兩種檔：逐筆（tick_writer.py 的 YYYY-MM-DD.jsonl）與**取樣**
-   （tick_recorder.py 的 YYYY-MM-DD-polled.jsonl，每 0.1 秒讀一次 /api/state、
-   只在價格或買賣價有變時記一列）。
-   ⛔ 取樣日**一定要在畫面上講出來**（圖上的籤、日期清單的標記、副標三處都要），
-      不是只放在資料裡 —— 兩者的密度差 40 倍，看不出差別就會把取樣當成逐筆讀。
-   ⛔ 取樣檔**沒有單筆成交量**（vol_ratio 是「累積量 ÷ 歷史中位」，不是量）⇒
-      量柱那顆疊圖一律 disabled ＋ 寫出原因，跟「加權」那顆同一套處理。 */
-function tkKindOf(d){ const x=tkDayInfo(d); return (x&&x.kind)||'tick'; }
-function tkKind(){ const D=TK.data;
- return (D&&D.date===TK.date&&D.kind)?D.kind:tkKindOf(TK.date); }
-const tkIsPolled=()=>tkKind()==='polled';
-/* 量柱唯一的開關。⛔ 沒有 has_vol 的舊回應（或還沒載入）一律看種類，不猜。 */
-function tkHasVol(){ const D=TK.data;
- return (D&&D.date===TK.date&&D.has_vol!==undefined)?!!D.has_vol:(tkKind()==='tick'); }
-/* 取樣密度講的是實測的中位間隔，不是寫死的「0.5 秒」。
-   ⚠️ 去尾零要一路去到底：舊版 `.replace(/0$/,'')` 只去掉**一個** 0 ⇒ ms_med=1000
-      會印成「約 1.0 秒一筆」（lab-qa 2026-09-07 抓到）。整數毫秒（例如 5ms）會被
-      去成空字串，所以留一條「小於 10 毫秒就直接講毫秒」的退路。 */
-function tkRate(){ const D=TK.data, m=(D&&D.date===TK.date)?D.ms_med:null;
- if(!(typeof m==='number'&&m>0)) return '約 0.5 秒一筆';
- const s=(m/1000).toFixed(2).replace(/\.?0+$/,'');
- return s?('約 '+s+' 秒一筆'):('約 '+Math.round(m)+' 毫秒一筆'); }
-/* ⛔ 圖上那張金籤要把「高低不可信」也講出來（2026-09-07 加）：取樣列只有**一個**
-   `price`，開高低收四個值全部來自同一個取樣點 —— 那四個數字沒有無中生有（它們真的是
-   那一秒**取樣到的**極值），但秒 K 之所以被選成預設，理由正是「K 棒多給的是這一段
-   摸到多高多低」，而取樣日**恰好就是那個東西不成立**：他那份真檔實測 1 秒桶有
-   **26.7% 高＝低**（401/1504）。他早上盯的是圖不是副標，所以這句話要在圖上。 */
-const TKPOLLBADGE=()=>'取樣 · '+tkRate()+' · 不是逐筆 · 高低＝取樣點的極值';
-
-/* ---------------- 取資料 ---------------- */
-function tkFetchDays(){
- return fetch('/api/tick/days').then(r=>r.json()).then(x=>{
-   TK.days=(x&&x.days)||[]; TK.since=(x&&x.since)||null;
-   TK.skipped=(x&&x.skipped)||[]; TK.today=(x&&x.today)||'';
-   if(!TK.date){
-     const first=TK.days.find(d=>!d.empty)||TK.days[0];
-     if(first) TK.date=first.d;
-   }
- }).catch(()=>{ if(!TK.days) TK.days=[]; });
-}
-
-/* columnar → TypedArray。2,700 個桶 × 8 欄 ≈ 86KB，整天留在記憶體完全無壓力
-   （demo 實測載入 40,000 點，JS heap 差 0.00 MB）。 */
-function tkPack(x){
- const cap=Math.max(2760,(x.s||[]).length+64);
- const D={date:x.date, len:0, cap:cap, idx:Object.create(null),
-          s:new Int32Array(cap), o:new Float32Array(cap), h:new Float32Array(cap),
-          l:new Float32Array(cap), c:new Float32Array(cap), vq:new Int32Array(cap),
-          bl:new Float32Array(cap), ah:new Float32Array(cap),
-          gaps:x.gaps||[], bad:x.bad||0, n:x.n||0, heads:x.heads||0, v:x.v,
-          vmix:!!x.vmix, first:x.first, last:x.last, complete:!!x.complete,
-          trades:x.trades||[], sec0:x.sec0,
-          kind:x.kind||'tick', has_vol:(x.has_vol!==undefined?!!x.has_vol:true),
-          ms_med:(x.ms_med==null?null:x.ms_med), nopx:x.nopx||0, outwin:x.outwin||0};
- tkMerge(D,x);
- return D;
-}
-/* ⛔ 合併規則是「同 s 覆蓋、其餘 append」，**不可以無腦 concat** ——
-   `from=<秒>` 回的桶含 from 本身（那個桶上次拿到時還沒收完），
-   concat 會出現兩根同一秒的 K 棒：**圖上完全看不出來，只有量會變兩倍**。 */
-function tkMerge(D,x){
- const S=x.s||[]; let dirty=false;
- for(let i=0;i<S.length;i++){
-   const s=S[i]; let j=D.idx[s];
-   if(j===undefined){
-     if(D.len>=D.cap) break;
-     if(D.len&&s<D.s[D.len-1]) dirty=true;      // 不該發生，但檔案不保證單調遞增
-     j=D.len++; D.idx[s]=j; D.s[j]=s;
-   }
-   D.o[j]=x.o[i]; D.h[j]=x.h[i]; D.l[j]=x.l[i]; D.c[j]=x.c[i];
-   D.vq[j]=x.vq[i]||0;
-   D.bl[j]=(x.bl[i]==null?NaN:x.bl[i]); D.ah[j]=(x.ah[i]==null?NaN:x.ah[i]);
- }
- if(dirty) tkResort(D);
- // meta 每次都換成最新的（筆數、缺口、first/last 都會長）
- for(const k of ['gaps','bad','n','heads','first','last','complete','trades','v','vmix',
-                 'kind','has_vol','ms_med','nopx','outwin'])
-   if(x[k]!==undefined) D[k]=x[k];
- TKBARC.key='';
- return D;
-}
-function tkResort(D){
- const ord=Array.from({length:D.len},(_,i)=>i).sort((a,b)=>D.s[a]-D.s[b]);
- const cp=a=>{const t=a.slice(0,D.len); for(let i=0;i<D.len;i++) a[i]=t[ord[i]];};
- cp(D.s);cp(D.o);cp(D.h);cp(D.l);cp(D.c);cp(D.vq);cp(D.bl);cp(D.ah);
- D.idx=Object.create(null);
- for(let i=0;i<D.len;i++) D.idx[D.s[i]]=i;
-}
-
-function tkFetchDay(d,incr){
- // ⛔ 換日請求要帶流水號，只認最後一次的回應。連按 ◀ 時先送的請求可能後回來
- //    （每換一天後端就要重解析一個 5MB 的檔），舊那天的資料會蓋回快取；
- //    而且快取的日期跟當前選擇又剛好對得上 ⇒「載入中」那道守衛判定不出來。
- const my=++TK.seq;
- const old=TK.cache[d];
- const from=(incr&&old&&old.len)?old.s[old.len-1]:null;
- if(!incr) TK.pending=true;
- const url='/api/tick/day?date='+encodeURIComponent(d)+(from!=null?('&from='+from):'');
- return fetch(url).then(r=>r.json().then(j=>({ok:r.ok,j:j}))).then(res=>{
-   if(my!==TK.seq) return;
-   if(!res.ok){
-     if(d===TK.date){ TK.err=(res.j&&res.j.error)||'讀不出來'; TK.pending=false; TK.data=null; }
-     tkPaint(); return;
-   }
-   const x=res.j;
-   const D=(incr&&old)?tkMerge(old,x):tkPack(x);
-   TK.cache[d]=D;
-   // 每個日期一份，最多留 3 份（今天 ＋ 前後翻的兩天），超過就丟最舊的
-   const ks=Object.keys(TK.cache);
-   if(ks.length>3){ ks.sort(); for(const k of ks.slice(0,ks.length-3)) if(k!==d) delete TK.cache[k]; }
-   if(d===TK.date){
-     TK.err=''; TK.pending=false;
-     const fresh=(!TK.data||TK.data.date!==d);
-     TK.data=D;
-     if(fresh){ TK.view=null; TK.follow=true; TK.hover=null; TKAXIS.key=null;
-                TK.sel=Math.max(0,D.trades.findIndex(t=>t.kind==='real')); }
-     tkFollow();
-   }
-   tkPaint();
- }).catch(()=>{
-   if(my!==TK.seq) return;
-   if(d===TK.date&&!incr){ TK.pending=false; TK.err='連不上面板'; }
-   tkPaint();
- });
-}
-
-/* 今天還在長 ⇒ 每 2 秒抓增量。
-   ⚠️ 節奏是 2 秒不是 1 秒：tick_writer 每 1.0 秒批次 flush，磁碟上的資料本來就有
-      ≤1.5 秒延遲，用 1 秒去輪詢只會常常拿到 0 個新桶。 */
-function tkPoll(){
- clearTimeout(TK.timer); TK.timer=null;
- if(TAB!=='tick'||document.hidden) return;
- const D=TK.data;
- if(!D||D.date!==TK.date||D.complete||TK.date!==TK.today) return;
- TK.timer=setTimeout(()=>{ if(!TK.pending) tkFetchDay(TK.date,true); tkPoll(); },2000);
-}
-/* 貼齊資料右緣時自動跟著往前；使用者拖走過就停止跟隨。
-   ⛔ 不可以直接把他拉回去 —— 他可能正在看某一段。 */
-function tkFollow(){
- const D=TK.data; if(!D||!D.len||!TK.follow||!TK.view) return;
- const right=D.s[D.len-1], span=TK.view.t1-TK.view.t0;
- if(TK.ov.fixed) return;                       // 固定框本來就涵蓋整段
- TK.view={t0:right-span,t1:right};
-}
-
-/* ---------------- 幾何 ---------------- */
-function tkFull(){
- const D=TK.data;
- if(TK.ov.fixed) return {t0:0,t1:TKSPAN};
- if(D&&D.len) return {t0:D.s[0],t1:Math.max(D.s[0]+10,D.s[D.len-1])};
- return {t0:0,t1:TKSPAN};
-}
-function tkView(){ if(!TK.view) TK.view=tkFull(); return TK.view; }
-/* 自動桶寬：視窗裡大約 150 根。
-   ⚠️ **取樣日的下限是 2 秒不是 1 秒**。用他 2026-09-07 那份真取樣檔（2,972 列）實測：
-      1 秒桶 1,504 個、平均 **1.98 個點**，其中 **26.7% 高＝低**（401 個，秒 K 退化成
-      一根橫線，看起來像「這一秒沒動」）；2 秒桶 755 個、平均 3.94 個點，
-      高＝低掉到 **0.9%**（7 個）。「這一段摸到多高多低」到 2 秒桶才畫得出來
-      —— 那正是 ±100 觸價唯一在意的東西。
-      （舊版這裡寫「一半只有 1 個點」，那個數字沒有量過：只有 1 個點的是 **13.3%**
-        ＝ 200/1504。真正撐住這個決定的是高＝低那 26.7%。）
-      ⛔ 只動 `auto`：他手動按「1 秒」還是要給他 1 秒（那是他自己選的，不是我們冒充的）。 */
-function tkAutoSec(){ const v=tkView(), want=(v.t1-v.t0)/150;
- const floor=tkIsPolled()?2:1;
- return TKBARSEC.find(s=>s>=want&&s>=floor)||60; }
-function tkBarSec(){ return TK.bar==='auto'?tkAutoSec():TK.bar; }
-
-/* 秒K 聚合。桶邊界一律 floor(秒/桶寬)*桶寬（對齊整秒的絕對格線）——
-   ⛔ 不可以用「從第一筆開始每 N 秒」，那樣換視窗時每根 K 棒都會重新切一次、
-      形狀跟著滑動，看起來像資料在變。sec0=31500 是 60 的倍數，所以相對秒與絕對秒同格線。
-   快取 key＝日期|桶寬|桶數，資料或桶寬沒變就不重算。 */
-function tkBars(){
- const D=TK.data; if(!D||!D.len) return [];
- const w=tkBarSec(), key=D.date+'|'+w+'|'+D.len;
- if(TKBARC.key===key&&TKBARC.bars) return TKBARC.bars;
- const out=[]; let cur=null;
- for(let i=0;i<D.len;i++){
-   const k=Math.floor(D.s[i]/w)*w;
-   if(!cur||cur.t!==k){ cur={t:k,o:D.o[i],h:D.h[i],l:D.l[i],c:D.c[i],v:D.vq[i]}; out.push(cur); }
-   else{ if(D.h[i]>cur.h)cur.h=D.h[i]; if(D.l[i]<cur.l)cur.l=D.l[i];
-         cur.c=D.c[i]; cur.v+=D.vq[i]; }
- }
- TKBARC={key:key,bars:out}; return out;
-}
-/* 視窗內索引用二分搜（資料本身時間遞增），不要每次 filter 整條陣列 */
-function tkBisect(D,v){
- let lo=0,hi=D.len-1;
- while(lo<hi){ const m=(lo+hi)>>1; if(D.s[m]<v) lo=m+1; else hi=m; }
- return lo;
-}
-function tkRange(){
- const D=TK.data, v=tkView();
- if(!D||!D.len) return [0,-1];
- return [Math.max(0,tkBisect(D,v.t0)-1), Math.min(D.len-1,tkBisect(D,v.t1)+1)];
-}
-/* 「這一段完全沒有成交」＝沒錄到。08:45~09:30 的微台不可能連 30 秒一筆都沒有。
-   ⚠️ **取樣日照樣用 30 秒這個門檻**（2026-09-07 量過他那份真的取樣檔：相鄰兩列
-      中位 457ms、最大 1,628ms，**秒與秒之間最大只跳 2 秒**）⇒ 30 秒離取樣本身的
-      抖動還有一個數量級，不會誤報。
-   ⛔ 但**那句話要換掉**：取樣工具「只在價格或買賣價有變時才記一列」，所以取樣檔裡
-      一段空白有兩種可能 —— 沒錄到，**或**那段時間報價真的一動也沒動。
-      逐筆檔可以斬釘截鐵說「不是沒行情」，取樣檔不行，寫成一樣的就是講了一句不確定的話。 */
-function tkHoles(){
- const D=TK.data, out=[]; if(!D||!D.len) return out;
- for(let i=1;i<D.len;i++) if(D.s[i]-D.s[i-1]>TKHOLE) out.push([D.s[i-1]+1,D.s[i]]);
- return out;
-}
-
-/* ---------------- 價格軸：niceStep ＋ 遲滯（必抄，不是優化） ----------------
-   即時分頁 2026-09-02 修過一次「軸一直重算、整張圖跳」（開盤 8 次 → 1 次）。
-   這張圖比 5 分 K 嚴重得多：資料密 40 倍、拖曳縮放是主要操作、最後一根還在長。
-   ⚠️ 遲滯 key **必須**帶「視窗起｜視窗迄｜桶寬」——
-      漏掉後兩項會出現「軸黏在上一個視窗」的鬼影（縮放／換圖種對不上）。 */
-function tkNiceStep(raw){
- if(!(raw>0)) return 1;
- const e=Math.pow(10,Math.floor(Math.log10(raw))), r=raw/e;
- return (r<=1?1:r<=2?2:r<=2.5?2.5:r<=5?5:10)*e;
-}
-function tkAxis(){
- const D=TK.data, v=tkView(), w=tkBarSec();
- let hi=-1e18, lo=1e18;
- if(TK.v==='C'){
-   for(const b of tkBars()) if(b.t+w>=v.t0&&b.t<=v.t1){
-     if(b.h>hi)hi=b.h; if(b.l<lo)lo=b.l; }
- }else if(D&&D.len){
-   const [i0,i1]=tkRange();
-   for(let i=i0;i<=i1;i++){
-     if(D.h[i]>hi)hi=D.h[i]; if(D.l[i]<lo)lo=D.l[i];
-     if(TK.v==='B'){ const a=D.ah[i], b=D.bl[i];
-       if(isFinite(a)&&a>hi)hi=a; if(isFinite(b)&&b<lo)lo=b; }
-   }
- }
- /* ⚠️ 進出場價只有在「那一單真的落在目前視窗的時間範圍裡」時才納入價格軸。
-    ⚠️ 真實單的 exit 可能是 null，`Math.min(lo,entry,exit)` 會把 null 當 0、
-       價格軸整個掉到 0（2026-09-02 踩過）—— 所以一律先 tkN() 過濾。
-    ⛔ ±100 停利停損**一律不納入**：那 45 分鐘的真實振幅常常只有 30~60 點，
-       硬把 ±200 的範圍塞進來會把唯一要看的波動壓成一條直線。 */
- if(TK.ov.trade) for(const t of tkVisTrades()){
-   const a=tkN(t.entry), b=tkN(t.exit);
-   if(a!=null){ if(a>hi)hi=a; if(a<lo)lo=a; }
-   if(b!=null){ if(b>hi)hi=b; if(b<lo)lo=b; }
- }
- if(!(hi>lo)){ const m=(hi>-1e17?hi:12000); hi=m+5; lo=m-5; }
- const pad=Math.max(1,(hi-lo)*0.06);
- let aHi=hi+pad, aLo=lo-pad;
- const step=tkNiceStep((aHi-aLo)/6);
- aHi=Math.ceil(aHi/step)*step; aLo=Math.floor(aLo/step)*step;
- const key=[TK.date,TK.v,v.t0.toFixed(2),v.t1.toFixed(2),w].join('|');
- /* key 沒變時：舊軸還包得住新資料、而且新資料的高度沒有縮到舊軸的 55% 以下，就沿用。 */
- if(TKAXIS.key===key&&TKAXIS.hi>=aHi&&TKAXIS.lo<=aLo
-    &&(aHi-aLo)>=(TKAXIS.hi-TKAXIS.lo)*0.55){
-   return TKAXIS;
- }
- TKAXIS={key:key,hi:aHi,lo:aLo,step:step};
- return TKAXIS;
-}
-
-/* ---------------- 我的單 ---------------- */
-function tkAllTrades(){ const D=TK.data; return (D&&D.trades)||[]; }
-function tkTradeSpan(t){
- const a=tkN(t.t_in), b=tkN(t.t_out);
- return {a:a==null?null:a-TKSEC0, b:b==null?null:b-TKSEC0};
-}
-function tkVisTrades(){
- const v=tkView(), out=[];
- for(const t of tkAllTrades()){
-   const sp=tkTradeSpan(t); if(sp.a==null) continue;
-   const end=sp.b==null?v.t1:sp.b;
-   if(sp.a<v.t1&&end>v.t0) out.push(t);
- }
- return out;
-}
-function tkSel(){ const L=tkAllTrades(); if(!L.length) return null;
- return L[Math.min(Math.max(0,TK.sel),L.length-1)]; }
-
-/* ---------------- canvas ----------------
-   ⛔ 這道 early-return 不准拿掉。寫 canvas.width（**就算寫同一個值**）會重新配置
-      整張後備緩衝區並清空 —— demo 實測 2,212 點時一次 draw 從 2ms 變 129ms（64 倍）。
-      tkFit() 每次 draw 都會呼叫，所以它在熱路徑上。 */
-function tkFit(){
- const cv=document.getElementById('tkcv'); if(!cv) return null;
- const box=cv.getBoundingClientRect();
- const w=Math.max(320,Math.round(box.width)), h=Math.max(140,Math.round(box.height));
- const dpr=Math.min(2,window.devicePixelRatio||1);
- if(w===TKC.W&&h===TKC.H&&dpr===TKC.DPR&&cv.width) return cv;
- TKC={W:w,H:h,DPR:dpr};
- cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr);
- cv.getContext('2d').setTransform(dpr,0,0,dpr,0,0);
- return cv;
-}
-
-/* 像素分桶：一個像素欄只留 min/max/first/last（買賣價另留 bidMin/askMax）。
-   ⛔ 不可以用「每 N 筆取一筆」的等距抽樣 —— 那會漏掉尖峰，
-      而尖峰正是 ±100 觸價唯一在意的東西。
-   一個像素欄本來就塞不下兩個以上的值，所以這不叫抽稀：畫面上看到的東西一模一樣
-   （每欄的 min/max 逐欄比對必須 100% 相等，探針第 2 條在守）。
-   真正丟掉的只有「同一像素欄之內誰先誰後」。 */
-function tkCols(D,i0,i1,xOf,cols){
- const mn=new Float64Array(cols).fill(Infinity), mx=new Float64Array(cols).fill(-Infinity);
- const bmn=new Float64Array(cols).fill(Infinity), amx=new Float64Array(cols).fill(-Infinity);
- const fst=new Float64Array(cols).fill(NaN), lst=new Float64Array(cols).fill(NaN);
- let used=0;
- for(let i=i0;i<=i1;i++){
-   let c=Math.floor(xOf(D.s[i])); if(c<0) c=0; if(c>=cols) c=cols-1;
-   if(D.l[i]<mn[c]) mn[c]=D.l[i];
-   if(D.h[i]>mx[c]) mx[c]=D.h[i];
-   if(isNaN(fst[c])){ fst[c]=D.o[i]; used++; }
-   lst[c]=D.c[i];
-   const b=D.bl[i], a=D.ah[i];
-   if(isFinite(b)&&b<bmn[c]) bmn[c]=b;
-   if(isFinite(a)&&a>amx[c]) amx[c]=a;
- }
- return {mn:mn,mx:mx,bmn:bmn,amx:amx,fst:fst,lst:lst,used:used};
-}
-
-/* 折線／折線+價帶。**抽出來當獨立函式**是刻意的：探針的負控組要能整支換掉，
-   拿「一個點都不省」的畫法跑同一份資料，證明分桶那條綠燈不是量錯的
-   （沒有負控組的綠燈在這個專案不算數）。 */
-function tkLine(ctx,D,i0,i1,xOf,yOf,PW){
- const cols=Math.max(1,Math.ceil(PW));
- const C=tkCols(D,i0,i1,xOf,cols);
- if(TK.v==='B'){
-   ctx.fillStyle='rgba(124,140,168,.20)'; ctx.beginPath();
-   let st=false;
-   for(let c=0;c<cols;c++) if(isFinite(C.amx[c])){ const y=yOf(C.amx[c]);
-     st?ctx.lineTo(c+.5,y):(ctx.moveTo(c+.5,y),st=true); }
-   for(let c=cols-1;c>=0;c--) if(isFinite(C.bmn[c])) ctx.lineTo(c+.5,yOf(C.bmn[c]));
-   ctx.closePath(); ctx.fill();
- }
- // 每欄的高低（極短的垂直線）＝那一欄真正的振幅，不會被抽掉
- ctx.strokeStyle='rgba(233,236,241,.38)'; ctx.lineWidth=1; ctx.beginPath();
- for(let c=0;c<cols;c++) if(isFinite(C.mn[c])&&C.mx[c]-C.mn[c]>0){
-   ctx.moveTo(c+.5,yOf(C.mx[c])); ctx.lineTo(c+.5,yOf(C.mn[c])); }
- ctx.stroke();
- ctx.strokeStyle='#E9ECF1'; ctx.lineWidth=1.4; ctx.lineJoin='round'; ctx.beginPath();
- let st=false;
- for(let c=0;c<cols;c++) if(!isNaN(C.lst[c])){ const y=yOf(C.lst[c]);
-   st?ctx.lineTo(c+.5,y):(ctx.moveTo(c+.5,y),st=true); }
- ctx.stroke();
- return C.used;
-}
-
-function tkDraw(){
- const t0=performance.now();
- const cv=tkFit(); if(!cv) return 0;
- const ctx=cv.getContext('2d');
- const W=TKC.W, H=TKC.H, PW=W-TKR;
- const D=TK.data, v=tkView();
- const xOf=s=>(s-v.t0)/(v.t1-v.t0)*PW;
- const A=tkAxis();
- const PH=H-TKTOP-TKBOT;
- // ⛔ 取樣日沒有量（tkHasVol()===false）⇒ 量區高度一定是 0。
- //    ⛔⛔ 絕不可以拿 vol_ratio 之類的東西湊一根「看起來像」的量柱。
- const VH=(TK.ov.vol&&tkHasVol()&&D&&D.len)?PH*TKVOLH:0;
- const priceH=PH-VH;
- const yOf=p=>TKTOP+(A.hi-p)/(A.hi-A.lo)*priceH;
- ctx.clearRect(0,0,W,H);
- ctx.font='12px ui-monospace, monospace'; ctx.textBaseline='alphabetic'; ctx.textAlign='left';
-
- // 下單時段底色（沿用面板「08:45~09:30」的表達）
- const bx0=Math.max(0,xOf(0)), bx1=Math.min(PW,xOf(TKSPAN));
- if(bx1>bx0){ ctx.fillStyle='rgba(227,169,81,.05)'; ctx.fillRect(bx0,TKTOP,bx1-bx0,PH); }
-
- /* 缺的那段畫斜線 ＋ **一句人話**。
-    ⛔ 那句話一定要說出「不是沒行情」：空白的那一段長得跟「行情沒動」一模一樣，
-       他早上是照圖判斷的，看不出差別會直接誤讀。
-    ⚠️「我們漏了」與「時間還沒走到」的文案必須不同。 */
- const hatch=(x0,x1,label,soft)=>{
-   x0=Math.max(0,x0); x1=Math.min(PW,x1);
-   if(!(x1>x0+1)) return;
-   ctx.save(); ctx.beginPath(); ctx.rect(x0,TKTOP,x1-x0,PH); ctx.clip();
-   ctx.fillStyle='#121721'; ctx.fillRect(x0,TKTOP,x1-x0,PH);
-   ctx.strokeStyle=soft?'rgba(141,149,163,.10)':'rgba(141,149,163,.18)'; ctx.lineWidth=1;
-   for(let x=x0-H;x<x1+H;x+=7){ ctx.beginPath(); ctx.moveTo(x,H-TKBOT);
-     ctx.lineTo(x+PH,TKTOP); ctx.stroke(); }
-   ctx.restore();
-   if(x1-x0>130&&label){
-     ctx.save(); ctx.font='12.5px "Microsoft JhengHei","PingFang TC",sans-serif';
-     const tw=ctx.measureText(label).width+16;
-     ctx.fillStyle='#0E1116'; ctx.globalAlpha=.82;
-     ctx.fillRect((x0+x1)/2-tw/2,TKTOP+priceH/2-18,tw,22); ctx.globalAlpha=1;
-     ctx.fillStyle='#8D95A3'; ctx.textAlign='center';
-     ctx.fillText(label,(x0+x1)/2,TKTOP+priceH/2-2);
-     ctx.textAlign='left'; ctx.restore();
-   }
- };
- /* ⚠️ 取樣日不可以說「不是沒行情」—— 取樣工具只在有變動時才記一列，
-       空白的那一段有兩種可能，講死就是講了一句我們證不了的話。 */
- const MISS=tkIsPolled()?'這段沒有取樣到（沒錄到，或報價一直沒變）'
-                       :'這段沒有錄到（不是沒行情）', SOON='還沒到';
- if(D&&D.len){
-   hatch(xOf(v.t0),xOf(D.s[0]),MISS);
-   // 今天而且還沒錄完 ⇒ 尾巴是「還沒到」；過去的日子沒有「還沒到」這件事
-   const growing=(!D.complete&&D.date===TK.today);
-   hatch(xOf(D.s[D.len-1]),xOf(v.t1),growing?SOON:MISS,growing);
-   for(const g of tkHoles()) hatch(xOf(g[0]),xOf(g[1]),MISS);
- }
-
- // 價格軸底 ＋ 格線（刻度線從 lo 往上取第一個 step 整數倍開始畫）
- ctx.fillStyle='rgba(28,34,44,.45)'; ctx.fillRect(PW,0,TKR,H);
- ctx.strokeStyle='#232A35'; ctx.lineWidth=1;
- for(let p=A.lo;p<=A.hi+1e-9;p+=A.step){
-   const y=Math.round(yOf(p))+.5;
-   if(y<TKTOP-1||y>TKTOP+priceH+1) continue;
-   ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(PW,y); ctx.stroke();
-   ctx.fillStyle='#5C6472'; ctx.fillText(p.toFixed(A.step<1?1:0),PW+8,y+4);
- }
-
- /* 時間軸。⛔ 秒級一律印完整 HH:MM:SS —— 只印 MM:SS 的話，放大到 12 秒時
-    「14:05」會被讀成下午兩點零五（demo 實測踩到）。 */
- const span=v.t1-v.t0, maxLab=Math.max(3,Math.floor(PW/110));
- const cand=[1,2,5,10,15,30,60,120,300,600,900];
- const gt=cand.find(c=>span/c<=maxLab)||900;
- ctx.strokeStyle='rgba(35,42,53,.7)';
- for(let t=Math.ceil(v.t0/gt)*gt;t<=v.t1;t+=gt){
-   const x=Math.round(xOf(t))+.5;
-   ctx.beginPath(); ctx.moveTo(x,TKTOP); ctx.lineTo(x,H-TKBOT); ctx.stroke();
-   ctx.fillStyle='#5C6472'; ctx.textAlign='center';
-   ctx.fillText(tkHMS(t),Math.max(34,Math.min(x,PW-34)),H-8);
-   ctx.textAlign='left';
- }
- // 09:30 收手線。標籤放**下緣**不放上緣（上緣要留給畫面外的邊緣籤，兩張會互相壓）
- if(TKSPAN>=v.t0&&TKSPAN<=v.t1){
-   const x=Math.round(xOf(TKSPAN))+.5;
-   ctx.save(); ctx.setLineDash([4,4]); ctx.strokeStyle='rgba(227,169,81,.55)';
-   ctx.beginPath(); ctx.moveTo(x,TKTOP); ctx.lineTo(x,H-TKBOT); ctx.stroke(); ctx.restore();
-   ctx.save(); ctx.fillStyle='#E3A951';
-   ctx.font='11.5px ui-monospace,"Microsoft JhengHei",monospace';
-   const lab='09:30 收手', lw=ctx.measureText(lab).width;
-   ctx.fillText(lab,Math.min(x+5,PW-lw-4),H-TKBOT-8); ctx.restore();
- }
-
- let drawn=0;
- ctx.save(); ctx.beginPath(); ctx.rect(0,0,PW,H); ctx.clip();
- if(D&&D.len){
-   const [i0,i1]=tkRange();
-   if(TK.v==='C'){
-     const w=tkBarSec(), B=tkBars();
-     const bw=Math.max(1,Math.min(14,(xOf(v.t0+w)-xOf(v.t0))*.66));
-     for(const b of B){
-       if(b.t+w<v.t0||b.t>v.t1) continue;
-       drawn++;
-       const x=xOf(b.t+w/2), up=b.c>=b.o;
-       ctx.strokeStyle=ctx.fillStyle=up?'#EE5A54':'#34B37E'; ctx.lineWidth=1;
-       ctx.beginPath(); ctx.moveTo(Math.round(x)+.5,yOf(b.h));
-       ctx.lineTo(Math.round(x)+.5,yOf(b.l)); ctx.stroke();
-       const yo=yOf(b.o), yc=yOf(b.c);
-       ctx.fillRect(x-bw/2,Math.min(yo,yc),bw,Math.max(1.2,Math.abs(yc-yo)));
-     }
-   }else{
-     drawn=tkLine(ctx,D,i0,i1,xOf,yOf,PW);
-   }
-
-   /* 成交量：疊在下緣、佔繪圖區 22%（即時分頁的 K 線圖就是這樣畫的，沿用同一套語言）。
-      量＝**桶內加總**；紅綠＝該桶的漲跌（收 ≥ 開為紅）。
-      ⛔ 絕對不可以標成「買量／賣量」或「內外盤」—— 逐筆紀錄裡沒有這個旗標，那會是編的。
-      量軸不畫刻度數字（秒級成交量的絕對值沒有解讀價值），只在右上角標「最大 N 口」。 */
-   if(VH>0){
-     const vy0=TKTOP+priceH, vy1=TKTOP+PH;
-     ctx.strokeStyle='#1E2530'; ctx.lineWidth=1; ctx.beginPath();
-     ctx.moveTo(0,Math.round(vy0)+.5); ctx.lineTo(PW,Math.round(vy0)+.5); ctx.stroke();
-     let vmax=0, list;
-     if(TK.v==='C'){ const w=tkBarSec();
-       list=tkBars().filter(b=>b.t+w>=v.t0&&b.t<=v.t1)
-                    .map(b=>({x0:xOf(b.t),x1:xOf(b.t+w),v:b.v,up:b.c>=b.o}));
-     }else{
-       const cols=Math.max(1,Math.ceil(PW)), acc=new Float64Array(cols);
-       const upc=new Int8Array(cols);
-       for(let i=i0;i<=i1;i++){ let c=Math.floor(xOf(D.s[i]));
-         if(c<0)c=0; if(c>=cols)c=cols-1; acc[c]+=D.vq[i]; upc[c]=(D.c[i]>=D.o[i])?1:0; }
-       list=[]; for(let c=0;c<cols;c++) if(acc[c]>0)
-         list.push({x0:c,x1:c+1,v:acc[c],up:!!upc[c]});
-     }
-     for(const b of list) if(b.v>vmax) vmax=b.v;
-     if(vmax>0){
-       for(const b of list){
-         const h2=Math.max(1,(b.v/vmax)*(vy1-vy0-3));
-         ctx.fillStyle=b.up?'rgba(238,90,84,.55)':'rgba(52,179,126,.55)';
-         const w2=Math.max(1,Math.min(14,(b.x1-b.x0)*.66));
-         ctx.fillRect((b.x0+b.x1)/2-w2/2,vy1-h2,w2,h2);
-       }
-       // 量軸不畫刻度數字（秒級成交量的絕對值沒有解讀價值，要看的是相對高低），
-       // 只在右上角標一個「最大 N 口」；量柱會蓋到它，所以先墊一塊底
-       ctx.save(); ctx.font='10.5px ui-monospace,monospace'; ctx.textAlign='right';
-       const vt='最大 '+vmax.toLocaleString()+' 口', vw=ctx.measureText(vt).width;
-       ctx.fillStyle='#0E1116'; ctx.globalAlpha=.85;
-       ctx.fillRect(PW-vw-11,vy0+2,vw+8,13); ctx.globalAlpha=1;
-       ctx.fillStyle='#5C6472'; ctx.fillText(vt,PW-6,vy0+12);
-       ctx.textAlign='left'; ctx.restore();
-     }
-   }
-
-   /* 佇列滿丟過資料的地方：一條金色虛線 ＋ 上緣小三角。
-      這是「這裡有 N 筆沒錄到」的痕跡，不是行情。 */
-   for(const g of (D.gaps||[])){
-     if(g.sec==null||g.sec<v.t0||g.sec>v.t1) continue;
-     const x=Math.round(xOf(g.sec))+.5;
-     ctx.save(); ctx.setLineDash([3,5]); ctx.strokeStyle='rgba(227,169,81,.6)';
-     ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(x,TKTOP); ctx.lineTo(x,TKTOP+priceH);
-     ctx.stroke(); ctx.restore();
-     ctx.fillStyle='#E3A951'; ctx.beginPath(); ctx.moveTo(x,TKTOP+7);
-     ctx.lineTo(x-5,TKTOP); ctx.lineTo(x+5,TKTOP); ctx.closePath(); ctx.fill();
-   }
- }
- ctx.restore();
-
- // 我的單
- if(TK.ov.trade&&D) tkDrawTrades(ctx,xOf,yOf,v,PW,H,A,priceH);
- // 游標十字線
- if(TK.hover!=null&&D&&D.len) tkDrawHover(ctx,xOf,yOf,PW,H,priceH);
-
- /* ⛔⛔ 取樣日的標籤**畫在圖上**，不是只放在資料裡。
-    這張圖跟另外兩張的差別就是「多細」，取樣把密度打掉 40 倍 ——
-    看不出差別的話他會把取樣當逐筆讀，而畫面上一模一樣。
-    位置在繪圖區**左下角**：左上角是「我那一單在左/右邊」的邊緣籤、
-    右側是「±100 在畫面外」與「09:30 收手」，三張擠在一起會互相壓掉字。 */
- if(tkIsPolled()) tkChip(ctx,6,TKTOP+priceH-22,TKPOLLBADGE(),'#E3A951');
-
- const ms=performance.now()-t0;
- TK.ms=ms; TK.drawn=drawn;
- TK.times.push(ms); if(TK.times.length>240) TK.times.shift();
- return ms;
-}
-
-function tkChip(ctx,x,y,txt,col){
- ctx.save(); ctx.font='11px ui-monospace,"Microsoft JhengHei",monospace';
- const w=ctx.measureText(txt).width+14;
- ctx.fillStyle='#0E1116'; ctx.globalAlpha=.9;
- ctx.beginPath(); ctx.roundRect(x,y,w,17,4); ctx.fill(); ctx.globalAlpha=1;
- ctx.strokeStyle=col; ctx.globalAlpha=.5; ctx.lineWidth=1; ctx.stroke(); ctx.globalAlpha=1;
- ctx.fillStyle=col; ctx.fillText(txt,x+7,y+12); ctx.restore();
-}
-function tkDrawTrades(ctx,xOf,yOf,v,PW,H,A,priceH){
- const vis=tkVisTrades(), all=tkAllTrades();
- ctx.save(); ctx.beginPath(); ctx.rect(0,0,PW,H); ctx.clip();
- for(const t of vis){
-   const sp=tkTradeSpan(t);
-   const x0=Math.max(-2,xOf(sp.a)), x1=Math.min(PW,xOf(sp.b==null?v.t1:sp.b));
-   ctx.fillStyle='rgba(233,236,241,.028)';
-   ctx.fillRect(x0,TKTOP,Math.max(1,x1-x0),priceH);
-   ctx.strokeStyle='rgba(233,236,241,.16)'; ctx.lineWidth=1;
-   [x0,x1].forEach(x=>{ ctx.beginPath(); ctx.moveTo(x+.5,TKTOP);
-     ctx.lineTo(x+.5,TKTOP+priceH); ctx.stroke(); });
-   const short=(t.dir==='short'), pin=tkN(t.entry), pout=tkN(t.exit);
-   const tag=(t.kind==='real'?'真':'練');
-   if(pin!=null){
-     const y=yOf(pin);
-     ctx.save(); ctx.fillStyle=short?'#34B37E':'#EE5A54'; ctx.beginPath();
-     if(short){ ctx.moveTo(xOf(sp.a),y+9); ctx.lineTo(xOf(sp.a)-7,y-3); ctx.lineTo(xOf(sp.a)+7,y-3); }
-     else{ ctx.moveTo(xOf(sp.a),y-9); ctx.lineTo(xOf(sp.a)-7,y+3); ctx.lineTo(xOf(sp.a)+7,y+3); }
-     ctx.closePath(); ctx.fill(); ctx.restore();
-     tkChip(ctx,Math.max(2,Math.min(xOf(sp.a)+10,PW-160)),y-30,
-       tag+(short?' ▼ 空 ':' ▲ 多 ')+tkHMS(sp.a)+' '+pin.toFixed(0),
-       short?'#34B37E':'#EE5A54');
-   }
-   if(pout!=null&&sp.b!=null){
-     const y=yOf(pout), win=(tkN(t.points)||0)>0, col=win?'#EE5A54':'#34B37E';
-     ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=2.2; ctx.beginPath();
-     const x=xOf(sp.b);
-     ctx.moveTo(x-6,y-6); ctx.lineTo(x+6,y+6); ctx.moveTo(x+6,y-6); ctx.lineTo(x-6,y+6);
-     ctx.stroke(); ctx.restore();
-     tkChip(ctx,Math.max(2,Math.min(x+10,PW-180)),y+12,
-       '✕ '+tkHMS(sp.b)+' '+pout.toFixed(0)+
-       (tkN(t.points)==null?'  —':'  '+(t.points>0?'+':'')+t.points),col);
-   }
- }
- ctx.restore();
- /* 不在畫面裡就整組不畫，改用邊緣籤講清楚它在哪一邊。
-    ⛔ 不要把標記黏在畫面邊緣假裝畫得出來 —— 看的人會以為那一單就發生在畫面邊上。 */
- for(const t of all){
-   if(vis.indexOf(t)>=0) continue;
-   const sp=tkTradeSpan(t); if(sp.a==null) continue;
-   const left=(sp.b==null?sp.a:sp.b)<=v.t0;
-   const txt=(left?'← ':'')+(t.kind==='real'?'真':'練')+'那一單在'+(left?'左':'右')+
-             '邊（'+tkHMS(sp.a)+'）'+(left?'':' →');
-   ctx.save(); ctx.font='11px ui-monospace,"Microsoft JhengHei",monospace';
-   const w=ctx.measureText(txt).width+14; ctx.restore();
-   tkChip(ctx,left?6:PW-w-6,TKTOP+4,txt,'#E3A951');
-   break;
- }
- /* ±100：只畫「目前選中的那一筆」。⛔ 沒有交易的日子不准畫「如果現在進場 ±100 會在哪」
-    —— 那是建議。畫不到就在對應那一側掛一張籤，**不撐大價格軸**。 */
- const s=tkSel();
- if(TK.ov.stop&&s&&tkN(s.entry)!=null){
-   const d=(s.dir==='short')?-1:1, e=tkN(s.entry);
-   [[e+d*RULE_TP,'#EE5A54','停利 +'+RULE_TP],[e-d*RULE_SL,'#34B37E','停損 −'+RULE_SL]].forEach(z=>{
-     const y=yOf(z[0]);
-     if(y>=TKTOP+8&&y<=TKTOP+priceH-4){
-       ctx.save(); ctx.setLineDash([5,4]); ctx.strokeStyle=z[1]; ctx.globalAlpha=.75;
-       ctx.lineWidth=1.2; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(PW,y); ctx.stroke();
-       ctx.restore();
-       tkChip(ctx,PW-124,y-8,z[2]+' '+z[0].toFixed(0),z[1]);
-     }else{
-       /* 畫面外：不去撐大價格軸（會把真正的波動壓扁），改成貼一張籤講清楚差多少。
-          ⚠️ y 要讓開兩個已經被佔走的位置：上緣 TKTOP+4 是「我那一單在左/右邊」的邊緣籤、
-             下緣 H-BOT-8 是「09:30 收手」—— 三張擠在同一行時會互相蓋掉一半的字
-             （實測過：停利那張把邊緣籤的時間壓成「:00 ）→」）。 */
-       const above=z[0]>A.hi, dd=Math.round(above?z[0]-A.hi:A.lo-z[0]);
-       tkChip(ctx,PW-236,above?TKTOP+25:TKTOP+priceH-42,
-         (above?'↑ ':'↓ ')+z[2]+' 在畫面'+(above?'上':'下')+'方 '+dd+' 點處',z[1]);
-     }
-   });
- }
-}
-function tkDrawHover(ctx,xOf,yOf,PW,H,priceH){
- const D=TK.data, v=tkView();
- const t=v.t0+(TK.hover/PW)*(v.t1-v.t0);
- let i=tkBisect(D,t);
- if(i>0&&Math.abs(D.s[i-1]-t)<Math.abs(D.s[i]-t)) i--;
- const x=xOf(D.s[i]), y=yOf(D.c[i]);
- if(x<0||x>PW){ TK.hi=null; return; }
- ctx.save(); ctx.setLineDash([3,3]); ctx.strokeStyle='rgba(141,149,163,.55)'; ctx.lineWidth=1;
- ctx.beginPath(); ctx.moveTo(x+.5,TKTOP); ctx.lineTo(x+.5,H-TKBOT);
- ctx.moveTo(0,y+.5); ctx.lineTo(PW,y+.5); ctx.stroke(); ctx.restore();
- ctx.fillStyle='#E3A951'; ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill();
- ctx.fillStyle='#E3A951'; ctx.fillRect(PW,y-8,TKR,16);
- ctx.fillStyle='#0E1116'; ctx.save(); ctx.font='11.5px ui-monospace,monospace';
- ctx.fillText(D.c[i].toFixed(0),PW+8,y+4); ctx.restore();
- TK.hi=i;
-}
-
-/* ---------------- 周邊文字 ---------------- */
-function tkLoading(){ return TK.pending||!TK.data||TK.data.date!==TK.date; }
-function tkDayInfo(d){ return (TK.days||[]).find(x=>x.d===d)||null; }
-/* 今天到底有沒有錄到。休市日、或面板今天還沒開過，today 根本不在清單裡 ——
-   那時候按「今天」只會換來一張錯誤畫面。 */
-function tkTodayOk(){ const x=tkDayInfo(TK.today); return !!(x&&!x.empty); }
-function tkStep(dir){
- // ◀▶ 走的是**清單的索引**，不是「日期減一天」—— 沒有錄到的日子要選不到
- const L=(TK.days||[]).filter(x=>!x.empty);
- if(!L.length) return null;
- const i=L.findIndex(x=>x.d===TK.date);
- if(i<0) return dir<0?L[0].d:null;
- const j=i-dir;                         // days 是新到舊，往前一天＝索引 +1
- return (j>=0&&j<L.length)?L[j].d:null;
-}
-function tkPagerHTML(){
- const cur=TK.date, me=tkDayInfo(cur), loading=tkLoading();
- const D=(!loading&&TK.data)?TK.data:null;
- const back=tkStep(-1), fwd=tkStep(1);
- let r2;
- if(!cur) r2='<span>沒有逐筆紀錄</span>';
- else if(loading) r2='<span>載入中…</span>';
- else if(TK.err) r2='<span class="warn">讀不出來</span>';
- else r2='<span>'+(tkIsPolled()?'取樣':'逐筆')+' '+tkNum(D?D.n:null)+
-   ' 筆</span><span class="sep">·</span>'+
-   '<span>'+((D&&D.first)?(D.first.slice(0,8)+'~'+(D.last||'').slice(0,8)):'—')+'</span>'+
-   ((D&&D.bad)?'<span class="sep">·</span><span class="warn">'+D.bad+' 列讀不出來</span>':'')+
-   '<span class="sep k">·</span><span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
- return '<div class="pager">'+
-  '<div class="r1">'+
-  '<button class="nav-icon" data-tknav="-1" title="前一個有錄到的日子（←）"'+
-    (back?'':' disabled')+'>◀</button>'+
-  // ⚠️ 日期鈕的寬度不准隨狀態變：載入中只把日期轉灰（.loading），不可以換成「載入中…」
-  //    —— 那會讓按鈕瞬間變寬約 33px，靠右對齊的 ◀ 被推出滑鼠底下。
-  '<button class="dstamp'+(TK.pick?' open':'')+(loading?' loading':'')+
-    '" data-tkpick="1" title="選日期（Esc 收合）"'+(cur?'':' disabled')+'>'+CAL_ICON+
-    '<span class="num">'+(cur?cur.slice(5):'--/--')+'</span>'+
-    '<span class="wd">'+(me?me.w:'')+'</span><span class="caret">▼</span></button>'+
-  '<button class="nav-icon" data-tknav="1" title="後一個有錄到的日子（→）"'+
-    (fwd?'':' disabled')+'>▶</button>'+
-  /* 「今天」鈕與「即時」燈固定同寬、而且永遠只出現其中一顆 ——
-     兩者寬度不一樣的話一按 ◀ 整條靠右對齊的 r1 就位移，連點時第 2 下會落到別的鈕上。
-     ⚠️ 今天沒有錄到（休市／面板還沒開）時鈕要 disabled 而不是消失：
-        消失＝整條位移，而且他會以為「今天」這條路不存在。 */
-  ((cur&&cur===TK.today)
-    ?'<span class="livelamp" title="今天"><i></i>今天</span>'
-    :'<button class="jump2" data-tkday="'+TK.today+'"'+(tkTodayOk()?'':' disabled')+
-     ' title="'+(tkTodayOk()?'回到今天（Home）':'今天還沒有紀錄')+'">今天</button>')+
-  '</div><div class="r2">'+r2+'</div></div>';
-}
-function tkListHTML(){
- if(!TK.pick) return '';
- const L=TK.days||[];
- let rows=L.map(x=>{
-   const D=TK.cache[x.d];
-   // ⚠️ 沒載入過的日子**不顯示估算筆數** —— 這個專案不放沒把握的數字。
-   //    筆數／涵蓋時段要真的切到那一天才由 /api/tick/day 給。
-   const meta=x.empty?'只有檔頭，沒有錄到資料'
-     :(D?(tkNum(D.n)+' 筆　'+((D.first||'').slice(0,8)+'~'+(D.last||'').slice(0,8))+
-          (((D.gaps||[]).length||D.bad)?'　<span class="warn">⚠ 有缺口</span>':''))
-        :'還沒載入');
-   /* ⛔ 每一列都標種類（**兩種都標**，不是只標取樣那種）——
-      他翻清單的時候要一眼分得出哪幾天是逐筆、哪幾天是取樣。
-      只標其中一種的話，沒有標記等於「不知道」而不是「另一種」。 */
-   const pol=(x.kind==='polled');
-   const tag='<span class="kind'+(pol?' polled':'')+'" title="'+
-     (pol?'tick_recorder.py 的取樣檔（約 0.5 秒一筆、沒有成交量）'
-         :'面板逐筆落地的檔（每一筆成交與買賣價）')+'">'+(pol?'取樣':'逐筆')+'</span>';
-   /* 同一天兩種檔都在：逐筆優先，另一份講出來（免得他以為那個檔不見了）。
-      ⚠️ 字要短：舊版「＋另有取樣檔（未採用）」會把 .meta 擠到換行、
-         那一列比別列高一截（.row 是 flex，換行就撐高）。長版說明放 title。 */
-   const alt=x.alt?'<span class="alt" title="這天兩種檔都有，畫的是'+(pol?'取樣':'逐筆')+
-     '檔；另一份'+(pol?'逐筆':'取樣')+'檔沒有採用">＋'+(pol?'逐筆':'取樣')+'檔</span>':'';
-   return '<button class="row'+(x.d===TK.date?' on':'')+'" data-tkday="'+x.d+'"'+
-     (x.empty?' disabled':'')+'><span class="dd">'+x.d.slice(5)+'</span>'+
-     '<span class="wd">'+x.w+'</span>'+tag+
-     '<span class="meta">'+meta+alt+'</span></button>';
- }).join('');
- if(!rows) rows='<div class="foot">還沒有任何逐筆紀錄。</div>';
- const foot=TK.since?('<div class="foot">更早以前沒有紀錄（'+TK.since+' 才開始錄）</div>'):'';
- /* ⛔ 被跳過的檔（檔名對、內容跟檔名對不起來）**在有資料的時候也要講**。
-    舊版只把它寫在「一個紀錄都沒有」的空狀態裡 ⇒ 只要有任何一天有資料，
-    「我明明有錄怎麼看不到」就完全無解（2026-09-07 lab-qa 退件 M1 的一部分）。 */
- const skip=(TK.skipped||[]).length
-   ?('<div class="foot">⚠ 有 '+TK.skipped.length+' 個檔被跳過（'+
-     TK.skipped.slice(0,3).join('、')+((TK.skipped.length>3)?' …':'')+
-     '）：檔名對、但內容跟檔名不是同一種格式。原因印在面板的主控台，'+
-     '檔案還在 tick_logs/，我們不改也不刪。</div>'):'';
- return '<div class="tk-list">'+rows+skip+foot+'</div>';
-}
-function tkToolsHTML(){
- const seg=(name,cur,items)=>'<div class="seg">'+items.map(it=>
-   '<button class="'+(String(cur)===String(it[0])?'on':'')+'" data-'+name+'="'+it[0]+'">'+
-   it[1]+'</button>').join('')+'</div>';
- const trades=tkAllTrades();
- const chip=(k,on,txt,dis,tip)=>'<button class="tk-chip'+(on?' on':'')+
-   '" data-tkov="'+k+'"'+(dis?' disabled':'')+(tip?' title="'+tip+'"':'')+'>'+txt+'</button>';
- return '<span class="lab">圖種</span>'+
-   seg('tkv',TK.v,[['C','秒K'],['A','折線'],['B','折線+價帶']])+
-   (TK.v==='C'?('<span class="lab">桶寬</span>'+
-     seg('tkbar',TK.bar,[['auto','自動'],[1,'1 秒'],[5,'5 秒'],[30,'30 秒']])):'')+
-   '<span class="gap"></span>'+
-   chip('trade',TK.ov.trade,'我的單',!trades.length,
-        trades.length?'':'這天沒有下單')+
-   chip('stop',TK.ov.stop,'±'+RULE_TP,!trades.length,
-        trades.length?'畫的是那一單的停利停損位置':'這天沒有下單')+
-   /* ⛔ 取樣檔沒有單筆成交量 ⇒ 停用 ＋ **寫出原因**（跟「加權」那顆同一套處理）。
-      ⛔⛔ 絕不可以拿 vol_ratio（累積量 ÷ 歷史中位）之類的東西湊一根假的量柱。 */
-   chip('vol',TK.ov.vol&&tkHasVol(),'成交量',!tkHasVol(),
-        tkHasVol()?'':'取樣檔只記價格與買賣價，沒有單筆成交量，這一頁畫不出量柱')+
-   // 加權指數這顆一律停用。⛔ 不可以拿別的來源硬湊一條「看起來像」的線。
-   // ⚠️ 兩種檔的原因不一樣，寫成同一句就會有一句是假的：逐筆檔真的沒有這一欄，
-   //    取樣檔有（tick_recorder 有記 idx）—— 但這一頁沒有做這條線。
-   chip('idx',false,'加權',true,
-        tkIsPolled()?'取樣檔裡有加權指數，但這一頁沒有做這條線'
-                    :'逐筆紀錄裡沒有加權指數，這一頁畫不出來')+
-   chip('fixed',TK.ov.fixed,'時間軸固定',false,
-        '固定 08:45~09:30 的框；關掉就只畫有資料的那段');
-}
-function tkReadHTML(){
- const D=TK.data;
- if(tkLoading()||!D||!D.len) return '<span class="lt">把游標移到圖上</span>';
- if(TK.hi==null||TK.hover==null) return '<span class="lt">把游標移到圖上　（滾輪縮放、拖曳平移、雙擊還原）</span>';
- const i=Math.min(TK.hi,D.len-1);
- const b=D.bl[i], a=D.ah[i];
- const w=tkBarSec();
- let o=D.o[i],h=D.h[i],l=D.l[i],c=D.c[i],vv=D.vq[i];
- if(TK.v==='C'&&w>1){
-   const k=Math.floor(D.s[i]/w)*w, B=tkBars(), bar=B.find(x=>x.t===k);
-   if(bar){ o=bar.o;h=bar.h;l=bar.l;c=bar.c;vv=bar.v; }
- }
- const up=c>=o;
- return '<span class="lt">時間</span><b>'+tkHMS(D.s[i])+'</b>'+
-   (TK.v==='C'?'<span class="sep">·</span><span class="lt">桶</span><b>'+w+' 秒</b>':'')+
-   '<span class="sep">·</span><span class="lt">開</span><b>'+o.toFixed(0)+'</b>'+
-   '<span class="lt">高</span><b>'+h.toFixed(0)+'</b>'+
-   '<span class="lt">低</span><b>'+l.toFixed(0)+'</b>'+
-   '<span class="lt">收</span><b class="'+(up?'up':'down')+'">'+c.toFixed(0)+'</b>'+
-   // ⛔ 取樣檔沒有量：寫「—」並講原因，不可以印 0 假裝那一秒沒成交
-   '<span class="sep">·</span><span class="lt">量</span>'+
-   (tkHasVol()?('<b>'+vv+'</b>'):'<b>—</b><span class="lt">取樣檔沒有量</span>')+
-   ((isFinite(b)&&isFinite(a))
-     ? '<span class="sep">·</span><span class="lt">買/賣</span><b>'+b.toFixed(0)+' / '+
-       a.toFixed(0)+'</b><span class="lt">差 '+(a-b).toFixed(0)+'</span>'
-     : '<span class="sep">·</span><span class="lt">買/賣</span><b>—</b>');
-}
-/* 副標的密度那三個字。⛔ 取樣日不可以寫「逐秒」——
-   取樣中位 0.46 秒一筆、而且是「有變才記」，寫逐秒就是把取樣講成逐筆。 */
-function tkDens(){ return tkIsPolled()?('取樣 '+tkRate()):'逐秒'; }
-function tkSubHTML(){
- if(!TK.date) return '<span>08:45~09:30 · '+tkDens()+'</span>';
- if(tkLoading()) return '<span>'+TK.date+' · 08:45~09:30 · '+tkDens()+'</span>'+
-   '<span class="sep">·</span><span>載入中…</span>';
- const D=TK.data;
- if(TK.err) return '<span>'+TK.date+'</span><span class="sep">·</span>'+
-   '<span class="warn">這天的紀錄讀不出來（'+TK.err+'）</span>';
- const growing=(!D.complete&&D.date===TK.today);
- let out='<span>'+D.date+' · 08:45~09:30 · '+tkDens()+'</span>'+
-   (tkIsPolled()?'<span class="sep">·</span><span class="warn">取樣資料，不是逐筆</span>'+
-     /* ⛔ 取樣列只有一個 price，開高低收四個值都是它 ⇒ 那個「高低」是**取樣點**的極值，
-        不是那一秒真正摸到的高低（實測 26.7% 的 1 秒桶高＝低）。金籤上也有同一句。 */
-     '<span class="sep">·</span><span>高低＝取樣點的極值，不是那一秒真正的高低</span>':'')+
-   '<span class="sep">·</span>'+
-   (growing?'<span class="warn">錄製中 · 最後一筆 '+((D.last||'').slice(0,8)||'—')+'</span>'
-           :'<span>已完成 · '+((D.first||'—').slice(0,8))+'~'+((D.last||'—').slice(0,8))+'</span>');
- // 只錄到一部分：⛔ 一定要說出「不是沒行情」
- const lateStart=D.len&&D.s[0]>30, earlyEnd=D.len&&!growing&&D.s[D.len-1]<TKSPAN-30;
- const holes=tkHoles();
- if(lateStart||earlyEnd||holes.length){
-   const seg=lateStart?('08:45~'+((D.first||'').slice(0,5))):
-     (holes.length?(tkHMS(holes[0][0]).slice(0,5)+'~'+tkHMS(holes[0][1]).slice(0,5)):
-      (((D.last||'').slice(0,5))+'~09:30'));
-   out+='<span class="sep">·</span><span class="warn">⚠ '+seg+
-        (tkIsPolled()?' 沒有取樣到（沒錄到，或報價一直沒變）':' 沒有錄到（不是沒行情）')+
-        '</span>';
- }
- const lost=(D.gaps||[]).reduce((a,g)=>a+(g.n||0),0);
- if(lost) out+='<span class="sep">·</span><span class="warn">佇列滿丟掉 '+lost+' 筆</span>';
- if(D.bad) out+='<span class="sep">·</span><span class="warn">有 '+D.bad+' 列讀不出來</span>';
- // 取樣當下面板沒有報價的那幾列（沒有價可畫）。⛔ 少了東西一定要有一個數字。
- if(D.nopx) out+='<span class="sep">·</span><span class="warn">有 '+D.nopx+
-   ' 列取樣時沒有報價</span>';
- /* 08:45~09:30 之外被切掉的列（`tick_recorder.py --until 13:45` 錄到下午的那種檔）。
-    ⛔ 這一頁只畫那 45 分鐘（一天最多 2,700 個桶是版面與效能的不變式），
-       但**被切掉的部分一定要講出來** —— 安靜地少是這個專案明令禁止的。 */
- if(D.outwin) out+='<span class="sep">·</span><span class="warn">另有 '+
-   D.outwin.toLocaleString()+' 列在 08:45~09:30 之外（這一頁不畫）</span>';
- if(D.heads>1) out+='<span class="sep">·</span><span>面板當天重啟 '+(D.heads-1)+' 次</span>';
- return out;
-}
-function tkFootHTML(){
- const D=(!tkLoading()&&TK.data)?TK.data:null;
- const growing=D&&!D.complete&&D.date===TK.today;
- const pol=tkIsPolled();
- return '<span>'+(pol?'取樣紀錄':'逐筆紀錄')+' · tick_logs/'+(TK.date||'YYYY-MM-DD')+
-   (pol?'-polled':'')+'.jsonl</span>'+
-   (pol?'<span class="sep">·</span><span>每 0.1 秒讀一次面板狀態、有變動才記一列'+
-        '（tick_recorder.py）</span>':'')+
-   (D?'<span class="sep">·</span><span>'+D.len.toLocaleString()+' 個 1 秒桶</span>':'')+
-   // ⛔ 這句一定要寫出來：為了少這 1 秒去碰 on_tick／佇列＝去碰他的停損，
-   //    所以這是刻意的取捨，不是缺陷。
-   (growing?'<span class="sep">·</span><span>落地延遲約 1 秒（逐筆是每秒批次寫檔）</span>':'')+
-   // ⚠️ 這一句刻意不寫「不做預測」四個字：頁尾那條免責已經寫了，而探針的禁詞掃描
-   //    是掃 #tab-tick 的純文字、看不懂否定句 —— 讓一個否定句去污染紅線的尺不划算。
-   '<span class="sep">·</span><span>只畫已經發生的事</span>';
-}
-/* 第一次打開一定看到的畫面就是空狀態 —— 上線當天合格的逐筆檔可能是 0 個，
-   所以它不是邊角，是主流程。 */
-function tkOverHTML(){
- if(tkLoading()&&TK.date)
-   return '<div class="tk-skel">'+
-     [38,52,44,61,55,70,64,48,57,72,66,80,74,59,68,52,63,47,58,66]
-       .map(h=>'<i style="height:'+h+'%"></i>').join('')+'</div>';
- if(!TK.date){
-   if((TK.days||[]).length===0)
-     // ⚠️ 這段文案**不寫死任何日期**：它只在「一個逐筆檔都沒有」時出現，
-     //    寫「明天 08:45」或某個特定日期，過幾天就變成假的（而且看不出來）。
-     return '<div class="tk-empty"><div class="t">還沒有任何紀錄</div>'+
-       '<div class="d">逐筆落地要面板重啟之後才開始；'+
-       '之後每個交易日 08:45 一開盤就會自動錄，09:30 收手。</div>'+
-       '<div class="d">檔案會落在 tools/shioaji/tick_logs/：'+
-       'YYYY-MM-DD.jsonl 是逐筆，YYYY-MM-DD-polled.jsonl 是取樣（都不會上傳）。</div>'+
-       ((TK.skipped||[]).length?'<div class="d">（有 '+TK.skipped.length+
-         ' 個檔名對、但內容跟檔名對不起來的檔被跳過了）</div>':'')+'</div>';
-   return '<div class="tk-empty"><div class="t">這天沒有紀錄</div>'+
-     '<div class="d">用上面的 ◀ ▶ 或日期清單換到有錄到的日子。</div></div>';
- }
- if(TK.err)
-   return '<div class="tk-empty"><div class="t">這天的紀錄讀不出來</div>'+
-     '<div class="d">'+TK.err+'</div>'+
-     '<button class="tk-chip go" data-tkact="retry">重試</button></div>';
- const D=TK.data;
- if(D&&!D.len){
-   const growing=(!D.complete&&D.date===TK.today);
-   return '<div class="tk-empty"><div class="t">'+
-     (growing?'今天還沒開始錄（08:45 開始）'
-             :(tkIsPolled()?'這個取樣檔裡一列都沒有':'這天只有檔頭，一筆成交都沒有錄到'))+'</div>'+
-     '<div class="d">'+(growing?'開盤之後就會一秒一秒長出來。':'換到別的日子看看。')+'</div>'+
-     (tkStep(-1)?'<button class="tk-chip go" data-tkday="'+tkStep(-1)+
-       '">看上一個有錄的日子 →</button>':'')+'</div>';
- }
- // 使用者拖走過就給一顆「回到最新」，⛔ 不可以直接把他拉回去
- if(D&&!D.complete&&D.date===TK.today&&!TK.follow&&!TK.ov.fixed)
-   return '<button class="tk-back" data-tkact="latest">回到最新</button>';
- return '';
-}
-function tkPaint(){
- if(TAB!=='tick') return;
- setEl('tksub',tkSubHTML());
- setEl('tkpager',tkPagerHTML());
- setEl('tkpick',tkListHTML());
- setEl('tktools',tkToolsHTML());
- setEl('tkread',tkReadHTML());
- setEl('tkfoot',tkFootHTML());
- const ov=tkOverHTML();
- setEl('tkover',ov);
- const cv=document.getElementById('tkcv');
- const blank=tkLoading()||!TK.date||TK.err||!(TK.data&&TK.data.len);
- if(cv) cv.style.visibility=blank?'hidden':'visible';
- if(!blank) tkDraw();
-}
-function tkGoDay(d){
- if(!d||d===TK.date&&!TK.pending) { TK.pick=false; tkPaint(); return; }
- TK.pick=false; TK.date=d; TK.err='';
- const c=TK.cache[d];
- if(c){ TK.data=c; TK.pending=false; TK.view=null; TK.follow=true; TK.hover=null;
-        TK.hi=null; TKAXIS.key=null; TKBARC.key='';
-        TK.sel=Math.max(0,c.trades.findIndex(t=>t.kind==='real')); tkPaint(); tkPoll(); }
- else { TK.pending=true; tkPaint(); tkFetchDay(d,false).then(tkPoll); }
-}
-function tkEnter(){
- tkPaint();
- if(!TK.booted){
-   TK.booted=true;
-   tkFetchDays().then(()=>{ tkPaint(); if(TK.date) tkFetchDay(TK.date,false).then(tkPoll); });
- }else{
-   // 回到這一頁時重新看一次有哪幾天（今天那個檔可能剛被建出來）
-   tkFetchDays().then(()=>{ tkPaint();
-     if(TK.date&&!TK.cache[TK.date]) tkFetchDay(TK.date,false).then(tkPoll); else tkPoll(); });
- }
-}
-function tkClampView(){
- const F=tkFull(), v=TK.view, span=v.t1-v.t0, pad=span*0.5;
- if(v.t0<F.t0-pad){ v.t0=F.t0-pad; v.t1=v.t0+span; }
- if(v.t1>F.t1+pad){ v.t1=F.t1+pad; v.t0=v.t1-span; }
-}
-function tkBind(){
- const cv=document.getElementById('tkcv'); if(!cv) return;
- cv.addEventListener('wheel',e=>{
-   if(TAB!=='tick'||tkLoading()) return;
-   e.preventDefault();
-   const v=tkView(), r=cv.getBoundingClientRect(), PW=TKC.W-TKR;
-   const u=Math.min(1,Math.max(0,(e.clientX-r.left)/(r.width*(PW/TKC.W))));
-   const anchor=v.t0+u*(v.t1-v.t0);
-   const F=tkFull();
-   // 縮放上限＝視窗 10 秒，下限＝完整 45 分鐘 ×1.2
-   let span=Math.min((F.t1-F.t0)*1.2,Math.max(10,(v.t1-v.t0)*(e.deltaY>0?1.18:1/1.18)));
-   TK.view={t0:anchor-u*span,t1:anchor+(1-u)*span};
-   TK.follow=false; tkClampView(); tkPaint();
- },{passive:false});
- cv.addEventListener('pointerdown',e=>{
-   if(TAB!=='tick'||tkLoading()) return;
-   cv.setPointerCapture(e.pointerId);
-   const v=tkView();
-   TKDRAG={x:e.clientX,t0:v.t0,t1:v.t1,w:cv.getBoundingClientRect().width,moved:0};
- });
- cv.addEventListener('pointermove',e=>{
-   if(TAB!=='tick') return;
-   const r=cv.getBoundingClientRect();
-   if(TKDRAG){
-     const PW=(TKC.W-TKR)/TKC.W*r.width;
-     const dt=(e.clientX-TKDRAG.x)/PW*(TKDRAG.t1-TKDRAG.t0);
-     TKDRAG.moved+=Math.abs(e.clientX-TKDRAG.x);
-     TK.view={t0:TKDRAG.t0-dt,t1:TKDRAG.t1-dt};
-     if(Math.abs(dt)>0.5) TK.follow=false;
-     tkClampView(); cv.style.cursor='grabbing'; tkPaint(); return;
-   }
-   TK.hover=(e.clientX-r.left)*(TKC.W/r.width);
-   if(TK.hover>TKC.W-TKR){ TK.hover=null; TK.hi=null; }
-   tkPaint();
- });
- cv.addEventListener('pointerup',()=>{ TKDRAG=null; cv.style.cursor='crosshair'; });
- cv.addEventListener('pointerleave',()=>{ TK.hover=null; TK.hi=null; tkPaint(); });
- cv.addEventListener('dblclick',()=>{ TK.view=null; TK.follow=true; TKAXIS.key=null; tkPaint(); });
- window.addEventListener('resize',()=>{ if(TAB==='tick') tkPaint(); });
- document.addEventListener('visibilitychange',()=>{ if(TAB==='tick') tkPoll(); });
-}
-
-document.addEventListener('click',function(e){
- if(TAB!=='tick') return;
- const nv=e.target.closest('[data-tknav]');
- if(nv){ tkGoDay(tkStep(parseInt(nv.getAttribute('data-tknav')))); return; }
- const pk=e.target.closest('[data-tkpick]');
- if(pk){ TK.pick=!TK.pick; tkPaint(); return; }
- const dy=e.target.closest('[data-tkday]');
- if(dy){ tkGoDay(dy.getAttribute('data-tkday')); return; }
- const vv=e.target.closest('[data-tkv]');
- // 三顆共用同一個視窗與同一套疊圖狀態：**切圖種不重設縮放**
- if(vv){ TK.v=vv.getAttribute('data-tkv');
-   TK.ov.vol=(TK.v==='C');            // 折線與量柱是兩種語言，疊在全景下會吵
-   TKAXIS.key=null; tkPaint(); return; }
- const bb=e.target.closest('[data-tkbar]');
- if(bb){ const x=bb.getAttribute('data-tkbar');
-   TK.bar=(x==='auto')?'auto':parseInt(x); TKAXIS.key=null; tkPaint(); return; }
- const ov=e.target.closest('[data-tkov]');
- if(ov){ const k=ov.getAttribute('data-tkov');
-   TK.ov[k]=!TK.ov[k];
-   if(k==='fixed'){ TK.view=null; TK.follow=true; }
-   TKAXIS.key=null; tkPaint(); return; }
- const ac=e.target.closest('[data-tkact]');
- if(ac){ const a=ac.getAttribute('data-tkact');
-   if(a==='retry'){ TK.err=''; TK.pending=true; tkPaint(); tkFetchDay(TK.date,false); }
-   if(a==='latest'){ TK.follow=true; tkFollow(); tkPaint(); }
-   return; }
- if(TK.pick&&!e.target.closest('.tk-list')){ TK.pick=false; tkPaint(); }
-});
-document.addEventListener('keydown',function(e){
- if(TAB!=='tick') return;
- if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
- if(e.key==='ArrowLeft'){ e.preventDefault(); tkGoDay(tkStep(-1)); }
- else if(e.key==='ArrowRight'){ e.preventDefault(); tkGoDay(tkStep(1)); }
- else if(e.key==='Home'){ e.preventDefault(); if(tkTodayOk()) tkGoDay(TK.today); }
- else if(e.key==='Escape'&&TK.pick){ TK.pick=false; tkPaint(); }
-});
-tkBind();
-
-/* ══════════════ 【策略實驗室】最上面那張「模擬（不會下單）」══════════════
+/* ══════════════ 【模擬】分頁：六條策略（⛔ 不會下單）══════════════
 
    ⛔ 只打 GET /api/sim/state（唯讀）。一顆按鈕、一個 POST 都沒有。
-   ⛔ 規則句、月合計、清單、今天狀態全部從後端來（⛔ 前端不寫死任何時刻／點數／百分比）。
+   ⛔ 規則句、月合計、今天狀態、最近一筆全部從後端來（⛔ 前端不寫死任何時刻／點數／百分比）。
    ⛔ 跟【自動下單】的真單紀錄完全分開（不讀 /api/fire/*、不共用 AL 的清單）。
+   ⛔ 六條的**順序與有哪幾條**由後端決定（x.lanes 的 key 順序），⛔ 前端不寫死 lane 名字。
    ⚠️ 不掛在 500ms 的 tick 上：切進這一頁問一次，停在這一頁時每 60 秒再問一次（離開就停）。
    ⚠️ 「沒變就別動 DOM」用節點上快取的字串比（⛔ 不讀回 innerHTML 比，見 CLAUDE.md）。
    ⚠️ 請求帶流水號，只認最後一次的回應。
 */
-var SM={seq:0,timer:null,err:''};
+var SM={seq:0,timer:null,err:'',keys:''};
 const SMWD=['日','一','二','三','四','五','六'];
 function smSet(id,html){ const e=document.getElementById(id); if(!e) return; if(e._smh!==html){ e._smh=html; e.innerHTML=html; } }
 function smPts(v){ if(v==null) return '—'; return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:1}); }
@@ -9615,47 +7472,53 @@ function smPx(v){ return v==null?'—':Number(v).toLocaleString('en-US',{maximum
 function smDay(s){ const p=String(s||'').split('-').map(Number); if(p.length<3) return esc(s);
   return esc(s.slice(5))+'（'+SMWD[new Date(p[0],p[1]-1,p[2]).getDay()]+'）'; }
 function smRow(r){
+  if(!r) return '<div class="sm-empty">還沒有算好的日子</div>';
   const trade=r.decision==='做多'||r.decision==='做空';
   const x=trade
     ? smPx(r.entry)+' → '+smPx(r.exit)+'（'+esc(r.exit_reason||'')+'）<small>'+esc(r.reason||'')+'</small>'
     : esc(r.reason||'');
-  return '<div class="sm-r"><span class="d">'+smDay(r.date)+'</span>'
+  return '<div class="sm-r"><div class="sm-rh"><span class="d">'+smDay(r.date)+'</span>'
     +'<span class="k '+(trade?(r.decision==='做多'?'up':'down'):'none')+'">'+esc(r.decision)+'</span>'
-    +'<span class="x">'+x+'</span>'
-    +'<span class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</span></div>';
+    +'<span class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</span></div>'
+    +'<span class="x">'+x+'</span></div>';
 }
 function smLane(L){
   if(!L) return '<div class="sm-empty">讀不到</div>';
   const t=L.today||{};
+  // ⭐ 由上而下：名字 → 每月累計點數（他最在意的，放第一個）→ 今天 → 最近一筆 → 規則句
   let h='<div class="sm-lt"><b>'+esc(L.name)+'</b><small>資料：'+esc(L.src)+'</small></div>'
-    +'<div class="sm-rule">'+esc(L.rule)+'</div>'
-    +'<div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>　':'')
-    +(t.row?(esc(t.row.decision)+(t.row.points!=null?'　<span class="'+smCls(t.row.points)+'">'+smPts(t.row.points)+' 點</span>':'')):esc(t.msg||''))+'</div>';
-  h+='<div class="sm-body"><div class="sm-months"><div class="sm-mh">每月累計點數</div>';
+    +'<div class="sm-mh">每月累計點數</div><div class="sm-months">';
   (L.months||[]).forEach(m=>{
     h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+'<i>'+m.trades+' 筆</i></span>'
       +'<b class="lb-mono '+smCls(m.points)+'">'+(m.days?smPts(m.points):'—')+'</b></div>';
   });
-  h+='</div><div><div class="sm-lh">最近 '+(L.recent||[]).length+' 筆</div><div class="sm-list">';
-  h+=(L.recent&&L.recent.length)?L.recent.map(smRow).join(''):'<div class="sm-empty">還沒有算好的日子</div>';
-  h+='</div>';
+  h+='</div><div class="sm-lh">今天</div><div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>':'')
+    +(t.row?(esc(t.row.decision)+(t.row.points!=null?'　<span class="'+smCls(t.row.points)+'">'+smPts(t.row.points)+' 點</span>':'')):esc(t.msg||''))+'</div>';
+  h+='<div class="sm-lh">最近一筆</div>'+smRow((L.recent||[])[0]);
   if(L.pending&&L.pending.length){
     h+='<div class="sm-pend">等資料：'+L.pending.map(p=>smDay(p.date)+' '+esc(p.msg)).join('；')+'</div>';
   }
   if(L.fetch&&L.fetch.msg){ h+='<div class="sm-pend">補資料：'+esc(L.fetch.msg)+(L.fetch.at?'（'+esc(L.fetch.at.slice(5,16))+'）':'')+'</div>'; }
-  return h+'</div></div>';
+  return h+'<div class="sm-rule">'+esc(L.rule)+'</div>';
 }
 function smPaint(x){
-  if(!x||!x.lanes){ smSet('sm-fast',''); smSet('sm-night',''); smSet('smfoot','<span>'+esc(SM.err||'讀取中…')+'</span>'); return; }
+  if(!x||!x.lanes){ smSet('smlanes',''); SM.keys=''; smSet('smfoot','<span>'+esc(SM.err||'讀取中…')+'</span>'); return; }
   smSet('smnote',esc(x.note||''));
-  smSet('sm-fast',smLane(x.lanes.fast));
-  smSet('sm-night',smLane(x.lanes.night));
+  // 條數／順序由後端決定。⚠️ 骨架只在「有哪幾條」變動時重建，平常每條各自比自己的字串
+  //    —— 每分鐘把整塊 innerHTML 換掉會把捲動位置與剛畫好的內容一起丟掉。
+  const keys=Object.keys(x.lanes).filter(k=>/^[a-z0-9_]+$/.test(k));
+  if(SM.keys!==keys.join('|')){
+    SM.keys=keys.join('|');
+    const el=document.getElementById('smlanes');
+    if(el){ el.innerHTML=keys.map(k=>'<div class="sm-lane" id="sm-'+k+'"></div>').join(''); el._smh=null; }
+  }
+  keys.forEach(k=>smSet('sm-'+k,smLane(x.lanes[k])));
   const f=x.file||{};
   smSet('smcount',esc('算到 '+(x.last_step_at||'—')));
   const bad=(x.errors>0)||(f.bad>0)||(f.dup>0)||(f.eq_ok===false)||(x.hist_bad>0)||!x.wired;
   const foot='紀錄 '+(f.ok||0)+' 列'+(f.bad?'、壞列 '+f.bad:'')+(f.dup?'、重複 '+f.dup:'')
     +(f.eq_ok===false?'、⚠️ 列數對不上':'')+(x.hist_bad?'、fast_hist 壞列 '+x.hist_bad:'')
-    +(x.wired?'':'、⚠️ 快攻規則沒有接上')
+    +(x.wired?'':'、⚠️ 規則函式沒有接上')
     +(x.errors?'、背景錯誤 '+x.errors+' 次（最近：'+(x.last_err||'')+'）':'');
   const e=document.getElementById('smfoot'); if(e) e.classList.toggle('bad',!!bad);
   smSet('smfoot',esc(foot));
@@ -9665,13 +7528,15 @@ function smLoad(){
   fetch('/api/sim/state',{cache:'no-store'}).then(r=>r.json().catch(()=>({})).then(b=>({s:r.status,b}))).then(({s,b})=>{
     if(my!==SM.seq) return;
     if(s!==200){ SM.err=(b&&b.msg)||('模擬讀取失敗（'+s+'）'); smPaint(null); return; }
+    // ⛔ 200 但看不懂 ⇒ 也要**說出來**：停在「讀取中…」等於安靜地壞掉（這個專案明令禁止）
+    if(!b||!b.lanes){ SM.err='模擬讀取失敗（回應看不懂）'; smPaint(null); return; }
     SM.err=''; smPaint(b);
   }).catch(()=>{ if(my!==SM.seq) return; SM.err='模擬讀取失敗（連不到面板）'; smPaint(null); });
 }
 function smEnter(){
   smLoad();
   if(SM.timer) clearTimeout(SM.timer);
-  const again=()=>{ SM.timer=null; if(TAB!=='lab') return; smLoad(); SM.timer=setTimeout(again,60000); };
+  const again=()=>{ SM.timer=null; if(TAB!=='sim') return; smLoad(); SM.timer=setTimeout(again,60000); };
   SM.timer=setTimeout(again,60000);
 }
 
@@ -9951,8 +7816,6 @@ function lbBind(){
   lbEl('lbrun').onclick=lbRun;
   window.addEventListener('resize',()=>{ if(TAB==='lab'&&LB.last) lbCurve(); });
 }
-
-rvBind();
 
 /* ══════════════ 【自動下單】分頁：會真的送出委託單的那一頁 ══════════════
 
@@ -11511,10 +9374,10 @@ def _sim_has_position():
 
 def start_sim_lanes():
     """
-    【策略實驗室】「模擬（不會下單）」那張卡的背景執行緒（main() 呼叫一次，排在 start_strategy_lab_fetch 後面）。
-    ⛔ 模擬：sim_lanes 自己不 import broker／auto_fire —— 門檻那幾支規則函式在**這裡**注入
-       （跟真單同一份正本：auto_fire.fast_verdict／move_pct／tpsl_points／hist_read、FAST_PCTL、FAST_RULE），
-       ⛔ 不准在 sim_lanes 裡另寫一份。
+    【模擬】分頁那張卡的背景執行緒（main() 呼叫一次，排在 start_strategy_lab_fetch 後面）。
+    ⛔ 模擬：sim_lanes 自己不 import broker／auto_fire —— 規則那幾支函式在**這裡**注入
+       （跟真單同一份正本：auto_fire.fast_verdict／move_pct／tpsl_points／reversal_dir／hist_read、
+        FAST_PCTL、REV_SEC、FAST_RULE），⛔ 不准在 sim_lanes 裡另寫一份。
     ⛔ 有部位就不抓資料：注入 `_sim_has_position`（沒有確定答案就回 True，見那支；2026-09-15 lab-qa 退件 R1）。
     ⛔ 規則函式一律用**關鍵字**注入（lab-qa R4：位置參數對調 move_pct／tpsl_points 不會報錯、只會算錯）。
     ⛔⛔ 這支**永遠不丟例外**：模組沒載入、起執行緒失敗，一律只印警告，main 照樣往下走。
@@ -11526,9 +9389,10 @@ def start_sim_lanes():
             return False
         ok = sim_lanes.configure(verdict_fn=auto_fire.fast_verdict, move_fn=auto_fire.move_pct,
                                  tpsl_fn=auto_fire.tpsl_points, hist_read_fn=auto_fire.hist_read,
+                                 reversal_fn=auto_fire.reversal_dir, rev_sec=REV_SEC,
                                  pctl=FAST_PCTL, rule=auto_fire.FAST_RULE)
         if not ok:
-            print("⚠️ 【模擬】規則函式接不上（早盤快攻那條會顯示「沒有接上」）")
+            print("⚠️ 【模擬】規則函式接不上（逐筆那幾條會顯示「沒有接上」）")
         threading.Thread(target=sim_lanes.loop,
                          args=(lambda: SESSION_REF.get("api"), _sim_has_position),
                          daemon=True, name="sim-lanes").start()

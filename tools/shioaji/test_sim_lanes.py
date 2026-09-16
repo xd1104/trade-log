@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-【策略實驗室】「模擬（不會下單）」離線測試（2026-09-15 晚上，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
+【模擬】分頁（六條）離線測試（2026-09-15 晚上，2026-09-16 擴到六條，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
 
   ① 早盤快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
      13:43:30 收盤平／結算日 13:30／沒有逐筆＝資料缺（不是定論）
@@ -10,7 +10,9 @@
   ⑤ 背景例外不外丟（step 與 loop 各驗）＋計數
   ⑥ 端點 GET /api/sim/state：200、唯讀（前後雜湊一樣）、跨站 403、POST 不接、模組是 None ⇒ 503；
      sim_lanes 載入失敗時 import live_panel 照樣成功
-  ⑦ 前端：卡在 #tab-lab 最上面、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑦ 前端：獨立的 #tab-sim、六條並排、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑪ 新的四條：hmq（快＋09:15 反轉）／rev（只做反轉那一半）／fast11（只換收盤時刻）／orb（箱子濾網）
+  ⑫ 規則函式一律用注入的那一份（⛔ sim_lanes 裡沒有另一把尺）
   ⑧ AST：sim_lanes 不 import／引用 broker、auto_fire；主迴圈那幾支跟固定基準 a71087e 一模一樣（沒有基準 ⇒ 記「未驗」）
   ④b 面板注入的 _sim_has_position（沒有確定答案就回 True）＋關鍵字注入各就各位
   ④c 休市不佔「每輪補一天」名額、落地成「休市」、今天回空不記休市、fast_hist 有那天就不記休市
@@ -126,8 +128,14 @@ SL.MIN1_CSV = TMP / "tmf_1min_lab.csv"
 AF.FIRE_DIR = TMP / "autofire"
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"
 AF.FAST_HIST = TMP / "af_fast_hist.jsonl"
-say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE),
-    "  configure 接上 auto_fire 的規則正本")
+say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC),
+    "  configure 接上 auto_fire 的規則正本（含 reversal_dir／REV_SEC）")
+say(not S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                    reversal_fn=None, rev_sec=LP.REV_SEC),
+    "  負控組：少了 reversal_dir ⇒ 接不上（⛔ 不准半套上路）")
+say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC), "  接回來")
 
 
 def reset_state():
@@ -136,7 +144,7 @@ def reset_state():
     S._NIGHT_API.clear()
     S.STATE["errors"] = 0
     S.STATE["last_err"] = None
-    S.STATE["pending"] = {"fast": {}, "night": {}}
+    S.STATE["pending"] = {k: {} for k in S.LANES}
 
 
 def ms(h, m, s=0, x=0):
@@ -581,10 +589,12 @@ say(bool(_FakeThread.made) and _FakeThread.made[-1][1][1] is LP._sim_has_positio
     "  注入的部位判斷是 _sim_has_position（不是只讀記憶體的 _lab_has_position）")
 chk("  注入的規則函式各就各位（move_pct／tpsl_points 沒對調）",
     (S._CFG["verdict"] is AF.fast_verdict, S._CFG["move_pct"] is AF.move_pct, S._CFG["tpsl"] is AF.tpsl_points,
-     S._CFG["hist_read"] is AF.hist_read, S._CFG["pctl"] == LP.FAST_PCTL, S._CFG["rule"] is AF.FAST_RULE),
-    (True, True, True, True, True, True))
-chk("  注入後實算：走幅(12060, 12000)＝0.5%、停利停損(12061)＝60 點",
-    (round(S._CFG["move_pct"](12060.0, 12000.0), 3), S._CFG["tpsl"](12061.0)), (0.5, 60))
+     S._CFG["hist_read"] is AF.hist_read, S._CFG["pctl"] == LP.FAST_PCTL, S._CFG["rule"] is AF.FAST_RULE,
+     S._CFG["reversal"] is AF.reversal_dir, S._CFG["rev_sec"] == LP.REV_SEC),
+    (True, True, True, True, True, True, True, True))
+chk("  注入後實算：走幅(12060, 12000)＝0.5%、停利停損(12061)＝60 點、reversal_dir(12006,+1,11990)＝−1",
+    (round(S._CFG["move_pct"](12060.0, 12000.0), 3), S._CFG["tpsl"](12061.0),
+     S._CFG["reversal"](12006.0, 1, 11990.0)), (0.5, 60, -1))
 S._CFG.clear()
 S._CFG.update(_cfg0)
 
@@ -741,8 +751,16 @@ def req(path, headers=None, method="GET", timeout=20):
 h0 = (fhash(S.SIM_DIR), fhash(SL.LAB_DIR), fhash(S.MIN1_CSV), fhash(S.FAST_HIST))
 st_code, body = req("/api/sim/state")
 chk("  GET ⇒ 200", st_code, 200)
-say(set(body.get("lanes", {})) == {"fast", "night"} and body["lanes"]["fast"]["name"] == "早盤快攻"
-    and body["lanes"]["night"]["name"] == "美股開盤順勢", "  兩條都在、名字對")
+# ⛔ 這裡**寫死**六個 key：拿 S.LANES 去比是自己比自己（少一條時兩邊一起少 ⇒ 永遠綠，
+#    2026-09-16 突變 N15 當場抓到這個假綠燈）。
+LANE_KEYS = ["fast", "hmq", "rev", "fast11", "orb", "night"]
+chk("  ⛔ 後端 LANES 就是這六條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
+chk("  端點端出來的六條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
+say(all(body["lanes"][ln]["name"] == S.LANE_NAME[ln] for ln in S.LANES)
+    and body["lanes"]["fast"]["name"] == "早盤快攻" and body["lanes"]["hmq"]["name"] == "快攻回馬槍"
+    and body["lanes"]["night"]["name"] == "美股開盤順勢", "  六條的名字對")
+say(all(body["lanes"][ln]["rule"] and "沒有接上" not in body["lanes"][ln]["rule"] for ln in S.LANES),
+    "  六條都有規則句（後端給的）")
 L = body.get("lanes", {}).get("fast", {})
 say(len(L.get("months", [])) == 6 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 6 個月、第一個標「本月」")
 say(all(k in L for k in ("recent", "today", "pending", "rule", "fetch")) and "errors" in body and "file" in body,
@@ -790,36 +808,282 @@ say(pr.returncode == 0 and "IMPORTED False" in pr.stdout and "【模擬】載入
 print("\n=== ⑦ 前端 ===")
 import re as _re
 page = LP.PAGE
-tab = page[page.index('<div id="tab-lab"'):page.index("<!-- 【回顧】")]
+# ⚠️ 切到【自動下單】那段註解之前為止：#tab-sim 之後緊接的是 #tab-fire，
+#    用 index('<div id="tab-lab"') 會把整個【自動下單】吃進來（第一版就踩到，altbl／/api/fire 全被算成模擬的）。
+tab = page[page.index('<div id="tab-sim"'):page.index("<!-- ══════════ 【自動下單】")]
 tab_code = _re.sub(r"<!--.*?-->", " ", tab, flags=_re.S)
-say(tab_code.index('id="smcard"') < tab_code.index('class="lb-grid"') and
-    _re.match(r'\s*<div id="tab-lab" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
-    "  卡是 #tab-lab 的第一個子元素（最上面）")
-card = tab_code[tab_code.index('id="smcard"'):tab_code.index('class="lb-grid"')]
-say("模擬（不會下單）" in card and 'id="sm-fast"' in card and 'id="sm-night"' in card, "  卡的標題與兩條並排的容器")
-_j0 = page.index("/* ══════════════ 【策略實驗室】最上面那張「模擬（不會下單）」")
+say(_re.match(r'\s*<div id="tab-sim" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
+    "  【模擬】是獨立分頁，卡是它的第一個子元素")
+card = tab_code
+say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標題與六條的容器")
+say('id="tab-tick"' not in page and 'id="tab-review"' not in page,
+    "  【細節】與【回顧】兩個分頁的容器都不在了")
+chk("  分頁列恰好四顆，順序＝即時／模擬／策略實驗室／自動下單",
+    _re.findall(r'<button data-tab="([a-z0-9]+)"', page), ["live", "sim", "lab", "fire"])
+_j0 = page.index("/* ══════════════ 【模擬】分頁：六條策略")
 sjs = page[_j0:page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測", _j0)]
-say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬卡那一段 JS（不多不少）")
+say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬那一段 JS（不多不少）")
 sjs_code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", " ", sjs, flags=_re.S).splitlines())
 fetches = sorted(set(x.split("'")[1].split("?")[0] for x in sjs.split("fetch(")[1:]))
 chk("  只打 GET /api/sim/state", fetches, ["/api/sim/state"])
 for w in ("broker", "place_order", "/api/enter", "/api/real/", "/api/fire", "method:", "POST", "pfetch(", "data-act",
           "data-rdir", "<form", "submit", "token", "PTOK", "<button", "altbl", "AL."):
-    chk(f"  模擬卡 HTML／JS 沒有 {w}", w in card + sjs_code, False)
+    chk(f"  模擬分頁 HTML／JS 沒有 {w}", w in card + sjs_code, False)
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
-    chk(f"  模擬卡畫面文字沒有「{w}」", w in card + sjs_code, False)
-state_txt = json.dumps(S.state(NOW), ensure_ascii=False) + S._rule_text("fast") + S._rule_text("night")
+    chk(f"  模擬分頁畫面文字沒有「{w}」", w in card + sjs_code, False)
+state_txt = json.dumps(S.state(NOW), ensure_ascii=False) + "".join(S._rule_text(ln) for ln in S.LANES)
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
     chk(f"  後端端出去的文字沒有「{w}」", w in state_txt, False)
-chk("  卡的 HTML 沒寫死時刻／點數（09:03、130、21:30、0.5%）",
-    [w for w in ("09:03", "130", "21:30", "22:30", "0.5%", "1%") if w in card + sjs_code], [])
-say("else if(t==='lab'){ lbEnter(); smEnter(); }" in page, "  切進【策略實驗室】才問（不掛 500ms tick）")
-say("if(TAB!=='lab') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
+chk("  分頁的 HTML／JS 沒寫死時刻／點數（09:03、09:15、130、21:30、0.5%）",
+    [w for w in ("09:03", "09:15", "11:00", "130", "21:30", "22:30", "0.5%", "1%") if w in card + sjs_code], [])
+say("if(t==='sim'){ smEnter(); }" in page, "  切進【模擬】才問（不掛 500ms tick）")
+say("if(TAB!=='sim') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
 say("e._smh!==html" in sjs and "innerHTML===" not in sjs, "  沒變就別動 DOM：比的是節點上快取的字串（不讀回 innerHTML）")
 say("my!==SM.seq" in sjs, "  請求帶流水號，只認最後一次")
+say("Object.keys(x.lanes)" in sjs, "  六條的順序由後端決定（前端不寫死 lane 名字）")
+chk("  前端 JS 沒有寫死任何一條 lane 的 key", [k for k in S.LANES if ("'%s'" % k) in sjs_code], [])
 fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
-chk("  【自動下單】那一頁沒有模擬卡的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
+chk("  【自動下單】那一頁沒有模擬的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
+lab_html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
+chk("  【策略實驗室】那一頁已經沒有模擬卡", [w for w in ("smcard", "sm-lane", "/api/sim") if w in lab_html], [])
 
+
+
+# ══ ⑪ 新的四條（2026-09-16）═══════════════════════════════════════════
+print("\n=== ⑪ hmq／rev／fast11：快的那一半與回馬槍那一半 ===")
+reset_state()
+D_FAST = base_day(12000, 12060, extra=[(ms(10, 0), 12100.0, 12099, 12101), (ms(10, 30), 12121.0, 12120, 12122)])
+r_fast = S.fast_eval(DAY, D_FAST, H40)
+r_hmq = S.hmq_eval(DAY, D_FAST, H40)
+chk("  快的日子：hmq 跟 fast 逐欄位一模一樣（只差 lane）",
+    {k: v for k, v in r_hmq.items() if k != "lane"}, {k: v for k, v in r_fast.items() if k != "lane"})
+r_rev = S.rev_eval(DAY, D_FAST, H40)
+chk("  快的日子：rev 不做（fast_skip）", (r_rev.get("decision"), r_rev.get("why")), ("不做", "fast_skip"))
+say("快，這條不做" in (r_rev.get("reason") or ""), "  rev 的原因寫「快，這條不做」", r_rev.get("reason"))
+
+# 慢（走 0.05%）＋ 09:15 反轉往下：進場＝09:15 的買價 11989、停利停損 round(11989×0.5%)=60
+D_REV = base_day(12000, 12006, extra=[(ms(9, 15), 11990.0, 11989, 11991), (ms(10, 0), 11930.0, 11929, 11931)])
+r_hmq2 = S.hmq_eval(DAY, D_REV, H40)
+chk("  慢＋09:15 反轉：hmq 做空／進場用 09:15 的買價／停利停損用進場價算",
+    (r_hmq2.get("decision"), r_hmq2.get("entry"), r_hmq2.get("tpsl_points"), r_hmq2.get("why")),
+    ("做空", 11989.0, 60, "rev"))
+chk("  慢＋09:15 反轉：13:43:30 收盤平（對手價 11931）⇒ 58−5",
+    (r_hmq2.get("exit_reason"), r_hmq2.get("exit"), r_hmq2.get("points")), ("收盤", 11931.0, 53.0))
+chk("  慢的日子：rev 跟 hmq 那一半一模一樣（只差 lane）",
+    {k: v for k, v in S.rev_eval(DAY, D_REV, H40).items() if k != "lane"},
+    {k: v for k, v in r_hmq2.items() if k != "lane"})
+chk("  fast 在慢的日子還是不做（⛔ 三條沒有互相污染）",
+    (S.fast_eval(DAY, D_REV, H40).get("decision"), S.fast_eval(DAY, D_REV, H40).get("why")), ("不做", "not_fast"))
+say(r_hmq2.get("p15") == 11990.0 and r_hmq2.get("rev_at") == "09:15:00",
+    "  落地那一列記了 09:15 的價與時刻", r_hmq2.get("rev_at"))
+
+D_SAME = base_day(12000, 12006, extra=[(ms(9, 15), 12020.0, 12019, 12021)])
+chk("  慢＋09:15 同方向 ⇒ 不做（no_rev）",
+    (S.hmq_eval(DAY, D_SAME, H40).get("decision"), S.hmq_eval(DAY, D_SAME, H40).get("why")), ("不做", "no_rev"))
+D_EQ = base_day(12000, 12006, extra=[(ms(9, 15), 12006.0, 12005, 12007)])
+chk("  慢＋09:15 一樣價 ⇒ 不做（研究：opp=0 不做）", S.hmq_eval(DAY, D_EQ, H40).get("why"), "no_rev")
+D_NO15 = base_day(12000, 12006)
+chk("  09:03:30~09:15 沒有成交 ⇒ 不做（no_p15）", S.hmq_eval(DAY, D_NO15, H40).get("why"), "no_p15")
+D_D0 = base_day(12000, 12000, extra=[(ms(9, 15), 11990.0, 11989, 11991)])
+chk("  09:03:30 跟 09:00 一樣價（沒有方向）⇒ hmq 不做", S.hmq_eval(DAY, D_D0, H40).get("decision"), "不做")
+
+# ⛔ 一天最多一口：快的日子**不會**再看 09:15（就算 09:15 反轉得很兇）
+D_BOTH = base_day(12000, 12060, extra=[(ms(9, 15), 11900.0, 11899, 11901), (ms(10, 30), 12121.0, 12120, 12122)])
+rb = S.hmq_eval(DAY, D_BOTH, H40)
+chk("  ⛔ 一天最多一口：快的日子照 09:03:30 進場，不看 09:15",
+    (rb.get("why"), rb.get("entry"), rb.get("decision")), ("fast", 12061.0, "做多"))
+
+print("\n  -- fast11：⛔ 只有收盤平倉時刻不同 --")
+# ⚠️ 11:15 那一筆是**故意**放的：只比對 cutoff 那個字串的話，把 11:00 改成 11:30 不會翻紅
+#    （2026-09-16 突變 N4b 當場抓到）。有這一筆，時刻挪動就會算出不同的點數。
+D_LATE = base_day(12000, 12060, extra=[(ms(10, 30), 12090.0, 12089, 12091), (ms(11, 15), 12110.0, 12109, 12111),
+                                       (ms(12, 0), 12121.0, 12120, 12122)])
+a11 = S.fast11_eval(DAY, D_LATE, H40)
+a00 = S.fast_eval(DAY, D_LATE, H40)
+chk("  同一天：fast 撐到 12:00 停利 ＋55；fast11 11:00 就平（對手價 12089）＋23",
+    (a00.get("exit_reason"), a00.get("points"), a11.get("exit_reason"), a11.get("points"), a11.get("exit")),
+    ("停利", 55.0, "收盤", 23.0, 12089.0))
+chk("  fast11 的 cutoff 寫 11:00:00", (a11.get("cutoff"), a00.get("cutoff")), ("11:00:00", "13:43:30"))
+chk("  進場那一半完全相同（方向／進場價／停利停損點數）",
+    (a11.get("decision"), a11.get("entry"), a11.get("tpsl_points")),
+    (a00.get("decision"), a00.get("entry"), a00.get("tpsl_points")))
+EXP = "2026-10-21"
+say(SL.is_expiry(date.fromisoformat(EXP)), "  治具自證：%s 是結算日" % EXP)
+HE = hist_rows(EXP, 40)
+chk("  結算日：fast 收 13:30、fast11 還是 11:00",
+    (S.fast_eval(EXP, D_LATE, HE).get("cutoff"), S.fast11_eval(EXP, D_LATE, HE).get("cutoff")),
+    ("13:30:00", "11:00:00"))
+chk("  不快的日子：fast11 也不做", S.fast11_eval(DAY, D_REV, H40).get("why"), "not_fast")
+chk("  沒接上規則 ⇒ 四條都記「沒接上」、⛔ 不猜",
+    [f(DAY, D_FAST, H40, cfg={"verdict": None})["why"]
+     for f in (S.fast_eval, S.hmq_eval, S.rev_eval, S.fast11_eval)], ["not_wired"] * 4)
+
+
+print("\n=== ⑪b ORB 5 分＋箱子濾網 ===")
+ODAY = "2026-11-10"           # 不是結算日
+say(not SL.is_expiry(date.fromisoformat(ODAY)), "  治具自證：%s 不是結算日" % ODAY)
+BOX = [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+       (ms(9, 4), 11980.0, 11979, 11981), (ms(9, 5, 0), 12010.0, 12009, 12011)]
+D_UP = mkD(BOX + [(ms(9, 30), 12050.0, 12049, 12051), (ms(10, 0), 12900.0, 12899, 12901),
+                  (ms(13, 44, 59), 12800.0, 12799, 12801)])
+o = S.orb_calc(ODAY, D_UP)
+chk("  箱子＝09:00~09:05 的最高最低（兩端都含）", (o["hi"], o["lo"], round(o["w"], 1)), (12040.0, 11980.0, 60.0))
+bp = o["box_pct"]
+r = S.orb_eval(ODAY, D_UP, [bp] * S.ORB_HIST_N)
+chk("  箱寬**等於**中位數 ⇒ 要做（⛔ 只有「小於」才不做）", r.get("decision"), "做多")
+chk("  突破上緣做多：進場＝那一筆的賣價、停損＝箱子下緣（12051−11980＝71）",
+    (r.get("entry"), r.get("sl_points")), (12051.0, 71.0))
+chk("  ⛔ 不設停利：漲到 12900 也不出場，13:43:30 收盤平（對手價 12899）⇒ 848−5",
+    (r.get("exit_reason"), r.get("exit"), r.get("points")), ("收盤", 12899.0, 843.0))
+chk("  cutoff 13:43:30、成本 5 點", (r.get("cutoff"), r.get("cost")), ("13:43:30", 5.0))
+say("停損＝箱子另一端" in (r.get("reason") or ""), "  原因寫得出停損是箱子另一端", r.get("reason"))
+r_narrow = S.orb_eval(ODAY, D_UP, [bp * 1.0000001] * S.ORB_HIST_N)
+chk("  箱寬小於中位數 ⇒ 定論「不做」（narrow_box）", (r_narrow.get("decision"), r_narrow.get("why")), ("不做", "narrow_box"))
+say(not r_narrow.get("pending"), "  箱子太窄是**定論**（會落地），不是資料缺")
+p_few = S.orb_eval(ODAY, D_UP, [bp] * (S.ORB_HIST_N - 1))
+chk("  歷史不夠 ⇒ **資料缺**（⛔ 不寫檔，逐筆之後可能補得回來）",
+    (p_few.get("pending"), p_few.get("why")), (True, "few_box_hist"))
+chk("  沒有當天逐筆 ⇒ 資料缺", S.orb_eval(ODAY, None, [bp] * 20).get("why"), "no_ticks")
+chk("  算不出歷史 ⇒ 資料缺", S.orb_eval(ODAY, D_UP, None).get("why"), "no_box_hist")
+
+D_DN = mkD(BOX + [(ms(9, 30), 11970.0, 11969, 11971), (ms(10, 0), 12045.0, 12044, 12046),
+                  (ms(13, 44, 59), 12000.0, 11999, 12001)])
+rd = S.orb_eval(ODAY, D_DN, [0.0] * S.ORB_HIST_N)
+chk("  跌破下緣做空：進場用買價 11969、停損＝箱子上緣（12040−11969＝71）",
+    (rd.get("decision"), rd.get("entry"), rd.get("sl_points")), ("做空", 11969.0, 71.0))
+chk("  碰到箱子上緣 ⇒ 停損，用觸發那一筆的成交價 12045 ⇒ −76−5",
+    (rd.get("exit_reason"), rd.get("exit"), rd.get("points")), ("停損", 12045.0, -81.0))
+
+D_EDGE = mkD(BOX + [(ms(9, 30), 12040.0, 12039, 12041), (ms(9, 40), 11980.0, 11979, 11981),
+                    (ms(13, 44, 59), 12000.0, 11999, 12001)])
+chk("  剛好碰到箱子邊**不算**突破（上緣用 >、下緣用 <）⇒ 整天沒突破",
+    S.orb_eval(ODAY, D_EDGE, [0.0] * 20).get("why"), "no_break")
+D_TWICE = mkD(BOX + [(ms(9, 30), 12050.0, 12049, 12051), (ms(9, 40), 11900.0, 11899, 11901),
+                     (ms(13, 44, 59), 11950.0, 11949, 11951)])
+r2 = S.orb_eval(ODAY, D_TWICE, [0.0] * 20)
+chk("  ⛔ 一天最多 1 次：只認第一次那一筆（先上緣 ⇒ 做多）", (r2.get("decision"), r2.get("entry")), ("做多", 12051.0))
+D_NOBOX = mkD([(ms(8, 50), 12000.0, 11999, 12001), (ms(9, 30), 12100.0, 12099, 12101)])
+chk("  09:00~09:05 沒有成交 ⇒ 定論「不做」（no_box）", S.orb_eval(ODAY, D_NOBOX, [0.0] * 20).get("why"), "no_box")
+chk("  結算日 13:30 平", S.orb_eval(EXP, D_UP, [0.0] * 20).get("cutoff"), "13:30:00")
+
+print("\n  -- box_hist：這一天以前最近 20 個有逐筆的交易日 --")
+# ⛔ 換一個乾淨的 tick_hist：那 22 個「這天以前」的日子會蓋到前面幾節寫的 2026-10-20
+#    （第一版就是這樣把 FD 那天的逐筆換成窄箱，害 ⑪c 整排翻紅 —— 治具互相污染）
+S._BOX.clear()
+_lab0, SL.LAB_DIR = SL.LAB_DIR, TMP / "tick_hist_box"
+_bd, _wrote = date.fromisoformat(ODAY), []
+while len(_wrote) < 22:
+    _bd -= timedelta(days=1)
+    if _bd.weekday() >= 5:
+        continue
+    _w = 12.0 + len(_wrote)                     # 每天不一樣，才看得出順序與取哪 20 天
+    write_ticks(str(_bd), [(ms(9, 0, 0), 12000.0, 11999, 12001),
+                           (ms(9, 4), 12000.0 + _w, 12000.0 + _w - 1, 12000.0 + _w + 1),
+                           (ms(9, 5, 0), 12000.0, 11999, 12001)])
+    _wrote.append((str(_bd), _w))
+# 今天那一天＋**之後**兩天都寫成超寬的箱子：只要有一天偷看到未來，下面的值就對不起來
+# （⛔ 一定要有「之後」那兩天 —— 只有「今天」的話，把 `< day` 改成 `!= day` 照樣是綠的，
+#   2026-09-16 突變 N13 當場抓到）。
+for _fd in (ODAY, "2026-11-11", "2026-11-12"):
+    write_ticks(_fd, [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 4), 19999.0, 19998, 20000),
+                      (ms(9, 5, 0), 12000.0, 11999, 12001)])
+BH = S.box_hist(ODAY)
+chk("  恰好 20 天", len(BH), S.ORB_HIST_N)
+_want = [round(w / 12000.0 * 100.0, 9) for _d, w in sorted(_wrote)[-20:]]
+chk("  值＝箱寬 ÷ 分母 × 100（沒有突破 ⇒ 分母用箱子最後一筆 12000），而且是舊到新",
+    [round(x, 9) for x in BH], _want)
+say(max(BH) < 1.0, "  ⛔ 今天那一天（箱寬 7999）沒有被算進「這一天以前」", "最大 %.4f%%" % max(BH))
+SL.LAB_DIR = _lab0
+S._BOX.clear()
+say(len(S.box_hist(ODAY)) < S.ORB_HIST_N,
+    "  還原 tick_hist（自證：換回去之後那 22 天就看不到了）", "剩 %d 天" % len(S.box_hist(ODAY)))
+
+
+
+print("\n=== ⑪c 一輪 step：五條逐筆各自落地，同一天只讀一次逐筆 ===")
+reset_state()
+_sim2 = TMP / "sim_lanes2"
+_sim0, S.SIM_DIR = S.SIM_DIR, _sim2          # ⛔ 換到另一個暫存資料夾，不污染前面幾節的檔
+_hits = []
+_ld2 = SL.load_day
+SL.load_day = lambda d: (_hits.append(str(d)), _ld2(d))[1]
+try:
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    SL.load_day = _ld2
+_rows2 = S.read_rows()[0]
+_got = {ln: _rows2.get((ln, FD), {}).get("decision") for ln in S.TICK_LANES}
+chk("  四條有定論（fast／hmq／rev／fast11），⛔ orb 因為箱子歷史不夠是資料缺",
+    (_got["fast"], _got["hmq"], _got["rev"], _got["fast11"], ("orb", FD) in _rows2),
+    ("做多", "做多", "不做", "做多", False))
+chk("  orb 在 pending 裡寫得出原因", S.STATE["pending"]["orb"].get(FD, {}).get("why"), "few_box_hist")
+chk("  ⛔ 同一天的逐筆只讀一次（五條共用，⛔ 不是一條讀一次）", _hits.count(FD), 1)
+say(len([d for d in set(_hits) if d == FD]) == 1 and len(_hits) >= 1,
+    "  自證：真的有量到 load_day 被呼叫", "共 %d 次" % len(_hits))
+_st2 = S.state(NOW)
+chk("  端點端得出六條、每條都有月合計", [ln for ln in _st2["lanes"] if len(_st2["lanes"][ln]["months"]) == 6], LANE_KEYS)
+
+# ⛔ 一條壞掉只停那一條，其他四條照算（⛔ 不是整天停擺）
+S.SIM_DIR = TMP / "sim_lanes3"
+reset_state()
+_ev0 = S.TICK_EVAL["rev"]
+# ⚠️ 故意丟 RuntimeError（不是 ZeroDivisionError）：內層那道 except 若被縮成某個特定型別，
+#    例外就會冒到外層、把整天其他四條一起打掉 —— 用特定型別去測會測不到（突變 M20b 抓過）。
+S.TICK_EVAL["rev"] = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("這一條故意壞掉"))
+try:
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    S.TICK_EVAL["rev"] = _ev0
+_rows3 = S.read_rows()[0]
+chk("  ⛔ rev 那條炸掉 ⇒ 只有它停，fast／hmq／fast11 照樣有定論",
+    (("rev", FD) in _rows3, _rows3.get(("fast", FD), {}).get("decision"),
+     _rows3.get(("hmq", FD), {}).get("decision"), _rows3.get(("fast11", FD), {}).get("decision")),
+    (False, "做多", "做多", "做多"))
+chk("  壞掉那條寫「計算出錯」並計數", (S.STATE["pending"]["rev"].get(FD, {}).get("why"), S.STATE["errors"] >= 1),
+    ("error", True))
+say(S.STATE["pending"]["fast"].get(FD) is None, "  自證：沒壞的那幾條沒有被連坐記成 pending")
+S.SIM_DIR = _sim0
+
+# ══ ⑫ ⛔ 規則只有一把尺（換掉注入的那一支，結果一定要跟著變）═══════════════
+print("\n=== ⑫ 規則一律用注入的那一份（⛔ sim_lanes 裡沒有第二把尺）===")
+_keep = dict(S._CFG)
+S._CFG["tpsl"] = lambda px: 10
+chk("  停利停損：換成固定 10 點 ⇒ 四條全部跟著變",
+    [S.fast_eval(DAY, D_FAST, H40).get("tpsl_points"), S.hmq_eval(DAY, D_FAST, H40).get("tpsl_points"),
+     S.fast11_eval(DAY, D_FAST, H40).get("tpsl_points"), S.hmq_eval(DAY, D_REV, H40).get("tpsl_points")],
+    [10, 10, 10, 10])
+S._CFG.clear()
+S._CFG.update(_keep)
+chk("  還原之後回到 60 點（自證：上面那條是真的換掉了）", S.fast_eval(DAY, D_FAST, H40).get("tpsl_points"), 60)
+S._CFG["reversal"] = lambda *a, **k: None
+chk("  反轉：換成永遠「沒反轉」⇒ hmq／rev 那半跟著不做",
+    [S.hmq_eval(DAY, D_REV, H40).get("why"), S.rev_eval(DAY, D_REV, H40).get("why")], ["no_rev", "no_rev"])
+S._CFG.clear()
+S._CFG.update(_keep)
+chk("  還原之後又做得出來（自證）", S.hmq_eval(DAY, D_REV, H40).get("decision"), "做空")
+S._CFG["verdict"] = lambda day, mv, rows, pctl=None: {"verdict": "fast", "thr_pct": 0.0, "n": 99, "move_pct": mv}
+chk("  快不快：換成「永遠快」⇒ 四條跟著改判",
+    [S.fast_eval(DAY, D_REV, H40).get("decision"), S.hmq_eval(DAY, D_REV, H40).get("why"),
+     S.rev_eval(DAY, D_REV, H40).get("why"), S.fast11_eval(DAY, D_REV, H40).get("decision")],
+    ["做多", "fast", "fast_skip", "做多"])
+S._CFG.clear()
+S._CFG.update(_keep)
+# ⚠️ 用 AST 看**會跑的那些 code**（註解／docstring 裡寫「⛔ 不要乘 0.005」是正確的說明，不是第二把尺）
+_tree = ast.parse((HERE / "sim_lanes.py").read_text(encoding="utf-8"))
+_nums = {n.value for n in ast.walk(_tree) if isinstance(n, ast.Constant) and isinstance(n.value, float)}
+chk("  sim_lanes.py 的程式碼裡沒有 0.005（停利停損一律走注入的 tpsl_points）", 0.005 in _nums, False)
+chk("  也沒有呼叫 percentile（門檻一律走注入的 fast_verdict）",
+    sorted({n.func.attr for n in ast.walk(_tree) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and "percentile" in n.func.attr}), [])
+_rt = [n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef) and n.name == "_rule_text"][0]
+_tf_all = [n for n in ast.walk(_tree) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
+_tf_rt = [n for n in ast.walk(_rt) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
+chk("  「tpsl_frac」只出現在 _rule_text（給畫面看的規則句，讀的還是注入的那份 rule）",
+    (len(_tf_all), len(_tf_rt)), (1, 1))
+_secs = {n.value for n in ast.walk(_tree) if isinstance(n, ast.Constant) and isinstance(n.value, int)}
+chk("  ⛔ 程式碼裡沒有寫死 09:15（33300 秒）：一律用注入的 rev_sec", 9 * 3600 + 15 * 60 in _secs, False)
+say(any(isinstance(n, ast.Constant) and n.value == "rev_sec" for n in ast.walk(_tree)),
+    "  負控組：同一把尺看得到 sim_lanes 真的在讀 rev_sec（尺是活的）")
 
 # ══ ⑧ AST ════════════════════════════════════════════════════════════
 print("\n=== ⑧ AST：不 import broker、主迴圈沒被改 ===")
@@ -847,7 +1111,8 @@ chk("  Handler._sim_get 裡沒有 broker／auto_fire",
     sorted({n.id for n in ast.walk(fn["_sim_get"]) if isinstance(n, ast.Name) and n.id in ("broker", "auto_fire")}), [])
 chk("  start_sim_lanes 只拿 auto_fire 的規則函式（沒有 enter／arm／on_*）",
     sorted({n.attr for n in ast.walk(fn["start_sim_lanes"]) if isinstance(n, ast.Attribute)
-            and getattr(n.value, "id", None) == "auto_fire"}), ["FAST_RULE", "fast_verdict", "hist_read", "move_pct", "tpsl_points"])
+            and getattr(n.value, "id", None) == "auto_fire"}),
+    ["FAST_RULE", "fast_verdict", "hist_read", "move_pct", "reversal_dir", "tpsl_points"])
 MAIN_LOOP = ("_auto_tick", "_auto_tick_guarded", "check_real_position", "on_tick", "_auto_snap", "_auto_put", "main")
 # ⛔ 基準固定在 a71087e（模擬這一包動工前的 main），⛔ 不用 HEAD —— commit 之後 HEAD 就是自己，比了等於沒比
 #    （2026-09-15 lab-qa 退件 R2）。沒有 git（突變測試的暫存複本）⇒ 吃 SIM_BASELINE_LIVE_PANEL 指的檔；

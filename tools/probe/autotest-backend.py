@@ -194,11 +194,13 @@ def strip_html(s):
 
 
 page = SRC[SRC.index("PAGE = r\"\"\""):]
-tab_html = strip_html(page[page.index('<div id="tab-lab"'):page.index('<!-- 【回顧】')])
+tab_html = strip_html(page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")])
 # ⚠️ 切點要落在那個區塊註解的 `/*` **上**，不然 strip_js 配不成對、
 #    整段開頭的說明會被當成程式碼（第一版就這樣紅的）。
 _js0 = page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測")
-js_at = strip_js(page[_js0:page.index("\nrvBind();", _js0)])
+# ⚠️ 2026-09-16：結束標記本來是 `\nrvBind();`（【回顧】那頁的接線），那一頁拿掉了 ⇒
+#    改用下一段的區塊註解開頭（一樣落在 `/*` 上，strip_js 才配得成對）。
+js_at = strip_js(page[_js0:page.index("/* ══════════════ 【自動下單】分頁", _js0)])
 say("function lbRun" in js_at and len(tab_html) > 2000, "  切出來的真的是研究頁（不是空字串）")
 # ⚠️ /api/fire/state 允許（唯讀 GET，用來標「現在真單用的」是哪個做法）；會改狀態的 on／off 不准
 fe_hits = [w for w in ["/api/enter", "/api/real/", "/api/fire/on", "/api/fire/off", "data-act=", "data-rdir=",

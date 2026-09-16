@@ -526,7 +526,7 @@ finally:
 # ══ ⑥ 前端：沒有下單路徑、沒有建議口吻、預設值走注入常數 ═══════════════════
 print("\n=== ⑥ 新分頁的 HTML／JS ===")
 page = LP.PAGE
-html = page[page.index('<div id="tab-lab"'):page.index("<!-- 【回顧】")]
+html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
 _j0 = page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測")
 js = page[_j0:page.index("\nrvBind();", _j0)]
 say(len(js) > 5000 and "function lbRun" in js and "function tkBind" not in js, "  切出來的確實是 lab 那一段 JS（不多不少）")
