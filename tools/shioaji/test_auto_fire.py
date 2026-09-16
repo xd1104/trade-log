@@ -1958,6 +1958,13 @@ say(all(s in _cr["text"] for s in ("真實下單", "你的錢", LP.SIGNAL_AT, "�
     and ("%g 點" % LP.TP_POINTS) not in _cr["text"],
     "  ⛔ 真錢那句要講「用你的錢」「幾點看」「快才送」「停利停損 ±0.5%」（⛔ 不是 130 點）",
     _cr["text"])
+# ⭐⭐ 2026-09-16「多方聯軍」：⛔ 三個候選都要講（只寫快攻那一條 ⇒ 他會以為開箱那一口是亂送的），
+#    而且**開箱不設停利／券商端沒有掛單**一定要寫出來（那是他該知道的風險）。
+say(all(x in _cr["text"] for x in ("只做多", "最早觸發", "快攻", "開箱", "純回馬",
+                                   "不設停利", "券商端", LP.REV_AT))
+    and ("%s~%s" % (AF.ORB_BOX_FROM_AT[:5], AF.ORB_BOX_TO_AT[:5])) in _cr["text"],
+    "  ⛔ 真錢那句要講三個候選、只做多、最早觸發、開箱不設停利＋券商端沒掛單",
+    _cr["text"])
 say("演練" in _cd["text"] and "不會真的送單" in _cd["text"]
     and "你的錢" not in _cd["text"],
     "  ⛔ 演練那句⛔ 不准出現「你的錢」（會嚇人，而且是假的）", _cd["text"])

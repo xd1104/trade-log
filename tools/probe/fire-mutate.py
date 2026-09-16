@@ -342,7 +342,7 @@ LP2_MUT = [
     ("Ⓝ1 確認條那句話兩種模式寫同一句（真錢那次會寫成「只是演練」）",
      '        return {"live": True,', '        return {"live": False,'),
     ("Ⓝ1b 真錢那句不提「你的錢」（他不會知道那一下代表什麼）",
-     '"真的送單，一天一次，%g 點停利／%g 點停損。"',
+     '"最多 1 口，**只做多**，三個候選誰最早觸發就做誰："',
      '"送出委託單。"'),
     ("Ⓝ1c 演練那句改成真錢那種語氣（狼來了）",
      '            "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}',
@@ -469,10 +469,9 @@ LP3_MUT = [
     ("Ⓖ9 mode 不驗（C／D／亂碼全部寫得進去）",
      '    if not isinstance(mode, str) or mode not in auto_fire.METHODS:', '    if False:'),
     ("Ⓖ9b mode 先寫再驗（驗失敗那一瞬間開關已經是開著的）",
-     '    if not isinstance(mode, str) or mode not in auto_fire.METHODS:\n'
-     '        return 400, {"ok": False, "msg": "只能用「%s」或「%s」這兩個做法" % (\n'
-     '            auto_fire.METHOD_NAME["A"], auto_fire.METHOD_NAME["B"])}',
-     '    pass'),
+     # ⚠️ 2026-09-15 起只剩 A ⇒ 那兩行的字面換過了（舊目標從那時就對不上，不是這一輪弄的）
+     '    if not isinstance(mode, str) or mode not in auto_fire.METHODS:',
+     '    if False:'),
     ("Ⓖ10 拿掉 O_EXCL（⛔ 已經開著再按會把他的檔蓋掉）",
      '        fd = os.open(str(flag), os.O_CREAT | os.O_EXCL | os.O_WRONLY)',
      '        fd = os.open(str(flag), os.O_CREAT | os.O_TRUNC | os.O_WRONLY)'),
@@ -730,8 +729,11 @@ REV_LP_MUT = [
      'pctl=FAST_PCTL, rev_at=REV_AT, rev_sec=REV_SEC)', 'pctl=FAST_PCTL, rev_at=REV_AT)'),
     ("RL6 main() 沒接回馬槍掛勾",
      '    AUTO_REV_HOOK = auto_fire.on_reversal', '    pass'),
-    ("RL7 規則句寫死 09:15",
-     "'不夠快就等 '+(D.rev_at||'—')+'", "'不夠快就等 09:15'+'"),
+    ("RL7 規則句寫死 09:15（⛔ 時刻要從後端 D.rev_at 來）",
+     "'③純回馬：'+(D.signal_at||'')+' 不夠快的日子等 '+(D.rev_at||'—')",
+     "'③純回馬：'+(D.signal_at||'')+' 不夠快的日子等 '+'09:15:00'"),
+    ("RL7b 規則句寫死開箱的截止時刻（⛔ 要從後端 r.break_by 來）",
+     "(r.break_by||'—')+' 以後才突破就不算'", "'09:30:00'+' 以後才突破就不算'"),
     ("RL8 前端帳本等式不數 wait",
      "(alN(L.eod)||0)+(alN(L.wait)||0);", "(alN(L.eod)||0);"),
 ]
