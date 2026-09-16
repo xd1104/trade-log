@@ -3785,6 +3785,20 @@ chk("  ⛔ ledger 等式含 wait（舊帳本的 wait 不算 bad）",
     (1, 0, _l18["total"]))
 chk("  ⛔ 防重送：舊帳本那一天算「送過了」", AF._sent(_old_day), True)
 chk("  ⛔ 收盤平倉照舊認得舊帳本那一口", (AF._auto_entry(_old_day)[0] or {}).get("dir"), "short")
+# ⛔ 舊帳本「只有一列 wait」的那種日子（09-16 那一版：不快、09:15 又沒跑到）——
+#    `_day_rows` 一定要認得 `wait`，不然那一天在合併後整個不見（畫面一格空白）。
+_wait_day = "2026-09-11"
+with (AF.FIRE_DIR / "2026-09.jsonl").open("a", encoding="utf-8") as _f:
+    _f.write(json.dumps({"rec": "wait", "date": _wait_day, "why": "wait_rev",
+                         "why_msg": "舊的等反轉", "px": 12010.0, "d": 1,
+                         "method": "A"}, ensure_ascii=False) + "\n")
+_wc, _we = AF._day_rows(_wait_day)
+chk("  ⛔ 只有一列 wait 的舊日子也併得出來（cand ＝ day）",
+    sorted((k, v.get("rec"), v.get("px")) for k, v in _wc.items()),
+    [("day", "wait", 12010.0)])
+chk("    那一列的原因留著（⛔ 不可以整天變一格空白）",
+    _wc["day"].get("why_msg"), "舊的等反轉")
+chk("  ⛔ 但它不是部位", AF._auto_entry(_wait_day), (None, "eod_no_entry"))
 orb_clear()
 arm_clear()
 reset()
