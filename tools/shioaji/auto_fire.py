@@ -1601,11 +1601,20 @@ def _orb_step(d=None, now_ms=None):
         if b or a_:
             _ORB["bid"], _ORB["ask"] = b, a_
     if feed["trades"]:
-        _ORB["seen_ms"] = feed["trades"][-1][0]
+        # ⚠️ 取**最大值**（檔案不保證單調遞增，見 tick_writer 檔頭）
+        _ORB["seen_ms"] = max(_ORB["seen_ms"] or 0, feed["trades"][-1][0],
+                              max(t for t, _p in feed["trades"]))
 
     # ── 箱子：只畫一次
     _orb_acc(feed["trades"])
     if _ORB["box"] is None:
+        # ⛔⛔ **箱子要等「讀到 09:05 之後的第一筆」才算畫完**：`tick_writer` 每 1 秒才
+        #    flush 一次 ⇒ 09:05:00.5 這一輪讀到的檔案很可能還少了最後一秒的成交，
+        #    那一秒剛好是新高／新低的話，箱子的上下緣就少算了（而箱子只畫一次、改不回來）。
+        #    ⇒ 沒讀到 09:05 之後的成交就先不畫；真的一整天都沒有 ⇒ 到 ORB_BREAK_BY 才收。
+        if (_ORB["seen_ms"] or 0) <= ORB_BOX_TO_MS and now_ms < ORB_BREAK_BY_MS:
+            _ORB["msg"] = ("開箱：還在等 %s 之後的第一筆（箱子還沒畫完）" % ORB_BOX_TO_AT[:5])
+            return False
         _ORB["box"] = _orb_box_from_acc()
         if _ORB["box"] is None:
             # 還沒有箱子（面板 09:05 之後才開、檔案還沒出現、那段真的沒成交）。

@@ -3479,6 +3479,9 @@ BOX_ROWS = [bq("09:00:00.000", 11999.0, 12001.0), tk("09:00:00.100", 12000.0),
 UP_ROWS = [bq("09:07:00.000", 12014.0, 12016.0), tk("09:07:00.100", 12015.0),
            bq("09:08:00.000", 12028.0, 12030.0), tk("09:20:00.000", 12030.0)]
 DN_ROWS = [bq("09:07:00.000", 11994.0, 11996.0), tk("09:07:00.100", 11995.0)]
+# 09:05 之後、但**還在箱子裡面**的一筆：箱子要等「讀到 09:05 之後的第一筆」才算畫完
+#（tick_writer 每 1 秒才 flush 一次 ⇒ 沒有這一筆就代表檔案可能還少了箱子的最後一秒）。
+AFTER_ROWS = [tk("09:05:30.000", 12005.0)]
 
 print("\n  ── ⑱a 純函式：箱子／突破／箱寬%／停損 ──")
 _F = AF.tick_feed(AF.TICK_DIR / "__nope__.jsonl", 0)
@@ -3583,6 +3586,11 @@ chk("  進場價＝突破那一筆的賣價 12016（⛔ 不是成交價 12015）
 chk("  突破時刻是那一筆成交的時間", _r18.get("at"), "09:07:00")
 say("券商端" in (_r18.get("why_msg") or "") or True, "  （why_msg 在 result 是 None，見畫面那一行）")
 say(AF._sent(DAY), "  ⛔ _sent() ＝ True（送過了）")
+# ⛔ 今天那一列箱寬%也要寫進歷史，而且**有突破的日子分母是進場價**
+#    （⛔ 不是箱子最後一筆 —— 那只用在「整天沒突破」的日子）
+chk("  ⛔ 歷史那一列：分母是進場價 12016（⛔ 不是箱子最後一筆 12005）",
+    round(AF.orb_hist_read()[0][-1]["box_pct"], 6), round(10.0 / 12016.0 * 100, 6))
+chk("    而且那一列就是今天", AF.orb_hist_read()[0][-1]["date"], DAY)
 
 print("\n  ── ⑱c2 ⛔ 同一天再跑一次（看門狗重啟）⇒ 不送第二筆 ──")
 _n18, _rows18 = len(_api18.orders), len(rows())
@@ -3618,10 +3626,13 @@ arm_write("A")
 live_on()
 _api18 = SimAPI("Buy", 12016.0)
 connect(_api18)
-tick_write(DAY, BOX_ROWS)                    # 第一批：只有箱子那一段
+tick_write(DAY, BOX_ROWS)                    # 第一批：只有箱子那一段（還沒有 09:05 之後的成交）
 AF._orb_step(DAY, _ms("09:05:30.000"))
-chk("  第一批：箱子畫好了、還在等突破", rows(), [])
-say("箱子已畫好" in (AF._ORB.get("msg") or ""), "  畫面說在等突破", AF._ORB.get("msg"))
+chk("  第一批：⛔ 還不下定論", rows(), [])
+say("還在等" in (AF._ORB.get("msg") or ""),
+    "  ⛔ 箱子還沒畫完（沒讀到 09:05 之後的第一筆 ⇒ 檔案可能還少了箱子的最後一秒）",
+    AF._ORB.get("msg"))
+chk("  ⛔ 而且箱子真的還沒畫", AF._ORB.get("box"), None)
 tick_write(DAY, BOX_ROWS + UP_ROWS)          # 第二批：把突破那幾筆接上去
 AF._orb_step(DAY, _ms("09:07:00.200"))
 _r18 = merged()
@@ -3654,7 +3665,8 @@ _api18 = orb_day(BOX_ROWS + UP_ROWS, hist=[_bp - 0.001] * AF.ORB_RULE["hist_n"],
 chk("  ⛔ 邊界對照：中位數只比箱寬小一點點 ⇒ 照做（>= 算夠寬）",
     (merged().get("rec"), merged().get("ok")), ("result", True))
 # ⛔ 突破之前印不出「太窄」——這是刻意的（畫面那一列寫「箱子已畫好，等突破」）
-_api18 = orb_day(BOX_ROWS, hist=[_bp + 0.001] * AF.ORB_RULE["hist_n"], now="09:06:00.000")
+_api18 = orb_day(BOX_ROWS + AFTER_ROWS, hist=[_bp + 0.001] * AF.ORB_RULE["hist_n"],
+                 now="09:06:00.000")
 chk("  ⛔ 還沒突破 ⇒ 帳本一列都不寫（不是定論）", rows(), [])
 say("箱子已畫好" in (AF._ORB.get("msg") or "") and "上緣" in (AF._ORB.get("msg") or ""),
     "  ⭐ 畫面那一列寫「箱子已畫好（上緣 X／下緣 Y），等突破」", AF._ORB.get("msg"))

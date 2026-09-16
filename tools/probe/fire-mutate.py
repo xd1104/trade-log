@@ -213,7 +213,13 @@ MUT = [
     ("U2 突破截止拉到收盤（⛔ 09:30 以後才突破的日子也會送 —— 而 tick_logs 根本沒錄到）",
      'ORB_BREAK_BY = "09:30:00"', 'ORB_BREAK_BY = "13:45:00"'),
     ("U3 箱寬濾網的分母改用箱子最後一筆（⛔ 第二把尺，跟回測對不起來）",
-     '    bp = orb_box_pct(box["w"], fill)', '    bp = orb_box_pct(box["w"], box["last"])'),
+     # ⚠️ 這一行在 auto_fire 裡有**兩處**（另一處在 _orb_hist_step）⇒ 目標要帶下一行才唯一，
+     #    不然 replace(...,1) 會打到寫歷史那一支，決策那一支原封不動 ⇒ 假的「打不紅」。
+     '    bp = orb_box_pct(box["w"], fill)\n    base["box_pct"]',
+     '    bp = orb_box_pct(box["w"], box["last"])\n    base["box_pct"]'),
+    ("U3b 寫進歷史的箱寬%分母用錯（⛔ 以後 20 天的門檻整批歪掉）",
+     '    bp = orb_box_pct(box["w"], fill)\n    if bp is None:\n        return',
+     '    bp = orb_box_pct(box["w"], box["hi"])\n    if bp is None:\n        return'),
     ("U4 箱寬濾網整個拿掉（⛔ 什麼箱子都算夠寬）",
      '    if bp < thr["med"]:', '    if False:'),
     ("U5 防重送閘門退回「今天有任何一列」（⛔ 第一個候選寫完 skip 就整天不送了）",
