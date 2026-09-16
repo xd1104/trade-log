@@ -2253,9 +2253,13 @@ say("PTOK=s.token" in _ptokfn.replace(" ", ""),
 chk("  ⛔ 整份前端**剛好兩個**地方會寫 PTOK（⛔ 不多不少）",
     _page_nc.count("PTOK=s.token"), 2)
 # ⛔ 每一個會改變狀態的端點都要有人呼叫 pfetch（⛔ 少一個 ＝ 那顆鈕壞了）
-for _ep in ("/api/real/enter", "/api/real/close", "/api/note", "/api/replay",
+# ⚠️ 2026-09-16 名單少了 /api/replay：【回顧】整頁拿掉之後前端**沒有人**叫它了
+#    （後端那支與 replay_log/ 刻意留著，見 REVIEW-SPEC.md 開頭）。⛔ 其餘一個都不准少。
+for _ep in ("/api/real/enter", "/api/real/close", "/api/note",
             "/api/fire/on", "/api/fire/off"):
     say(f"pfetch('{_ep}'" in _page_nc, f"  ⛔ 前端用 pfetch 打 {_ep}")
+say("/api/replay" not in _page_nc,
+    "  /api/replay 已經沒有前端呼叫端（【回顧】整頁拿掉了；後端那支還在）")
 say("pfetch(url,body)" in _page_nc.replace(" ", ""),
     "  ⛔ 練習那幾顆（/api/enter・/api/close・/api/undo）也走 pfetch")
 

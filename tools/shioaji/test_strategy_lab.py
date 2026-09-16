@@ -526,9 +526,11 @@ finally:
 # ══ ⑥ 前端：沒有下單路徑、沒有建議口吻、預設值走注入常數 ═══════════════════
 print("\n=== ⑥ 新分頁的 HTML／JS ===")
 page = LP.PAGE
-html = page[page.index('<div id="tab-lab"'):page.index("<!-- 【回顧】")]
+html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
 _j0 = page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測")
-js = page[_j0:page.index("\nrvBind();", _j0)]
+# ⚠️ 2026-09-16：結束標記本來是 `\nrvBind();`（【回顧】那頁的接線），那一頁整個拿掉了 ⇒
+#    改用下一段的區塊註解開頭，跟 autotest-backend.py 同一個錨點（⛔ 三份要一起改）。
+js = page[_j0:page.index("/* ══════════════ 【自動下單】分頁", _j0)]
 say(len(js) > 5000 and "function lbRun" in js and "function tkBind" not in js, "  切出來的確實是 lab 那一段 JS（不多不少）")
 lab = html + js
 # ⚠️ 用字檢查要先剝註解：註解本身就在寫「⛔ 不預測、不建議」，不剝會把紅線說明當成違規。

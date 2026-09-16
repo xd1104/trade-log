@@ -1,3 +1,8 @@
+> ⚠️ **2026-09-16：【細節】分頁的畫面已經整個拿掉**（Benson 交辦，他已經不看）。
+> 這份規格只留作紀錄。**後端還在**：逐筆落地（`tick_writer.py` → `tick_logs/`）與
+> `/api/tick/days`、`/api/tick/day` 一行都沒動，探針 `tools/probe/tick-backend.py` 照樣要跑；
+> 前端探針 `tools/probe/tick-tab.mjs` 已刪（它量的那一頁不存在了）。
+
 # 【細節】分頁 — 逐筆早盤圖設計規格（lab-ux → lab-dev）
 
 對象檔案：`tools/shioaji/live_panel.py`（HTML/CSS/JS inline 在 `PAGE`）＋新增的後端端點。

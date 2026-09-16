@@ -1,3 +1,8 @@
+> ⚠️ **2026-09-16：【回顧】分頁的畫面已經整個拿掉**（Benson 交辦，他已經不看），連同「重播練習」。
+> 這份規格只留作紀錄。**後端刻意留著**：`/api/review`、`/api/replay`、`/api/bars`（不帶 full）、
+> `day_bars(full=False)`、`replay_log/` 的舊紀錄一行都沒動 ——
+> `day_bars()` 是【即時】也在用的同一支，只是 `full` 參數不同。
+
 # 【回顧】分頁 — 設計規格（給 lab-dev）
 
 > 對應可試用 demo：`tools/shioaji/review-demo.html`（雙擊即開，不需要伺服器）。

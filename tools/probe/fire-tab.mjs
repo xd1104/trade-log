@@ -164,9 +164,10 @@ chk("⛔ 分頁名是「自動下單」（沒有括號）",
 // 2026-09-14 隔壁那顆從「自動下單（模擬）」換成【策略實驗室】（#tab-lab，只算歷史、不送單）
 chk("隔壁那顆是「策略實驗室」",
   await ev(`document.querySelector('[data-tab="lab"]').textContent`), "策略實驗室");
+// ⚠️ 2026-09-16 分頁重整：【細節】【回顧】拿掉、多了【模擬】(#tab-sim)
 chk("其他分頁都藏起來了",
-  await ev(`['tab-live','tab-tick','tab-review','tab-lab']
-    .map(i=>document.getElementById(i).hidden)`), [true, true, true, true]);
+  await ev(`['tab-live','tab-sim','tab-lab']
+    .map(i=>document.getElementById(i).hidden)`), [true, true, true]);
 chk("這一頁真的顯示出來了", await ev(`document.getElementById('tab-fire').hidden`), false);
 
 /* ═══ ② ⛔ 關著的時候：恰好兩顆「開始」，⛔ 一個表單／輸入框都沒有 ═══════

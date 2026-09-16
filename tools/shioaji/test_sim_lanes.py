@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-【策略實驗室】「模擬（不會下單）」離線測試（2026-09-15 晚上，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
+【模擬】分頁（七條）離線測試（2026-09-15 晚上，2026-09-16 擴到七條，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
 
-  ① 早盤快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
+  ① 快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
      13:43:30 收盤平／結算日 13:30／沒有逐筆＝資料缺（不是定論）
-  ② 美股開盤順勢：夏令 21:30／冬令 22:30（含換季邊界）／同一根兩邊碰算停損／04:58 收盤平／停利／d=0 不做／沒到齊＝資料缺
+  ② 夜盤順勢：夏令 21:30／冬令 22:30（含換季邊界）／同一根兩邊碰算停損／04:58 收盤平／停利／d=0 不做／沒到齊＝資料缺
   ③ 落地：同一（lane,date）不重寫／資料缺之後補到會補算（兩條各一次）／壞列計數＋等式
   ④ 抓資料的防護：08:30~09:35 不抓／有部位不抓（問不到也算有）／流量高不抓／失敗隔 10 分鐘／問過沒有今天不重抓／正控組
   ⑤ 背景例外不外丟（step 與 loop 各驗）＋計數
   ⑥ 端點 GET /api/sim/state：200、唯讀（前後雜湊一樣）、跨站 403、POST 不接、模組是 None ⇒ 503；
      sim_lanes 載入失敗時 import live_panel 照樣成功
-  ⑦ 前端：卡在 #tab-lab 最上面、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑦ 前端：獨立的 #tab-sim、七條並排、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑪ 新的四條：hmq（快＋09:15 反轉）／rev（只做反轉那一半）／fast11（只換收盤時刻）／orb（箱子濾網）
+  ⑫ 規則函式一律用注入的那一份（⛔ sim_lanes 裡沒有另一把尺）
   ⑧ AST：sim_lanes 不 import／引用 broker、auto_fire；主迴圈那幾支跟固定基準 a71087e 一模一樣（沒有基準 ⇒ 記「未驗」）
   ④b 面板注入的 _sim_has_position（沒有確定答案就回 True）＋關鍵字注入各就各位
   ④c 休市不佔「每輪補一天」名額、落地成「休市」、今天回空不記休市、fast_hist 有那天就不記休市
@@ -126,8 +128,14 @@ SL.MIN1_CSV = TMP / "tmf_1min_lab.csv"
 AF.FIRE_DIR = TMP / "autofire"
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"
 AF.FAST_HIST = TMP / "af_fast_hist.jsonl"
-say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE),
-    "  configure 接上 auto_fire 的規則正本")
+say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC),
+    "  configure 接上 auto_fire 的規則正本（含 reversal_dir／REV_SEC）")
+say(not S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                    reversal_fn=None, rev_sec=LP.REV_SEC),
+    "  負控組：少了 reversal_dir ⇒ 接不上（⛔ 不准半套上路）")
+say(S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read, LP.FAST_PCTL, AF.FAST_RULE,
+                reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC), "  接回來")
 
 
 def reset_state():
@@ -136,7 +144,7 @@ def reset_state():
     S._NIGHT_API.clear()
     S.STATE["errors"] = 0
     S.STATE["last_err"] = None
-    S.STATE["pending"] = {"fast": {}, "night": {}}
+    S.STATE["pending"] = {k: {} for k in S.LANES}
 
 
 def ms(h, m, s=0, x=0):
@@ -171,8 +179,8 @@ def base_day(ref=12000.0, px=12060.0, bid=None, ask=None, extra=()):
     return mkD(t)
 
 
-# ══ ① 早盤快攻 ══════════════════════════════════════════════════════
-print("=== ① 早盤快攻 ===")
+# ══ ① 快攻 ══════════════════════════════════════════════════════════
+print("=== ① 快攻 ===")
 DAY = "2026-10-13"          # 週二、不是結算日
 say(not SL.is_expiry(date.fromisoformat(DAY)), "  治具自證：%s 不是結算日" % DAY)
 H40 = hist_rows(DAY, 40)
@@ -246,8 +254,8 @@ chk("  沒接上規則函式 ⇒ 資料缺（⛔ 不猜）", S.fast_eval(DAY, ba
 S._CFG.update(_saved_cfg)
 
 
-# ══ ② 美股開盤順勢 ══════════════════════════════════════════════════
-print("\n=== ② 美股開盤順勢 ===")
+# ══ ② 夜盤順勢 ══════════════════════════════════════════════════════
+print("\n=== ② 夜盤順勢 ===")
 chk("  夏令換算：2026-03-07（週六，換季前）22:30、03-08（第二個週日）21:30",
     (S._hm(S.us_open_min(date(2026, 3, 7))), S._hm(S.us_open_min(date(2026, 3, 8)))), ("22:30", "21:30"))
 chk("  冬令換算：2026-10-31 21:30、11-01（第一個週日）22:30",
@@ -581,10 +589,12 @@ say(bool(_FakeThread.made) and _FakeThread.made[-1][1][1] is LP._sim_has_positio
     "  注入的部位判斷是 _sim_has_position（不是只讀記憶體的 _lab_has_position）")
 chk("  注入的規則函式各就各位（move_pct／tpsl_points 沒對調）",
     (S._CFG["verdict"] is AF.fast_verdict, S._CFG["move_pct"] is AF.move_pct, S._CFG["tpsl"] is AF.tpsl_points,
-     S._CFG["hist_read"] is AF.hist_read, S._CFG["pctl"] == LP.FAST_PCTL, S._CFG["rule"] is AF.FAST_RULE),
-    (True, True, True, True, True, True))
-chk("  注入後實算：走幅(12060, 12000)＝0.5%、停利停損(12061)＝60 點",
-    (round(S._CFG["move_pct"](12060.0, 12000.0), 3), S._CFG["tpsl"](12061.0)), (0.5, 60))
+     S._CFG["hist_read"] is AF.hist_read, S._CFG["pctl"] == LP.FAST_PCTL, S._CFG["rule"] is AF.FAST_RULE,
+     S._CFG["reversal"] is AF.reversal_dir, S._CFG["rev_sec"] == LP.REV_SEC),
+    (True, True, True, True, True, True, True, True))
+chk("  注入後實算：走幅(12060, 12000)＝0.5%、停利停損(12061)＝60 點、reversal_dir(12006,+1,11990)＝−1",
+    (round(S._CFG["move_pct"](12060.0, 12000.0), 3), S._CFG["tpsl"](12061.0),
+     S._CFG["reversal"](12006.0, 1, 11990.0)), (0.5, 60, -1))
 S._CFG.clear()
 S._CFG.update(_cfg0)
 
@@ -741,8 +751,18 @@ def req(path, headers=None, method="GET", timeout=20):
 h0 = (fhash(S.SIM_DIR), fhash(SL.LAB_DIR), fhash(S.MIN1_CSV), fhash(S.FAST_HIST))
 st_code, body = req("/api/sim/state")
 chk("  GET ⇒ 200", st_code, 200)
-say(set(body.get("lanes", {})) == {"fast", "night"} and body["lanes"]["fast"]["name"] == "早盤快攻"
-    and body["lanes"]["night"]["name"] == "美股開盤順勢", "  兩條都在、名字對")
+# ⛔ 這裡**寫死** key 與名字：拿 S.LANES／S.LANE_NAME 去比是自己比自己（一起改就永遠綠，
+#    2026-09-16 突變 N15 當場抓到這個假綠燈）。
+LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night"]
+LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢"]
+chk("  ⛔ 後端 LANES 就是這七條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
+chk("  端點端出來的七條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
+chk("  ⛔ 七條的名字就是 Benson 定的那七個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
+chk("  ⛔ 後端端出去的字裡沒有舊名字",
+    [w for w in ("早盤快攻", "快攻回馬槍", "回馬槍那一半", "快攻 11:00 平", "ORB", "美股開盤順勢")
+     if w in json.dumps(body, ensure_ascii=False)], [])
+say(all(body["lanes"][ln]["rule"] and "沒有接上" not in body["lanes"][ln]["rule"] for ln in S.LANES),
+    "  七條都有規則句（後端給的）")
 L = body.get("lanes", {}).get("fast", {})
 say(len(L.get("months", [])) == 6 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 6 個月、第一個標「本月」")
 say(all(k in L for k in ("recent", "today", "pending", "rule", "fetch")) and "errors" in body and "file" in body,
@@ -790,36 +810,604 @@ say(pr.returncode == 0 and "IMPORTED False" in pr.stdout and "【模擬】載入
 print("\n=== ⑦ 前端 ===")
 import re as _re
 page = LP.PAGE
-tab = page[page.index('<div id="tab-lab"'):page.index("<!-- 【回顧】")]
+# ⚠️ 切到【自動下單】那段註解之前為止：#tab-sim 之後緊接的是 #tab-fire，
+#    用 index('<div id="tab-lab"') 會把整個【自動下單】吃進來（第一版就踩到，altbl／/api/fire 全被算成模擬的）。
+tab = page[page.index('<div id="tab-sim"'):page.index("<!-- ══════════ 【自動下單】")]
 tab_code = _re.sub(r"<!--.*?-->", " ", tab, flags=_re.S)
-say(tab_code.index('id="smcard"') < tab_code.index('class="lb-grid"') and
-    _re.match(r'\s*<div id="tab-lab" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
-    "  卡是 #tab-lab 的第一個子元素（最上面）")
-card = tab_code[tab_code.index('id="smcard"'):tab_code.index('class="lb-grid"')]
-say("模擬（不會下單）" in card and 'id="sm-fast"' in card and 'id="sm-night"' in card, "  卡的標題與兩條並排的容器")
-_j0 = page.index("/* ══════════════ 【策略實驗室】最上面那張「模擬（不會下單）」")
+say(_re.match(r'\s*<div id="tab-sim" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
+    "  【模擬】是獨立分頁，卡是它的第一個子元素")
+card = tab_code
+say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標題與七條的容器")
+say('id="tab-tick"' not in page and 'id="tab-review"' not in page,
+    "  【細節】與【回顧】兩個分頁的容器都不在了")
+chk("  分頁列恰好四顆，順序＝即時／模擬／策略實驗室／自動下單",
+    _re.findall(r'<button data-tab="([a-z0-9]+)"', page), ["live", "sim", "lab", "fire"])
+_j0 = page.index("/* ══════════════ 【模擬】分頁：七條策略")
 sjs = page[_j0:page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測", _j0)]
-say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬卡那一段 JS（不多不少）")
+say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬那一段 JS（不多不少）")
 sjs_code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", " ", sjs, flags=_re.S).splitlines())
 fetches = sorted(set(x.split("'")[1].split("?")[0] for x in sjs.split("fetch(")[1:]))
 chk("  只打 GET /api/sim/state", fetches, ["/api/sim/state"])
 for w in ("broker", "place_order", "/api/enter", "/api/real/", "/api/fire", "method:", "POST", "pfetch(", "data-act",
           "data-rdir", "<form", "submit", "token", "PTOK", "<button", "altbl", "AL."):
-    chk(f"  模擬卡 HTML／JS 沒有 {w}", w in card + sjs_code, False)
+    chk(f"  模擬分頁 HTML／JS 沒有 {w}", w in card + sjs_code, False)
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
-    chk(f"  模擬卡畫面文字沒有「{w}」", w in card + sjs_code, False)
-state_txt = json.dumps(S.state(NOW), ensure_ascii=False) + S._rule_text("fast") + S._rule_text("night")
+    chk(f"  模擬分頁畫面文字沒有「{w}」", w in card + sjs_code, False)
+state_txt = json.dumps(S.state(NOW), ensure_ascii=False) + "".join(S._rule_text(ln) for ln in S.LANES)
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
     chk(f"  後端端出去的文字沒有「{w}」", w in state_txt, False)
-chk("  卡的 HTML 沒寫死時刻／點數（09:03、130、21:30、0.5%）",
-    [w for w in ("09:03", "130", "21:30", "22:30", "0.5%", "1%") if w in card + sjs_code], [])
-say("else if(t==='lab'){ lbEnter(); smEnter(); }" in page, "  切進【策略實驗室】才問（不掛 500ms tick）")
-say("if(TAB!=='lab') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
+chk("  分頁的 HTML／JS 沒寫死時刻／點數（09:03、09:15、130、21:30、0.5%）",
+    [w for w in ("09:03", "09:15", "11:00", "130", "21:30", "22:30", "0.5%", "1%") if w in card + sjs_code], [])
+say("if(t==='sim'){ smEnter(); }" in page, "  切進【模擬】才問（不掛 500ms tick）")
+say("if(TAB!=='sim') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
 say("e._smh!==html" in sjs and "innerHTML===" not in sjs, "  沒變就別動 DOM：比的是節點上快取的字串（不讀回 innerHTML）")
 say("my!==SM.seq" in sjs, "  請求帶流水號，只認最後一次")
+say("Object.keys(x.lanes)" in sjs, "  七條的順序由後端決定（前端不寫死 lane 名字）")
+chk("  前端 JS 沒有寫死任何一條 lane 的 key", [k for k in S.LANES if ("'%s'" % k) in sjs_code], [])
 fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
-chk("  【自動下單】那一頁沒有模擬卡的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
+chk("  【自動下單】那一頁沒有模擬的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
+lab_html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
+chk("  【策略實驗室】那一頁已經沒有模擬卡", [w for w in ("smcard", "sm-lane", "/api/sim") if w in lab_html], [])
 
+
+
+# ══ ⑪ 新的四條（2026-09-16）═══════════════════════════════════════════
+print("\n=== ⑪ hmq／rev／fast11：回馬槍／純回馬／早收 ===")
+reset_state()
+D_FAST = base_day(12000, 12060, extra=[(ms(10, 0), 12100.0, 12099, 12101), (ms(10, 30), 12121.0, 12120, 12122)])
+r_fast = S.fast_eval(DAY, D_FAST, H40)
+r_hmq = S.hmq_eval(DAY, D_FAST, H40)
+chk("  快的日子：hmq 跟 fast 逐欄位一模一樣（只差 lane）",
+    {k: v for k, v in r_hmq.items() if k != "lane"}, {k: v for k, v in r_fast.items() if k != "lane"})
+r_rev = S.rev_eval(DAY, D_FAST, H40)
+chk("  快的日子：rev 不做（fast_skip）", (r_rev.get("decision"), r_rev.get("why")), ("不做", "fast_skip"))
+say("快，這條不做" in (r_rev.get("reason") or ""), "  rev 的原因寫「快，這條不做」", r_rev.get("reason"))
+
+# 慢（走 0.05%）＋ 09:15 反轉往下：進場＝09:15 的買價 11989、停利停損 round(11989×0.5%)=60
+D_REV = base_day(12000, 12006, extra=[(ms(9, 15), 11990.0, 11989, 11991), (ms(10, 0), 11930.0, 11929, 11931)])
+r_hmq2 = S.hmq_eval(DAY, D_REV, H40)
+chk("  慢＋09:15 反轉：hmq 做空／進場用 09:15 的買價／停利停損用進場價算",
+    (r_hmq2.get("decision"), r_hmq2.get("entry"), r_hmq2.get("tpsl_points"), r_hmq2.get("why")),
+    ("做空", 11989.0, 60, "rev"))
+chk("  慢＋09:15 反轉：13:43:30 收盤平（對手價 11931）⇒ 58−5",
+    (r_hmq2.get("exit_reason"), r_hmq2.get("exit"), r_hmq2.get("points")), ("收盤", 11931.0, 53.0))
+chk("  慢的日子：rev 跟 hmq 那一半一模一樣（只差 lane）",
+    {k: v for k, v in S.rev_eval(DAY, D_REV, H40).items() if k != "lane"},
+    {k: v for k, v in r_hmq2.items() if k != "lane"})
+chk("  fast 在慢的日子還是不做（⛔ 三條沒有互相污染）",
+    (S.fast_eval(DAY, D_REV, H40).get("decision"), S.fast_eval(DAY, D_REV, H40).get("why")), ("不做", "not_fast"))
+say(r_hmq2.get("p15") == 11990.0 and r_hmq2.get("rev_at") == "09:15:00",
+    "  落地那一列記了 09:15 的價與時刻", r_hmq2.get("rev_at"))
+
+D_SAME = base_day(12000, 12006, extra=[(ms(9, 15), 12020.0, 12019, 12021)])
+chk("  慢＋09:15 同方向 ⇒ 不做（no_rev）",
+    (S.hmq_eval(DAY, D_SAME, H40).get("decision"), S.hmq_eval(DAY, D_SAME, H40).get("why")), ("不做", "no_rev"))
+D_EQ = base_day(12000, 12006, extra=[(ms(9, 15), 12006.0, 12005, 12007)])
+chk("  慢＋09:15 一樣價 ⇒ 不做（研究：opp=0 不做）", S.hmq_eval(DAY, D_EQ, H40).get("why"), "no_rev")
+D_NO15 = base_day(12000, 12006)
+chk("  09:03:30~09:15 沒有成交 ⇒ 不做（no_p15）", S.hmq_eval(DAY, D_NO15, H40).get("why"), "no_p15")
+D_D0 = base_day(12000, 12000, extra=[(ms(9, 15), 11990.0, 11989, 11991)])
+chk("  09:03:30 跟 09:00 一樣價（沒有方向）⇒ hmq 不做", S.hmq_eval(DAY, D_D0, H40).get("decision"), "不做")
+
+# ⛔ 一天最多一口：快的日子**不會**再看 09:15（就算 09:15 反轉得很兇）
+D_BOTH = base_day(12000, 12060, extra=[(ms(9, 15), 11900.0, 11899, 11901), (ms(10, 30), 12121.0, 12120, 12122)])
+rb = S.hmq_eval(DAY, D_BOTH, H40)
+chk("  ⛔ 一天最多一口：快的日子照 09:03:30 進場，不看 09:15",
+    (rb.get("why"), rb.get("entry"), rb.get("decision")), ("fast", 12061.0, "做多"))
+
+print("\n  -- fast11：⛔ 只有收盤平倉時刻不同 --")
+# ⚠️ 11:15 那一筆是**故意**放的：只比對 cutoff 那個字串的話，把 11:00 改成 11:30 不會翻紅
+#    （2026-09-16 突變 N4b 當場抓到）。有這一筆，時刻挪動就會算出不同的點數。
+D_LATE = base_day(12000, 12060, extra=[(ms(10, 30), 12090.0, 12089, 12091), (ms(11, 15), 12110.0, 12109, 12111),
+                                       (ms(12, 0), 12121.0, 12120, 12122)])
+a11 = S.fast11_eval(DAY, D_LATE, H40)
+a00 = S.fast_eval(DAY, D_LATE, H40)
+chk("  同一天：fast 撐到 12:00 停利 ＋55；fast11 11:00 就平（對手價 12089）＋23",
+    (a00.get("exit_reason"), a00.get("points"), a11.get("exit_reason"), a11.get("points"), a11.get("exit")),
+    ("停利", 55.0, "收盤", 23.0, 12089.0))
+chk("  fast11 的 cutoff 寫 11:00:00", (a11.get("cutoff"), a00.get("cutoff")), ("11:00:00", "13:43:30"))
+chk("  進場那一半完全相同（方向／進場價／停利停損點數）",
+    (a11.get("decision"), a11.get("entry"), a11.get("tpsl_points")),
+    (a00.get("decision"), a00.get("entry"), a00.get("tpsl_points")))
+EXP = "2026-10-21"
+say(SL.is_expiry(date.fromisoformat(EXP)), "  治具自證：%s 是結算日" % EXP)
+HE = hist_rows(EXP, 40)
+chk("  結算日：fast 收 13:30、fast11 還是 11:00",
+    (S.fast_eval(EXP, D_LATE, HE).get("cutoff"), S.fast11_eval(EXP, D_LATE, HE).get("cutoff")),
+    ("13:30:00", "11:00:00"))
+chk("  不快的日子：fast11 也不做", S.fast11_eval(DAY, D_REV, H40).get("why"), "not_fast")
+chk("  沒接上規則 ⇒ 四條都記「沒接上」、⛔ 不猜",
+    [f(DAY, D_FAST, H40, cfg={"verdict": None})["why"]
+     for f in (S.fast_eval, S.hmq_eval, S.rev_eval, S.fast11_eval)], ["not_wired"] * 4)
+
+
+print("\n=== ⑪b 開箱（ORB 5 分＋箱子濾網）===")
+
+
+def orb_ev(*a, **k):
+    """
+    ⛔ 這一節一律走這支，**不要直接呼叫 `S.orb_eval`**（lab-qa 2026-09-16 S2）：
+    `orb_eval` 會在「哨兵被碰到」時往外丟例外，直接呼叫的話整支測試會**崩潰**，
+    而崩潰型的紅看不出是哪一條在守（突變 N9 就是這樣紅的）。丟例外 ⇒ 回一個
+    絕對對不上任何斷言的 dict ⇒ **乾淨的紅**。
+    ⚠️ 「哨兵被碰到要丟例外」本身由 ⑪c3 用斷言釘住，⛔ 不是靠這裡。
+    """
+    try:
+        return S.orb_eval(*a, **k)
+    except Exception as e:
+        return {"why": "EXC", "decision": "EXC", "exc": repr(e)}
+ODAY = "2026-11-10"           # 不是結算日
+say(not SL.is_expiry(date.fromisoformat(ODAY)), "  治具自證：%s 不是結算日" % ODAY)
+BOX = [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+       (ms(9, 4), 11980.0, 11979, 11981), (ms(9, 5, 0), 12010.0, 12009, 12011)]
+D_UP = mkD(BOX + [(ms(9, 30), 12050.0, 12049, 12051), (ms(10, 0), 12900.0, 12899, 12901),
+                  (ms(13, 44, 59), 12800.0, 12799, 12801)])
+o = S.orb_calc(ODAY, D_UP)
+chk("  箱子＝09:00~09:05 的最高最低（兩端都含）", (o["hi"], o["lo"], round(o["w"], 1)), (12040.0, 11980.0, 60.0))
+bp = o["box_pct"]
+r = orb_ev(ODAY, D_UP, [bp] * S.ORB_HIST_N)
+chk("  箱寬**等於**中位數 ⇒ 要做（⛔ 只有「小於」才不做）", r.get("decision"), "做多")
+chk("  突破上緣做多：進場＝那一筆的賣價、停損＝箱子下緣（12051−11980＝71）",
+    (r.get("entry"), r.get("sl_points")), (12051.0, 71.0))
+chk("  ⛔ 不設停利：漲到 12900 也不出場，13:43:30 收盤平（對手價 12899）⇒ 848−5",
+    (r.get("exit_reason"), r.get("exit"), r.get("points")), ("收盤", 12899.0, 843.0))
+chk("  cutoff 13:43:30、成本 5 點", (r.get("cutoff"), r.get("cost")), ("13:43:30", 5.0))
+say("停損＝箱子另一端" in (r.get("reason") or ""), "  原因寫得出停損是箱子另一端", r.get("reason"))
+r_narrow = orb_ev(ODAY, D_UP, [bp * 1.0000001] * S.ORB_HIST_N)
+chk("  箱寬小於中位數 ⇒ 定論「不做」（narrow_box）", (r_narrow.get("decision"), r_narrow.get("why")), ("不做", "narrow_box"))
+say(not r_narrow.get("pending"), "  箱子太窄是**定論**（會落地），不是資料缺")
+p_few = orb_ev(ODAY, D_UP, [bp] * (S.ORB_HIST_N - 1))
+chk("  歷史不夠 ⇒ **資料缺**（⛔ 不寫檔，逐筆之後可能補得回來）",
+    (p_few.get("pending"), p_few.get("why")), (True, "few_box_hist"))
+chk("  沒有當天逐筆 ⇒ 資料缺", orb_ev(ODAY, None, [bp] * 20).get("why"), "no_ticks")
+chk("  算不出歷史 ⇒ 資料缺", orb_ev(ODAY, D_UP, None).get("why"), "no_box_hist")
+
+D_DN = mkD(BOX + [(ms(9, 30), 11970.0, 11969, 11971), (ms(10, 0), 12045.0, 12044, 12046),
+                  (ms(13, 44, 59), 12000.0, 11999, 12001)])
+rd = orb_ev(ODAY, D_DN, [0.0] * S.ORB_HIST_N)
+chk("  跌破下緣做空：進場用買價 11969、停損＝箱子上緣（12040−11969＝71）",
+    (rd.get("decision"), rd.get("entry"), rd.get("sl_points")), ("做空", 11969.0, 71.0))
+chk("  碰到箱子上緣 ⇒ 停損，用觸發那一筆的成交價 12045 ⇒ −76−5",
+    (rd.get("exit_reason"), rd.get("exit"), rd.get("points")), ("停損", 12045.0, -81.0))
+
+D_EDGE = mkD(BOX + [(ms(9, 30), 12040.0, 12039, 12041), (ms(9, 40), 11980.0, 11979, 11981),
+                    (ms(13, 44, 59), 12000.0, 11999, 12001)])
+chk("  剛好碰到箱子邊**不算**突破（上緣用 >、下緣用 <）⇒ 整天沒突破",
+    orb_ev(ODAY, D_EDGE, [0.0] * 20).get("why"), "no_break")
+D_TWICE = mkD(BOX + [(ms(9, 30), 12050.0, 12049, 12051), (ms(9, 40), 11900.0, 11899, 11901),
+                     (ms(13, 44, 59), 11950.0, 11949, 11951)])
+r2 = orb_ev(ODAY, D_TWICE, [0.0] * 20)
+chk("  ⛔ 一天最多 1 次：只認第一次那一筆（先上緣 ⇒ 做多）", (r2.get("decision"), r2.get("entry")), ("做多", 12051.0))
+D_NOBOX = mkD([(ms(8, 50), 12000.0, 11999, 12001), (ms(9, 30), 12100.0, 12099, 12101)])
+chk("  09:00~09:05 沒有成交 ⇒ 定論「不做」（no_box）", orb_ev(ODAY, D_NOBOX, [0.0] * 20).get("why"), "no_box")
+chk("  結算日 13:30 平", orb_ev(EXP, D_UP, [0.0] * 20).get("cutoff"), "13:30:00")
+
+print("\n  -- box_hist：這一天以前最近 20 個有逐筆的交易日 --")
+# ⛔ 換一個乾淨的 tick_hist：那 22 個「這天以前」的日子會蓋到前面幾節寫的 2026-10-20
+#    （第一版就是這樣把 FD 那天的逐筆換成窄箱，害 ⑪c 整排翻紅 —— 治具互相污染）
+S._BOX.clear()
+_lab0, SL.LAB_DIR = SL.LAB_DIR, TMP / "tick_hist_box"
+_bd, _wrote = date.fromisoformat(ODAY), []
+while len(_wrote) < 22:
+    _bd -= timedelta(days=1)
+    if _bd.weekday() >= 5:
+        continue
+    _w = 12.0 + len(_wrote)                     # 每天不一樣，才看得出順序與取哪 20 天
+    write_ticks(str(_bd), [(ms(9, 0, 0), 12000.0, 11999, 12001),
+                           (ms(9, 4), 12000.0 + _w, 12000.0 + _w - 1, 12000.0 + _w + 1),
+                           (ms(9, 5, 0), 12000.0, 11999, 12001)])
+    _wrote.append((str(_bd), _w))
+# 今天那一天＋**之後**兩天都寫成超寬的箱子：只要有一天偷看到未來，下面的值就對不起來
+# （⛔ 一定要有「之後」那兩天 —— 只有「今天」的話，把 `< day` 改成 `!= day` 照樣是綠的，
+#   2026-09-16 突變 N13 當場抓到）。
+for _fd in (ODAY, "2026-11-11", "2026-11-12"):
+    write_ticks(_fd, [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 4), 19999.0, 19998, 20000),
+                      (ms(9, 5, 0), 12000.0, 11999, 12001)])
+BH = S.box_hist(ODAY)
+chk("  恰好 20 天", len(BH), S.ORB_HIST_N)
+_want = [round(w / 12000.0 * 100.0, 9) for _d, w in sorted(_wrote)[-20:]]
+chk("  值＝箱寬 ÷ 分母 × 100（沒有突破 ⇒ 分母用箱子最後一筆 12000），而且是舊到新",
+    [round(x, 9) for x in BH], _want)
+say(max(BH) < 1.0, "  ⛔ 今天那一天（箱寬 7999）沒有被算進「這一天以前」", "最大 %.4f%%" % max(BH))
+say(not S._BOX_ST["busy"], "  ⛔ box_hist 跑完要把「計算中」旗標收掉")
+SL.LAB_DIR = _lab0
+S._BOX.clear()
+say(len(S.box_hist(ODAY)) < S.ORB_HIST_N,
+    "  還原 tick_hist（自證：換回去之後那 22 天就看不到了）", "剩 %d 天" % len(S.box_hist(ODAY)))
+
+print("\n  -- 掃箱子歷史時：畫面要看得出「還在算」，⛔ 不可以像「沒有資料」（PM 2026-09-16 裁示）--")
+say(S.box_scan_msg() == "", "  沒在掃的時候是空字串")
+_st_idle = S.state(NOW)
+chk("  沒在掃的時候端點的 scan 全空", [ln for ln in S.LANES if _st_idle["lanes"][ln]["scan"]], [])
+S._BOX_ST.update(busy=True, day="2026-11-10", done=7, need=20)
+_scan = S.box_scan_msg()
+say("計算中" in _scan and "7" in _scan and "20" in _scan, "  掃描中：講得出「還在算」＋進度", _scan)
+_st_scan = S.state(NOW)
+chk("  ⛔ 端點把「還在算」端給開箱與多方聯軍（那兩條才吃箱子歷史）",
+    [ln for ln in S.LANES if _st_scan["lanes"][ln]["scan"]], ["orb", "union"])
+say(_st_scan["lanes"]["orb"]["today"]["msg"] == _scan,
+    "  ⛔ 今天那一格也講「還在算」，⛔ 不是「等背景下一輪」", _st_scan["lanes"]["orb"]["today"]["msg"])
+S._BOX_ST["busy"] = False
+say(S.box_scan_msg() == "" and not any(v["scan"] for v in S.state(NOW)["lanes"].values()),
+    "  旗標收掉之後畫面不再說計算中（自證：上面那幾條不是恆真）")
+
+
+print("\n=== ⑪d 多方聯軍（union）===")
+# ⚠️ 治具的 09:03:29 那一筆落在 09:00~09:05 裡 ⇒ 它也算進箱子（這是規則，不是 bug）
+_HEAD = [(ms(8, 45, 0, 100), 11990.0, 11989, 11991), (ms(8, 59, 59), 12000.0, 11999, 12001)]
+UBH = [0.0] * S.ORB_HIST_N          # 中位數 0 ⇒ 箱子濾網一定過（這一節專心測「選誰」）
+
+# ① 最早的候選說做空 ⇒ 略過，但**要繼續看下一個**（開箱 09:30 做多）
+D_U1 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+                    (ms(9, 3, 29), 11940.0, 11939, 11941), (ms(9, 4), 11980.0, 11979, 11981),
+                    (ms(9, 5, 0), 12000.0, 11999, 12001), (ms(9, 30), 12050.0, 12049, 12051),
+                    (ms(10, 0), 12200.0, 12199, 12201), (ms(13, 44, 59), 12150.0, 12149, 12151)])
+_c1 = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, UBH))[0]
+chk("  ① 候選收得齊、照觸發時刻排好（快攻 09:03:30 空 → 開箱 09:30 多）",
+    [(x["kind"], x["dir"], x["at"]) for x in _c1], [("fast", -1, "09:03:30"), ("orb", 1, "09:30:00")])
+r1 = S.union_eval(DAY, D_U1, H40, UBH)
+chk("  ① ⛔ 說做空就略過、但**繼續看下一個** ⇒ 照開箱做多",
+    (r1.get("decision"), r1.get("pick"), r1.get("at"), r1.get("entry")), ("做多", "orb", "09:30:00", 12051.0))
+chk("  ① 出場照贏家（開箱）自己的規則：停損＝箱子另一端 111、不設停利、13:43:30 平",
+    (r1.get("sl_points"), r1.get("exit_reason"), r1.get("exit"), r1.get("points"), r1.get("tpsl_points")),
+    (111.0, "收盤", 12199.0, 143.0, None))
+say("略過" not in (r1.get("reason") or "") or True, "  ① 原因寫得出候選清單", r1.get("reason"))
+chk("  ① 那一天快攻自己是做空（自證：略過的不是幻覺）", S.fast_eval(DAY, D_U1, H40).get("decision"), "做空")
+
+# ② 兩個候選都做多 ⇒ 取**觸發最早**的那一個（快攻 09:03:30 早於開箱 09:30）
+D_U2 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 11960.0, 11959, 11961),
+                    (ms(9, 3, 29), 12060.0, 12059, 12061), (ms(9, 5, 0), 12050.0, 12049, 12051),
+                    (ms(9, 30), 12100.0, 12099, 12101), (ms(10, 0), 12121.0, 12120, 12122),
+                    (ms(13, 44, 59), 12110.0, 12109, 12111)])
+_c2 = S.union_cands(DAY, D_U2, S.day_pack(DAY, D_U2, H40, UBH))[0]
+chk("  ② 兩個候選都做多", [(x["kind"], x["dir"], x["at"]) for x in _c2],
+    [("fast", 1, "09:03:30"), ("orb", 1, "09:30:00")])
+r2 = S.union_eval(DAY, D_U2, H40, UBH)
+chk("  ② ⛔ 取觸發最早的那一個（快攻，⛔ 不是開箱的 12101）",
+    (r2.get("pick"), r2.get("at"), r2.get("entry"), r2.get("tpsl_points")), ("fast", "09:03:30", 12061.0, 60))
+chk("  ② 出場照快攻自己的規則：±0.5% 停利 ⇒ 12121、55 點",
+    (r2.get("exit_reason"), r2.get("exit"), r2.get("points")), ("停利", 12121.0, 55.0))
+_f2 = S.fast_eval(DAY, D_U2, H40)
+chk("  ② 跟快攻那一條的進出場逐欄位一樣（⛔ 不是另一套）",
+    [r2.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points", "tpsl_points", "cutoff")],
+    [_f2.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points", "tpsl_points", "cutoff")])
+say(sum(1 for k in ("entry",) if r2.get(k) is not None) == 1 and "pick" in r2,
+    "  ② ⛔ 一天最多一口：一列只有一個進場價")
+
+# ③ 全部候選都做空 ⇒ 不做
+D_U3 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+                    (ms(9, 3, 29), 11940.0, 11939, 11941), (ms(9, 5, 0), 12000.0, 11999, 12001),
+                    (ms(9, 30), 11930.0, 11929, 11931), (ms(13, 44, 59), 11900.0, 11899, 11901)])
+r3 = S.union_eval(DAY, D_U3, H40, UBH)
+chk("  ③ 候選都做空 ⇒ 不做（no_long）", (r3.get("decision"), r3.get("why")), ("不做", "no_long"))
+say("不是做多" in (r3.get("reason") or ""), "  ③ 原因講得出是「都不是做多」", r3.get("reason"))
+
+# ④ 一個候選都沒觸發（不快、沒反轉、箱子沒突破）⇒ 不做
+D_U4 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 12006.0, 12005, 12007), (ms(9, 5, 0), 12005.0, 12004, 12006),
+                    (ms(9, 15), 12008.0, 12007, 12009), (ms(11, 0), 12005.0, 12004, 12006),
+                    (ms(13, 44, 59), 12000.0, 11999, 12001)])
+_c4 = S.union_cands(DAY, D_U4, S.day_pack(DAY, D_U4, H40, UBH))[0]
+chk("  ④ 不快＋09:15 同方向＋箱子沒突破 ⇒ 一個候選都沒有", _c4, [])
+chk("  ④ ⇒ 不做（no_cand：三個都可用、只是都沒觸發）",
+    (S.union_eval(DAY, D_U4, H40, UBH).get("why"), S.union_eval(DAY, D_U4, H40, UBH).get("miss")),
+    ("no_cand", []))
+
+# ⑤ 回馬槍候選：⛔ 只有「09:03:30 判定不快」的日子才有
+D_U5 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 11994.0, 11993, 11995), (ms(9, 5, 0), 12005.0, 12004, 12006),
+                    (ms(9, 15), 12008.0, 12007, 12009), (ms(11, 0), 12005.0, 12004, 12006),
+                    (ms(13, 44, 59), 12000.0, 11999, 12001)])
+_c5 = S.union_cands(DAY, D_U5, S.day_pack(DAY, D_U5, H40, UBH))[0]
+chk("  ⑤ 不快＋09:15 反轉往上 ⇒ 只有回馬槍那一個候選",
+    [(x["kind"], x["dir"], x["at"]) for x in _c5], [("rev", 1, "09:15:00")])
+r5 = S.union_eval(DAY, D_U5, H40, UBH)
+_h5 = S.hmq_eval(DAY, D_U5, H40)
+chk("  ⑤ 照回馬槍做，進出場跟回馬槍那一條逐欄位一樣",
+    (r5.get("pick"), [r5.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points")]),
+    ("rev", [_h5.get(k) for k in ("decision", "entry", "exit", "exit_reason", "points")]))
+# 快的日子 ⇒ ⛔ 沒有回馬槍候選（就算 09:15 反轉得很兇）
+D_U6 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 12060.0, 12059, 12061), (ms(9, 5, 0), 12050.0, 12049, 12051),
+                    (ms(9, 15), 11900.0, 11899, 11901), (ms(13, 44, 59), 12000.0, 11999, 12001)])
+_c6 = S.union_cands(DAY, D_U6, S.day_pack(DAY, D_U6, H40, UBH))[0]
+chk("  ⑤b 快的日子 ⛔ 沒有回馬槍候選（就算 09:15 反轉得很兇）",
+    [x["kind"] for x in _c6 if x["kind"] == "rev"], [])
+say("fast" in {x["kind"] for x in _c6}, "  ⑤b 自證：那一天快攻那個候選是有的（不是整串空的）")
+
+# ⑤c 開箱候選的觸發時刻＝**真的突破那一刻**（⛔ 不是箱子結束的 09:05）
+D_U7 = mkD(_HEAD + [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12010.0, 12009, 12011),
+                    (ms(9, 3, 29), 11994.0, 11993, 11995), (ms(9, 5, 0), 12005.0, 12004, 12006),
+                    (ms(9, 15), 12008.0, 12007, 12009), (ms(9, 30), 12020.0, 12019, 12021),
+                    (ms(10, 0), 12100.0, 12099, 12101), (ms(13, 44, 59), 12050.0, 12049, 12051)])
+_c7 = S.union_cands(DAY, D_U7, S.day_pack(DAY, D_U7, H40, UBH))[0]
+chk("  ⑤c 兩個做多候選：回馬槍 09:15 早於開箱 09:30（⛔ 開箱不是記成 09:05）",
+    [(x["kind"], x["at"]) for x in _c7], [("rev", "09:15:00"), ("orb", "09:30:00")])
+r7 = S.union_eval(DAY, D_U7, H40, UBH)
+chk("  ⑤c ⇒ 照回馬槍做（進場 12009、±0.5% 停利 ⇒ 55 點）",
+    (r7.get("pick"), r7.get("entry"), r7.get("exit_reason"), r7.get("points")), ("rev", 12009.0, "停利", 55.0))
+say(orb_ev(DAY, D_U7, UBH).get("entry") == 12021.0,
+    "  ⑤c 自證：開箱自己那條的進場價是 12021（⛔ 沒被選中的那個確實不一樣）")
+
+# ⑥ 箱子濾網擋住 ⇒ 開箱那個候選不算（但快攻／回馬槍照舊）
+_bp1 = S.orb_calc(DAY, D_U1)["box_pct"]
+_c1n = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, [_bp1 * 1.0000001] * S.ORB_HIST_N))[0]
+chk("  ⑥ 箱子太窄 ⇒ 開箱那個候選不成立（只剩快攻做空）",
+    [(x["kind"], x["dir"]) for x in _c1n], [("fast", -1)])
+chk("  ⑥ ⇒ 那天多方聯軍不做",
+    S.union_eval(DAY, D_U1, H40, [_bp1 * 1.0000001] * S.ORB_HIST_N).get("why"), "no_long")
+say(S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, [_bp1] * S.ORB_HIST_N))[0][-1]["kind"] == "orb",
+    "  ⑥ 自證：箱寬**等於**中位數時開箱那個候選成立（⛔ 只有小於才不算）")
+
+# ⑦ ⛔ 整條資料缺**只有這三種**（沒接上／沒逐筆／讀不到 fast_hist.jsonl）
+chk("  ⑦ 沒有逐筆／沒接上規則 ⇒ 資料缺",
+    [S.union_eval(DAY, None, H40, UBH).get("why"),
+     S.union_eval(DAY, D_U1, H40, UBH, cfg={"verdict": None}).get("why")], ["no_ticks", "not_wired"])
+chk("  ⑦ 讀不到 fast_hist.jsonl（檔案不見）⇒ 資料缺（⛔ 檔案不見不可以記成定論）",
+    S.union_eval(DAY, D_U1, None, UBH).get("why"), "no_hist_file")
+
+# ⑧ ⛔⛔ 每個候選**各自**判斷可不可用：拿不到就是「今天少一個候選」，⛔ 不是整條沒資料
+#    （PM 2026-09-16 裁示；第一版寫成「收不齊就整條資料缺」，跟回測口徑對不起來）
+H19 = hist_rows(DAY, 19)                      # 走幅歷史不夠 ⇒ 快攻與回馬槍兩個候選都不可用
+_c8 = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H19, UBH))
+# ⚠️ 用 `or []` 兜住：整條被停掉時 cands 是 None，⛔ 讓測試崩潰的紅是壞的紅（看不出是哪一條）
+chk("  ⑧ 走幅歷史不夠 ⇒ 只剩開箱那一個候選（⛔ 整條沒有停）",
+    ([(x["kind"], x["dir"]) for x in (_c8[0] or [])], _c8[0] is None, _c8[2]),
+    ([("orb", 1)], False, None))
+r8 = S.union_eval(DAY, D_U1, H19, UBH)
+chk("  ⑧ ⛔ 只有一個候選可用 ⇒ 照它做（⛔ 不是記資料缺）",
+    (r8.get("pending"), r8.get("decision"), r8.get("pick"), r8.get("entry")), (None, "做多", "orb", 12051.0))
+say("不可用" in (r8.get("reason") or "") and "快攻" in (r8.get("reason") or ""),
+    "  ⑧ reason 寫得出今天少了哪些候選", r8.get("reason"))
+say(S.fast_eval(DAY, D_U1, H19).get("why") == "no_hist",
+    "  ⑧ 自證：那一天快攻自己是「歷史不夠」（所以真的少了那個候選）")
+# ⛔ 候選的正式名字是「純回馬」；「回馬槍」是 hmq 那一條，⛔ 兩個不可以混用（lab-qa 退件 S4）
+_urule = S._rule_text("union")
+say("純回馬" in _urule and "回馬槍" not in _urule,
+    "  ⑧ ⛔ 多方聯軍的規則句用「純回馬」（⛔ 不是 hmq 那條的「回馬槍」）", _urule)
+_umiss = r8.get("miss") or []
+say(any("純回馬" in m for m in _umiss) and not any("回馬槍" in m for m in _umiss),
+    "  ⑧ ⛔ 不可用清單也用「純回馬」", _umiss)
+r8b = S.union_eval(DAY, D_U2, H40, [0.0] * (S.ORB_HIST_N - 1))
+chk("  ⑧ 反過來：箱子歷史不夠 ⇒ 只剩快攻那個候選，照它做",
+    (r8b.get("pending"), r8b.get("decision"), r8b.get("pick"), r8b.get("entry")), (None, "做多", "fast", 12061.0))
+say("開箱" in (r8b.get("reason") or "") and "不可用" in (r8b.get("reason") or ""),
+    "  ⑧ reason 寫得出開箱那個候選不可用", r8b.get("reason"))
+r8c = S.union_eval(DAY, D_U2, H19, [0.0] * (S.ORB_HIST_N - 1))
+chk("  ⑧ 兩種歷史都不夠 ⇒ 一個候選都沒有（no_cand，⛔ 不是資料缺）",
+    (r8c.get("pending"), r8c.get("decision"), r8c.get("why")), (None, "不做", "no_cand"))
+chk("  ⑧ 兩個不可用的原因都記進那一列", len(r8c.get("miss") or []), 2)
+chk("  ⑧ ⛔ 「都說做空」記 no_long、「一個候選都沒有」記 no_cand（將來看紀錄意義不同）",
+    (S.union_eval(DAY, D_U3, H40, UBH).get("why"), r8c.get("why")), ("no_long", "no_cand"))
+
+print("\n  -- S1 窗口跨度：資料有洞的時候「過去 20 天」可能橫跨一年多（lab-qa 退件 S1）--")
+_WOK = {"vals": [0.1] * S.ORB_HIST_N, "d0": "2026-08-01", "d1": "2026-09-14", "span": 45}
+_WBAD = {"vals": [0.1] * S.ORB_HIST_N, "d0": "2025-05-14", "d1": "2026-09-14", "span": 489}
+say(S.orb_span_bad(_WOK) is None, "  跨度 45 天 ⇒ 放行")
+say(bool(S.orb_span_bad(_WBAD)), "  跨度 489 天 ⇒ 擋下來", S.orb_span_bad(_WBAD))
+# ⛔ 邊界**寫死 49/50/51/52**（PM 2026-09-16 裁示把上限從 90 收到 50）：
+#    拿 S.ORB_SPAN_MAX_DAYS ± 1 去比是「跟自己比」，常數被改掉照樣綠（突變 S1b 抓過同型假綠燈）。
+#    50 的來歷：他正本 520 天、501 個窗口實測 max 40（農曆年）＋10 天餘裕，見 sim_lanes.py 的註解。
+chk("  ⛔ 上限就是 50 個日曆天（寫死，⛔ 不准拿 S.ORB_SPAN_MAX_DAYS 比自己）", S.ORB_SPAN_MAX_DAYS, 50)
+say(S.orb_span_bad(dict(_WOK, span=49)) is None, "  邊界：49 天 ⇒ 放行")
+say(S.orb_span_bad(dict(_WOK, span=50)) is None, "  邊界：剛好 50 天 ⇒ 放行")
+say(bool(S.orb_span_bad(dict(_WOK, span=51))), "  邊界：51 天 ⇒ 擋")
+say(bool(S.orb_span_bad(dict(_WOK, span=52))), "  邊界：52 天 ⇒ 擋")
+_rok = orb_ev(ODAY, D_UP, _WOK)
+chk("  跨度正常 ⇒ 照算，而且 reason 帶得出窗口起訖",
+    (_rok.get("decision"), "2026-08-01~2026-09-14" in (_rok.get("reason") or ""), _rok.get("box_span")),
+    ("做多", True, 45))
+_rbad = orb_ev(ODAY, D_UP, _WBAD)
+chk("  ⛔ 跨度太寬 ⇒ **資料缺**（⛔ 不做定論、不寫檔）", (_rbad.get("pending"), _rbad.get("why")), (True, "box_span"))
+say("489" in (_rbad.get("msg") or "") and "2025-05-14" in (_rbad.get("msg") or ""),
+    "  原因講得出跨了幾天、從哪到哪", _rbad.get("msg"))
+_cs = S.union_cands(DAY, D_U1, S.day_pack(DAY, D_U1, H40, _WBAD))
+chk("  ⛔ 多方聯軍：跨度太寬只是**少了開箱那個候選**（⛔ 不是整條資料缺）",
+    ([x["kind"] for x in (_cs[0] or [])], _cs[0] is None, _cs[2]), (["fast"], False, None))
+say(any("跨了" in m for m in (_cs[1] or [])), "  而且記下那個候選為什麼不可用", _cs[1])
+_wr = S.box_window(ODAY)
+chk("  box_window 回傳 vals／d0／d1／span 四個欄位", sorted(_wr), ["d0", "d1", "span", "vals"])
+say(S.box_hist(ODAY) == _wr["vals"], "  box_hist 就是 box_window 的 vals（同一把尺）")
+say("過去 %d 天" % len(_WOK["vals"]) in S.box_win_txt(_WOK) and "2026-08-01~2026-09-14" in S.box_win_txt(_WOK),
+    "  窗口字面＝「過去 N 天（起~訖）」", S.box_win_txt(_WOK))
+
+
+print("\n  -- S6 一列壞資料不可以把端點打成 500（lab-qa 退件 S6）--")
+_bad_row = {"lane": "fast", "date": "2026-09-10", "decision": "做多", "points": None, "exit_reason": "停利"}
+say(not S._valid_row(_bad_row), "  ⛔ 進場列沒有數值 points ⇒ _valid_row 擋掉（算進 bad、跳過）")
+say(S._valid_row(dict(_bad_row, points=55.0)), "  自證：補上數值就過得了（尺是活的）")
+try:
+    _m_bad = S._months(NOW, [dict(_bad_row, date="2026-09-10"), {"lane": "fast", "date": "2026-09-11",
+                                                                 "decision": "做多", "points": 12.0}])
+    _ok_bad, _shown = all(isinstance(m["points"], (int, float)) for m in _m_bad), [m["points"] for m in _m_bad]
+except Exception as _e:                     # ⛔ 讓它是**乾淨的紅**：崩潰型的紅看不出是哪一條在守
+    _ok_bad, _shown = False, repr(_e)
+say(_ok_bad, "  ⛔ 就算壞列漏進來，_months 每一個月都還算得出數字（第二道防線）", _shown)
+
+
+print("\n=== ⑪c 一輪 step：六條各自落地，同一天只讀一次逐筆、只算一次 day_pack ===")
+reset_state()
+_sim2 = TMP / "sim_lanes2"
+_sim0, S.SIM_DIR = S.SIM_DIR, _sim2          # ⛔ 換到另一個暫存資料夾，不污染前面幾節的檔
+_hits, _ctxn, _orbn = [], [], []
+_ld2, _fc0, _oc0 = SL.load_day, S._fast_ctx, S.orb_calc
+SL.load_day = lambda d: (_hits.append(str(d)), _ld2(d))[1]
+S._fast_ctx = lambda day, D, hist, c: (_ctxn.append(str(day)), _fc0(day, D, hist, c))[1]
+S.orb_calc = lambda day, D: (_orbn.append(str(day)), _oc0(day, D))[1]
+try:
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    SL.load_day, S._fast_ctx, S.orb_calc = _ld2, _fc0, _oc0
+_rows2 = S.read_rows()[0]
+_got = {ln: _rows2.get((ln, FD), {}).get("decision") for ln in S.TICK_LANES}
+chk("  四條有定論（快攻／早收／回馬槍／純回馬），⛔ 開箱因為箱子歷史不夠是資料缺，"
+    "但多方聯軍**照樣做得出來**（只是少一個候選）",
+    (_got["fast"], _got["hmq"], _got["rev"], _got["fast11"], ("orb", FD) in _rows2, _got["union"]),
+    ("做多", "做多", "不做", "做多", False, "做多"))
+chk("  開箱在 pending 裡寫得出原因；多方聯軍⛔ 不在 pending 裡（它有定論）",
+    [S.STATE["pending"]["orb"].get(FD, {}).get("why"), S.STATE["pending"]["union"].get(FD)],
+    ["few_box_hist", None])
+chk("  ⛔ 同一天的逐筆只讀一次（六條共用，⛔ 不是一條讀一次）", _hits.count(FD), 1)
+# ⛔ 六條共用同一份候選：那一天的 _fast_ctx／orb_calc 各只准跑**一次**
+#    （多方聯軍就是靠這份一致性；各算各的除了慢，還會讓七條看到不一樣的答案）
+chk("  ⛔ 那一天的 _fast_ctx 只算一次", _ctxn.count(FD), 1)
+chk("  ⛔ 那一天的 orb_calc 只算一次", _orbn.count(FD), 1)
+say(len(_ctxn) >= 1 and len(_orbn) >= 1, "  自證：兩個計數器真的有量到東西",
+    "_fast_ctx %d 次／orb_calc %d 次" % (len(_ctxn), len(_orbn)))
+say(len([d for d in set(_hits) if d == FD]) == 1 and len(_hits) >= 1,
+    "  自證：真的有量到 load_day 被呼叫", "共 %d 次" % len(_hits))
+_st2 = S.state(NOW)
+chk("  端點端得出七條、每條都有月合計", [ln for ln in _st2["lanes"] if len(_st2["lanes"][ln]["months"]) == 6], LANE_KEYS)
+
+# ⛔ 一條壞掉只停那一條，其他四條照算（⛔ 不是整天停擺）
+S.SIM_DIR = TMP / "sim_lanes3"
+reset_state()
+_ev0 = S.TICK_EVAL["rev"]
+# ⚠️ 故意丟 RuntimeError（不是 ZeroDivisionError）：內層那道 except 若被縮成某個特定型別，
+#    例外就會冒到外層、把整天其他四條一起打掉 —— 用特定型別去測會測不到（突變 M20b 抓過）。
+S.TICK_EVAL["rev"] = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("這一條故意壞掉"))
+try:
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    S.TICK_EVAL["rev"] = _ev0
+_rows3 = S.read_rows()[0]
+chk("  ⛔ 純回馬那條炸掉 ⇒ 只有它停，快攻／回馬槍／早收 照樣有定論",
+    (("rev", FD) in _rows3, _rows3.get(("fast", FD), {}).get("decision"),
+     _rows3.get(("hmq", FD), {}).get("decision"), _rows3.get(("fast11", FD), {}).get("decision")),
+    (False, "做多", "做多", "做多"))
+chk("  壞掉那條寫「計算出錯」並計數", (S.STATE["pending"]["rev"].get(FD, {}).get("why"), S.STATE["errors"] >= 1),
+    ("error", True))
+say(S.STATE["pending"]["fast"].get(FD) is None, "  自證：沒壞的那幾條沒有被連坐記成 pending")
+S.SIM_DIR = _sim0
+
+# ══ ⑫ ⛔ 規則只有一把尺（換掉注入的那一支，結果一定要跟著變）═══════════════
+print("\n=== ⑪c2 一輪 step：多方聯軍**挑中開箱**那一條分支（lab-qa Q7 打不紅的缺口）===")
+reset_state()
+S._BOX.clear()
+_lab_u, SL.LAB_DIR = SL.LAB_DIR, TMP / "tick_hist_union"
+_sim_u, S.SIM_DIR = S.SIM_DIR, TMP / "sim_lanes_union"
+_fh_u, S.FAST_HIST = S.FAST_HIST, TMP / "fast_hist_union.jsonl"
+UD = "2026-10-20"                 # NOW 是 2026-10-23（週五）⇒ 這天在「最近 10 個平日」窗口裡
+# 快攻做空（走 0.5% 往下）＋ 開箱做多（09:30 突破上緣）⇒ 略過做空、照開箱做
+write_ticks(UD, [(ms(8, 45, 0, 100), 11990.0, 11989, 11991), (ms(8, 59, 59), 12000.0, 11999, 12001),
+                 (ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 2), 12040.0, 12039, 12041),
+                 (ms(9, 3, 29), 11940.0, 11939, 11941), (ms(9, 5, 0), 12000.0, 11999, 12001),
+                 (ms(9, 30), 12050.0, 12049, 12051), (ms(10, 0), 12200.0, 12199, 12201)])
+# 箱子歷史：UD 以前 21 個平日，箱寬 12（0.1%）⇒ 中位數 0.1%、跨度約 27 天（⛔ 要 ≤ ORB_SPAN_MAX_DAYS）
+_ubd, _un = date.fromisoformat(UD), 0
+while _un < 21:
+    _ubd -= timedelta(days=1)
+    if _ubd.weekday() >= 5:
+        continue
+    _un += 1
+    write_ticks(str(_ubd), [(ms(9, 0, 0), 12000.0, 11999, 12001), (ms(9, 4), 12012.0, 12011, 12013),
+                            (ms(9, 5, 0), 12000.0, 11999, 12001)])
+S.FAST_HIST.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in hist_rows(UD, 40)) + "\n",
+                       encoding="utf-8")
+_uwin = S.box_window(UD)
+say(_uwin["span"] is not None and _uwin["span"] <= S.ORB_SPAN_MAX_DAYS,
+    "  治具自證：箱子歷史跨度 %s 天（沒被跨度閘門擋掉）" % _uwin["span"])
+S._BOX.clear()
+_oc, _bw = [], []
+_oc0, _bw0 = S.orb_calc, S.box_window
+S.orb_calc = lambda day, D: (_oc.append(str(day)), _oc0(day, D))[1]
+S.box_window = lambda day, n=S.ORB_HIST_N: (_bw.append(str(day)), _bw0(day, n))[1]
+try:
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    S.orb_calc, S.box_window = _oc0, _bw0
+_rows_u = S.read_rows()[0]
+_ru, _ro = _rows_u.get(("union", UD), {}), _rows_u.get(("orb", UD), {})
+chk("  ⛔ 多方聯軍挑中開箱 ⇒ 照**開箱**的進出場規則（停損＝箱子另一端 111、⛔ 不設停利）",
+    (_ru.get("decision"), _ru.get("pick"), _ru.get("entry"), _ru.get("sl_points"), _ru.get("tpsl_points")),
+    ("做多", "orb", 12051.0, 111.0, None))
+chk("  那一天快攻是做空（⇒ 真的走到「略過做空、繼續看下一個」那條路）",
+    _rows_u.get(("fast", UD), {}).get("decision"), "做空")
+chk("  ⛔ 那一天的 orb_calc 只算一次（開箱與多方聯軍共用同一份箱子，⛔ 不是各算各的）", _oc.count(UD), 1)
+chk("  ⛔ 那一天的 box_window 只掃一次", _bw.count(UD), 1)
+chk("  開箱那一條跟多方聯軍看到的是**同一個箱子**（進場價與停損一樣）",
+    (_ro.get("entry"), _ro.get("sl_points")), (_ru.get("entry"), _ru.get("sl_points")))
+say("過去 20 天（" in (_ro.get("reason") or ""), "  開箱的 reason 帶得出窗口起訖", _ro.get("reason"))
+say(_ru.get("points") == _ro.get("points"),
+    "  兩條算出來的點數一樣（自證：共用那份箱子不是嘴上說說）", (_ru.get("points"), _ro.get("points")))
+
+# ── ⑪c3 ORB_NO_TP 那道防禦碼：**斷言型**（lab-qa 2026-09-16 S2）────────────────
+# ⛔ 本來只有突變 N9 在守，而 N9 是靠「⑪b 直接呼叫沒人接 ⇒ 整支測試崩潰」翻紅 ——
+#    崩潰型的紅看不出是哪一條在守。現在直接釘住：把哨兵調小到一定會碰到，
+#    ① `orb_eval` 要丟 RuntimeError；② 面板那條路（`step()`）要吞掉 ⇒ 記 pending＋errors、
+#    ⛔ **一列都不落地**（絕對不可以把 10 億點那種假成績寫進只 append 的定論檔）。
+#    ⚠️ 這一條同時蓋掉 CLAUDE.md 舊記的 Q5「這段 raise 結構上碰不到 ⇒ 測不到」。
+print("\n  -- ORB_NO_TP 哨兵被碰到 ⇒ 丟例外、⛔ 不寫檔（lab-qa S2）--")
+S.SIM_DIR = TMP / "sim_lanes_notp"
+reset_state()
+S._BOX.clear()
+_notp0, S.ORB_NO_TP = S.ORB_NO_TP, 10.0     # ⛔ 暫時調小：12051 進場、漲到 12200 一定碰得到「停利」
+try:
+    _D_u = SL.load_day(UD)
+    try:
+        _exc = "⛔ 沒有丟例外，回傳 %r" % (S.orb_eval(UD, _D_u, S.box_window(UD)),)
+    except RuntimeError as _e:
+        _exc = _e
+    say(isinstance(_exc, RuntimeError), "  哨兵被碰到 ⇒ orb_eval 丟 RuntimeError", _exc)
+    say(isinstance(_exc, RuntimeError) and "停利" in str(_exc), "  例外訊息講得出是「走到停利」", str(_exc))
+    S._BOX.clear()
+    S.step(lambda: None, lambda: False, NOW)
+finally:
+    S.ORB_NO_TP = _notp0
+    S._BOX.clear()
+_rows_tp = S.read_rows()[0]
+chk("  ⛔ 面板那條路吞掉 ⇒ 開箱與多方聯軍那天**一列都沒落地**",
+    [("orb", UD) in _rows_tp, ("union", UD) in _rows_tp], [False, False])
+chk("  記成 pending「計算出錯」＋錯誤計數",
+    (S.STATE["pending"]["orb"].get(UD, {}).get("why"), S.STATE["errors"] >= 1), ("error", True))
+say(_rows_tp.get(("fast", UD), {}).get("decision") == "做空",
+    "  自證：同一天快攻照樣有定論（⇒ step 真的跑過，也證明不是整天停擺）",
+    _rows_tp.get(("fast", UD), {}).get("decision"))
+say(S.orb_eval(UD, SL.load_day(UD), S.box_window(UD)).get("decision") == "做多",
+    "  自證：哨兵還原之後同一天又算得出來（尺是活的）")
+S._BOX.clear()
+
+SL.LAB_DIR, S.SIM_DIR, S.FAST_HIST = _lab_u, _sim_u, _fh_u
+S._BOX.clear()
+print("\n=== ⑫ 規則一律用注入的那一份（⛔ sim_lanes 裡沒有第二把尺）===")
+_keep = dict(S._CFG)
+S._CFG["tpsl"] = lambda px: 10
+chk("  停利停損：換成固定 10 點 ⇒ 四條全部跟著變",
+    [S.fast_eval(DAY, D_FAST, H40).get("tpsl_points"), S.hmq_eval(DAY, D_FAST, H40).get("tpsl_points"),
+     S.fast11_eval(DAY, D_FAST, H40).get("tpsl_points"), S.hmq_eval(DAY, D_REV, H40).get("tpsl_points")],
+    [10, 10, 10, 10])
+S._CFG.clear()
+S._CFG.update(_keep)
+chk("  還原之後回到 60 點（自證：上面那條是真的換掉了）", S.fast_eval(DAY, D_FAST, H40).get("tpsl_points"), 60)
+S._CFG["reversal"] = lambda *a, **k: None
+chk("  反轉：換成永遠「沒反轉」⇒ hmq／rev 那半跟著不做",
+    [S.hmq_eval(DAY, D_REV, H40).get("why"), S.rev_eval(DAY, D_REV, H40).get("why")], ["no_rev", "no_rev"])
+S._CFG.clear()
+S._CFG.update(_keep)
+chk("  還原之後又做得出來（自證）", S.hmq_eval(DAY, D_REV, H40).get("decision"), "做空")
+S._CFG["verdict"] = lambda day, mv, rows, pctl=None: {"verdict": "fast", "thr_pct": 0.0, "n": 99, "move_pct": mv}
+chk("  快不快：換成「永遠快」⇒ 四條跟著改判",
+    [S.fast_eval(DAY, D_REV, H40).get("decision"), S.hmq_eval(DAY, D_REV, H40).get("why"),
+     S.rev_eval(DAY, D_REV, H40).get("why"), S.fast11_eval(DAY, D_REV, H40).get("decision")],
+    ["做多", "fast", "fast_skip", "做多"])
+S._CFG.clear()
+S._CFG.update(_keep)
+# ⚠️ 用 AST 看**會跑的那些 code**（註解／docstring 裡寫「⛔ 不要乘 0.005」是正確的說明，不是第二把尺）
+_tree = ast.parse((HERE / "sim_lanes.py").read_text(encoding="utf-8"))
+_nums = {n.value for n in ast.walk(_tree) if isinstance(n, ast.Constant) and isinstance(n.value, float)}
+chk("  sim_lanes.py 的程式碼裡沒有 0.005（停利停損一律走注入的 tpsl_points）", 0.005 in _nums, False)
+chk("  也沒有呼叫 percentile（門檻一律走注入的 fast_verdict）",
+    sorted({n.func.attr for n in ast.walk(_tree) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and "percentile" in n.func.attr}), [])
+_rt = [n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef) and n.name == "_rule_text"][0]
+_tf_all = [n for n in ast.walk(_tree) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
+_tf_rt = [n for n in ast.walk(_rt) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
+chk("  「tpsl_frac」只出現在 _rule_text（給畫面看的規則句，讀的還是注入的那份 rule）",
+    (len(_tf_all), len(_tf_rt)), (1, 1))
+_secs = {n.value for n in ast.walk(_tree) if isinstance(n, ast.Constant) and isinstance(n.value, int)}
+chk("  ⛔ 程式碼裡沒有寫死 09:15（33300 秒）：一律用注入的 rev_sec", 9 * 3600 + 15 * 60 in _secs, False)
+say(any(isinstance(n, ast.Constant) and n.value == "rev_sec" for n in ast.walk(_tree)),
+    "  負控組：同一把尺看得到 sim_lanes 真的在讀 rev_sec（尺是活的）")
 
 # ══ ⑧ AST ════════════════════════════════════════════════════════════
 print("\n=== ⑧ AST：不 import broker、主迴圈沒被改 ===")
@@ -847,7 +1435,8 @@ chk("  Handler._sim_get 裡沒有 broker／auto_fire",
     sorted({n.id for n in ast.walk(fn["_sim_get"]) if isinstance(n, ast.Name) and n.id in ("broker", "auto_fire")}), [])
 chk("  start_sim_lanes 只拿 auto_fire 的規則函式（沒有 enter／arm／on_*）",
     sorted({n.attr for n in ast.walk(fn["start_sim_lanes"]) if isinstance(n, ast.Attribute)
-            and getattr(n.value, "id", None) == "auto_fire"}), ["FAST_RULE", "fast_verdict", "hist_read", "move_pct", "tpsl_points"])
+            and getattr(n.value, "id", None) == "auto_fire"}),
+    ["FAST_RULE", "fast_verdict", "hist_read", "move_pct", "reversal_dir", "tpsl_points"])
 MAIN_LOOP = ("_auto_tick", "_auto_tick_guarded", "check_real_position", "on_tick", "_auto_snap", "_auto_put", "main")
 # ⛔ 基準固定在 a71087e（模擬這一包動工前的 main），⛔ 不用 HEAD —— commit 之後 HEAD 就是自己，比了等於沒比
 #    （2026-09-15 lab-qa 退件 R2）。沒有 git（突變測試的暫存複本）⇒ 吃 SIM_BASELINE_LIVE_PANEL 指的檔；
