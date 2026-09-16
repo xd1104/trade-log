@@ -666,8 +666,10 @@ REV_MUT = [
      '    if d2 != 0 and d2 != d:', '    if d2 != d:'),
     # ⚠️ 第一版把 pop 插在 wait.update(...) **前面** ⇒ update 又把 px 放回去 ⇒ 等於沒突變（打不紅是尺的問題）。
     ("R3 wait 那一列不落地 09:03:30 的 px",
-     '        slow.update({"d": dv, "dir_0903": direction, "px": px, "rev_at": _CFG["rev_at"]})',
-     '        slow.update({"d": dv, "dir_0903": direction, "rev_at": _CFG["rev_at"]})'),
+     # ⚠️ ⛔ 不可以只拿掉 slow.update 裡那個 px —— `base` 本來就有一個 px ⇒ 那是空包彈
+     #    （2026-09-16 實測：改了照樣全綠）。要打就打 base 那一份。
+     '            "px": _num(snap.get("px")), "quote_age_ms": snap.get("quote_age_ms"),',
+     '            "quote_age_ms": snap.get("quote_age_ms"),'),
     ("R4 wait 那一列不落地方向 d",
      '{"d": dv, "dir_0903": direction,', '{"dir_0903": direction,'),
     ("R5 09:15 不檢查今天已經有 fire／result／skip（一天兩筆）",

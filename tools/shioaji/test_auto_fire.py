@@ -3242,6 +3242,12 @@ chk("  ⛔ ledger 等式（skip 2：快攻 not_fast ＋ 純回馬 no_reversal）
     (0, 2, _led17["total"]))
 chk("  收盤平倉 ⇒ eod_no_entry（沒反轉的那一天沒有部位）", AF._auto_entry(DAY), (None, "eod_no_entry"))
 
+# ⛔ 這一段守的是 `_cand_done(d, "rev")`（⛔ 不是 `_sent`：這一天根本沒送過單）
+_n_rows = len(rows())
+run_rev(FakeToday(px=12100.0))
+chk("  ⛔ 看門狗重啟又跑一次 09:15 ⇒ 不准再寫第二列", len(rows()), _n_rows)
+chk("    而且還是同一個結論", merged().get("why"), "no_reversal")
+
 print("\n  ── ⑰f 09:15 價 ＝ 09:03:30 價 ⇒ ⛔ 不送 ──")
 slow_day(ExplodeAPI())
 run_rev(FakeToday(px=12010.0))
@@ -3779,6 +3785,33 @@ chk("  ⛔ ledger 等式含 wait（舊帳本的 wait 不算 bad）",
     (1, 0, _l18["total"]))
 chk("  ⛔ 防重送：舊帳本那一天算「送過了」", AF._sent(_old_day), True)
 chk("  ⛔ 收盤平倉照舊認得舊帳本那一口", (AF._auto_entry(_old_day)[0] or {}).get("dir"), "short")
+orb_clear()
+arm_clear()
+reset()
+
+print("\n  ── ⑱k ⭐⭐ 跨候選的「一天最多一口」：開箱送過了 ⇒ 09:15 純回馬不准再送 ──")
+reset(hist=False)
+hist_seed([0.30] * 40)          # 快攻一律判「不快」⇒ 這一天有純回馬這個候選
+orb_clear()
+orb_seed([0.05] * AF.ORB_RULE["hist_n"])
+tick_write(DAY, BOX_ROWS + UP_ROWS)
+arm_write("A")
+live_on()
+_api18 = SimAPI("Buy", 12016.0)
+connect(_api18)
+run_signal(FakeToday())          # 09:03:30：不快 ⇒ 快攻那一列 not_fast（帶 px／d）
+chk("  前置：快攻不快、還沒送單",
+    (merged().get("why"), AF._sent(DAY)), ("not_fast", False))
+AF._orb_step(DAY, _ms("09:07:00.200"))
+chk("  前置：開箱在 09:07 送出去了",
+    (merged().get("rec"), merged().get("cand")), ("result", "orb"))
+_n18, _rows18 = len(_api18.orders), len(rows())
+broker._state["position"] = None          # 假裝那一口已經平掉（不然 can_enter 本來就會擋）
+run_rev(FakeToday(px=12200.0))            # 09:15 真的反轉成做多 —— ⛔ 但今天已經送過了
+chk("  ⛔⛔ 09:15 一張單都不准再送", len(_api18.orders), _n18)
+chk("  ⛔ 也不准再寫任何一列", len(rows()), _rows18)
+chk("  ⛔ 收盤平倉認得的還是開箱那一口",
+    (AF._auto_entry(DAY)[0] or {}).get("cand"), "orb")
 orb_clear()
 arm_clear()
 reset()

@@ -1264,7 +1264,9 @@ def _fire(snap, day, lag_ms, put_at, leg="fast"):
         #       在這一刻就有定論了。舊帳本的 `wait` 照樣讀得到（`_wait_row`／`read_all`）。
         slow = dict(base)
         slow.pop("dir", None)
-        slow.update({"d": dv, "dir_0903": direction, "px": px, "rev_at": _CFG["rev_at"]})
+        # ⚠️ `px` 不必再寫一次：`base` 裡那一份就是同一個值（`_num(snap.get("px"))`）。
+        #    寫兩份的話，拿掉任何一份都不會有東西紅 ＝ 兩邊互相遮住（2026-09-16 突變測試抓到）。
+        slow.update({"d": dv, "dir_0903": direction, "rev_at": _CFG["rev_at"]})
         return _skip(d, "not_fast", slow,
                      "快攻：今天開盤不夠快（走 %.2f%%／門檻 %.2f%%）—— 這個候選今天不用，"
                      "等 %s 看純回馬有沒有反轉" % (mv, v["thr_pct"], _CFG["rev_at"]),
