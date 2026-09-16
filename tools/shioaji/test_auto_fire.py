@@ -3044,6 +3044,22 @@ say("alName(r.method)" not in LPSRC.replace(_rn, ""),
 say(len(_re_hist.findall(r"esc\(alRecName\(D,r\)", LPSRC)) >= 5, "  紀錄清單 5 處都改走 alRecName(D,r)")
 say("'舊規則'" in _rn and "r.tp_points" in _rn and "r.at" in _rn and "r.leg" in _rn,
     "  alRecName 用帳本的 leg／at／tp_points 判斷（不看現在的常數）")
+# ⭐⭐ 2026-09-16 第二次改名（「快攻回馬槍」→「多方聯軍」）——PM 指名的那個坑：
+#    舊版寫 `if(r.leg || 日期>=…)`，而 09-16 那一版**每一列都有 leg** ⇒ `r.leg` 會
+#    **短路掉日期閘門** ⇒ 改 METHOD_NAME 會把 09-16 那幾天當場改名成「多方聯軍」。
+#    ⇒ 日期閘門一定要排在 `r.leg` **前面**，而且歷史名字要是**寫死的字串**。
+say("const AL_UNION_FROM='" in LPSRC and "const AL_HMQ_NAME='快攻回馬槍'" in LPSRC,
+    "  ⛔ 有 AL_UNION_FROM（上線日）與寫死的歷史名字 AL_HMQ_NAME")
+_i_union = _rn.find("AL_UNION_FROM")
+_i_leg = _rn.find("r.leg")
+say(0 <= _i_union < _i_leg,
+    "  ⛔⛔ AL_UNION_FROM 那道日期閘門排在 r.leg **前面**（⛔ 不然 leg 會短路掉它）",
+    f"union@{_i_union} leg@{_i_leg}")
+say("return AL_HMQ_NAME" in _rn and "alName(r.method)" in _rn,
+    "  ⛔ 09-16 那一版回**寫死的**歷史名字，只有上線日之後才回現在的名字")
+_line_union = [x for x in _rn.splitlines() if 'AL_UNION_FROM' in x and 'return' in x]
+say(_line_union and "alName(r.method)" in _line_union[0] and "r.leg" not in _line_union[0],
+    "  ⛔ 上線日那一行只看日期（⛔ 不准把 r.leg 混進同一個條件）", _line_union)
 say(len(set(AF.REV_MSG.values())) == len(AF.REV_MSG)
     and not (set(AF.REV_MSG.values()) & set(AF.WHY.values())),
     "  ⛔ 回馬槍那幾句互不相同、也不跟 WHY 任何一句相同（09:15 不准講成 09:03:30）")
