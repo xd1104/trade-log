@@ -881,6 +881,16 @@ say("ev.key==='Escape'&&SM.det" in sjs, "  Esc 關得掉內頁")
 say("my!==SM.dseq" in sjs and "SM.dseq++" in sjs,
     "  內頁的請求也帶流水號；關掉時把流水號往前推（還在路上的回應不准再畫）")
 say("n.id.slice(3)" in sjs, "  內頁要看哪一條是從節點 id 取的（⛔ 前端不寫死 lane 名字）")
+# ⑧ 月表點下去跳到那個月（2026-09-17 Benson 交辦）
+say("function smJump" in sjs and "data-m=" in sjs, "  月表點得下去、逐日每一列帶得出是哪個月")
+say("/^\\d{4}-\\d{2}$/.test(m" in sjs,
+    "  月份先驗過 YYYY-MM 才丟進 querySelector（⛔ 不准把任意字串接進選擇器）")
+say("scrollIntoView" not in sjs_code and "sc.scrollTop+=" in sjs_code,
+    "  捲的是清單那個容器自己（⛔ 不用 scrollIntoView：它會把整頁一起捲走）")
+say("thead" in sjs_code and "head.getBoundingClientRect().height" in sjs_code,
+    "  有扣掉 sticky 表頭的高度（不然跳過去的第一列被壓在表頭底下）")
+# ⛔ 卡上那張月表**不可以**變成可點的：整張卡本來就是一顆「點進去」的鈕
+say("all?' hit\"" in sjs, "  只有內頁那張月表有 .hit（卡上那張不可點）")
 # ④ **粗體一定要先 esc 再換**：順序反過來就是 HTML 注入
 say(sjs.index("esc(String(s==null?'':s))") < sjs.index(".replace(/\\*\\*([^*]+)\\*\\*/g"),
     "  smMd 先 esc 再換粗體（⛔ 反過來就開了 HTML 注入）")

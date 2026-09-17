@@ -5443,6 +5443,12 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .sm-tbl .why{color:var(--faint); font-size:11px; line-height:1.5; overflow-wrap:anywhere}
 .sm-tbl .src{color:var(--faint); font-size:10.5px; white-space:nowrap}
 .sm-tbl .src.bf{color:var(--ghost)}
+/* 月表點下去跳到那個月（⚠️ 只有內頁那張有 .hit；卡上那張刻意不可點） */
+.sm-m.hit{cursor:pointer}
+.sm-m.hit:hover{background:var(--raise)}
+.sm-m.hit:focus-visible{outline:2px solid var(--gold-line); outline-offset:1px}
+.sm-m.on{box-shadow:inset 3px 0 0 var(--gold)}
+.sm-tbl tr.hl td{background:var(--gold-soft)}
 .lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
 @media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
 .lb-mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
@@ -7686,7 +7692,11 @@ function smMonths(ms,all){
   (ms||[]).forEach(m=>{
     // ⛔ 筆數旁邊一定要帶「算到幾天」：資料補得多寡不同時，兩條的月合計**不可比** ——
     //    只寫「2 筆」看不出來是「這個月只算到 9 天」還是「20 天只做了 2 筆」（lab-qa 退件 S2）。
-    h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+(all&&m.this?'（本月）':'')
+    // ⭐ 內頁（all）那張月表點得下去 ⇒ 右邊的逐日紀錄跳到那個月（2026-09-17 Benson 交辦）。
+    //    ⛔ 卡上那張**不可以**變成可點的：整張卡本來就是一顆「點進去」的鈕，
+    //       月份再吃掉一次點擊，他會點不開內頁。
+    const hit=all?' hit" data-m="'+esc(m.month)+'" role="button" tabindex="0':'';
+    h+='<div class="sm-m'+(m.this?' this':'')+hit+'"><span>'+esc(m.label)+(all&&m.this?'（本月）':'')
       +'<i>'+m.trades+' 筆／'+m.days+' 天</i></span>'
       +'<b class="lb-mono '+smCls(m.points)+'">'+(m.days?smPts(m.points):'—')+'</b></div>';
   });
@@ -7716,7 +7726,8 @@ function smLane(L){
    ⚠️ 「回填」與「即時」要看得出來：`calc` 有值＝事後重算的，沒有＝面板當天即時算的。 */
 function smDetRow(r){
   const trade=r.decision==='做多'||r.decision==='做空';
-  return '<tr><td class="d">'+smDayY(r.date)+'</td>'
+  // data-m ＝這一列屬於哪個月（月表點下去要靠它找到第一列）
+  return '<tr data-m="'+esc(String(r.date||'').slice(0,7))+'"><td class="d">'+smDayY(r.date)+'</td>'
     +'<td class="k '+(trade?(r.decision==='做多'?'up':'down'):'none')+'">'+esc(r.decision)+'</td>'
     +'<td class="x">'+(trade?smPx(r.entry)+' → '+smPx(r.exit)+'（'+esc(r.exit_reason||'')+'）':'')+'</td>'
     +'<td class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</td>'
@@ -7746,6 +7757,25 @@ function smDetPaint(d){
     +'</tbody></table></div></div></div>';
   h+='<div class="sm-foot">'+esc(d.note||'')+'　規則原句：'+esc(d.rule||'')+'</div>';
   smSet('smdet',h);
+}
+/* 月表點下去 ⇒ 右邊的逐日紀錄捲到那個月的第一天（2026-09-17 Benson 交辦）。
+   ⛔ 不用 scrollIntoView：它會把**整頁**一起捲走（內頁上半的定義就被推出畫面了），
+      這裡要捲的只有 .sm-scroll 這個容器自己 ⇒ 用 getBoundingClientRect 的差值。
+   ⚠️ 表頭是 position:sticky ⇒ 要**多扣掉表頭的高度**，不然跳過去的第一列被壓在表頭底下。
+   ⚠️ m 只准是 YYYY-MM：它會被丟進 querySelector，先驗過才不會被亂七八糟的值打壞。 */
+function smJump(m){
+  if(!/^\d{4}-\d{2}$/.test(m||'')) return;
+  const dt=document.getElementById('smdet'); if(!dt) return;
+  const sc=dt.querySelector('.sm-scroll'), tr=dt.querySelector('.sm-tbl tbody tr[data-m="'+m+'"]');
+  if(!sc||!tr) return;
+  const head=dt.querySelector('.sm-tbl thead');
+  sc.scrollTop+=tr.getBoundingClientRect().top-sc.getBoundingClientRect().top
+                -(head?head.getBoundingClientRect().height:0);
+  // 跳到哪個月要看得出來（月表那一列亮起來、那個月的逐日整段淡淡上色）
+  dt.querySelectorAll('.sm-m.on').forEach(e=>e.classList.remove('on'));
+  const row=dt.querySelector('.sm-m[data-m="'+m+'"]'); if(row) row.classList.add('on');
+  dt.querySelectorAll('.sm-tbl tbody tr.hl').forEach(e=>e.classList.remove('hl'));
+  dt.querySelectorAll('.sm-tbl tbody tr[data-m="'+m+'"]').forEach(e=>e.classList.add('hl'));
 }
 function smDetOpen(k){
   if(!k) return;
@@ -7784,9 +7814,17 @@ function smBind(){
     el.addEventListener('keydown',ev=>{ if(ev.key!=='Enter'&&ev.key!==' ') return;
       const n=ev.target.closest('.sm-lane'); if(n){ ev.preventDefault(); open(n); } });
   }
-  if(dt){ dt.addEventListener('click',ev=>{ if(ev.target.closest('.sm-back')) smDetClose(); });
-    dt.addEventListener('keydown',ev=>{ if((ev.key==='Enter'||ev.key===' ')&&ev.target.closest('.sm-back')){
-      ev.preventDefault(); smDetClose(); } }); }
+  if(dt){
+    dt.addEventListener('click',ev=>{
+      if(ev.target.closest('.sm-back')) return smDetClose();
+      const m=ev.target.closest('.sm-m[data-m]'); if(m) smJump(m.getAttribute('data-m'));
+    });
+    dt.addEventListener('keydown',ev=>{
+      if(ev.key!=='Enter'&&ev.key!==' ') return;
+      if(ev.target.closest('.sm-back')){ ev.preventDefault(); return smDetClose(); }
+      const m=ev.target.closest('.sm-m[data-m]'); if(m){ ev.preventDefault(); smJump(m.getAttribute('data-m')); }
+    });
+  }
   document.addEventListener('keydown',ev=>{ if(ev.key==='Escape'&&SM.det) smDetClose(); });
 }
 function smPaint(x){
