@@ -273,8 +273,12 @@ def _hms_ms(msec):
 
 
 def _day_cutoff(day):
-    """日盤收盤平倉的時刻：結算日 13:30，其他 13:43:30（⛔ 用 strategy_lab 的正本，不另寫 is_expiry）"""
-    return SL.T1330 if SL.is_expiry(date.fromisoformat(str(day))) else SL.T1343_30
+    """
+    日盤收盤平倉的時刻：結算日 13:30，其他 13:43:30（⛔ 用 strategy_lab 的正本，不另寫 is_expiry）。
+    ⭐ 2026-09-16 改走 `is_expiry_cal`：**農曆年會把結算日往後移**（實例 2026-02-23、2023-01-30），
+       只看「第三個週三」會漏掉那幾天 ⇒ 那一天的收盤平倉被算在一個市場已經關了的時刻。
+    """
+    return SL.T1330 if SL.is_expiry_cal(date.fromisoformat(str(day))) else SL.T1343_30
 
 
 def _cut_at(cutoff):

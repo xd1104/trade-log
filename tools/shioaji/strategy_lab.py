@@ -86,9 +86,166 @@ def log(msg):
 
 # ══ 日曆 ══════════════════════════════════════════════════════════════
 
-def is_expiry(d):
-    """結算日（13:30 收盤）＝每月第三個週三（照 hypotheses.is_expiry）"""
-    return d.weekday() == 2 and 15 <= d.day <= 21
+# ⭐⭐ 結算日順延最多幾個日曆天（2026-09-16 加）。
+#    農曆年會把結算日往後推：**實例 2023-01-30**（第三個週三 01-18 落在年假裡，
+#    台股 01-17 封關、01-30 才開紅盤 ⇒ 順延 12 天）。
+#    ⇒ 上限取 14（12 天 ＋ 2 天餘裕）。超過就是**行事曆有洞**，不是連假。
+EXPIRY_MAX_POSTPONE = 14
+
+
+def _wed3(d):
+    """那個月的第三個週三（永遠落在 15~21 號）。"""
+    first = date(d.year, d.month, 1)
+    return first + timedelta(days=(2 - first.weekday()) % 7 + 14)
+
+
+def expiry_state(d, cal=None):
+    """
+    結算日（**13:30 收盤**，不是 13:45）—— 回 **(答案, 判不出來的原因)**，答案有**三種**：
+
+      ・`True`  ＝ 確定是結算日
+      ・`False` ＝ 確定不是
+      ・`None`  ＝ ⛔⛔ **判不出來**（呼叫端要用安全的預設 ＋ 把原因端到畫面上，
+                   ⛔ 不准安靜地當成 True，也不准安靜地當成 False）
+
+    ⛔⛔⛔ **2026-09-17 PM 裁示，整支重寫。** 被退件的舊版把
+       「行事曆裡查不到第三個週三」當成「那天沒開盤 ⇒ 順延」，於是
+       **`days.jsonl` 只到 09-15、第三個週三是 09-16 ⇒ 09-17～09-30 整整 14 個日曆天
+       全部被判成結算日**，而且 `err` 是 None、主控台還印「今天是結算日」。
+       ⇒ 這就是這個專案最貴的那個錯：**分不出「沒有」跟「不知道」**。⛔ 不准再犯。
+
+    ⛔ 規則（期交所）：**每月第三個週三；那天休市就順延到下一個有交易的日子。**
+
+    ⭐ 主判斷永遠是「**每月第三個週三**」（＝ `hypotheses.is_expiry` 那把尺）。
+       **只有在「確定那個第三個週三不是交易日」時才順延**，而判「確定」的方法是**夾擊**：
+
+         行事曆裡**同時**有「第三個週三之前的交易日」**和**「之後的交易日」，
+         而第三個週三本身不在裡面 ⇒ **才**能說它休市 ⇒ 順延到之後第一個交易日。
+
+       ⛔⛔ **`max(cal)` 不可以拿來當新鮮度浮水印**（lab-qa 2026-09-17）：
+          連假也會讓 max 停住，那樣 `2026-02-23` 那種**真的移動過**的結算日會被誤殺。
+          夾擊問的是「第三個週三**兩側**有沒有資料」，跟行事曆整體新不新鮮無關。
+
+    `cal`＝交易日的集合（字串 `YYYY-MM-DD`）。**不給／是空的** ⇒ 只用「第三個週三」
+    那半（＝ 2026-09-16 以前的行為，⛔ 一個字都沒變），而且那個答案是**確定的**
+    （沒有行事曆就沒有「可能被順延」這回事可以講）。
+    ⚠️ `d` 本身不必在 `cal` 裡 —— `days.jsonl` 只到**昨天**，今天永遠不在裡面。
+
+    ⭐ 這條規則的材料是**量出來的**（2026-09-16，lab-dev 用 `tick_hist` 520 天
+       〔2024-07-29~2026-09-15〕逐日看「日盤最後一筆是幾點」）：
+         ・27 天的最後一筆 < 13:40，其中 **25 天是真的結算日**（最後一筆 13:29），
+           另外 2 天（2025-11-24 停在 10:00／2025-12-08 停在 10:20）是資料有洞、不是結算日
+         ・舊的「第三個週三」抓到 24 天、**漏掉 2026-02-23**（第三個週三 02-18 落在農曆年假）
+         ・這條規則對那 25 天 **全中、0 漏、0 誤抓**（`test_eod_expiry.py` ④ 每次重驗）
+       ⛔ 要改這條規則的人先把上面那組數字重量一次。
+    """
+    w = _wed3(d)
+    if not cal:
+        # 沒有行事曆 ⇒ 只認第三個週三（⛔ 不猜順延，也不用講「不知道」——
+        # 這條路上「順延」這個概念根本不存在）。
+        return (d == w), None
+    ws = str(w)
+    if ws in cal:
+        # ⭐ 第三個週三**真的有開盤** ⇒ 結算日就是它，一翻兩瞪眼（⛔ 不准順延）。
+        return (d == w), None
+    # ── 第三個週三不在行事曆裡。是「那天休市」還是「行事曆沒資料」？⇒ 夾擊
+    has_before = any(s < ws for s in cal)
+    has_after = any(s > ws for s in cal)
+    if not (has_before and has_after):
+        # ⛔⛔ 夾不住 ⇒ **不知道那天有沒有開盤**（⛔「查不到」不是「沒有」）。
+        if d == w:
+            # 主判斷照樣算數：它就是第三個週三。
+            # ⚠️ 萬一那天其實是休市 ⇒ 市場根本沒開，判成結算日也不會做任何事。
+            return True, None
+        if w < d <= w + timedelta(days=EXPIRY_MAX_POSTPONE):
+            # ⛔ 這正是 09-17 那個案例：第三個週三 09-16 查不到、它後面也沒有資料
+            #    ⇒ **可能**順延到今天，也**可能** 09-16 就結算完了。⇒ 回「不知道」。
+            return None, ("行事曆裡查不到第三個週三（%s）"
+                          "，它後面也還沒有任何交易日 ⇒ 分不出那天是休市（順延）"
+                          "還是只是資料還沒補到" % ws)
+        # 離第三個週三超過順延上限 ⇒ 不管 w 有沒有開盤，都不可能是結算日。
+        return False, None
+    # ── 夾擊成立 ⇒ 第三個週三**確定休市** ⇒ 順延到行事曆裡它之後第一個交易日
+    nxt = min(s for s in cal if s > ws)
+    if (date.fromisoformat(nxt) - w).days > EXPIRY_MAX_POSTPONE:
+        # 順延超過上限＝行事曆在那一段有洞（不是連假）⇒ ⛔ 不猜。
+        return None, ("第三個週三（%s）休市，但行事曆裡它之後第一個交易日是 %s"
+                      "（差 %d 天，超過 %d 天的順延上限）⇒ 那一段資料有洞"
+                      % (ws, nxt, (date.fromisoformat(nxt) - w).days,
+                         EXPIRY_MAX_POSTPONE))
+    return (str(d) == nxt), None
+
+
+def is_expiry(d, cal=None):
+    """
+    `expiry_state()` 的布林版（舊呼叫端都走這一支，⛔ 簽名與既有答案一個字都沒變）。
+
+    ⛔⛔ **判不出來 ⇒ 回 False**（＝收盤平倉用平常那一組 13:43:30，PM 2026-09-17 裁示）。
+       ⚠️ 所以**會看畫面的呼叫端（面板）⛔ 不准用這一支** —— 用 `expiry_state_cal()`，
+          把「不知道」講出來。這一支是給回測那條路用的（那裡沒有人看得到警告）。
+    """
+    st, _why = expiry_state(d, cal)
+    return st is True
+
+
+_CAL = {"key": None, "set": frozenset()}
+
+
+def trading_days():
+    """
+    交易日的集合（`days.jsonl` 裡每一天＝真的有日盤成交的日子）。
+    ⚠️ 只到**昨天**（今天那一份要收盤後才抓得到）—— `is_expiry(d, cal)` 問的是
+       「第三個週三到 d **之前**有沒有交易日」，所以缺今天不影響。
+    ⛔ 讀不到就回空集合 ⇒ 呼叫端退回「第三個週三」那半（安全的那一邊）。
+    """
+    f = _days_file()
+    try:
+        s = f.stat()
+        key = (str(f), s.st_mtime_ns, s.st_size)
+    except OSError:
+        _CAL.update(key=None, set=frozenset())
+        return _CAL["set"]
+    if _CAL["key"] == key:
+        return _CAL["set"]
+    _CAL.update(key=key, set=frozenset(r["date"] for r in days() if r.get("date")))
+    return _CAL["set"]
+
+
+_EXP = {"key": None, "map": {}, "at": 0.0, "cal": frozenset()}
+EXP_RECHECK_S = 5.0        # 多久回頭確認一次行事曆有沒有被重建
+
+
+def expiry_state_cal(d):
+    """
+    帶行事曆的結算日判斷（**面板走這一支**）—— 回 `(True/False/None, 判不出來的原因)`。
+    ⛔ 行事曆讀不到（空集合）⇒ 退回「第三個週三」，⛔ 不猜。
+
+    ⚠️⚠️ **一次回測查詢會叫 520 次**（一天一次，在 `_day_pts` 的熱路徑上）⇒
+       結果記在 `_EXP["map"]` 裡，而且**命中時連 `stat()` 都不做**
+       （每次都 stat 一下實測會讓一次查詢多 0.15 秒；那條線的上限是 3 秒）。
+       行事曆有沒有換，每 `EXP_RECHECK_S` 秒回頭確認一次就夠了 ——
+       `days.jsonl` 一天只重建一次（收盤後補抓那一段）。
+    """
+    now = time.time()
+    if _EXP["at"] == 0.0 or now - _EXP["at"] > EXP_RECHECK_S:
+        _EXP["at"] = now
+        cal = trading_days()                      # ⚠️ 這一行就是那個 stat（每 5 秒才一次）
+        if _EXP["key"] != _CAL["key"]:
+            _EXP.update(key=_CAL["key"], map={}, cal=cal)
+        else:
+            _EXP["cal"] = cal
+    m = _EXP["map"]
+    if d not in m:
+        m[d] = expiry_state(d, _EXP["cal"] or None)
+    return m[d]
+
+
+def is_expiry_cal(d):
+    """
+    `expiry_state_cal()` 的布林版（回測那條路走這一支）。
+    ⛔ 判不出來 ⇒ False（＝平常那一組），⛔ 會看畫面的呼叫端不准用這一支。
+    """
+    return expiry_state_cal(d)[0] is True
 
 
 def expiry_week(d):
@@ -260,7 +417,8 @@ def _nights(calendar, night):
 
 def day_close(D, dt):
     """日盤收盤＝13:45 前最後一筆成交（結算日 13:30 前）。⛔ 只從逐筆取，不靠 tmf_1min.csv"""
-    cut = T1330 if is_expiry(dt) else T1345
+    # ⭐ 2026-09-16：結算日改走帶行事曆的那一支（農曆年會把結算日往後移）
+    cut = T1330 if is_expiry_cal(dt) else T1345
     k = int(np.searchsorted(D["t"], cut, side="left")) - 1
     return float(D["p"][max(k, 0)])
 
@@ -338,7 +496,10 @@ def refresh_days(force=False):
             if D is None:
                 continue          # 那天沒有日盤成交（檔案是空的）：不列入
             dt = date.fromisoformat(d)
-            rows[d] = {"date": d, "weekday": dt.weekday(), "is_expiry": is_expiry(dt),
+            # ⛔ 這裡的行事曆用「這一批逐筆日」本身（`dates`）——
+            #    ⛔ 不可以回頭呼叫 trading_days()：那讀的是 days.jsonl，正是這支要寫的檔。
+            rows[d] = {"date": d, "weekday": dt.weekday(),
+                       "is_expiry": is_expiry(dt, set(dates)),
                        "expiry_week": expiry_week(dt), "n": int(len(D["t"])),
                        "open": float(D["p"][0]), "close": day_close(D, dt),
                        "src": _stamp(_ticks_dir() / f"{d}.csv.gz").tolist()}
@@ -497,7 +658,7 @@ def sim_day(row, D, P):
     else:
         fill = px
     dt = date.fromisoformat(row["date"])
-    cutoff = T1330 if is_expiry(dt) else T1343_30
+    cutoff = T1330 if is_expiry_cal(dt) else T1343_30
     pts, why = run_bracket(D, ipx, float(fill), d, P["tp"], P["sl"], cutoff, cost)
     return pts - (FEE if cost else 0.0), why
 
@@ -618,7 +779,7 @@ def _complete(df, d):
     if ts.empty or ts.max().date() != d or ts.min().date() != d:
         return False
     last = ts.max()
-    need = dtime(13, 29) if is_expiry(d) else dtime(13, 44)
+    need = dtime(13, 29) if is_expiry_cal(d) else dtime(13, 44)
     return last.time() >= need and ts.min().time() <= dtime(8, 50)
 
 
