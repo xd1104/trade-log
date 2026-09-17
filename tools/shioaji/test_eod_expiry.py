@@ -97,25 +97,61 @@ chk("  ⛔ 正常月份：2026-09-17 不是（⛔ 不准順延）",
     SL.is_expiry(D("2026-09-17"), CAL_OK), False)
 chk("  ⛔ 正常月份：2026-09-15 不是", SL.is_expiry(D("2026-09-15"), CAL_OK), False)
 
-print("\n=== ③ ⛔ 行事曆有洞時不猜（順延上限 ＋ 左邊界）===")
+print("\n=== ③ ⛔⛔ 行事曆有洞 ⇒ 回答「**不知道**」（⛔ 不准當成「那天沒開盤」）===")
+# ⛔⛔⛔ 這一整段 2026-09-17 **重寫**（lab-qa 退件 M1）。
+#    舊版把下面 CAL_HOLE 的 09-30 釘成 `True`（「差剛好 14 天 ⇒ 還算」），
+#    ⇒ 那條斷言**把壞行為當成了正確答案**：真實情況是 `days.jsonl` 只到 09-15、
+#      第三個週三是 09-16，於是 **09-17～09-30 整整 14 個平常日全被判成結算日**
+#      （主控台印「今天是結算日」、err 是 None、每天安靜地提早 15 分鐘平倉）。
+#    ⇒ 正確答案是 **None ＝ 判不出來**。
 chk("  上限就是 EXPIRY_MAX_POSTPONE 天", SL.EXPIRY_MAX_POSTPONE, 14)
-# 行事曆從 08-01 起、但 09-16 之後就沒有資料了（＝資料缺，不是連假）
+# 行事曆從 08-01 起、但 09-15 之後就沒有資料了（＝資料缺，不是連假）
 CAL_HOLE = weekdays("2026-08-01", "2026-09-15")
-chk("  第三個週三（09-16）照舊算結算日", SL.is_expiry(D("2026-09-16"), CAL_HOLE), True)
-chk("    邊界：差剛好 14 天 ⇒ 還算（`>` 不是 `>=`）",
-    SL.is_expiry(D("2026-09-30"), CAL_HOLE), True)
-chk("  ⛔ 差 15 天（超過上限）⇒ 不算（⛔ 不把一個離很遠的日子標成結算日）",
-    SL.is_expiry(D("2026-10-01"), CAL_HOLE), False)
+chk("  治具自證：行事曆最後一天是 09-15、09-16 不在裡面",
+    (max(CAL_HOLE), "2026-09-16" in CAL_HOLE), ("2026-09-15", False))
+chk("  第三個週三（09-16）照舊算結算日（主判斷就是第三個週三）",
+    SL.expiry_state(D("2026-09-16"), CAL_HOLE), (True, None))
+# ⭐⭐⭐ **PM 指名要釘住的那個失敗案例**（2026-09-17 退件 M1）：
+#    第三個週三 ＝ 09-16，行事曆只到 09-15 ⇒ 09-16 之後**一天資料都沒有**
+#    ⇒ 分不出「09-16 休市所以順延」跟「只是還沒補資料」⇒ **必須回答「不知道」**。
+_st, _why = SL.expiry_state(D("2026-09-17"), CAL_HOLE)
+chk("  ⭐⭐⭐ 09-17（第三個週三 09-16 查不到、它後面沒有任何交易日）⇒ **不知道**", _st, None)
+say(bool(_why) and "2026-09-16" in _why,
+    "  ⛔ 而且說得出是哪一天查不到（⛔ 不可以只回 None 不說話）", _why)
+chk("    ⛔ 布林版是 False ⇒ 收盤平倉用平常那一組（⛔ 不是 13:28:30）",
+    SL.is_expiry(D("2026-09-17"), CAL_HOLE), False)
+chk("  ⛔ 09-30（差剛好 14 天）也是「不知道」—— ⛔ 舊版把它釘成 True",
+    SL.expiry_state(D("2026-09-30"), CAL_HOLE)[0], None)
+chk("  ⛔ 差 15 天（超過順延上限）⇒ **確定不是**（不必再講「不知道」）",
+    SL.expiry_state(D("2026-10-01"), CAL_HOLE), (False, None))
+# ⭐ 對照組（夾擊）：同一個第三個週三，行事曆**前後都有**交易日 ⇒ 答案是確定的
+CAL_PINCER = (weekdays("2026-08-01", "2026-09-15") | weekdays("2026-09-17", "2026-09-30"))
+chk("  ⭐ 夾擊成立（09-16 前後都有交易日、09-16 本身沒有）⇒ 確定順延到 09-17",
+    SL.expiry_state(D("2026-09-17"), CAL_PINCER), (True, None))
+chk("    同一份行事曆：09-18 確定不是",
+    SL.expiry_state(D("2026-09-18"), CAL_PINCER), (False, None))
+chk("  ⭐ 第三個週三**在**行事曆裡 ⇒ 一翻兩瞪眼，⛔ 不准順延",
+    [SL.expiry_state(D(s), weekdays("2026-09-01", "2026-09-30"))
+     for s in ("2026-09-16", "2026-09-17")], [(True, None), (False, None)])
 # ⭐⭐ **左邊界**：行事曆的起點比第三個週三還晚 ⇒ 中間有沒有交易日我們根本不知道
 #    （實例：tick_hist 的第一天 2024-07-29，那個月的第三個週三是 07-17。
 #      沒有這道的話那一天會被標成結算日 —— 2026-09-16 實測抓到過。）
 CAL_LATE = weekdays("2024-07-29", "2024-08-31")
-chk("  ⛔ 行事曆起點晚於第三個週三 ⇒ 那一天不算結算日（⛔ 不猜）",
+chk("  ⛔ 行事曆起點晚於第三個週三 ⇒ 那一天是「不知道」（⛔ 不猜）",
+    SL.expiry_state(D("2024-07-29"), CAL_LATE)[0], None)
+chk("    ⛔ 布林版照舊是 False（舊呼叫端的答案一個字都沒變）",
     SL.is_expiry(D("2024-07-29"), CAL_LATE), False)
-chk("    對照組：同一份行事曆，8 月的第三個週三照樣算得出來",
-    SL.is_expiry(D("2024-08-21"), CAL_LATE), True)
-chk("  ⛔ 行事曆是空的 ⇒ 只認第三個週三",
-    [SL.is_expiry(D(s), set()) for s in ("2026-09-16", "2026-09-17")], [True, False])
+chk("    對照組：同一份行事曆，8 月的第三個週三照樣算得出來（而且是確定的）",
+    SL.expiry_state(D("2024-08-21"), CAL_LATE), (True, None))
+chk("  ⛔ 行事曆是空的 ⇒ 只認第三個週三，而且那個答案是**確定的**（沒有順延這回事）",
+    [SL.expiry_state(D(s), set()) for s in ("2026-09-16", "2026-09-17")],
+    [(True, None), (False, None)])
+# ⛔⛔ `max(cal)` **不可以**拿來當新鮮度浮水印（lab-qa 2026-09-17 指出）：
+#    連假也會讓 max 停住 ⇒ 2026-02-23 那種**真的移動過**的結算日會被誤殺。
+CAL_LNY = (weekdays("2026-01-01", "2026-02-11") | weekdays("2026-02-23", "2026-02-27"))
+chk("  ⛔⛔ 反例：農曆年讓行事曆「停」在 02-11，但 02-23 照樣判得出來"
+    "（⛔ 所以不准拿 max(cal) 當新鮮度浮水印）",
+    SL.expiry_state(D("2026-02-23"), CAL_LNY), (True, None))
 
 print("\n=== ④ ⛔ 用他真的資料重驗一次（tick_hist 520 天）===")
 try:
@@ -124,19 +160,47 @@ except Exception as e:
     cal = set()
     print("  ·    讀不到行事曆（%s）" % str(e)[:80])
 if len(cal) >= 300:
-    # 這 25 天是量出來的（逐筆最後一筆停在 13:29）。⛔ 這張表是 2026-09-16 實測的結果，
+    # 這 26 天是量出來的（逐筆最後一筆停在 13:29）。⛔ 這張表是實測的結果，
     #    要改的人先重跑「每一天日盤最後一筆是幾點」。
+    # ⭐ 2026-09-17 補上 **2026-09-16**：`days.jsonl` 那天收盤後多了一列，
+    #    lab-dev 重量過 `tick_hist/ticks/2026-09-16.csv.gz` ⇒ **日盤最後一筆 13:29:58**
+    #    ⇒ 它是真的結算日（⛔ 不是規則抓錯，是這張表沒跟上資料）。
     REAL = ["2024-08-21", "2024-09-18", "2024-10-16", "2024-11-20", "2024-12-18",
             "2025-01-15", "2025-02-19", "2025-03-19", "2025-04-16", "2025-05-21",
             "2025-06-18", "2025-07-16", "2025-08-20", "2025-09-17", "2025-10-15",
             "2025-11-19", "2025-12-17", "2026-01-21", "2026-02-23", "2026-03-18",
-            "2026-04-15", "2026-05-20", "2026-06-17", "2026-07-15", "2026-08-19"]
+            "2026-04-15", "2026-05-20", "2026-06-17", "2026-07-15", "2026-08-19",
+            "2026-09-16"]
+    # ⚠️ 行事曆只到「昨天」⇒ 表裡比行事曆還新的日子不該拿來算漏抓（那不是漏，是還沒發生）
+    REAL = [s for s in REAL if s <= max(cal)]
     hit = [s for s in REAL if SL.is_expiry(D(s), cal)]
     chk("  ⭐ 25 天實測的結算日全中（0 漏）", len(hit), len(REAL))
     miss_old = [s for s in REAL if not SL.is_expiry(D(s))]
     chk("    舊規則漏掉的就是 2026-02-23（證明這條真的補了洞）", miss_old, ["2026-02-23"])
     wrong = [s for s in sorted(cal) if s not in REAL and SL.is_expiry(D(s), cal)]
     chk("  ⭐ 而且 0 誤抓（行事曆裡沒有別的日子被標成結算日）", wrong, [])
+    # ⭐⭐⭐ 2026-09-17 退件 M1：**往前掃到行事曆的盡頭之後**（那正是出事的那一段）。
+    #    ⛔ 這一段的正確答案只有兩天是結算日（09-16、10-21），其餘一律 13:43:30。
+    #    ⚠️ 用 eod_plan()（＝面板真的在用的那一支），⛔ 不是只問 is_expiry。
+    _fwd, _d = [], D("2026-09-16")
+    while _d <= D("2026-10-31"):
+        if _d.weekday() < 5:
+            LP.EOD_DAY.update({"date": None})
+            _p = LP.eod_plan(_d)
+            _fwd.append((str(_d), _p["expiry"], _p["at"], _p["sure"]))
+        _d += datetime.timedelta(days=1)
+    LP.EOD_DAY.update({"date": None})
+    chk("  ⭐⭐ 2026-09-16~10-31：只有 09-16 與 10-21 判成結算日",
+        [x[0] for x in _fwd if x[1]], ["2026-09-16", "2026-10-21"])
+    chk("  ⛔⛔ 其餘每一天都是 13:43:30（⛔ 舊版有 14 天安靜地用 13:28:30）",
+        sorted({x[2] for x in _fwd if not x[1]}), [LP.EOD_CLOSE_AT])
+    chk("    兩個真的結算日用的是 13:28:30",
+        sorted({x[2] for x in _fwd if x[1]}), [LP.EOD_CLOSE_AT_EXPIRY])
+    say(all(x[3] for x in _fwd if x[1]),
+        "  ⛔ 而且那兩天是**有把握**的（⛔ 不是猜的）")
+    say(all(x[1] is False for x in _fwd if not x[3]),
+        "  ⛔ 判不出來的日子一律走平常那一組（⛔ 沒有一天是「不確定卻用了 13:28:30」）",
+        "%d 天判不出來" % sum(1 for x in _fwd if not x[3]))
 else:
     print("  ·    未驗：這台機器上沒有 tick_hist/days.jsonl（%d 天）⇒ ④ 整段跳過" % len(cal))
     say(False, "  ⛔ 這一段沒驗到（⛔ 不當成通過）")
@@ -171,7 +235,9 @@ chk("  2026-02-24 ⇒ 平常那一組",
     (p["expiry"], p["at"], p["sec"], p["end"]),
     (False, LP.EOD_CLOSE_AT, LP.EOD_CLOSE_SEC, None))
 _n = {"n": 0}
-_real_cal = SL.is_expiry_cal
+# ⚠️ 2026-09-17：面板走的是**三態**那一支（`expiry_state_cal`），⛔ 不是 `is_expiry_cal`
+#    —— 這裡要數的就是面板真的會叫的那一支（數錯了這條等於沒測）。
+_real_cal = SL.expiry_state_cal
 
 
 def _count_cal(d):
@@ -179,7 +245,7 @@ def _count_cal(d):
     return _real_cal(d)
 
 
-SL.is_expiry_cal = _count_cal
+SL.expiry_state_cal = _count_cal
 try:
     LP.EOD_DAY.update({"date": None})
     for _ in range(50):
@@ -188,7 +254,7 @@ try:
     LP.eod_plan(D("2026-02-25"))
     chk("    跨日會重算一次（⛔ 不是永遠不更新）", _n["n"], 2)
 finally:
-    SL.is_expiry_cal = _real_cal
+    SL.expiry_state_cal = _real_cal
 
 print("\n  ── ⑤c ⛔ 判不出來 ⇒ 退回平常那一組，而且**要說得出原因** ──")
 _real_sl = LP.strategy_lab
@@ -199,9 +265,46 @@ try:
     chk("  退回 13:43:30（安全的那一邊是「不猜」）",
         (p["expiry"], p["at"]), (False, LP.EOD_CLOSE_AT))
     say(p["err"] and "結算日" in p["err"], "  ⛔ 而且原因留著（⛔ 不可以安靜地用錯的時刻）", p["err"])
+    chk("  ⛔ 而且 sure 是 False（畫面靠這個字決定要不要出聲）", p["sure"], False)
 finally:
     LP.strategy_lab = _real_sl
     LP.EOD_DAY.update({"date": None})
+
+# ⭐⭐⭐ ⑤c2（2026-09-17 退件 M1）：**行事曆有洞**那條路要走到 eod_plan()
+#    ——⛔ 這才是真的會發生的那一種「判不出來」（⑤c 那種是模組整個載不起來）。
+print("\n  ── ⑤c2 ⛔⛔ 行事曆只到第三個週三的前一天 ⇒ eod_plan 要說「不知道」 ──")
+_real_state = SL.expiry_state_cal
+_HOLE = weekdays("2026-08-01", "2026-09-15")
+try:
+    SL.expiry_state_cal = lambda d: SL.expiry_state(d, _HOLE)
+    LP.EOD_DAY.update({"date": None})
+    p = LP.eod_plan(D("2026-09-17"))
+    chk("  ⛔⛔ 09-17 ⇒ **不是**結算日那一組（⛔ 舊版會安靜地用 13:28:30）",
+        (p["expiry"], p["at"], p["sec"], p["end"]),
+        (False, LP.EOD_CLOSE_AT, LP.EOD_CLOSE_SEC, None))
+    chk("  ⛔ sure＝False（⛔ 不可以跟平常日子長得一樣）", p["sure"], False)
+    say(p["err"] and "2026-09-16" in p["err"] and LP.EOD_CLOSE_AT in p["err"],
+        "  ⛔ err 講得出「哪一天查不到」與「改用哪個時刻」", p["err"])
+    LP.EOD_DAY.update({"date": None})
+    p2 = LP.eod_plan(D("2026-09-16"))
+    chk("  ⭐ 對照組：同一份有洞的行事曆，第三個週三 09-16 照樣判得出來（而且有把握）",
+        (p2["expiry"], p2["at"], p2["sure"], p2["err"]),
+        (True, LP.EOD_CLOSE_AT_EXPIRY, True, None))
+finally:
+    SL.expiry_state_cal = _real_state
+    LP.EOD_DAY.update({"date": None})
+
+# ⛔ 「今天是結算日」那句話**在不確定時不准出現**（PM 2026-09-17 裁示 3）。
+#    ⚠️ 這裡比的是**原始碼**（那句話印在 main() 的啟動訊息裡，測試起不了 main）——
+#       所以另外要求它跟 `_ep["sure"]` 綁在一起，⛔ 不是只有 `_ep["expiry"]`。
+_src_main = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+_i_line = _src_main.find("今天是結算日，日盤 13:30 收盤")
+_win = _src_main[_i_line - 200:_i_line + 400] if _i_line > 0 else ""
+say(_i_line > 0 and '_ep["expiry"]' in _win and 'not _ep["sure"]' in _win
+    and "判不出來" in _win,
+    "  ⛔⛔ 啟動那一行：不確定時走「判不出來」那一句，⛔ 不准印「今天是結算日」")
+say("D.eod_sure===false" in _src_main and "eod_err" in _src_main,
+    "  ⛔ 而且「判不出來」有端到**畫面**上（⛔ 不是只留在主控台）")
 
 print("\n  ── ⑤d ⛔ 主迴圈真的在用那一組（`_auto_tick` 走完整條路）──")
 

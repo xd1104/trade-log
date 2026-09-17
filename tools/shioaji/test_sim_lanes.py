@@ -1478,11 +1478,17 @@ AUTH_PATCH = [
      '    if not AUTO["eod"] and _eod_sec <= secs < _eod_end:\n'
      '        AUTO["eod"] = True\n'
      '        AUTO_EOD_HOOK(d, (secs - _eod_sec) * 1000 + now.microsecond // 1000, _eod["at"])\n'),
-    ("啟動那一行要印出今天實際用的平倉時刻（結算日看得出來）",
+    # ⛔⛔ 2026-09-17 改：「今天是結算日」那句話**在不確定時不准出現**（PM 裁示 M1）。
+    #    背景：`is_expiry()` 把「行事曆裡查不到第三個週三」當成「那天休市 ⇒ 順延」，
+    #    於是 days.jsonl 只到 09-15 時，**09-17～09-30 整整 14 個平常日全被判成結算日**，
+    #    而且 err 是 None、主控台還印「今天是結算日」⇒ 每天安靜地提早 15 分鐘平倉。
+    ("啟動那一行要印出今天實際用的平倉時刻（結算日看得出來；不確定時要說不確定）",
      '    print(f"【自動下單】收盤平倉 {EOD_CLOSE_AT}（⛔ 只平自動下單開的那一口）")\n',
      '    _ep = eod_plan(date.today())\n'
      '    print(f"【自動下單】收盤平倉 {_ep[\'at\']}"\n'
-     '          + ("（⭐ 今天是結算日，日盤 13:30 收盤）" if _ep["expiry"] else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）")\n'
+     '          + ("（⭐ 今天是結算日，日盤 13:30 收盤）" if _ep["expiry"]\n'
+     '             else ("（⚠️ 今天是不是結算日**判不出來**）" if not _ep["sure"]\n'
+     '                   else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）"))\n'
      '          + "（⛔ 只平自動下單開的那一口）"\n'
      '          + (f"　⚠️ {_ep[\'err\']}" if _ep["err"] else ""))\n'),
 ]

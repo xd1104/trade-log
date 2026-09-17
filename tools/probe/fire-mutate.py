@@ -65,8 +65,13 @@ MUT = [
      '    txt = raw.strip().upper()', '    txt = "A"'),
     ("② 開關檔不存在也照做（＝出貨就是開著的）",
      '        if not ARM_FLAG.exists():', '        if False:'),
-    ("③ 一天一口的守衛拿掉（看門狗重啟就送第二張）",
-     '    if _sent(d, rows):\n        return None', '    if False:\n        return None'),
+    ("③ 一天一口的守衛拿掉（多方聯軍那一邊；看門狗重啟就送第二張）",
+     '        if _sent(d, rows):\n            return None',
+     '        if False:\n            return None'),
+    # ⭐ 2026-09-17：A 與 U 的防重送閘門**不一樣**（A＝今天有任何一列就收工，
+    #    ＝ main 的 `_has`）⇒ 兩邊各要有一個突變，⛔ 不可以只打一邊。
+    ("③b ⛔ A 那一邊的「一天一次」拿掉（看門狗重啟就送第二張）",
+     '    elif rows:\n        return None', '    elif False:\n        return None'),
     ("④ 報價太舊照樣下單（斷線時自動下單沒有跟著停）",
      '    if age is None or age > _CFG["gap_s"] * 1000:', '    if False:'),
     ("⑤ 只有中價也照樣下單（拿中價當進場價）",
@@ -74,14 +79,14 @@ MUT = [
     ("⑥ 沒有成交價也照樣下單",
      '    if _num(snap.get("px")) is None:', '    if False:'),
     ("⑦ 算不出訊號也照樣下單（方向用猜的）",
-     '    if dv is None or mv is None:\n        return _skip(d, "no_signal", base, cand="fast")',
+     '    if dv is None or mv is None:\n        return _skip(d, "no_signal", base, cand=_cf)',
      '    if dv is None or mv is None:\n        dv, mv = 1, 1.0'),
     # ⚠️ 2026-09-16：多方聯軍**只做多** ⇒ `direction = "long"` 已經打不到任何東西
     #    （做空那幾天在上一道就回了）⇒ 重新指向**方向本身**：永遠算成做多。
     ("⑧ 方向永遠算成做多（2026-09-01 那個會賠錢的 bug 的形狀）",
-     '    dv = dirs.get(a["method"])', '    dv = 1'),
-    ("⑨ 開關講 A／B 但送的是別的做法",
-     '    dv = dirs.get(a["method"])', '    dv = dirs.get("D")'),
+     '    dv = dirs.get(DIR_KEY.get(a["method"]))', '    dv = 1'),
+    ("⑨ 開關講 A／U 但送的是別的做法",
+     '    dv = dirs.get(DIR_KEY.get(a["method"]))', '    dv = dirs.get("D")'),
     ("⑩ 不走 broker.can_enter（券商那一整排防呆全失效）",
      '    ok, why = broker.can_enter(px, fresh)', '    ok, why = True, None'),
     ("⑪ 「沒送」不落地（畫面上永遠看不到為什麼沒送）",
@@ -239,9 +244,10 @@ MUT = [
     ("U10 沒有 tick 檔也下定論（⛔ 把「查不到」寫成「沒有突破」）",
      '    if not _tick_path(d).exists():', '    if False:'),
     ("U11 快攻說做空也照送（⛔ 多方聯軍只做多）",
-     '    if dv < 0:\n        # ⭐⭐ 多方聯軍**只做多**',
-     '    if False:\n        # ⭐⭐ 多方聯軍**只做多**'),
-    ("U12 純回馬反轉成做空也照送（⛔ 多方聯軍只做多）", '    if d2 < 0:', '    if False:'),
+     '    if _u and dv < 0:\n        # ⭐⭐ 多方聯軍**只做多**',
+     '    if False and dv < 0:\n        # ⭐⭐ 多方聯軍**只做多**'),
+    ("U12 純回馬反轉成做空也照送（⛔ 多方聯軍只做多）",
+     '    if _u and d2 < 0:', '    if False and d2 < 0:'),
     ("U13 開箱跌破下緣也照送（⛔ 多方聯軍只做多）",
      '    if dv < 0:\n        _orb_end(d, "orb_short"',
      '    if False:\n        _orb_end(d, "orb_short"'),
@@ -261,6 +267,59 @@ MUT = [
     ("U20 箱子的中位數天數跟 sim_lanes 分岔（⛔ 兩把尺）",
      'ORB_RULE = {"hist_n": 20, "span_max_days": 50}',
      'ORB_RULE = {"hist_n": 10, "span_max_days": 50}'),
+    # ── ⭐⭐⭐ ⓤ 系列（2026-09-17 Benson 裁示）：**真單繼續跑「快攻回馬槍」（A）**。
+    #    多方聯軍是多一個可以選的做法（U），⛔ 不是取代 A。
+    #    這一組打的就是「A 那條路被多方聯軍的規則污染」的每一種形狀。
+    ("ⓤ1 ⛔⛔ 預設做法改成多方聯軍（他不動開關檔，隔天真單就換了一條規則）",
+     'DEFAULT_METHOD = "A"', 'DEFAULT_METHOD = "U"'),
+    ("ⓤ1b ⛔⛔ A 這個代號被「多方聯軍」佔走（開關寫 A 卻跑另一條規則）",
+     'METHOD_NAME = {"A": "快攻回馬槍", "U": "多方聯軍"}',
+     'METHOD_NAME = {"A": "多方聯軍", "U": "多方聯軍"}'),
+    ("ⓤ2 ⛔⛔ 做法閘門永遠說「是多方聯軍」（開關寫 A 也跑三個候選）",
+     '    return (a or arm()).get("method") == "U"', '    return True'),
+    ("ⓤ2b 做法閘門永遠說「不是」（多方聯軍整條規則安靜地失效）",
+     '    return (a or arm()).get("method") == "U"', '    return False'),
+    ("ⓤ3 ⛔ 開箱那一段的做法閘門拿掉（跑 A 也會去讀逐筆、也會送開箱那一口）",
+     '    _a = arm()\n    if not _union_on(_a):', '    _a = arm()\n    if False:'),
+    ("ⓤ4 ⛔ 09:15 那一段也去掃開箱（A 沒有開箱這個候選）",
+     '    _u = _union_on()\n    if _u:\n        # ⭐⭐ **先把開箱補掃一次再判**',
+     '    _u = _union_on()\n    if True:\n        # ⭐⭐ **先把開箱補掃一次再判**'),
+    ("ⓤ5 ⛔⛔ 快攻「只做多」那一道對 A 也生效（他的做空單從此送不出去）",
+     '    if _u and dv < 0:', '    if dv < 0:'),
+    ("ⓤ6 ⛔⛔ 純回馬「只做多」那一道對 A 也生效（09:15 反轉做空從此不送）",
+     '    if _u and d2 < 0:', '    if d2 < 0:'),
+    ("ⓤ7 ⛔⛔ A 的「不快」改寫成多方聯軍那種 skip（帳本形狀整個換掉）",
+     '        if not _u:\n            # ── A（快攻回馬槍）：⛔ **這一段跟 main 一個字都不能差**。',
+     '        if False:\n            # ── A（快攻回馬槍）：⛔ **這一段跟 main 一個字都不能差**。'),
+    ("ⓤ8 ⛔⛔ A 的防重送閘門換成 `_sent()`（看門狗重啟會多寫一列）",
+     '    elif rows:\n        return None                      # A：一天一次。⛔ 這道在最前面',
+     '    elif _sent(d, rows):\n        return None                      # A：一天一次。⛔ 這道在最前面'),
+    ("ⓤ9 ⛔ A 的帳本也被塞 cand 欄位（舊資料的形狀被改掉）",
+     '    _cf = "fast" if _u else CAND_DAY', '    _cf = "fast"'),
+    ("ⓤ9b ⛔ 「晚到」那一列也被塞 cand（⛔ 早退那條路的形狀也要跟 main 一樣）",
+     '    _cf0 = "fast" if _u else CAND_DAY', '    _cf0 = "fast"'),
+    ("ⓤ10 ⛔ 方向 key 直接拿 method 當 key（U 每天都會變成「算不出訊號」）",
+     '    dv = dirs.get(DIR_KEY.get(a["method"]))', '    dv = dirs.get(a["method"])'),
+    # ── ⭐⭐ M3：規則代號寫進帳本那一列（畫面照那一列取名）
+    ("Ⓜ1 ⛔ 落地時不寫規則代號（畫面又要回去猜「上線日是哪一天」）",
+     '    if not row.get("rule"):\n'
+     '        _rid = RULE_ID.get(row.get("method"))\n'
+     '        if _rid:\n'
+     '            row["rule"] = _rid',
+     '    if False:\n'
+     '        _rid = RULE_ID.get(row.get("method"))\n'
+     '        if _rid:\n'
+     '            row["rule"] = _rid'),
+    ("Ⓜ2 ⛔ 規則代號兩個做法共用一個（快攻回馬槍的舊紀錄會被標成多方聯軍）",
+     'RULE_ID = {"A": "hmq", "U": "union"}', 'RULE_ID = {"A": "union", "U": "union"}'),
+    ("Ⓜ3 ⛔ 規則代號 → 名字那張表被改值（⛔ 那張表只准新增）",
+     'RULE_NAME = {"hmq": "快攻回馬槍", "union": "多方聯軍"}',
+     'RULE_NAME = {"hmq": "多方聯軍", "union": "多方聯軍"}'),
+    # ── ⭐⭐ R1：沒有 orb_hist.jsonl ⇒ 畫面要明講「開箱這個候選不可用」
+    ("Ⓡ1a ⛔⛔ 開箱的歷史夠不夠不端到畫面（安靜地少一個候選）",
+     '    out["hist_ok"] = hr["ok"]', '    out["hist_ok"] = True'),
+    ("Ⓡ1b ⛔ 「檔案還沒建」跟「天數不夠」講同一句話",
+     '        if missing:', '        if False:'),
 ]
 
 # ── 第二組：**產品的路由**（⛔ 只有 test_fire_routes.py 打得到）
@@ -328,8 +387,23 @@ LP2_MUT = [
      '    _eod_sec = 49410'),
     # ⭐⭐ 2026-09-16 舊紀錄不准改名（PM 指名的那個坑）
     ("Ⓥ1 日期閘門排回 r.leg 後面（⛔ 改 METHOD_NAME 會把 09-16 那幾天一起改名）",
-     "  if(d>=AL_UNION_FROM) return alName(r.method);\n  if(d>=AL_HMQ_FROM||r.leg) return AL_HMQ_NAME;",
-     "  if(r.leg||d>=AL_UNION_FROM) return alName(r.method);\n  if(d>=AL_HMQ_FROM) return AL_HMQ_NAME;"),
+     "  if(AL_UNION_FROM&&d>=AL_UNION_FROM) return alName(r.method);\n"
+     "  if(d>=AL_HMQ_FROM||r.leg) return AL_HMQ_NAME;",
+     "  if(r.leg||(AL_UNION_FROM&&d>=AL_UNION_FROM)) return alName(r.method);\n"
+     "  if(d>=AL_HMQ_FROM) return AL_HMQ_NAME;"),
+    # ⭐⭐ 2026-09-17（PM 裁示 M3）：上線日那個常數**必須是明確待填的 null**，
+    #    ⛔ 不准留一個會悄悄生效的日期。
+    ("Ⓥ1b ⛔⛔ 上線日被填成一個會悄悄生效的日期（舊紀錄當場被改名）",
+     "const AL_UNION_FROM=null;", "const AL_UNION_FROM='2026-09-17';"),
+    # ⭐⭐ M3 的長遠那半：帳本那一列自己講規則代號 ⇒ 名字再也改不動
+    ("Ⓥ3 ⛔⛔ 畫面不看帳本那一列的規則代號（又回去猜「上線日是哪一天」）",
+     "  if(r.rule&&RN[r.rule]) return RN[r.rule];", "  if(false) return RN[r.rule];"),
+    ("Ⓥ3b ⛔ 規則代號那一道排到日期閘門後面（日期猜錯就蓋掉帳本說的）",
+     "  const RN=(D&&D.rule_names)||{};\n  if(r.rule&&RN[r.rule]) return RN[r.rule];\n"
+     "  if(AL_UNION_FROM&&d>=AL_UNION_FROM) return alName(r.method);",
+     "  const RN=(D&&D.rule_names)||{};\n"
+     "  if(AL_UNION_FROM&&d>=AL_UNION_FROM) return alName(r.method);\n"
+     "  if(r.rule&&RN[r.rule]) return RN[r.rule];"),
     ("Ⓥ2 歷史名字改成跟著現在的常數跑（⛔ 一改 METHOD_NAME 舊紀錄就變了）",
      "  if(d>=AL_HMQ_FROM||r.leg) return AL_HMQ_NAME;",
      "  if(d>=AL_HMQ_FROM||r.leg) return alName(r.method);"),
@@ -342,14 +416,28 @@ LP2_MUT = [
     ("Ⓝ1 確認條那句話兩種模式寫同一句（真錢那次會寫成「只是演練」）",
      '        return {"live": True,', '        return {"live": False,'),
     ("Ⓝ1b 真錢那句不提「你的錢」（他不會知道那一下代表什麼）",
-     '"最多 1 口，**只做多**，三個候選誰最早觸發就做誰："',
+     '"現在是**真實下單模式**。打開之後，程式每個交易日會"\n'
+     '                         "**用你的錢**照「%s」送單，第一次是 %s。" % (name, when)',
      '"送出委託單。"'),
     ("Ⓝ1c 演練那句改成真錢那種語氣（狼來了）",
-     '            "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}',
+     '            "text": ("現在是演練模式，%s 會照「%s」跑完整條路，但不會真的送單。"\n'
+     '                     % (when, name))}',
      '            "text": "現在會用你的錢真的送單。"}'),
     ("Ⓝ2 fire_arm_confirm 自己再問一次 broker（兩把尺）",
-     "def fire_arm_confirm(live, now=None):",
-     "def fire_arm_confirm(live, now=None):\n    live = broker.is_live()"),
+     "def fire_arm_confirm(live, now=None, mode=None):",
+     "def fire_arm_confirm(live, now=None, mode=None):\n    live = broker.is_live()"),
+    # ⭐⭐ 2026-09-17（lab-qa 建議 2）：**兩個做法的說明不可以共用一句**
+    ("Ⓝ1d ⛔⛔ 兩個做法共用同一句規則說明（跑 A 卻講開箱＝假話）",
+     '    if mode == "U":', '    if True:'),
+    ("Ⓝ1e ⛔ A 那句被換成多方聯軍那一句（他按的不是那條規則）",
+     '    if mode == "U":', '    if mode != "U":'),
+    # ⭐ 2026-09-17（lab-qa 建議 1）：`**粗體**` 要真的變粗體，⛔ 不是把星號印出來
+    ("Ⓝ1f ⛔ 確認條退回 esc()（`**` 原樣印在他按下去之前的最後一個畫面上）",
+     "'<div class=\"q\">'+(C.live?'⚠️ ':'')+emb(C.text)",
+     "'<div class=\"q\">'+(C.live?'⚠️ ':'')+esc(C.text)"),
+    ("Ⓝ1g ⛔ emb() 先換再 esc（那是一個 XSS 的洞）",
+     "const emb=s=>esc(s).replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>');",
+     "const emb=s=>String(s==null?'':s).replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>');"),
     # ── ⭐⭐ R2（2026-09-09 退件）：確認條的「今天／下一個交易日」
     #    ⛔ 那句話必須跟 `_auto_tick()` 真正的觸發條件同一把尺。
     ("Ⓡ1 文案退回退件前（永遠寫「下一個交易日」，盤前按下去就是假話）",
@@ -381,13 +469,19 @@ LP2_MUT = [
      '>= SIGNAL_SEC + AUTO_LATE_MS / 1000:', '>= SIGNAL_SEC:'),
     # ⚠️ Ⓡ7 現在**行為上是等價的**（`market_session` 那把尺在 09:03:30 只剩星期在起作用），
     #    但它是「兩把尺」的種子：哪天 market_session 長出假日表，這裡就會靜靜地分岔。
-    #    ⇒ 由 ⑬c 那條「判斷用的是 SIGNAL_SEC ＋ market_session」的原始碼斷言擋。
+    # ⛔⛔ 2026-09-17 lab-qa 退件 M2：舊註解寫「由 ⑬c 的原始碼斷言擋」——**那是一句假話**。
+    #    ⑬c 舊版只比「`market_session` 有沒有出現在 body 裡」，而條件 ⓪（回馬槍那一刻）
+    #    **還有一次** ⇒ 突變之後 ⑬c 照樣綠、擋不住。
+    #    ⇒ ⑬c 改成三條一起比：①`SIGNAL_SEC` 與 `market_session` 都在；
+    #      ②body 裡**一個 `weekday` 都沒有**；③`market_session` 剛好兩次。
+    #    ⛔ 改完**實跑過**確認這一條真的翻紅（⛔ 不是只改註解）。
     ("Ⓡ7 自己寫 weekday() 取代 market_session（⛔ 兩把尺的種子）",
      '    return market_session(sig_at) == "day"', '    return now.weekday() < 5'),
     ("Ⓝ3 開著的時候還是把「打開」畫出來（開與關同時在畫面上）",
      "if(D.flag_exists) return '';", "if(false) return '';"),
     ("Ⓝ4 第一段（選做法）就直接送出請求（⛔ 沒確認就武裝真錢）",
-     " return '<div class=\"row\">'+", " fetch('/api/fire/on');\n return '<div class=\"row\">'+"),
+     " return MS.map(x=>'<div class=\"row\">'+",
+     " fetch('/api/fire/on');\n return MS.map(x=>'<div class=\"row\">'+"),
     ("Ⓝ5 前端不帶自訂標頭（後端會擋 ⇒ **每一顆鈕**從此按不動）",
      "'X-Panel':'1',", ""),
     ("Ⓝ5b 前端不帶 token", "'X-Panel-Token':PTOK}", "}"),
@@ -420,7 +514,9 @@ LP2_MUT = [
      " ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';\n alFetch();",
      " alFetch();"),
     ("Ⓝ7 確認條的文案改成前端自己寫死（後端說什麼都沒用）",
-     "esc(C.text)", "'現在是演練模式，會照跑但不會真的送單。'"),
+     "emb(C.text)", "'現在是演練模式，會照跑但不會真的送單。'"),
+    ("Ⓝ7b 規則那一行改成前端自己寫死（後端改了規則畫面不會跟）",
+     "emb(alRuleFull(D,m))", "'開盤夠快就送、不夠快就等 09:15 看反轉'"),
 ]
 
 # ── 第四組：**「打開」那顆的端點與六道防護**（只有 test_fire_routes.py 打得到）
@@ -483,7 +579,8 @@ LP3_MUT = [
     ("Ⓖ12 state 不帶 token（那顆鈕從此按不動，而且沒人看得出來）",
      '                out["token"] = FIRE_TOKEN', '                pass'),
     ("Ⓖ13 arm_confirm 不帶出去（前端只能自己猜真錢／演練）",
-     '                out["arm_confirm"] = fire_arm_confirm(out.get("live"))', '                pass'),
+     '                out["arm_confirm"] = {m: fire_arm_confirm(out.get("live"), mode=m)\n'
+     '                                      for m in auto_fire.METHODS}', '                pass'),
     # ── ⛔⛔⛔ 【P0，2026-09-09 lab-qa】守衛套在 do_POST 入口這件事本身
     ("Ⓟ1 守衛退回「只掛在 /api/fire/on」（⛔ 一張純 HTML 表單就能用他的帳戶送單）",
      '        ok, code, msg = fire_post_guard(self.headers)\n'
@@ -671,31 +768,36 @@ REV_MUT = [
      '            "quote_age_ms": snap.get("quote_age_ms"),'),
     ("R4 wait 那一列不落地方向 d",
      '{"d": dv, "dir_0903": direction,', '{"dir_0903": direction,'),
-    ("R5 09:15 不檢查今天已經有 fire／result／skip（一天兩筆）",
-     '    if _sent(d, rows):\n        return None     # ⛔ 一天一口',
-     '    if False:\n        return None     # ⛔ 一天一口'),
-    ("R5b 09:15 只看 skip、不看 fire／result（快攻送過的日子再送一口）",
-     '    if _cand_done(d, "rev", rows):\n        return None     # 純回馬這個候選今天已經有定論',
-     '    if False:\n        return None     # 純回馬這個候選今天已經有定論'),
+    ("R5 09:15 不檢查今天已經有 fire／result（多方聯軍那一邊 ⇒ 一天兩筆）",
+     '        if _sent(d, rows):\n            return None     # ⛔ 一天一口',
+     '        if False:\n            return None     # ⛔ 一天一口'),
+    ("R5b 09:15 不看「這個候選已經有定論」（看門狗重啟會再寫一列）",
+     '        if _cand_done(d, "rev", rows):\n            return None     # 純回馬這個候選今天已經有定論',
+     '        if False:\n            return None     # 純回馬這個候選今天已經有定論'),
+    # ⭐ 2026-09-17：A 那一邊的「一天只准一筆」是另一行（＝ main 的那一道）
+    ("R5c ⛔ A 那一邊 09:15 的「一天只准一筆」拿掉（快攻送過的日子再送一口）",
+     '    if not _u and any(o.get("rec") in ("fire", "result", "skip") for o in rows):',
+     '    if False and any(o.get("rec") in ("fire", "result", "skip") for o in rows):'),
     ("R6 09:15 不重新讀開關（09:03:30 之後關掉照送）",
      '    a = arm()\n    base["arm_raw"] = a["raw"]',
      '    a = {"on": True, "method": "A", "why": None, "raw": "A", "msg": ""}\n    base["arm_raw"] = a["raw"]'),
     ("R7 09:15 報價不能用照送",
-     '    q = _quote_why(snap)\n    if q:\n        return _skip(d, q, base, REV_MSG[q] % rev_at, cand="rev")',
+     '    q = _quote_why(snap)\n    if q:\n        return _skip(d, q, base, REV_MSG[q] % rev_at, cand=_cr)',
      '    q = None'),
     ("R8 09:15 晚到那句話講成 09:03:30（WHY['late']）",
-     '        return _skip(d, "late", base, REV_MSG["late"] % rev_at, cand="rev")',
-     '        return _skip(d, "late", base, WHY["late"], cand="rev")'),
+     '        return _skip(d, "late", base, REV_MSG["late"] % rev_at, cand=_cr)',
+     '        return _skip(d, "late", base, WHY["late"], cand=_cr)'),
     ("R9 pts 用 09:03:30 的價算（不是 09:15）",
      '    pts = tpsl_points(p15)', '    pts = tpsl_points(px0)'),
     ("R10 回馬槍送的是 09:03:30 的方向（不是 d2）",
      '    direction = "long" if d2 > 0 else "short"\n    base["dir"] = direction',
      '    direction = "long" if d0 > 0 else "short"\n    base["dir"] = direction'),
     ("R11 回馬槍那幾列不記 leg（帳本／畫面看不出是回馬槍）",
-     '    base = {"leg": "reversal", "cand": "rev", "method": wait.get("method"),',
-     '    base = {"cand": "rev", "method": wait.get("method"),'),
+     '    base = {"leg": "reversal", "method": wait.get("method"),',
+     '    base = {"method": wait.get("method"),'),
     ("R12 不快那一列記到別的候選底下（純回馬永遠讀不回 09:03:30 的價）",
-     '                     cand="fast")\n    if dv < 0:', '                     cand=CAND_DAY)\n    if dv < 0:'),
+     '                     cand="fast")\n    if _u and dv < 0:',
+     '                     cand=CAND_DAY)\n    if _u and dv < 0:'),
     ("R13 _fire 不分派 reversal（09:15 那一件被當成 09:03:30）",
      '    if leg == "reversal":\n        return _rev(snap, day, lag_ms, put_at)',
      '    if False:\n        return _rev(snap, day, lag_ms, put_at)'),
@@ -729,13 +831,17 @@ REV_LP_MUT = [
      'pctl=FAST_PCTL, rev_at=REV_AT, rev_sec=REV_SEC)', 'pctl=FAST_PCTL, rev_at=REV_AT)'),
     ("RL6 main() 沒接回馬槍掛勾",
      '    AUTO_REV_HOOK = auto_fire.on_reversal', '    pass'),
-    # ⚠️ 2026-09-17：目標字串要跟原始碼**逐字**一致（全形空白也算）。
-    #    上一版漏了 ③ 前面那個全形空白 ⇒ 這條突變靜靜地「沒跑」，總結才看得出來。
-    ("RL7 規則句寫死 09:15（⛔ 時刻要從後端 D.rev_at 來）",
-     "'　③純回馬：'+(D.signal_at||'')+' 不夠快的日子等 '+(D.rev_at||'—')",
-     "'　③純回馬：'+(D.signal_at||'')+' 不夠快的日子等 '+'09:15:00'"),
-    ("RL7b 規則句寫死開箱的截止時刻（⛔ 要從後端 r.break_by 來）",
-     "(r.break_by||'—')+' 以後才突破就不算）；'", "'09:30:00'+' 以後才突破就不算）；'"),
+    # ⚠️ 2026-09-17：規則那句話的**正本搬到後端**（`fire_rule_line()`）⇒ 這兩條改打後端。
+    #    ⛔ 前端那一句以前寫死「多方聯軍：三個候選…」，而真單跑的是 A ⇒ 整段假話。
+    ("RL7 規則句寫死回馬槍那一刻（⛔ 時刻要從常數 REV_AT 來）",
+     '            "③純回馬 %s：只有 %s 判定不夠快的日子才有，反轉成做多才送。"',
+     '            "③純回馬 09:15:00：只有 %s%s 判定不夠快的日子才有，反轉成做多才送。"'),
+    ("RL7b 規則句寫死開箱的箱子時段（⛔ 要從 ORB_BOX_FROM_AT／TO_AT 來）",
+     '        box = "%s~%s" % (auto_fire.ORB_BOX_FROM_AT[:5], auto_fire.ORB_BOX_TO_AT[:5])',
+     '        box = "09:00~09:05"'),
+    ("RL7c ⛔ 開著時那行小字退回寫死「多方聯軍」（跑 A 時整段是假話）",
+     " const base=alRuleFull(D,D&&D.method)||'';",
+     " const base='多方聯軍：三個候選裡只取做多、而且最早觸發的那一個';"),
     ("RL8 前端帳本等式不數 wait",
      "(alN(L.eod)||0)+(alN(L.wait)||0);", "(alN(L.eod)||0);"),
 ]

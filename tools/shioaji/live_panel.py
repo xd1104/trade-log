@@ -2129,9 +2129,10 @@ EOD_CLOSE_SEC_EXPIRY = 13 * 3600 + 28 * 60 + 30
 # 結算日的日盤收盤（＝觸發區間的上界；平常是 DAY_END 13:45）
 DAY_END_SEC_EXPIRY = 13 * 3600 + 30 * 60
 # 今天是不是結算日 —— **一天只算一次**（`_auto_tick` 在 4Hz 主迴圈上，
-# ⛔ 那裡不准讀檔；`strategy_lab.is_expiry_cal` 會讀 days.jsonl）。
-EOD_DAY = {"date": None, "expiry": False, "at": EOD_CLOSE_AT, "sec": EOD_CLOSE_SEC,
-           "end": None, "err": None}
+# ⛔ 那裡不准讀檔；`strategy_lab.expiry_state_cal` 會讀 days.jsonl）。
+# ⭐ `sure`＝那個答案有沒有把握（False ⇒ 用了平常那一組，但我們其實**不知道**）。
+EOD_DAY = {"date": None, "expiry": False, "sure": True,
+           "at": EOD_CLOSE_AT, "sec": EOD_CLOSE_SEC, "end": None, "err": None}
 
 
 def eod_plan(d):
@@ -2139,25 +2140,43 @@ def eod_plan(d):
     今天的收盤平倉時刻。回 `EOD_DAY`（同一天只算一次，之後都讀記憶體）。
 
     ⚠️ **讀行事曆是磁碟 I/O** ⇒ 只在「跨日的第一圈」算一次，之後 4Hz 主迴圈只讀 dict。
-    ⛔ 判不出來（行事曆讀不到／出錯）⇒ 退回平常那一組（13:43:30），並把原因留在 `err`
-       讓畫面看得到 —— ⛔ 不可以安靜地用錯的時刻。
-    ⚠️ **方向是刻意的**：判成結算日而其實不是 ⇒ 早 15 分鐘平掉（少賺／少賠一點）；
-       判成不是而其實是 ⇒ **單子送不出去、抱過夜、13:45 起連停損都沒有**。
-       所以行事曆本身有疑慮時寧可早平，⛔ 不要賭。
+
+    ⛔⛔⛔ **判不出來 ⇒ 用平常那一組（13:43:30）＋ 把原因寫進 `err` ＋ 端到畫面上**
+       （PM 2026-09-17 裁示）。⛔ 不可以安靜地用 13:28:30，
+       ⛔ 「今天是結算日」那句話**在不確定的時候不准出現**。
+       ⚠️ 這條裁示**推翻了 2026-09-16 版的那句「有疑慮時寧可早平」**，理由是實測出來的：
+          舊版把「行事曆查不到第三個週三」當成「那天休市 ⇒ 順延」⇒
+          `days.jsonl` 只到 09-15 時，**09-17～09-30 整整 14 個平常日全被判成結算日**，
+          每天安靜地提早 15 分鐘平倉、而且 `err` 是 None。
+          「不確定就早平」聽起來保守，但它的真實成本是**每個月十幾天的系統性錯誤**；
+          反過來那一邊（真的是移動過的結算日卻沒認出來）只在「農曆年 ＋ 行事曆過期」
+          同時成立時才發生，而且畫面會大聲講「判不出來」。
+       ⛔ 判斷的正本是 `strategy_lab.expiry_state()`（三態：是／不是／**不知道**）。
+
+    ⚠️ 真正的第三個週三**仍然判得出來**（主判斷就是它）—— 會落到「不知道」的只有
+       「第三個週三查不到、它後面也還沒有任何交易日」的那幾天。
     """
     ds = str(d)
     if EOD_DAY["date"] == ds:
         return EOD_DAY
-    exp, err = False, None
+    exp, sure, err = False, True, None
     try:
         if strategy_lab is None:
             raise RuntimeError("策略實驗室模組沒載起來（行事曆讀不到）")
-        exp = bool(strategy_lab.is_expiry_cal(d if isinstance(d, date) else
-                                              date.fromisoformat(ds)))
+        st, why = strategy_lab.expiry_state_cal(d if isinstance(d, date) else
+                                                date.fromisoformat(ds))
+        if st is None:
+            sure = False
+            err = ("判不出今天是不是結算日：%s —— 收盤平倉用平常那一組（%s），"
+                   "⛔ 今天不保證 13:30 收盤前平得掉" % (why, EOD_CLOSE_AT))
+            print("⚠️ [自動下單] " + err, flush=True)
+        else:
+            exp = bool(st)
     except Exception as e:
+        sure = False
         err = "判不出今天是不是結算日（%s）—— 收盤平倉用平常那一組" % str(e)[:80]
         print("⚠️ [自動下單] " + err, flush=True)
-    EOD_DAY.update({"date": ds, "expiry": exp, "err": err,
+    EOD_DAY.update({"date": ds, "expiry": exp, "sure": sure, "err": err,
                     "at": EOD_CLOSE_AT_EXPIRY if exp else EOD_CLOSE_AT,
                     "sec": EOD_CLOSE_SEC_EXPIRY if exp else EOD_CLOSE_SEC,
                     "end": DAY_END_SEC_EXPIRY if exp else None})
@@ -3749,7 +3768,7 @@ def fire_fires_today(now=None):
     return market_session(sig_at) == "day"
 
 
-def fire_arm_confirm(live, now=None):
+def fire_arm_confirm(live, now=None, mode=None):
     """
     兩段式確認**第二段那句話的正本**。⛔ 前端不准自己算「現在是不是真錢」——
     畫面上那句話講錯的代價是「他以為只是演練，結果那天真的送了一口單」。
@@ -3757,26 +3776,57 @@ def fire_arm_confirm(live, now=None):
        ⛔ 這裡**不再問一次** `broker.is_live()` —— 同一件事兩把尺一定會有一把是錯的。
     ⚠️ 「今天／下一個交易日」同理走 `fire_fires_today()`（跟 `_auto_tick` 同一組條件），
        ⛔ 不准在這裡自己寫「明天」兩個字。
+
+    ⭐⭐ 2026-09-17：`mode`＝他正要打開的**那一個做法**（A 快攻回馬槍／U 多方聯軍）。
+       ⛔⛔ **兩種的說明各自正確**（Benson 裁示）—— 兩條規則的候選數、做不做空、
+          有沒有停利都不一樣，共用一句話就一定有一邊是假話。
+    ⚠️ `rule`／`rule_line` 是**同一段話拆成兩半**：`text` 給確認條，`rule_line` 給
+       「還沒按下去」那一段（⛔ 不是兩份文案 —— 見 `fire_rule_line()`）。
     """
+    mode = mode if mode in auto_fire.METHODS else auto_fire.DEFAULT_METHOD
     when = ("今天 " if fire_fires_today(now) else "下一個交易日 ") + SIGNAL_AT
+    name = auto_fire.METHOD_NAME[mode]
     if live:
         # ⚠️ 2026-09-15：自動下單的停利停損是 ±0.5%（auto_fire.FAST_RULE），⛔ 不是 TP_POINTS
         #    （那是手動真單的 ±130）。講錯的話他以為賭的是 130 點，實際一口是 230 點上下。
-        return {"live": True, "when": when,
-                # ⭐ 2026-09-16「多方聯軍」：**三個候選都要講**（只寫快攻那一條的話，
-                #    他會以為開箱那一口是程式亂送的）；⛔ 而且「開箱不設停利」一定要寫出來。
-                "text": ("現在是真實下單模式。打開之後，程式每個交易日會用你的錢送出"
-                         "最多 1 口，**只做多**，三個候選誰最早觸發就做誰："
-                         "①快攻 %s 開盤夠快就順勢做；"
-                         "②開箱 %s 的箱子夠寬、被突破就做（**這一口不設停利**，"
-                         "停損是箱子的另一端，券商端一張掛單都沒有）；"
-                         "③純回馬 %s 不夠快的日子等 %s 反轉。"
-                         "快攻與純回馬的停利停損各 ±%g%%（以送單那一刻的價格算）。"
-                         % (when, "%s~%s" % (auto_fire.ORB_BOX_FROM_AT[:5],
-                                             auto_fire.ORB_BOX_TO_AT[:5]),
-                            when, REV_AT, auto_fire.FAST_RULE["tpsl_frac"] * 100))}
-    return {"live": False, "when": when,
-            "text": "現在是演練模式，%s 會照跑但不會真的送單。" % when}
+        # ⛔ 2026-09-17（lab-qa 建議 1）：**這裡不准寫 Markdown 的 `**`** ——
+        #    前端是 `esc()` 之後直接塞進 HTML，星號會原樣印在他按下去之前看的最後一個畫面上。
+        #    要強調就交給 `emb()`（前端把 `**…**` 轉成 <b>）—— 這裡一律寫純文字。
+        return {"live": True, "when": when, "mode": mode, "method_name": name,
+                "rule_line": fire_rule_line(mode, when),
+                "text": ("現在是**真實下單模式**。打開之後，程式每個交易日會"
+                         "**用你的錢**照「%s」送單，第一次是 %s。" % (name, when))}
+    return {"live": False, "when": when, "mode": mode, "method_name": name,
+            "rule_line": fire_rule_line(mode, when),
+            "text": ("現在是演練模式，%s 會照「%s」跑完整條路，但不會真的送單。"
+                     % (when, name))}
+
+
+def fire_rule_line(mode, when=None):
+    """
+    ⭐⭐ **「這個做法每天會做什麼」那句話的正本**（⛔ 只有這一份）。
+
+    ⛔⛔ 2026-09-17 lab-qa 建議 2：舊版確認條最後一行還掛著**兩候選**的舊描述
+       （「開盤夠快就送、不夠快就等 09:15 看反轉」），而多方聯軍是三個候選、
+       而且「夠快但做空要跳過」⇒ 那句「開盤夠快就送」在 U 底下是**假話**。
+       ⇒ 兩條規則各一句、跟後端這一段對齊，⛔ 前端不准自己再寫一份。
+    ⛔ 數字一律從常數來（SIGNAL_AT／REV_AT／auto_fire 的規則 dict），⛔ 不寫死。
+    """
+    when = when or SIGNAL_AT
+    pct = auto_fire.FAST_RULE["tpsl_frac"] * 100
+    if mode == "U":
+        box = "%s~%s" % (auto_fire.ORB_BOX_FROM_AT[:5], auto_fire.ORB_BOX_TO_AT[:5])
+        return ("一天最多 1 口、只做多，三個候選誰最早觸發就做誰 —— "
+                "①快攻 %s：開盤夠快**而且方向是做多**才送（夠快但做空就跳過）；"
+                "②開箱：%s 的箱子夠寬、**突破上緣**才送，"
+                "**這一口不設停利**、停損是箱子的另一端，**券商端一張掛單都沒有**"
+                "（停損與收盤平倉都靠面板）；"
+                "③純回馬 %s：只有 %s 判定不夠快的日子才有，反轉成做多才送。"
+                "快攻與純回馬的停利停損各 ±%g%%（以送單那一刻的價格算）。"
+                % (when, box, REV_AT, SIGNAL_AT, pct))
+    return ("一天最多 1 口 —— %s 開盤夠快就**順勢**送（做多做空都做）；"
+            "不夠快就等 %s，反轉了才送。停利停損各 ±%g%%（以送單那一刻的價格算）。"
+            % (when, REV_AT, pct))
 
 
 def _fire_arm_log(row):
@@ -3808,8 +3858,8 @@ def fire_arm_on(mode, who="panel"):
     ⭐⭐ **整個 repo 唯一一個會建立 `AUTO_ORDERS_ON` 的地方。**
     回傳 `(http_code, payload)`。⛔ 呼叫端必須先過 `fire_post_guard()`。
 
-    - `mode` 只准 `"A"` / `"B"`，⛔ **先驗再寫**（不准寫進檔案再回頭驗 ——
-      驗失敗那一瞬間開關就是開著的）。
+    - `mode` 只准 `auto_fire.METHODS` 裡那幾個（2026-09-17 起是 **A 快攻回馬槍／U 多方聯軍**），
+      ⛔ **先驗再寫**（不准寫進檔案再回頭驗 —— 驗失敗那一瞬間開關就是開著的）。
     - 寫檔用 `O_CREAT|O_EXCL` ⇒ **結構上不可能蓋掉他已經有的那個檔**
       （已經開著再按 ⇒ 409，⛔ 不是換做法）。而且這一道連「兩個視窗同時按」
       那種競態都擋得住（不是「先 exists() 再寫」那種查完再做）。
@@ -3817,10 +3867,12 @@ def fire_arm_on(mode, who="panel"):
       跟 `auto_fire._decode_flag()` 讀的那條路對齊（那邊 `strip().upper()`）。
     """
     if not isinstance(mode, str) or mode not in auto_fire.METHODS:
-        # ⛔ 2026-09-15 起只剩 A。送 B 來的（舊前端／快取住的舊頁面）要講清楚是規則換了。
+        # ⛔ 2026-09-15 起 B 不支援。送 B 來的（舊前端／快取住的舊頁面）要講清楚是規則換了。
         if mode == "B":
             return 400, {"ok": False, "msg": auto_fire.MSG_ONLY_A}
-        return 400, {"ok": False, "msg": "只能用「%s」這個做法" % auto_fire.METHOD_NAME["A"]}
+        # ⚠️ 2026-09-17：可以選的做法不只一個了 ⇒ 這句話一律從 auto_fire.MSG_METHODS 來
+        #    （⛔ 不准在這裡寫死「只能用 A」—— 那會讓新做法看起來像壞掉）。
+        return 400, {"ok": False, "msg": auto_fire.MSG_METHODS}
     flag = auto_fire.ARM_FLAG
     live = broker.is_live()
     try:
@@ -7519,6 +7571,11 @@ setTimeout(function(){ document.body.classList.remove('boot'); }, 1100);
 
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
   .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+/* ⭐⭐ 後端那幾句話裡的 `**粗體**` —— ⛔⛔ 一定要**先 esc 再換**（先換就是開一個 XSS 的洞）。
+   2026-09-17 lab-qa 建議 1：確認條用 esc() 直接印，於是後端寫的 `**只做多**` 把星號
+   原樣印在畫面上 —— 而那是他按下去之前看的最後一個畫面。
+   ⛔ 這一支只認 `**…**` 這一種，⛔ 不是實作一個 Markdown。 */
+const emb=s=>esc(s).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
 const today10=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000)
   .toISOString().slice(0,10);
 function setTab(t){
@@ -7957,8 +8014,12 @@ var ALON={step:'idle',mode:null,busy:false,err:''};
 /* ⚠️ 2026-09-15 自動下單只剩 A，名字改成「開盤快才做」（跟後端 auto_fire.METHOD_NAME 同一組字）。
    B 從這張表拿掉 ⇒ 舊紀錄裡 method:"B" 的那幾天，alName() 回空字串、畫面照舊印「—」。 */
 /* ⭐ 2026-09-15 晚上再改成「快攻回馬槍」（慢的日子 09:15 反轉也會做；跟後端 METHOD_NAME 同一組字）。 */
-/* ⭐ 2026-09-16 再改成「多方聯軍」（多了「開箱」這個候選，而且只做多）。 */
-const ALWAY={A:{n:'多方聯軍',s:'三個候選裡最早觸發的那個做多'}};
+/* ⛔⛔ 2026-09-17 Benson 裁示：**A 還是「快攻回馬槍」，真單繼續跑它。**
+   「多方聯軍」是**多一個可以選的做法（U）**，⛔ 不是取代 A ——
+   他不去動 AUTO_ORDERS_ON 的內容，跑的就還是快攻回馬槍。
+   ⚠️ 兩張表的字跟後端 auto_fire.METHOD_NAME／METHOD_SUB 是同一組（⛔ 對不上就是兩把尺）。 */
+const ALWAY={A:{n:'快攻回馬槍',s:'09:00 起算'},
+             U:{n:'多方聯軍',s:'三個候選裡最早觸發的那個做多'}};
 /* 帳本那一天是哪一段送的。⛔ 名字從後端（新帳本走 D.cand_names＝auto_fire.CAND_NAME，
    舊帳本走 D.leg_names＝LEG_NAME），這裡只是退路。⛔ 兩張表都不准在前端寫死。 */
 function alLeg(D,r){
@@ -7979,17 +8040,32 @@ const AL_HMQ_FROM='2026-09-16';
       `METHOD_NAME["A"]` 一改，09-16 那幾天的紀錄當場被改名成「多方聯軍」。
       （同一個坑 09-15 晚上已經踩過一次：一筆紀錄叫什麼名字，要看**那一天當時的規則**。）
    ⚠️ `AL_HMQ_NAME` 是**寫死的歷史名字**，⛔ 不准改成 alName(...)（那又會跟著現在的常數跑）。
-   ⚠️ 要是多方聯軍延後上線，這個日期要跟著往後改（⛔ 不改就是把 hmq 那幾天標成多方聯軍）。 */
-const AL_UNION_FROM='2026-09-17';
+
+   ⭐⭐⭐ 2026-09-17（PM 裁示 M3）：**根治的做法是「帳本那一列自己說它是哪條規則」**
+      —— 後端送單時把規則代號寫進那一列（`r.rule`，見 auto_fire.RULE_ID），
+      畫面照那一列取名（`D.rule_names`）⇒ **名字再也不會因為現在跑哪條規則而改動**，
+      也不必猜「上線日是哪一天」。舊列沒有 `rule` ⇒ 退回下面那套日期閘門。
+
+   ⛔⛔ `AL_UNION_FROM` **刻意是 null ＝ 待填**（⛔ 不要留一個會悄悄生效的日期）：
+      這支還沒 merge、他的面板現在沒在跑、多方聯軍也**不是**預設做法
+      （Benson 2026-09-17：真單繼續跑快攻回馬槍）⇒ 猜一個日期只會把某幾天標錯名字。
+      ⭐ 這一行**只有在「多方聯軍真的上線當預設」那一天才需要填**，而且那時候新寫的列
+         本來就會自帶 `rule` ⇒ 實務上多半永遠不必填。 */
+const AL_UNION_FROM=null;
 const AL_HMQ_NAME='快攻回馬槍';
 function alRecName(D,r){
   if(!r) return '';
   const d=String(r.date||'');
-  if(d>=AL_UNION_FROM) return alName(r.method);
+  /* ⭐ ① 帳本那一列自己講（⛔ 這一道排最前面：它是唯一不會被「現在的常數」影響的來源） */
+  const RN=(D&&D.rule_names)||{};
+  if(r.rule&&RN[r.rule]) return RN[r.rule];
+  if(AL_UNION_FROM&&d>=AL_UNION_FROM) return alName(r.method);
   if(d>=AL_HMQ_FROM||r.leg) return AL_HMQ_NAME;
   const at=String(r.at||'').slice(0,8), tp=alN(r.tp_points);
   return '舊規則'+(at?(' '+at):'')+(tp!=null?(' ±'+tp.toFixed(0)+'點'):'');
 }
+/* ⚠️ 2026-09-17 起畫面上不再用它（規則那句話的正本搬到後端 `fire_rule_line()`）——
+   ⛔ 但**不刪**：`ALWAY` 那張表是舊紀錄的名字退路，這一支是它的另一半。 */
 function alSub(k){ const w=ALWAY[k]; return w?w.s:''; }
 function alN(v){ return (typeof v==='number'&&isFinite(v))?v:null; }
 /* ⭐ 2026-09-15【自動下單】的規則那一句（一個地方組，三個地方用：標題小字／確認前說明／每天送那格）。
@@ -8013,15 +8089,16 @@ function alPctlTxt(D){
 /* ⭐ 2026-09-16「多方聯軍」：規則句一個地方組、三個地方用。
    ⛔ 時刻／百分位／±% 全部從後端（D.signal_at／D.rule）—— 前端不准寫死 09:15／09:30／0.5%。
    ⚠️ 只做多、取最早觸發的那一個 —— 這兩句是這條規則跟舊的「快攻回馬槍」最大的差別，必須寫出來。 */
+/* ⛔⛔ 2026-09-17：這一句以前寫死「多方聯軍：三個候選…」，而真單跑的是 A（快攻回馬槍）
+   ⇒ 開著的時候標題那行小字整段是假話。⇒ **改成照現在跑的那個做法**，
+   正本在後端 `fire_rule_line()`（⛔ 前端不准再寫第二份規則說明）。
+   ⚠️ 「今天約 N 點」是這裡才有的（要看今天的價），接在後面。 */
 function alRuleTxt(D){
- const p=alPct(D), t=alPtsToday(D), c=alPctlTxt(D), q=String(D.qty||1), r=(D&&D.rule)||{};
- return '多方聯軍：三個候選裡**只取做多**、而且最早觸發的那一個，做 '+q+' 口 ——'+
-   '　①快攻 '+(D.signal_at||'')+' 開盤'+(c||'夠快')+'就順勢做（停利停損 ±'+(p==null?'—':p)+'%'+
-   (t?('，今天約 '+t.v+' 點'+(t.est?'、照現價估':'')):'')+'）；'+
-   '　②開箱 '+(r.box_at||'')+' 畫箱子，箱子夠寬的話第一次突破上緣就做（⛔ 不設停利，停損＝箱子另一端；'+
-   (r.break_by||'—')+' 以後才突破就不算）；'+
-   '　③純回馬：'+(D.signal_at||'')+' 不夠快的日子等 '+(D.rev_at||'—')+'，反轉成做多才做（±'+
-   (p==null?'—':p)+'%）；　一天最多 '+q+' 口';
+ const t=alPtsToday(D), c=alPctlTxt(D), q=String(D.qty||1);
+ const base=alRuleFull(D,D&&D.method)||'';
+ return (base||('一天最多 '+q+' 口'))+
+   (c?('　夠快的定義：'+c+'。'):'')+
+   (t?('　今天約 '+t.v+' 點'+(t.est?'、照現價估':'')+'。'):'');
 }
 /* 今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 D.fast 來（fast_verdict 那一支），
    ⛔ 09:03:30 之前不預告（verdict 是 null 時只講門檻）。 */
@@ -8109,7 +8186,9 @@ function alPaint(){
  /* ⭐ 2026-09-15 規則換成「開盤快才做」：這一行要講出**整條規則**（時刻／快才做／幾口／±0.5%），
     ⛔ 數字一律從後端來（D.signal_at／D.rule／D.fast.pts／D.pts_est），⛔ 不准寫死 0.5 或 40／70。 */
  if(armed) st='<span class="al-badge on">開啟中</span>'+
-   '<span class="al-way">'+esc(alName(m)||m)+'<i>'+esc(alRuleTxt(D))+
+   /* ⛔ 2026-09-17（lab-qa 建議 1）：用 `emb()` —— 後端那句話裡的 `**粗體**`
+      要真的變粗體，⛔ 不是把星號印出來。 */
+   '<span class="al-way">'+esc(alName(m)||m)+'<i>'+emb(alRuleTxt(D))+
    ' · 差 0 點算做多'+(live?'（你不在也會送）':'')+
    (D.eod_at?(' · '+esc(D.eod_at)+' 自動平那一口，你自己開的單不會碰'):'')+
    '</i></span>';
@@ -8149,6 +8228,13 @@ function alPaint(){
    '要自己下單就先按手動平倉，或把這個開關關掉。</span>';
  if(D.err) sub+=sep()+'<span class="warn">送單那一段出過錯 '+
    esc(String(D.err_n||0))+' 次（停損不受影響）：'+esc(D.err)+'</span>';
+ /* ⭐⭐ 2026-09-17（PM 裁示 M1）：「今天是不是結算日」判不出來 ⇒ ⛔ 一定要講。
+    結算日日盤 13:30 就收盤，而判不出來的那一天走的是平常那一組（13:43:30）——
+    真的是結算日的話那一刻市場已經關了、平倉單送不出去。
+    ⛔ 這句話只在**不確定**時出現（確定不是結算日的平常日子講它只是雜訊）。 */
+ if(D.eod_sure===false) sub+=sep()+'<span class="warn">⚠️ 今天是不是結算日<b>判不出來</b>'+
+   '（'+esc(String(D.eod_err||'行事曆不完整'))+'）—— 收盤平倉照平常那一組跑，'+
+   '<b>今天請自己盯一下 13:30</b>。</span>';
  setEl('alsub',sub);
 
  /* 三顆狀態卡的短標（2026-09-14 lab-ux 定案 C）：「自動下單」「真單」「每天送」。
@@ -8189,10 +8275,13 @@ function alPaint(){
          '面板關掉／當掉／電腦睡著就<b>沒有停損</b>'+
          (eodT?('，'+eodT+' 的自動平倉也不會發生'):'')+'。</span></p>'+
        /* ⚠️ 2026-09-15：「每個交易日都會送」改成「都會看、夠快就送」—— 規則換成開盤快才做之後，
-          寫「都會送」是一句假話（慢的日子不送）；但「沒有有效期」那半一字不動。 */
+          寫「都會送」是一句假話（慢的日子不送）；但「沒有有效期」那半一字不動。
+          ⛔ 2026-09-17（lab-qa 建議 2）：那句話**寫死了兩候選的舊描述** ——
+             多方聯軍是三個候選、而且「夠快但做空要跳過」⇒ 在 U 底下整句是假話。
+             ⇒ 改成照現在跑的那個做法（正本在後端 fire_rule_line）。 */
        '<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
-         '<b>每個交易日都會看，開盤夠快就送、不夠快就等 '+esc(D.rev_at||'—')+' 看反轉</b>，'+
-         '直到你自己按下面那顆關掉。</span></p>'+
+         '每個交易日都會照「<b>'+esc(alName(m)||m)+'</b>」看一次（'+
+         emb(alRuleFull(D,m))+'），直到你自己按下面那顆關掉。</span></p>'+
      '</div>'
    : '');
 
@@ -8241,27 +8330,42 @@ function alPaint(){
       兩邊各寫一份就一定有一份是舊的。
    ⛔ 後端沒回 arm_confirm ⇒ **不畫開啟鈕**（我們連現在是不是真錢都不知道，
       這種時候給他一顆按鈕比不給更糟）。 */
+/* 拿「他正要打開的那個做法」的確認條正本。⛔ 沒有就回 null（呼叫端不准畫按鈕）。 */
+function alConf(D,m){
+  const C=(D&&D.arm_confirm)||null;
+  if(!C||typeof C!=='object') return null;
+  const one=C[m];
+  return (one&&typeof one.text==='string')?one:null;
+}
+/* 這個做法的完整規則那句話（⛔ 正本在後端 fire_rule_line()，前端只負責顯示）。 */
+function alRuleFull(D,m){ const c=alConf(D,m); return c?String(c.rule_line||''):''; }
 function alOnHTML(D){
  if(D.flag_exists) return '';    /* 已經開著 ⇒ 這裡什麼都不畫（要換做法請先關掉） */
- const C=D.arm_confirm;
- if(!C||typeof C.text!=='string')
+ const MS=(D&&D.methods)||[];
+ if(!MS.length||!MS.some(x=>alConf(D,x.k)))
    return '<div class="err">這個面板還不能從畫面上打開（後端沒有回報現在是'+
      '真實下單還是演練）。要開請自己在 <b>tools/shioaji/'+
      esc(D.flag||'AUTO_ORDERS_ON')+'</b> 裡寫一個字母。</div>';
  if(ALON.step==='confirm'){
-   const m=ALON.mode;
+   const m=ALON.mode, C=alConf(D,m);
+   if(!C){ return '<div class="err">選到的做法後端不認得，請重新按一次。</div>'; }
    /* ⛔ 這一條要當場講清楚**現在是哪一種**：真錢＝紅底（這個面板唯一的例外，
       紅綠平常只給損益）、演練＝中性灰。⛔ 兩種絕不可以長一樣。 */
    return '<div class="al-conf'+(C.live?' real':'')+'">'+
      /* ⚠️ 「沒有有效期」那句在這裡**再講一次**（2026-09-10）：這是他按下去之前
         最後一個畫面，而「開一次＝以後每天都送」正是他最容易誤會的一件事。
         ⛔ 這是**前端加的一行**，⛔ 不准去動後端 `fire_arm_confirm()` 那句正本
-        （那句話的職責是「現在是真錢還是演練」，被 `test_auto_fire.py` ⑬b 綁著）。 */
-     '<div class="q">'+(C.live?'⚠️ ':'')+esc(C.text)+'<br>要用「<b>'+
-       esc(alName(m))+'</b>」（'+esc(alSub(m))+'）開始嗎？'+
-       /* 2026-09-15：「都會送」→「都會看、夠快就送」（慢的日子不送，寫「都會送」是假話） */
-       '<br>打開之後<b>每個交易日都會看，開盤夠快就送、不夠快就等 '+esc(D.rev_at||'—')+
-       ' 看反轉，直到你自己關掉</b>。</div>'+
+        （那句話的職責是「現在是真錢還是演練」，被 `test_auto_fire.py` ⑬b 綁著）。
+        ⛔ 2026-09-17（lab-qa 建議 1）：用 `emb()` 不是 `esc()` ——
+           後端那句話裡的 `**粗體**` 要真的變粗體，⛔ 不是把星號印在他臉上。 */
+     '<div class="q">'+(C.live?'⚠️ ':'')+emb(C.text)+'<br>要用「<b>'+
+       esc(C.method_name||alName(m))+'</b>」開始嗎？'+
+       /* ⛔ 2026-09-17（lab-qa 建議 2）：這一行以前寫死兩候選的舊描述
+          （「開盤夠快就送、不夠快就等 09:15 看反轉」）——多方聯軍是三個候選、
+          而且「夠快但做空要跳過」⇒ 那句在 U 底下整句是假話。
+          ⇒ 改成照後端那一份規則正本（每個做法各自正確）。 */
+       '<br>'+emb(alRuleFull(D,m))+
+       '<br>打開之後<b>每個交易日都會照這條規則看一次，直到你自己關掉</b>。</div>'+
      '<div class="btns2">'+
        '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
          (ALON.busy?'打開中…':'確定，打開')+'</button>'+
@@ -8270,33 +8374,25 @@ function alOnHTML(D){
      (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
  }
  /* 第一段：⛔ 做法直接寫在鈕上（他不必先去別的地方查哪個是哪個），
-    名字一律走 alName()／alSub()（⛔ 不准自己發明名字，也不准出現代號）。 */
- /* ⚠️ 2026-09-15：自動下單只剩一個做法 ⇒ 只剩**一顆**鈕（B 那顆拿掉，⛔ 不是停用留著 ——
-    留一顆按不動的「用開盤起開始」只會讓他以為面板壞了）。後端 fire_arm_on 收到 B 也會回 400。 */
- return '<div class="row">'+
-   '<button class="btn" data-alon="A">用「'+esc(alName('A'))+'」開始</button>'+
+    名字一律從後端 D.methods（⛔ 不准自己發明名字，也不准出現代號）。
+    ⭐⭐ 2026-09-17：**兩顆鈕**（快攻回馬槍／多方聯軍），每一顆底下各自寫自己的規則
+       ——⛔ 兩條規則的候選數、做不做空、有沒有停利都不一樣，共用一段說明就是假話。
+    ⚠️ 預設（他不動開關檔時跑的那一個）要標出來，⛔ 不然他不知道「現在在跑的是哪一條」。 */
+ return MS.map(x=>'<div class="row">'+
+     '<button class="btn" data-alon="'+esc(x.k)+'">用「'+esc(x.name||alName(x.k))+
+       '」開始</button>'+
+     /* ⚠️ 這一段只在**關著**的時候畫 ⇒ ⛔ 不可以寫「現在在跑的就是這一條」
+        （那時候什麼都沒在跑，是一句假話）。要講的是「不去動開關檔就是這一條」。 */
+     (x.k===D.default_method?'<span class="n">（<b>預設</b>：開關檔不改內容就是這一條）</span>':'')+
    '</div>'+
-   /* ⚠️ 「比它高或持平做多、低做空」這句 ⛔ 不可以跟著〈怎麼開〉一起砍掉 ——
-      2026-09-10 之後**整頁只剩這裡在講方向怎麼判**，而「剛好持平（差 0 點）算做多」
-      是這個工具刻意選的那一邊（跟【自動下單（模擬）】同一把尺），畫面上一定要說。
-      ⚠️ 「打開之後每個交易日都會送」那句是**開著時 `.al-risk` 第二條**的同一件事：
-      關著的時候他正要按的就是這顆鈕，所以掛在這裡（⛔ 不是兩件事，是同一句話
-      在兩種狀態下各掛在他當下看得到的地方）。 */
-   /* ⭐⭐ 2026-09-16「多方聯軍」：規則講完整 —— 三個候選、**只做多**、取最早觸發的那一個。
-      ⛔ 數字與時刻全部從後端（D.rule／D.signal_at／D.rev_at），⛔ 不寫死 09:15／09:30／09:00~09:05。
-      ⛔ 「開箱不設停利、券商端一張掛單都沒有」一定要在這裡講：他正要按的就是這顆鈕。 */
-   '<div class="n">每個交易日<b>最多做 1 口，而且只做多</b>：三個候選誰<b>最早觸發</b>就做誰。'+
-     '<br>①<b>快攻</b>（'+esc(D.signal_at||'')+'）：09:00 以前最後一筆到 '+esc(D.signal_at||'')+
-     ' 走了多少 %，不低於過去 '+esc(String((D.rule||{}).window||'—'))+' 個交易日的第 '+
-     esc(String((D.rule||{}).pctl||'—'))+' 百分位就算夠快；價比 09:00 高或持平＝做多（做空就略過）。'+
-     '<br>②<b>開箱</b>（'+esc((D.rule||{}).box_at||'—')+' 的最高最低畫成箱子）：箱子夠寬'+
-     '（不窄於過去 '+esc(String((D.rule||{}).orb_hist_n||'—'))+' 天的中位數）而且被<b>突破上緣</b>才做；'+
-     '<b>這一口不設停利</b>，停損是箱子的另一端 —— <b>券商端一張掛單都沒有，停損與收盤平倉都靠面板</b>。'+
-     esc((D.rule||{}).break_by||'—')+' 以後才突破就不算。'+
-     '<br>③<b>純回馬</b>（'+esc(D.rev_at||'—')+'）：只有 '+esc(D.signal_at||'')+
-     ' 不夠快的日子才有；那一刻的價跟 '+esc(D.signal_at||'')+' 比反轉成做多才做。'+
-     '<br>快攻與純回馬的停利停損 ±'+esc(alPct(D)==null?'—':String(alPct(D)))+'%。'+
-     '按下去會<b>再問你一次</b>；打開之後<b>每個交易日都會看，直到你自己關掉</b>。</div>'+
+   '<div class="n"><b>'+esc(x.name||alName(x.k))+'</b>：'+emb(alRuleFull(D,x.k))+
+     '<br>按下去會<b>再問你一次</b>。</div>').join('')+
+   /* ⚠️ 「比它高或持平做多、低做空」這句 ⛔ 不可以砍掉 —— 整頁只剩這裡在講方向怎麼判，
+      而「剛好持平（差 0 點）算做多」是這個工具刻意選的那一邊（跟【模擬】同一把尺）。 */
+   '<div class="n">方向怎麼判：'+esc(D.signal_at||'')+' 的價比 09:00 <b>高或持平＝做多</b>、'+
+     '低＝做空（差 0 點算做多，跟【自動下單（模擬）】同一把尺）。'+
+     '快不快的門檻是過去 '+esc(String((D.rule||{}).window||'—'))+' 個交易日的第 '+
+     esc(String((D.rule||{}).pctl||'—'))+' 百分位。</div>'+
    (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
 }
 
@@ -8307,7 +8403,11 @@ function alOnHTML(D){
 function alArm(){
  if(ALON.busy) return;
  const m=ALON.mode;
- if(m!=='A'){ ALON.step='idle'; ALON.mode=null;
+ /* ⛔ 只准送**後端自己列出來的**那幾個做法（⛔ 不准在前端寫死 'A'）——
+    2026-09-17 起有兩個（A 快攻回馬槍／U 多方聯軍），寫死就等於新做法按不動。
+    ⚠️ 後端 `fire_arm_on()` 還會再驗一次（那才是最後一道），這裡只是不送明顯錯的。 */
+ const MS=((AL.data||{}).methods)||[];
+ if(!m||!MS.some(x=>x.k===m)){ ALON.step='idle'; ALON.mode=null;
    ALON.err='沒有選到做法，請再按一次'; alPaint(); return; }
  ALON.busy=true; ALON.err=''; alPaint();
  pfetch('/api/fire/on',JSON.stringify({mode:m}))
@@ -8477,7 +8577,12 @@ function alCandRow(D,r,c){
    else txt=String(hit.why_msg||hit.why||'');
  }else if(c.k==='orb'){
    const O=D.orb||{};
-   txt=O.msg||(O.stage==='before'?('箱子畫的是 '+esc(O.box_at||'')+'，'+esc(O.box_at||'').slice(6)+' 之後才看得出來'):'');
+   /* ⛔⛔ 2026-09-17（lab-qa 退件 R1）：**箱子寬度歷史還沒有的時候要當場講**。
+      那個檔（orb_hist.jsonl）沒建 ⇒ 算不出中位數 ⇒ 開箱這個候選**開箱即不可用**，
+      而舊版在 09:05 以前只寫「等 09:05 畫完箱子」⇒ 畫面講三個候選、實際只跑得出兩個。
+      ⛔ 不可以安靜地少一個候選 ⇒ 這一句排在最前面（正本在後端 orb_hist_ready）。 */
+   if(O.hist_ok===false&&O.hist_msg){ txt=String(O.hist_msg); tone='warn'; }
+   else txt=O.msg||(O.stage==='before'?('箱子畫的是 '+esc(O.box_at||'')+'，'+esc(O.box_at||'').slice(6)+' 之後才看得出來'):'');
    if(!txt) txt='等 '+esc(O.box_at||'')+' 畫完箱子';
  }else if(c.k==='rev'){
    const f=rows.filter(x=>x.cand==='fast')[0]||null;
@@ -8487,9 +8592,13 @@ function alCandRow(D,r,c){
    txt='等 '+esc(D.signal_at||'');
  }
  return '<div class="al-cand'+(tone?' '+tone:'')+'"><span class="k">'+esc(c.name||'')+
-   '</span><span class="w">'+esc(String(txt))+'</span></div>';
+   '</span><span class="w">'+emb(String(txt))+'</span></div>';
 }
 function alCandsHTML(D,r){
+ /* ⛔⛔ 2026-09-17：**只有「多方聯軍」才有三個候選**（Benson 裁示：真單繼續跑
+    快攻回馬槍）。跑 A 的時候畫這一區就是一句假話（他今天根本沒有開箱這個候選）。
+    ⛔ 判準用後端的 D.union，⛔ 前端不准自己比 method === 'U'（那是把代號寫死進畫面）。 */
+ if(!(D&&D.union)) return '';
  const cs=(D&&D.cands)||[];
  if(!cs.length) return '';
  return '<div class="al-cands"><div class="hd">今天三個候選（只做多，取最早觸發的那一個）</div>'+
@@ -9048,7 +9157,18 @@ class Handler(BaseHTTPRequestHandler):
                                               eod_at=out.get("eod_at"))
                 # ⛔ 「現在是真錢還是演練」那句話**在後端算**（前端不准猜），
                 #    而且拿的是 auto_fire 算好的那個 live ⇒ 只有一把尺。
-                out["arm_confirm"] = fire_arm_confirm(out.get("live"))
+                # ⭐⭐ 2026-09-17：**每個做法各一份**（A 快攻回馬槍／U 多方聯軍）——
+                #    兩條規則的說明不一樣，共用一句一定有一邊是假話。
+                #    ⛔ 前端拿 `arm_confirm[他選的那個]`，⛔ 不准自己組字。
+                out["arm_confirm"] = {m: fire_arm_confirm(out.get("live"), mode=m)
+                                      for m in auto_fire.METHODS}
+                # ⭐⭐ 今天是不是結算日（2026-09-17 PM 裁示 M1）：⛔ 「判不出來」
+                #    一定要上畫面 —— 那一天收盤平倉用的是平常那一組（13:43:30），
+                #    而真的是結算日的話市場 13:30 就關了。⛔ 不可以只留在主控台。
+                _ep = eod_plan(date.today())
+                out["eod_expiry"] = _ep["expiry"]
+                out["eod_sure"] = _ep["sure"]
+                out["eod_err"] = _ep["err"]
                 # 「今天約 N 點」：09:03:30 還沒到（帳本／歷史都還沒有今天的價）時，
                 #   拿**現價**照同一支 tpsl_points() 估（⛔ 前端不准自己乘 0.005）。只讀記憶體。
                 _tt = CURRENT_STATE.get("today")
@@ -9829,8 +9949,12 @@ def main():
                            ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")
                            if _arm["on"] else "關閉中 —— " + _arm["msg"]))
     _ep = eod_plan(date.today())
+    # ⛔⛔ 「今天是結算日」那句話**只有在確定的時候才准出現**（PM 2026-09-17 裁示）——
+    #    判不出來時走的是「不確定」那一句，⛔ 不是安靜地印「結算日提前到 …」。
     print(f"【自動下單】收盤平倉 {_ep['at']}"
-          + ("（⭐ 今天是結算日，日盤 13:30 收盤）" if _ep["expiry"] else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）")
+          + ("（⭐ 今天是結算日，日盤 13:30 收盤）" if _ep["expiry"]
+             else ("（⚠️ 今天是不是結算日**判不出來**）" if not _ep["sure"]
+                   else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）"))
           + "（⛔ 只平自動下單開的那一口）"
           + (f"　⚠️ {_ep['err']}" if _ep["err"] else ""))
 

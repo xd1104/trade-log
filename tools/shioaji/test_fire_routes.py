@@ -463,11 +463,16 @@ with urllib.request.urlopen(BASE + "/api/fire/state", timeout=15) as _r:
 say(not any(k.startswith("access-control") for k in _hdrs),
     "    ⛔⛔ 而且那份回應**沒有任何 CORS 標頭**（跨站送得出去但讀不到 ⇒ 拿不到 token）",
     str(_hdrs))
-say(isinstance(j.get("arm_confirm"), dict)
-    and isinstance(j["arm_confirm"].get("text"), str)
-    and j["arm_confirm"].get("live") is broker.is_live(),
-    "    ⛔ 確認條那句話由後端算（真錢／演練跟 broker 同一把尺）",
-    str(j.get("arm_confirm"))[:90])
+# ⭐ 2026-09-17：`arm_confirm` 改成**每個做法各一份**（A 快攻回馬槍／U 多方聯軍）——
+#    兩條規則的說明不一樣，共用一句一定有一邊是假話。
+_ac = j.get("arm_confirm") or {}
+say(isinstance(_ac, dict) and set(_ac) == set(AF.METHODS)
+    and all(isinstance(v.get("text"), str) and isinstance(v.get("rule_line"), str)
+            and v.get("live") is broker.is_live() for v in _ac.values()),
+    "    ⛔ 確認條那句話由後端算、**每個做法各一份**（真錢／演練跟 broker 同一把尺）",
+    str(_ac)[:120])
+say(len({v.get("rule_line") for v in _ac.values()}) == len(_ac),
+    "    ⛔ 而且每個做法的規則說明都不一樣（共用一句就有一邊是假話）")
 
 # ── ③c ⛔⛔⛔ 【P0】守衛套在**每一個** POST 上，不是只有 /api/fire/on
 print("\n=== ③c ⛔⛔⛔ 【P0】每一個 POST 都要過守衛 ===")
