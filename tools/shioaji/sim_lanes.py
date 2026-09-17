@@ -1314,6 +1314,121 @@ def _rule_text(lane):
     return ""
 
 
+def _fee_txt(pts, extra=""):
+    """成本那一句。⛔ 數字一律從常數來（卡頂那句「成本已扣」講的就是它）。"""
+    return "每筆扣 %g 點%s —— 這一條的點數都是**扣完**的" % (pts, extra)
+
+
+def _rule_detail(lane):
+    """
+    ⭐ **點進去那一頁**的規則說明（2026-09-17 加，Benson 要「定義寫得再容易閱讀一點」）：
+    把 `_rule_text()` 那一長句拆成「白話一句 ＋ 逐項」。
+
+    ⛔⛔ 跟 `_rule_text()` 同一條鐵律：**後端給**、時刻與點數一律從常數／注入的設定組出來。
+       前端不准自己寫死（兩邊各寫一份，改規則的時候一定會有一邊忘了改）。
+    ⛔ 這裡是**說明**，不是第二份規則：一個數字都不准在這裡「算」出來，只准把常數排成句子。
+    回 {"plain": 白話一句, "steps": [{"k": 小標, "v": 內容}, ...]}。
+    """
+    src = {"k": "資料", "v": "逐筆成交" if lane in TICK_LANES else "1 分 K（⚠️ 近似，不是逐筆）"}
+    if lane == "night":
+        return {"plain": "美股一開盤的那 5 分鐘往哪走，就跟著做一口，抱到清晨。",
+                "steps": [src,
+                          {"k": "什麼時候看", "v": "美股開盤那一刻（美國夏令 21:30、冬令 22:30；"
+                                              "夏令＝3 月第二個週日起到 11 月第一個週日前）"},
+                          {"k": "做哪一邊", "v": "拿開盤後 5 分鐘的收盤價，跟開盤那一刻的收盤價比："
+                                             "漲就做多、跌就做空；**一模一樣就不做**"},
+                          {"k": "做不做得成", "v": "那 5 分鐘至少要有 %d 根 K 棒，整晚至少要有 %d 根 —— "
+                                               "不夠就是資料有洞，那一晚不算" % (NIGHT_FIRST_MIN_BARS, NIGHT_MIN_BARS)},
+                          {"k": "停利停損", "v": "±%g%%（以進場價算）" % (NIGHT_TPSL_FRAC * 100)},
+                          {"k": "同一分鐘兩邊都碰到", "v": "算**停損**（1 分 K 看不出誰先到，一律往壞的算）"},
+                          {"k": "沒碰到怎麼出", "v": "清晨 %s 平" % _hm(NIGHT_EXIT_MIN)},
+                          {"k": "成本", "v": _fee_txt(NIGHT_FEE + NIGHT_SPREAD,
+                                                    "（手續費 %g ＋ 買賣價差 %g）" % (NIGHT_FEE, NIGHT_SPREAD))}]}
+    if lane == "orb":
+        return {"plain": "開盤 5 分鐘先畫一個箱子，箱子夠寬才玩，之後往哪邊衝破就跟哪邊。",
+                "steps": [src,
+                          {"k": "箱子怎麼畫", "v": "%s 之間的最高價與最低價（兩端都含）" % ORB_BOX_AT},
+                          {"k": "做不做", "v": "箱子寬度%%（箱寬 ÷ 進場價）比**過去 %d 個交易日的中位數窄**就不做；"
+                                            "剛好等於中位數要做" % ORB_HIST_N},
+                          {"k": "什麼時候不算數", "v": "過去湊不到 %d 天、或那 %d 天橫跨超過 %d 個日曆天 ⇒ "
+                                                "**資料缺、那天不下定論**（規則的意思是「跟最近的波動比」，"
+                                                "跨太久就不是那個意思了）" % (ORB_HIST_N, ORB_HIST_N, ORB_SPAN_MAX_DAYS)},
+                          {"k": "怎麼進場", "v": "箱子畫好之後**第一次**突破上緣做多、跌破下緣做空；"
+                                             "剛好碰到邊不算，一天最多 1 次"},
+                          {"k": "停損", "v": "箱子的**另一端**（不是固定點數）"},
+                          {"k": "停利", "v": "**不設** —— 讓它自己跑到收盤"},
+                          {"k": "沒碰到怎麼出", "v": "%s 平（結算日 %s）" % (_cut_at(SL.T1343_30), _cut_at(SL.T1330))},
+                          {"k": "成本", "v": _fee_txt(ORB_FEE)}]}
+    if lane == "union":
+        at = _hms_sec(_CFG["rev_sec"]) if _CFG.get("rev_sec") else "?"
+        return {"plain": "三條策略誰先喊做多，就聽誰的；沒人喊做多就整天不做。",
+                "steps": [src,
+                          {"k": "哪三個候選", "v": "%s（%s）、%s（第一次突破那一刻）、%s（%s）"
+                                              % (LANE_NAME["fast"], FAST_PX_AT, LANE_NAME["orb"],
+                                                 LANE_NAME["rev"], at)},
+                          {"k": "先篩", "v": "**只留做多的**。說做空的就略過，但當天**繼續看下一個候選**，不是收工"},
+                          {"k": "再挑", "v": "剩下的做多候選裡，取**觸發時刻最早**的那一個"},
+                          {"k": "怎麼做", "v": "照**它自己的**進出場規則做（挑到開箱就用開箱的停損、挑到快攻就用快攻的停利停損）"},
+                          {"k": "一天幾口", "v": "**最多一口**；一個做多候選都沒有就不做"},
+                          {"k": "候選各自算數", "v": "走幅歷史不夠 ⇒ 那天沒有「%s」與「%s」這兩個候選；"
+                                               "箱子歷史不夠 ⇒ 沒有「%s」。⛔ 少一個候選不等於整條不做 —— "
+                                               "只要還有一個做多候選就照做"
+                                               % (LANE_NAME["fast"], LANE_NAME["rev"], LANE_NAME["orb"])},
+                          {"k": "成本", "v": "跟被挑中的那一條一樣"}]}
+
+    r, q = _CFG.get("rule") or {}, _CFG.get("pctl")
+    if not r or q is None or _CFG.get("rev_sec") is None:
+        return {"plain": "（規則函式沒有接上）", "steps": []}
+    share = ("%g 成" % (q / 10)) if q % 10 == 0 else ("第 %g 百分位" % q)
+    frac = r.get("tpsl_frac")
+    tp = ("%g%%" % (frac * 100)) if frac else "?"
+    at = _hms_sec(_CFG["rev_sec"])
+    quick = [{"k": "什麼時候看", "v": "每個交易日的 %s" % FAST_PX_AT},
+             {"k": "快不快", "v": "把 %s 的價跟 %s 的價比，算出**走了百分之幾**（不分漲跌）；"
+                               "這個數字要 ≥ 過去 %d 個交易日裡「%s的日子」的水準，才算「快」"
+                               % (FAST_PX_AT, FAST_REF_AT, r["window"], share)},
+             # ⛔ 不在這裡寫「2024 年 8 月起的頭 40 天」那種話：回填的範圍哪天改了，
+             #    畫面上就會留下一個**錯的**日期（說明只准講規則，不准講資料現在補到哪）。
+             {"k": "歷史不夠就不做", "v": "過去湊不到 %d 天 ⇒ 那天不做（資料最開頭那幾十個交易日都會是這樣）"
+                                   % r["min_n"]}]
+    direction = {"k": "做哪一邊", "v": "%s 比 %s **高**就做多、**低**就做空，1 口" % (FAST_PX_AT, FAST_REF_AT)}
+    # ⛔ 這裡不舉「進場 X ⇒ Y 點」的例子：那個 Y 得自己算一次，
+    #    停利停損的比例哪天改了就會變成畫面上一個**錯的**數字（規則改了、例子沒改）。
+    tpsl = {"k": "停利停損", "v": "±%s，**以進場價算**（進場價 × %s，四捨五入成點數）" % (tp, tp)}
+    eod = {"k": "沒碰到怎麼出", "v": "%s 平（結算日提早到 %s）" % (_cut_at(SL.T1343_30), _cut_at(SL.T1330))}
+    fee = {"k": "成本", "v": _fee_txt(FAST_FEE)}
+    if lane == "fast":
+        return {"plain": "開盤前三分半走得比平常兇，就順著那個方向做一口。慢的日子整天不做。",
+                "steps": [src] + quick + [direction, tpsl, eod, fee]}
+    if lane == "fast11":
+        return {"plain": "跟「%s」一模一樣，只是**中午 %s 就收工**，不抱到下午。"
+                         % (LANE_NAME["fast"], FAST11_CUT_AT),
+                "steps": [src] + quick + [direction, tpsl,
+                                          {"k": "沒碰到怎麼出", "v": "%s 平 —— 這是**唯一**跟「%s」不同的地方"
+                                                                % (FAST11_CUT_AT, LANE_NAME["fast"])},
+                                          {"k": "結算日", "v": "%s 比結算日的 %s 還早 ⇒ 結算日不必另外處理"
+                                                           % (FAST11_CUT_AT, _cut_at(SL.T1330))},
+                                          fee]}
+    if lane == "hmq":
+        return {"plain": "快的日子跟著衝；慢的日子等到 %s，如果風向轉了就做反方向那一口。" % at,
+                "steps": [src] + quick + [direction,
+                                          {"k": "不快的日子", "v": "等到 %s 再看一次：方向跟 %s **相反**才順著新方向做 1 口；"
+                                                              "方向一樣就整天不做" % (at, FAST_PX_AT)},
+                                          {"k": "一天幾口", "v": "**最多一口** —— 快的日子已經做過了，⛔ 不會再看 %s" % at},
+                                          tpsl, eod, fee]}
+    if lane == "rev":
+        return {"plain": "只撿「%s」剩下的那一半：慢的日子等風向轉了才做。" % LANE_NAME["hmq"],
+                "steps": [src,
+                          {"k": "這一條是什麼", "v": "「%s」**減掉**「%s」＝只做「慢、而且 %s 轉向」那一半"
+                                              % (LANE_NAME["hmq"], LANE_NAME["fast"], at)},
+                          quick[1],
+                          {"k": "快的日子", "v": "**一律不做**（那半留給「%s」）" % LANE_NAME["fast"]},
+                          {"k": "慢的日子", "v": "等到 %s：方向跟 %s **相反**才順著新方向做 1 口；方向一樣就不做"
+                                            % (at, FAST_PX_AT)},
+                          tpsl, eod, fee]}
+    return {"plain": "", "steps": []}
+
+
 def _months(now, lane_rows):
     ym = [(now.year, now.month)]
     while len(ym) < MONTHS_SHOWN:
@@ -1333,9 +1448,35 @@ def _months(now, lane_rows):
     return out
 
 
+def _month_row(key, rs, this):
+    """一個月的小計。⛔ 跟 `_months()` 同一種算法（只加「真的是數字」的點數）。"""
+    tr = [r for r in rs if r["decision"] != "不做"]
+    pts = [r["points"] for r in tr
+           if not isinstance(r.get("points"), bool) and isinstance(r.get("points"), (int, float))]
+    return {"month": key, "label": key, "this": this, "points": round(sum(pts), 1),
+            "trades": len(tr), "days": len(rs),
+            "backfill": sum(1 for r in rs if r.get("calc") == "backfill")}
+
+
+def _months_all(lane_rows, now):
+    """
+    ⭐ **點進去那一頁**的月表（2026-09-17 加）：**有定論的每一個月**，新到舊。
+    ⛔ 不是卡上那 6 個月（`_months()`）—— 那張卡刻意只給最近半年，點進去才看得到全部。
+    ⚠️ 中間沒有定論的月份就是沒有那一列（⛔ 不補 0：0 點跟「那個月沒算過」是兩回事）。
+    """
+    cur = "%04d-%02d" % (now.year, now.month)
+    out = []
+    for key in sorted({r["date"][:7] for r in lane_rows}, reverse=True):
+        out.append(_month_row(key, [r for r in lane_rows if r["date"][:7] == key], key == cur))
+    return out
+
+
 def _slim(r):
+    # ⭐ `calc` 是**怎麼算出來的**（2026-09-17 加）：`"backfill"`＝`backfill_sim.py` 事後重算的、
+    #    **沒有這個欄位**＝面板當天即時算的。⛔ 不做資料遷移（舊列本來就沒有 ⇒ 就是即時）。
     keys = ("date", "decision", "why", "reason", "entry", "exit", "exit_reason", "points",
-            "move_pct", "thr_pct", "ref", "px", "c", "ref_label", "c_label", "us_open", "src", "exit_label")
+            "move_pct", "thr_pct", "ref", "px", "c", "ref_label", "c_label", "us_open", "src",
+            "exit_label", "calc")
     return {k: r.get(k) for k in keys if k in r}
 
 
@@ -1387,3 +1528,36 @@ def state(now=None):
             "errors": STATE["errors"], "last_err": STATE["last_err"], "last_err_at": STATE["last_err_at"],
             "hist_bad": STATE["hist_bad"], "hist_dup": STATE["hist_dup"],
             "steps": STATE["steps"], "last_step_at": STATE["last_step_at"]}
+
+
+def lane_detail(key, now=None):
+    """
+    ⭐ **點進去一條策略**看的東西（2026-09-17 加）：GET /api/sim/lane?key=<lane>。
+    ⛔ 唯讀（只讀 sim_lanes/），跟 `state()` 同一份資料、同一種算法 —— 差別只有兩個：
+       ① 月表給**每一個月**（`_months_all`），不是卡上那 6 個月
+       ② 逐日紀錄給**全部**（`state()` 只給 %d 筆給卡片用）
+    ⚠️ 這支一次會端出幾百列（2024-08 起回填之後約 520 天）⇒ **只有點下去才打**，
+       ⛔ 不准併進每 60 秒輪詢的 `/api/sim/state`。
+    不認得的 key ⇒ 回 None（呼叫端回 400，⛔ 不要默默回一條空的）。
+    """ % RECENT_N
+    if key not in LANES:
+        return None
+    now = now or datetime.now()
+    rows, st = read_rows()
+    lr = sorted((r for (ln, _d), r in rows.items() if ln == key), key=lambda r: r["date"], reverse=True)
+    slim = [_slim(r) for r in lr]
+    tr = [r for r in lr if r["decision"] != "不做"]
+    pts = [r["points"] for r in tr
+           if not isinstance(r.get("points"), bool) and isinstance(r.get("points"), (int, float))]
+    return {"ok": True, "key": key, "name": LANE_NAME[key], "src": SRC_NAME[key],
+            "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "note": "成本已扣；夜盤用 1 分 K 近似",
+            "rule": _rule_text(key), "detail": _rule_detail(key), "wired": wired(),
+            "months": _months_all(lr, now), "rows": slim,
+            "today": _today(key, now, rows),
+            # ⚠️ 合計是**這條有定論的全部日子**，⛔ 不是「今年」或「最近 N 天」——
+            #    畫面上要寫清楚是哪一段（`d0`~`d1`），不然兩條的合計看起來可比、其實不可比。
+            "total": {"days": len(lr), "trades": len(tr), "points": round(sum(pts), 1),
+                      "backfill": sum(1 for r in lr if r.get("calc") == "backfill"),
+                      "d0": lr[-1]["date"] if lr else None, "d1": lr[0]["date"] if lr else None},
+            "file": dict(st, eq_ok=st["lines"] == st["ok"] + st["bad"] + st["dup"] + st["blank"])}

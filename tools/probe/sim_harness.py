@@ -43,30 +43,35 @@ WIRED = S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read,
                     LP.FAST_PCTL, AF.FAST_RULE, reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC)
 
 # ══ 捏造的定論（價格一律 12000 附近，⛔ 不撞他的真實紀錄）════════════════════
+# ⭐ 2026-09-17：造 `DAYS` 個交易日（跨二十幾個月）—— 內頁那張月表與逐日清單要有東西才看得出版面。
+#    ⚠️ 最近 10 個平日以外的那些標 `calc="backfill"`，跟真的一樣（畫面要分得出回填與即時）。
 NOW = datetime.now()
 S.SIM_DIR.mkdir(parents=True, exist_ok=True)
 _d0 = NOW.date()
+DAYS = 160                      # ⚠️ 再多就只是拖慢治具啟動（append_row 每次都重讀整個資料夾）
+_LIVE_N = 10                    # 最近這麼多個平日當成「面板即時算的」
 for _li, _lane in enumerate(S.LANES):
     _k, _made = 1, 0
-    while _made < 9:
+    while _made < DAYS:
         _d = _d0 - timedelta(days=_k)
         _k += 1
         if _d.weekday() > 4:
             continue
         _made += 1
+        _calc = {} if _made <= _LIVE_N else {"calc": "backfill"}
         if (_made + _li) % 3 == 0:
             S.append_row({"lane": _lane, "date": str(_d), "decision": "不做", "why": "not_fast",
                           "reason": "不快，不做（走 0.052%，門檻 0.272%）",
                           "entry": None, "exit": None, "exit_reason": None, "points": None,
-                          "src": S.SRC_NAME[_lane]})
+                          "src": S.SRC_NAME[_lane], **_calc})
         else:
             _dir = "做多" if (_made + _li) % 2 else "做空"
-            _pts = round(((-1) ** (_made + _li)) * (37 + 11 * _made + 3 * _li), 1)
+            _pts = round(((-1) ** (_made + _li)) * (37 + 11 * (_made % 9) + 3 * _li), 1)
             S.append_row({"lane": _lane, "date": str(_d), "decision": _dir, "why": "fast",
                           "reason": "快（走 0.503%，門檻 0.272%）",
                           "entry": 12061.0, "exit": 12121.0,
                           "exit_reason": ["停利", "停損", "收盤"][_made % 3], "points": _pts,
-                          "src": S.SRC_NAME[_lane]})
+                          "src": S.SRC_NAME[_lane], **_calc})
 # 一條「等資料」，讓那一行也看得到
 S.STATE["pending"]["orb"] = {str(_d0 - timedelta(days=1)):
                              S._pending("few_box_hist", "箱子寬度歷史不夠（這天以前只有 12 天，要 20 天）")}
@@ -90,9 +95,21 @@ class H(BaseHTTPRequestHandler):
         if self.path.startswith("/api/sim/state"):
             return self._send(200, json.dumps(S.state(datetime.now()), ensure_ascii=False),
                               "application/json; charset=utf-8")
+        # ⭐ 點進去一條策略的內頁（2026-09-17 加）。⛔ 跟面板同一支 `lane_detail`，
+        #    連「不認得的 key ⇒ 400」都照做 —— 治具跟真的不一樣就驗不到東西。
+        if self.path.startswith("/api/sim/lane"):
+            from urllib.parse import parse_qs
+            key = (parse_qs(self.path.partition("?")[2]).get("key") or [""])[0]
+            out = S.lane_detail(key, datetime.now())
+            if out is None:
+                return self._send(400, json.dumps({"ok": False, "msg": "沒有這一條：" + key[:40]},
+                                                  ensure_ascii=False),
+                                  "application/json; charset=utf-8")
+            return self._send(200, json.dumps(out, ensure_ascii=False),
+                              "application/json; charset=utf-8")
         # ⛔ 其他 /api/ 一律 404（這支治具只服務【模擬】那一頁；別頁請用 fe_harness.py）
         if self.path.startswith("/api/"):
-            return self._send(404, '{"ok":false,"msg":"這支治具只有 /api/sim/state"}',
+            return self._send(404, '{"ok":false,"msg":"這支治具只有 /api/sim/state 與 /api/sim/lane"}',
                               "application/json; charset=utf-8")
         return self._send(200, LP.PAGE, "text/html; charset=utf-8")
 

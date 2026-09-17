@@ -5394,20 +5394,55 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .sm-m i{font-style:normal; font-size:10px; color:var(--faint); margin-left:3px}
 .sm-today{font-size:11.5px; color:var(--dim); line-height:1.5; overflow-wrap:anywhere}
 .sm-today em{font-style:normal; color:var(--faint); margin-right:4px}
-/* 最近一筆：窄欄放不下四欄的表格 ⇒ 第一列（日期／做多做空／點數）＋第二列（進出與原因）堆疊 */
-.sm-r{font-size:12px}
-.sm-rh{display:flex; align-items:baseline; gap:6px}
-.sm-r .d{color:var(--dim); font-family:var(--font-mono)}
-.sm-r .k{font-weight:650} .sm-r .k.none{color:var(--faint); font-weight:500}
-.sm-r .p{margin-left:auto; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
-.sm-r .x{display:block; color:var(--faint); font-size:11px; line-height:1.5; margin-top:2px; overflow-wrap:anywhere}
-.sm-r .x small{display:block}
-.sm-rule{font-size:10.5px; color:var(--faint); line-height:1.5; margin-top:9px;
-  border-top:1px solid var(--line-soft); padding-top:7px}
 .sm-pend{font-size:10.5px; color:var(--faint); margin-top:6px; line-height:1.5; overflow-wrap:anywhere}
 .sm-empty{font-size:11.5px; color:var(--faint); padding:4px 0}
 .sm-foot{font-size:11px; color:var(--faint); margin-top:10px}
 .sm-foot.bad{color:var(--down)}
+/* ⭐ 2026-09-17：卡上的「最近一筆」與規則句收掉（Benson 要的），改成整張卡可以點進去。
+   ⛔ 不做彈出視窗：同一個位置把七條整個換成那一條的內頁 —— 窄視窗不會被遮住，
+      Esc 或「← 全部策略」回得去。 */
+.sm-lane{cursor:pointer; transition:border-color .12s ease, background .12s ease}
+.sm-lane:hover{border-color:var(--ghost); background:var(--surface-2)}
+.sm-lane:focus-visible{outline:2px solid var(--gold-line); outline-offset:2px}
+.sm-more{font-size:10.5px; color:var(--faint); margin-top:9px;
+  border-top:1px solid var(--line-soft); padding-top:7px}
+.sm-lane:hover .sm-more{color:var(--gold)}
+/* 內頁 */
+.sm-dhead{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px}
+.sm-dhead h2{font-size:19px; font-weight:650; color:var(--text); margin:0}
+.sm-dhead small{font-size:11.5px; color:var(--faint)}
+.sm-back{font-size:12px; color:var(--dim); border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:5px 10px; cursor:pointer; user-select:none}
+.sm-back:hover{background:var(--surface-2); color:var(--text)}
+.sm-plain{font-size:14.5px; color:var(--text); line-height:1.75; margin:12px 0 16px;
+  padding:12px 14px; background:var(--surface-2); border-radius:var(--r-md);
+  border-left:3px solid var(--gold-line)}
+.sm-steps{display:grid; grid-template-columns:max-content minmax(0,1fr); gap:8px 16px;
+  font-size:12.5px; line-height:1.7; margin:0}
+.sm-steps dt{color:var(--faint); white-space:nowrap}
+.sm-steps dd{margin:0; color:var(--dim); overflow-wrap:anywhere}
+.sm-steps dd b{color:var(--text); font-weight:650}
+@media(max-width:640px){ .sm-steps{grid-template-columns:minmax(0,1fr); gap:1px 0}
+  .sm-steps dd{margin-bottom:9px} }
+.sm-tot{font-size:12.5px; color:var(--dim); line-height:1.7; margin:14px 0 2px;
+  padding:10px 12px; border:1px solid var(--line-soft); border-radius:var(--r-md)}
+.sm-tot b{font-family:var(--font-mono); font-variant-numeric:tabular-nums; color:var(--text)}
+.sm-cols{display:grid; grid-template-columns:250px minmax(0,1fr); gap:18px; align-items:start}
+@media(max-width:900px){ .sm-cols{grid-template-columns:minmax(0,1fr)} }
+.sm-scroll{max-height:56vh; overflow:auto; border:1px solid var(--line-soft); border-radius:var(--r-md)}
+.sm-tbl{width:100%; border-collapse:collapse; font-size:12px}
+.sm-tbl th{position:sticky; top:0; z-index:1; background:var(--surface); text-align:left;
+  font-weight:500; color:var(--faint); font-size:10.5px; letter-spacing:1px;
+  padding:7px 9px; border-bottom:1px solid var(--line)}
+.sm-tbl td{padding:6px 9px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+.sm-tbl tr:last-child td{border-bottom:0}
+.sm-tbl .d{font-family:var(--font-mono); color:var(--dim); white-space:nowrap}
+.sm-tbl .k{font-weight:650; white-space:nowrap} .sm-tbl .k.none{color:var(--faint); font-weight:500}
+.sm-tbl .x{font-family:var(--font-mono); color:var(--dim); white-space:nowrap}
+.sm-tbl .p{font-family:var(--font-mono); font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
+.sm-tbl .why{color:var(--faint); font-size:11px; line-height:1.5; overflow-wrap:anywhere}
+.sm-tbl .src{color:var(--faint); font-size:10.5px; white-space:nowrap}
+.sm-tbl .src.bf{color:var(--ghost)}
 .lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
 @media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
 .lb-mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
@@ -5584,10 +5619,14 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
      ⚠️ 2026-09-16 從【策略實驗室】最上面那張卡搬出來獨立成一頁（Benson 交辦），
         class 一律沿用原本的 `sm-` 前綴 ⛔ 不改名。
      ⛔ 跟【自動下單】的真單紀錄完全分開：不同的檔、不同的端點、不同的卡，⛔ 不准混進同一個清單。
-     ⛔ 只放空容器：規則句、月合計、今天狀態、最近一筆全部從後端來（前端不寫死時刻與點數）；一顆按鈕都沒有。
+     ⛔ 只放空容器：規則說明、月合計、今天狀態、逐日紀錄全部從後端來（前端不寫死時刻與點數）；
+        ⛔ 一顆會動到資料或錢的鈕都沒有 —— 只有「點進一條策略」與「回到七條」兩個純導覽的控制項
+        （2026-09-17 加；它們只換畫面、不打任何 POST）。
      ⛔ 只列歷史模擬結果：不放勝率估計、不放預估、不給進場提示。
      ⚠️ .sm-lanes 是**獨立節點**：七條的骨架只在條數變動時重建，每條的內容各自比對自己的字串
-        （整塊重繪會把捲動位置與剛畫好的內容一起換掉）。 -->
+        （整塊重繪會把捲動位置與剛畫好的內容一起換掉）。
+     ⭐ #smdet ＝點進去之後那一條的內頁（GET /api/sim/lane?key=…，⛔ 只有點下去才打）。
+        ⚠️ 兩張卡**同時只有一張看得見**：開內頁時 #smcard hidden、關掉時反過來。 -->
 <div id="tab-sim" hidden>
  <div class="card sm-card" id="smcard">
   <div class="sec-head"><h2>模擬（不會下單）</h2><span class="count" id="smcount"></span></div>
@@ -5595,6 +5634,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="sm-lanes" id="smlanes"></div>
   <div class="sm-foot" id="smfoot"></div>
  </div>
+ <div class="card sm-card" id="smdet" hidden></div>
 </div>
 
 <!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
@@ -7628,7 +7668,7 @@ document.addEventListener('keydown',function(e){
    ⚠️ 「沒變就別動 DOM」用節點上快取的字串比（⛔ 不讀回 innerHTML 比，見 CLAUDE.md）。
    ⚠️ 請求帶流水號，只認最後一次的回應。
 */
-var SM={seq:0,timer:null,err:'',keys:''};
+var SM={seq:0,dseq:0,timer:null,err:'',keys:'',det:'',bound:false};
 const SMWD=['日','一','二','三','四','五','六'];
 function smSet(id,html){ const e=document.getElementById(id); if(!e) return; if(e._smh!==html){ e._smh=html; e.innerHTML=html; } }
 function smPts(v){ if(v==null) return '—'; return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:1}); }
@@ -7636,39 +7676,118 @@ function smCls(v){ return v>0?'up':v<0?'down':''; }
 function smPx(v){ return v==null?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:1}); }
 function smDay(s){ const p=String(s||'').split('-').map(Number); if(p.length<3) return esc(s);
   return esc(s.slice(5))+'（'+SMWD[new Date(p[0],p[1]-1,p[2]).getDay()]+'）'; }
-function smRow(r){
-  if(!r) return '<div class="sm-empty">還沒有算好的日子</div>';
-  const trade=r.decision==='做多'||r.decision==='做空';
-  const x=trade
-    ? smPx(r.entry)+' → '+smPx(r.exit)+'（'+esc(r.exit_reason||'')+'）<small>'+esc(r.reason||'')+'</small>'
-    : esc(r.reason||'');
-  return '<div class="sm-r"><div class="sm-rh"><span class="d">'+smDay(r.date)+'</span>'
-    +'<span class="k '+(trade?(r.decision==='做多'?'up':'down'):'none')+'">'+esc(r.decision)+'</span>'
-    +'<span class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</span></div>'
-    +'<span class="x">'+x+'</span></div>';
+// 內頁的清單跨了兩年多 ⇒ ⛔ 一定要帶年份（只有月日會把 2024 跟 2026 看成同一天）
+function smDayY(s){ const p=String(s||'').split('-').map(Number); if(p.length<3) return esc(s);
+  return esc(s)+'（'+SMWD[new Date(p[0],p[1]-1,p[2]).getDay()]+'）'; }
+// 後端那幾句說明裡的 **粗體** ⇒ <b>。⛔ 先 esc 再換，順序反過來就等於開了 HTML 注入。
+function smMd(s){ return esc(String(s==null?'':s)).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>'); }
+function smMonths(ms,all){
+  let h='<div class="sm-months">';
+  (ms||[]).forEach(m=>{
+    // ⛔ 筆數旁邊一定要帶「算到幾天」：資料補得多寡不同時，兩條的月合計**不可比** ——
+    //    只寫「2 筆」看不出來是「這個月只算到 9 天」還是「20 天只做了 2 筆」（lab-qa 退件 S2）。
+    h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+(all&&m.this?'（本月）':'')
+      +'<i>'+m.trades+' 筆／'+m.days+' 天</i></span>'
+      +'<b class="lb-mono '+smCls(m.points)+'">'+(m.days?smPts(m.points):'—')+'</b></div>';
+  });
+  return h+'</div>';
 }
 function smLane(L){
   if(!L) return '<div class="sm-empty">讀不到</div>';
   const t=L.today||{};
-  // ⭐ 由上而下：名字 → 每月累計點數（他最在意的，放第一個）→ 今天 → 最近一筆 → 規則句
+  // ⭐ 由上而下：名字 → 每月累計點數（他最在意的，放第一個）→ 今天 → 點進去的提示
+  // ⭐ 2026-09-17：「最近一筆」與規則句搬進內頁（Benson 要的）—— 卡上只留他天天在看的那三塊。
   let h='<div class="sm-lt"><b>'+esc(L.name)+'</b><small>資料：'+esc(L.src)+'</small></div>'
-    +'<div class="sm-mh">每月累計點數</div><div class="sm-months">';
-  (L.months||[]).forEach(m=>{
-    // ⛔ 筆數旁邊一定要帶「算到幾天」：資料補得多寡不同時，兩條的月合計**不可比** ——
-    //    只寫「2 筆」看不出來是「這個月只算到 9 天」還是「20 天只做了 2 筆」（lab-qa 退件 S2）。
-    h+='<div class="sm-m'+(m.this?' this':'')+'"><span>'+esc(m.label)+'<i>'+m.trades+' 筆／'+m.days+' 天</i></span>'
-      +'<b class="lb-mono '+smCls(m.points)+'">'+(m.days?smPts(m.points):'—')+'</b></div>';
-  });
-  h+='</div><div class="sm-lh">今天</div><div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>':'')
+    +'<div class="sm-mh">每月累計點數</div>'+smMonths(L.months,false);
+  h+='<div class="sm-lh">今天</div><div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>':'')
     +(t.row?(esc(t.row.decision)+(t.row.points!=null?'　<span class="'+smCls(t.row.points)+'">'+smPts(t.row.points)+' 點</span>':'')):esc(t.msg||''))+'</div>';
-  h+='<div class="sm-lh">最近一筆</div>'+smRow((L.recent||[])[0]);
   if(L.pending&&L.pending.length){
     h+='<div class="sm-pend">等資料：'+L.pending.map(p=>smDay(p.date)+' '+esc(p.msg)).join('；')+'</div>';
   }
   if(L.fetch&&L.fetch.msg){ h+='<div class="sm-pend">補資料：'+esc(L.fetch.msg)+(L.fetch.at?'（'+esc(L.fetch.at.slice(5,16))+'）':'')+'</div>'; }
   // ⛔ 正在掃箱子寬度歷史時要說「還在算」，⛔ 不可以讓他以為是「沒有資料」
   if(L.scan){ h+='<div class="sm-pend">'+esc(L.scan)+'</div>'; }
-  return h+'<div class="sm-rule">'+esc(L.rule)+'</div>';
+  return h+'<div class="sm-more">點一下看全部紀錄與定義 →</div>';
+}
+
+/* ── 點進去一條策略的內頁（2026-09-17 加）────────────────────────────
+   ⛔ 只打 GET /api/sim/lane?key=…（唯讀），⛔ 只有點下去才打（一次幾百列，不准併進 60 秒輪詢）。
+   ⛔ 白話、逐項定義、規則句一律**後端給**（跟卡片同一條鐵律：前端不寫死時刻／點數／百分比）。
+   ⚠️ 「回填」與「即時」要看得出來：`calc` 有值＝事後重算的，沒有＝面板當天即時算的。 */
+function smDetRow(r){
+  const trade=r.decision==='做多'||r.decision==='做空';
+  return '<tr><td class="d">'+smDayY(r.date)+'</td>'
+    +'<td class="k '+(trade?(r.decision==='做多'?'up':'down'):'none')+'">'+esc(r.decision)+'</td>'
+    +'<td class="x">'+(trade?smPx(r.entry)+' → '+smPx(r.exit)+'（'+esc(r.exit_reason||'')+'）':'')+'</td>'
+    +'<td class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</td>'
+    +'<td class="why">'+esc(r.reason||'')+'</td>'
+    +'<td class="src'+(r.calc?' bf':'')+'">'+(r.calc?'回填':'即時')+'</td></tr>';
+}
+function smDetPaint(d){
+  if(!d){ smSet('smdet','<span class="sm-back" role="button" tabindex="0">← 全部策略</span>'
+    +'<div class="sm-empty">'+esc(SM.err||'讀取中…')+'</div>'); return; }
+  const t=d.total||{}, dt=d.detail||{};
+  let h='<div class="sm-dhead"><span class="sm-back" role="button" tabindex="0">← 全部策略</span>'
+    +'<h2>'+esc(d.name)+'</h2><small>資料：'+esc(d.src)+'</small></div>';
+  h+='<div class="sm-plain">'+smMd(dt.plain)+'</div>';
+  if(d.wired===false){ h+='<div class="sm-pend">⚠️ 規則函式沒有接上 —— 下面的說明不完整</div>'; }
+  h+='<div class="sm-mh">這一條是怎麼算的</div><dl class="sm-steps">';
+  (dt.steps||[]).forEach(s=>{ h+='<dt>'+esc(s.k)+'</dt><dd>'+smMd(s.v)+'</dd>'; });
+  h+='</dl>';
+  h+='<div class="sm-tot">合計 '+esc(t.d0||'—')+' ~ '+esc(t.d1||'—')+'：算過 <b>'+(t.days||0)
+    +'</b> 天、做了 <b>'+(t.trades||0)+'</b> 筆、<b class="'+smCls(t.points)+'">'+smPts(t.points)+'</b> 點'
+    +(t.backfill?'　（其中 '+t.backfill+' 天是回填 —— 事後用同一份規則、同一份逐筆重算的；'
+      +'其餘是面板當天即時算的）':'')+'</div>';
+  h+='<div class="sm-cols"><div><div class="sm-mh">每月累計點數</div>'+smMonths(d.months,true)+'</div>'
+    +'<div><div class="sm-mh">逐日紀錄（'+(d.rows||[]).length+' 天，新到舊）</div>'
+    +'<div class="sm-scroll"><table class="sm-tbl"><thead><tr><th>日期</th><th>判斷</th>'
+    +'<th>進 → 出</th><th>點數</th><th>說明</th><th>怎麼算的</th></tr></thead><tbody>'
+    +((d.rows||[]).map(smDetRow).join('')||'<tr><td colspan="6" class="why">還沒有算好的日子</td></tr>')
+    +'</tbody></table></div></div></div>';
+  h+='<div class="sm-foot">'+esc(d.note||'')+'　規則原句：'+esc(d.rule||'')+'</div>';
+  smSet('smdet',h);
+}
+function smDetOpen(k){
+  if(!k) return;
+  SM.det=k;
+  const c=document.getElementById('smcard'), e=document.getElementById('smdet');
+  if(c) c.hidden=true;
+  if(e){ e.hidden=false; e._smh=null; }
+  SM.err=''; smDetPaint(null);
+  const my=++SM.dseq;
+  fetch('/api/sim/lane?key='+encodeURIComponent(k),{cache:'no-store'})
+    .then(r=>r.json().catch(()=>({})).then(b=>({s:r.status,b}))).then(({s,b})=>{
+      if(my!==SM.dseq||SM.det!==k) return;
+      if(s!==200){ SM.err=(b&&b.msg)||('模擬紀錄讀取失敗（'+s+'）'); smDetPaint(null); return; }
+      // ⛔ 200 但看不懂 ⇒ 也要**說出來**：停在「讀取中…」等於安靜地壞掉
+      if(!b||!b.rows){ SM.err='模擬紀錄讀取失敗（回應看不懂）'; smDetPaint(null); return; }
+      SM.err=''; smDetPaint(b);
+    }).catch(()=>{ if(my!==SM.dseq||SM.det!==k) return;
+      SM.err='模擬紀錄讀取失敗（連不到面板）'; smDetPaint(null); });
+}
+function smDetClose(){
+  SM.det=''; SM.dseq++;                 // ⛔ 流水號往前推：還在路上的那個回應回來時不准再畫
+  const c=document.getElementById('smcard'), e=document.getElementById('smdet');
+  if(e){ e.hidden=true; e._smh=null; }
+  if(c) c.hidden=false;
+  SM.err=''; smLoad();
+}
+function smBind(){
+  if(SM.bound) return;
+  SM.bound=true;
+  const el=document.getElementById('smlanes'), dt=document.getElementById('smdet');
+  // ⛔ 用委派：七條的骨架會被重建，直接掛在每一條上的事件會跟著不見
+  // ⛔ lane 的 key 從節點 id 取（id＝"sm-"＋key），⛔ 前端不寫死任何一條的名字
+  const open=n=>{ if(n&&n.id&&n.id.indexOf('sm-')===0) smDetOpen(n.id.slice(3)); };
+  if(el){
+    el.addEventListener('click',ev=>open(ev.target.closest('.sm-lane')));
+    el.addEventListener('keydown',ev=>{ if(ev.key!=='Enter'&&ev.key!==' ') return;
+      const n=ev.target.closest('.sm-lane'); if(n){ ev.preventDefault(); open(n); } });
+  }
+  if(dt){ dt.addEventListener('click',ev=>{ if(ev.target.closest('.sm-back')) smDetClose(); });
+    dt.addEventListener('keydown',ev=>{ if((ev.key==='Enter'||ev.key===' ')&&ev.target.closest('.sm-back')){
+      ev.preventDefault(); smDetClose(); } }); }
+  document.addEventListener('keydown',ev=>{ if(ev.key==='Escape'&&SM.det) smDetClose(); });
 }
 function smPaint(x){
   if(!x||!x.lanes){ smSet('smlanes',''); SM.keys=''; smSet('smfoot','<span>'+esc(SM.err||'讀取中…')+'</span>'); return; }
@@ -7679,7 +7798,9 @@ function smPaint(x){
   if(SM.keys!==keys.join('|')){
     SM.keys=keys.join('|');
     const el=document.getElementById('smlanes');
-    if(el){ el.innerHTML=keys.map(k=>'<div class="sm-lane" id="sm-'+k+'"></div>').join(''); el._smh=null; }
+    // role/tabindex：整張卡是一個可以點、也可以用鍵盤打開的東西（⛔ 不用 <button>：
+    //    這一頁刻意一顆按鈕都沒有，而這只是導覽、不會動到任何資料）
+    if(el){ el.innerHTML=keys.map(k=>'<div class="sm-lane" id="sm-'+k+'" role="button" tabindex="0"></div>').join(''); el._smh=null; }
   }
   keys.forEach(k=>smSet('sm-'+k,smLane(x.lanes[k])));
   const f=x.file||{};
@@ -7703,6 +7824,7 @@ function smLoad(){
   }).catch(()=>{ if(my!==SM.seq) return; SM.err='模擬讀取失敗（連不到面板）'; smPaint(null); });
 }
 function smEnter(){
+  smBind();
   smLoad();
   if(SM.timer) clearTimeout(SM.timer);
   const again=()=>{ SM.timer=null; if(TAB!=='sim') return; smLoad(); SM.timer=setTimeout(again,60000); };
@@ -9053,11 +9175,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._json(500, {"ok": False, "msg": "模擬狀態讀取失敗：" + str(e)[:160]})
 
+    def _sim_lane_get(self, qs):
+        """
+        ⭐ 【模擬】點進去一條策略：唯讀端點 GET /api/sim/lane?key=<lane>（2026-09-17 加）。
+        ⛔ 跟 /api/sim/state 同一道防護、同樣只讀 sim_lanes/：不抓資料、不寫檔、不碰 broker／auto_fire。
+        ⚠️ 一次端出幾百列 ⇒ **只有點下去才打**，⛔ 不准併進每 60 秒輪詢的 /api/sim/state。
+        """
+        ok, code, msg = fire_get_guard(self.headers)
+        if not ok:
+            return self._json(code, {"ok": False, "msg": msg})
+        if sim_lanes is None:
+            return self._json(503, {"ok": False, "msg": "模擬載入失敗"})
+        key = (parse_qs(qs).get("key") or [""])[0]
+        try:
+            out = sim_lanes.lane_detail(key)
+        except Exception as e:
+            return self._json(500, {"ok": False, "msg": "模擬紀錄讀取失敗：" + str(e)[:160]})
+        if out is None:         # ⛔ 不認得的 key 要說出來，不要默默回一條空的
+            return self._json(400, {"ok": False, "msg": "沒有這一條：" + key[:40]})
+        return self._json(200, out)
+
     def do_GET(self):
         if self.path.partition("?")[0] in ("/api/lab/meta", "/api/lab/run"):
             return self._lab_get()
         if self.path.partition("?")[0] == "/api/sim/state":
             return self._sim_get()
+        if self.path.partition("?")[0] == "/api/sim/lane":
+            return self._sim_lane_get(self.path.partition("?")[2])
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:

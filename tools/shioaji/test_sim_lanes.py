@@ -827,13 +827,27 @@ sjs = page[_j0:page.index("/* ══════════════ 【策�
 say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬那一段 JS（不多不少）")
 sjs_code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", " ", sjs, flags=_re.S).splitlines())
 fetches = sorted(set(x.split("'")[1].split("?")[0] for x in sjs.split("fetch(")[1:]))
-chk("  只打 GET /api/sim/state", fetches, ["/api/sim/state"])
+# ⭐ 2026-09-17 多了「點進去一條」的內頁 ⇒ 第二個端點。⛔ 兩個都是 GET、都是唯讀；
+#    ⛔ 這個清單是**寫死**的：哪天多打了第三個端點，這一條就要紅（不准改成「開頭是 /api/sim 就好」）。
+chk("  只打 GET /api/sim/state 與 /api/sim/lane（兩個都唯讀）", fetches, ["/api/sim/lane", "/api/sim/state"])
+say("'/api/sim/lane?key='" in sjs and "smDetOpen" in sjs, "  內頁那個端點是「點下去」那條路在打")
+# ⛔ 內頁那個端點**整段 JS 裡只准出現一次**，而且要落在 smDetOpen 裡 ——
+#    ⛔ 不准驗成「不在某個位置之前」（註解也算數，第一版就這樣綠不起來）。
+say(sjs_code.count("/api/sim/lane") == 1
+    and sjs_code.index("function smDetOpen") < sjs_code.index("/api/sim/lane") < sjs_code.index("function smDetClose"),
+    "  內頁那個端點只被 smDetOpen 打（⛔ 不在 60 秒輪詢那條路上）")
+say("/api/sim/state" in sjs_code[sjs_code.index("function smLoad"):],
+    "  60 秒輪詢那一支打的還是 /api/sim/state")
 for w in ("broker", "place_order", "/api/enter", "/api/real/", "/api/fire", "method:", "POST", "pfetch(", "data-act",
           "data-rdir", "<form", "submit", "token", "PTOK", "<button", "altbl", "AL."):
     chk(f"  模擬分頁 HTML／JS 沒有 {w}", w in card + sjs_code, False)
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
     chk(f"  模擬分頁畫面文字沒有「{w}」", w in card + sjs_code, False)
-state_txt = json.dumps(S.state(NOW), ensure_ascii=False) + "".join(S._rule_text(ln) for ln in S.LANES)
+# ⛔ 內頁那份說明（`_rule_detail`）也是後端端出去的字 ⇒ 同一把尺要掃到它，
+#    不然「不准有建議口吻」那條會被新功能整個繞過去。
+state_txt = (json.dumps(S.state(NOW), ensure_ascii=False)
+             + "".join(S._rule_text(ln) for ln in S.LANES)
+             + json.dumps([S._rule_detail(ln) for ln in S.LANES], ensure_ascii=False))
 for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
     chk(f"  後端端出去的文字沒有「{w}」", w in state_txt, False)
 chk("  分頁的 HTML／JS 沒寫死時刻／點數（09:03、09:15、130、21:30、0.5%）",
@@ -848,6 +862,53 @@ fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"'
 chk("  【自動下單】那一頁沒有模擬的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
 lab_html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
 chk("  【策略實驗室】那一頁已經沒有模擬卡", [w for w in ("smcard", "sm-lane", "/api/sim") if w in lab_html], [])
+
+
+# ══ ⑦b 卡片瘦身 ＋ 點進去的內頁（2026-09-17 Benson 交辦）═══════════════
+print("\n=== ⑦b 卡片瘦身 ＋ 內頁 ===")
+# ① 卡上「最近一筆」與規則句收掉了 —— ⛔ 是真的不見，不是被 CSS 藏起來
+# ⚠️ 比的是**去掉註解**的程式碼：註解裡本來就會提到「最近一筆搬去哪了」（第一版拿 sjs 比，紅在自己的註解上）
+say("最近一筆" not in sjs_code and "sm-rule" not in card + sjs_code and "function smRow(" not in sjs_code,
+    "  卡上的『最近一筆』與規則句整段拿掉了（不是藏起來）")
+say("sm-more" in sjs and "點一下看全部紀錄與定義" in sjs, "  卡上改成「點進去」的提示")
+# ② 內頁的容器在 #smcard 之後、預設 hidden
+say('<div class="card sm-card" id="smdet" hidden></div>' in tab_code, "  內頁容器 #smdet 預設 hidden")
+say(tab_code.index('id="smcard"') < tab_code.index('id="smdet"'), "  #smdet 排在 #smcard 後面")
+# ③ 兩張卡同時只有一張看得見（⛔ 不准兩張一起出現）
+say("c.hidden=true" in sjs and "e.hidden=false" in sjs and "e.hidden=true" in sjs and "c.hidden=false" in sjs,
+    "  開內頁 ⇒ 藏卡片；關內頁 ⇒ 還原（兩張同時只有一張看得見）")
+say("ev.key==='Escape'&&SM.det" in sjs, "  Esc 關得掉內頁")
+say("my!==SM.dseq" in sjs and "SM.dseq++" in sjs,
+    "  內頁的請求也帶流水號；關掉時把流水號往前推（還在路上的回應不准再畫）")
+say("n.id.slice(3)" in sjs, "  內頁要看哪一條是從節點 id 取的（⛔ 前端不寫死 lane 名字）")
+# ④ **粗體一定要先 esc 再換**：順序反過來就是 HTML 注入
+say(sjs.index("esc(String(s==null?'':s))") < sjs.index(".replace(/\\*\\*([^*]+)\\*\\*/g"),
+    "  smMd 先 esc 再換粗體（⛔ 反過來就開了 HTML 注入）")
+# ⑤ 後端：lane_detail
+say(S.lane_detail("這條不存在") is None, "  不認得的 lane ⇒ 回 None（呼叫端才回得了 400）")
+for _ln in S.LANES:
+    _d = S.lane_detail(_ln, NOW)
+    say(isinstance(_d, dict) and _d["key"] == _ln and isinstance(_d.get("rows"), list)
+        and isinstance(_d.get("months"), list) and isinstance(_d.get("total"), dict),
+        "  %s：內頁端得出 rows／months／total" % S.LANE_NAME[_ln])
+    _dt = _d.get("detail") or {}
+    say(bool(_dt.get("plain")) and len(_dt.get("steps") or []) >= 4,
+        "  %s：白話一句 ＋ 至少 4 項逐條說明" % S.LANE_NAME[_ln], _dt.get("plain"))
+# ⑥ `calc` 端得出去（回填 vs 即時就靠它）
+say("calc" in S._slim({"date": "2026-01-02", "decision": "不做", "calc": "backfill"}),
+    "  _slim 端得出 calc（回填）")
+say("calc" not in S._slim({"date": "2026-01-02", "decision": "不做"}),
+    "  沒有 calc 的舊列就是「即時」（⛔ 不補預設值、不做資料遷移）")
+# ⑦ `_months_all`：**有定論的每一個月**，⛔ 中間沒資料的月份不補 0
+_fake = [{"date": "2026-03-02", "decision": "不做", "points": None},
+         {"date": "2026-01-05", "decision": "做多", "points": 10.0},
+         {"date": "2026-01-06", "decision": "做空", "points": -4.0}]
+_ma = S._months_all(_fake, NOW)
+chk("  月表＝有定論的每一個月、新到舊（⛔ 中間的 2 月不補 0）",
+    [(m["month"], m["days"], m["trades"], m["points"]) for m in _ma],
+    [("2026-03", 1, 0, 0), ("2026-01", 2, 2, 6.0)])
+say(len(S._months(NOW, _fake)) == S.MONTHS_SHOWN,
+    "  卡上那張月表還是固定 %d 個月（⛔ 內頁才給全部）" % S.MONTHS_SHOWN)
 
 
 
@@ -1399,11 +1460,16 @@ chk("  sim_lanes.py 的程式碼裡沒有 0.005（停利停損一律走注入的
 chk("  也沒有呼叫 percentile（門檻一律走注入的 fast_verdict）",
     sorted({n.func.attr for n in ast.walk(_tree) if isinstance(n, ast.Call)
             and isinstance(n.func, ast.Attribute) and "percentile" in n.func.attr}), [])
-_rt = [n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef) and n.name == "_rule_text"][0]
+# ⛔ `tpsl_frac` 只准出現在**給畫面看字**的那兩支裡（`_rule_text` 的規則句、`_rule_detail` 的逐條說明）。
+#    2026-09-17 從一支變兩支 —— ⛔ 不准改成「數字對就好」：要驗的是**每一個**都落在那兩支裡面，
+#    不然哪天有人拿 tpsl_frac 自己乘一次停利停損，這條照樣綠燈。
+_TXT_FNS = ("_rule_text", "_rule_detail")
+_txt_nodes = [n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef) and n.name in _TXT_FNS]
+say(len(_txt_nodes) == len(_TXT_FNS), "  給畫面看字的那兩支都在（_rule_text／_rule_detail）")
 _tf_all = [n for n in ast.walk(_tree) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
-_tf_rt = [n for n in ast.walk(_rt) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
-chk("  「tpsl_frac」只出現在 _rule_text（給畫面看的規則句，讀的還是注入的那份 rule）",
-    (len(_tf_all), len(_tf_rt)), (1, 1))
+_tf_in = [n for f in _txt_nodes for n in ast.walk(f) if isinstance(n, ast.Constant) and n.value == "tpsl_frac"]
+chk("  「tpsl_frac」只出現在 _rule_text／_rule_detail（給畫面看的字，算的還是注入的那份 rule）",
+    (len(_tf_all), len(_tf_in), len(_tf_all) == len(_tf_in)), (2, 2, True))
 _secs = {n.value for n in ast.walk(_tree) if isinstance(n, ast.Constant) and isinstance(n.value, int)}
 chk("  ⛔ 程式碼裡沒有寫死 09:15（33300 秒）：一律用注入的 rev_sec", 9 * 3600 + 15 * 60 in _secs, False)
 say(any(isinstance(n, ast.Constant) and n.value == "rev_sec" for n in ast.walk(_tree)),
