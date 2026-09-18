@@ -829,7 +829,9 @@ sjs_code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", "
 fetches = sorted(set(x.split("'")[1].split("?")[0] for x in sjs.split("fetch(")[1:]))
 # ⭐ 2026-09-17 多了「點進去一條」的內頁 ⇒ 第二個端點。⛔ 兩個都是 GET、都是唯讀；
 #    ⛔ 這個清單是**寫死**的：哪天多打了第三個端點，這一條就要紅（不准改成「開頭是 /api/sim 就好」）。
-chk("  只打 GET /api/sim/state 與 /api/sim/lane（兩個都唯讀）", fetches, ["/api/sim/lane", "/api/sim/state"])
+# ⭐ 2026-09-18 再多一個「點一天看圖」⇒ 第三個端點（一樣是 GET、唯讀）。⛔ 清單照樣寫死。
+chk("  只打 GET /api/sim/state／lane／daychart（三個都唯讀）", fetches,
+    ["/api/sim/daychart", "/api/sim/lane", "/api/sim/state"])
 say("'/api/sim/lane?key='" in sjs and "smDetOpen" in sjs, "  內頁那個端點是「點下去」那條路在打")
 # ⛔ 內頁那個端點**整段 JS 裡只准出現一次**，而且要落在 smDetOpen 裡 ——
 #    ⛔ 不准驗成「不在某個位置之前」（註解也算數，第一版就這樣綠不起來）。
@@ -877,7 +879,8 @@ say(tab_code.index('id="smcard"') < tab_code.index('id="smdet"'), "  #smdet 排�
 # ③ 兩張卡同時只有一張看得見（⛔ 不准兩張一起出現）
 say("c.hidden=true" in sjs and "e.hidden=false" in sjs and "e.hidden=true" in sjs and "c.hidden=false" in sjs,
     "  開內頁 ⇒ 藏卡片；關內頁 ⇒ 還原（兩張同時只有一張看得見）")
-say("ev.key==='Escape'&&SM.det" in sjs, "  Esc 關得掉內頁")
+# ⚠️ 2026-09-18 Esc 改成「一次退一層」（先關那天的圖、再關內頁）⇒ 比對的字串跟著換，要驗的行為不變
+say("ev.key==='Escape'" in sjs_code and "if(SM.det) smDetClose()" in sjs_code, "  Esc 關得掉內頁")
 say("my!==SM.dseq" in sjs and "SM.dseq++" in sjs,
     "  內頁的請求也帶流水號；關掉時把流水號往前推（還在路上的回應不准再畫）")
 say("n.id.slice(3)" in sjs, "  內頁要看哪一條是從節點 id 取的（⛔ 前端不寫死 lane 名字）")
@@ -919,6 +922,61 @@ chk("  月表＝有定論的每一個月、新到舊（⛔ 中間的 2 月不補
     [("2026-03", 1, 0, 0), ("2026-01", 2, 2, 6.0)])
 say(len(S._months(NOW, _fake)) == S.MONTHS_SHOWN,
     "  卡上那張月表還是固定 %d 個月（⛔ 內頁才給全部）" % S.MONTHS_SHOWN)
+
+
+# ══ ⑦c 點一天看圖（2026-09-18 Benson 交辦）═══════════════════════════════
+print("\n=== ⑦c 點一天看圖 ===")
+# ① 前端：只從 smDayOpen 打、⛔ 不借即時分頁那張圖
+say(sjs_code.count("/api/sim/daychart") == 1
+    and sjs_code.index("function smDayOpen") < sjs_code.index("/api/sim/daychart") < sjs_code.index("function smDayStep"),
+    "  那天的圖只由 smDayOpen 打（點下去才打）")
+chk("  ⛔ 不借即時分頁那張圖（真單在跑時它也在用）",
+    [w for w in ("paintChart", "chartSVG", "csvg", "barsCache", "viewDate") if w in sjs_code], [])
+say("ev.key==='Escape'" in sjs_code and "if(open) return smDayClose()" in sjs_code,
+    "  Esc 一次只退一層（先關圖、再關內頁）")
+say("smDayClose();" in sjs[sjs.index("function smDetClose"):sjs.index("function smBind")],
+    "  關掉內頁時，那天的圖一起收（⛔ 不准留一張孤兒浮層）")
+say('data-d="' in sjs and "tr[data-d]" in sjs, "  逐日每一列都帶日期、點得下去")
+# ② 後端：參數不對 ⇒ None（呼叫端回 400）
+say(S.day_chart("這條不存在", DAY) is None and S.day_chart("fast", "亂填") is None,
+    "  key 或日期不對 ⇒ None")
+say(S.day_chart("fast", DAY, rows={})["notes"] == ["這一天沒有這一條的定論"],
+    "  沒有定論的日子 ⇒ 講出來（⛔ 不是空白一張圖）")
+# ③ 用真的 fast_eval 算出一列，再畫 —— ⛔ 圖上的每個點都要對得回那一列（不准自己重算）
+_D_tp = base_day(12000, 12060, extra=[(ms(10, 0), 12100.0, 12099, 12101), (ms(10, 30), 12121.0, 12120, 12122)])
+_r_tp = S.fast_eval(DAY, _D_tp, H40)
+_old_load = SL.load_day
+try:
+    SL.load_day = lambda d: _D_tp
+    _c = S.day_chart("fast", DAY, rows={("fast", DAY): _r_tp})
+finally:
+    SL.load_day = _old_load
+_en = [m for m in _c["marks"] if m["kind"] == "entry"]
+_ex = [m for m in _c["marks"] if m["kind"] == "exit"]
+chk("  停利那天：進場標在規則的時刻、價格＝落地那一列",
+    (_en[0]["at"], _en[0]["price"]) if _en else None, (S.FAST_PX_AT, _r_tp["entry"]))
+chk("  停利那天：出場時刻從逐筆找回來＝第一筆碰到停利價的那一筆（10:30:00）",
+    (_ex[0]["at"], _ex[0]["price"]) if _ex else None, ("10:30:00", _r_tp["exit"]))
+say(any("從逐筆找回來" in n for n in _c["notes"]), "  畫面上講清楚「出場時刻是找回來的」")
+chk("  停利停損兩條線 ＝ 進場價 ± 落地那一列的 tpsl_points",
+    sorted((l["label"], l["price"]) for l in _c["lines"] if l["style"] in ("tp", "sl")),
+    sorted([("停利", _r_tp["entry"] + _r_tp["tpsl_points"]), ("停損", _r_tp["entry"] - _r_tp["tpsl_points"])]))
+say(len(_c["bars"]) > 0 and _c["bars"][0][0] <= "08:46", "  畫得出 1 分 K（從 08:45 那一分鐘開始）")
+# ④ 找不到出場的那一筆 ⇒ ⛔ 不猜時間
+_r_bad = dict(_r_tp, exit=99999.0)
+try:
+    SL.load_day = lambda d: _D_tp
+    _c2 = S.day_chart("fast", DAY, rows={("fast", DAY): _r_bad})
+finally:
+    SL.load_day = _old_load
+_ex2 = [m for m in _c2["marks"] if m["kind"] == "exit"]
+say(_ex2 and _ex2[0]["at"] is None and any("重建不出來" in n for n in _c2["notes"]),
+    "  出場價從來沒被碰到 ⇒ 時刻給 None ＋ 講出來（⛔ 不猜一個時間）")
+# ⑤ 同一個價位的線併成一條（開箱的停損就是箱底）
+chk("  同價位的線併成一條「箱底＝停損」、顏色用停損的",
+    S._merge_lines([{"price": 100.0, "label": "箱底", "style": "box"},
+                    {"price": 100.0, "label": "停損", "style": "sl"}]),
+    [{"price": 100.0, "label": "箱底＝停損", "style": "sl"}])
 
 
 

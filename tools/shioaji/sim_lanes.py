@@ -1561,3 +1561,219 @@ def lane_detail(key, now=None):
                       "backfill": sum(1 for r in lr if r.get("calc") == "backfill"),
                       "d0": lr[-1]["date"] if lr else None, "d1": lr[0]["date"] if lr else None},
             "file": dict(st, eq_ok=st["lines"] == st["ok"] + st["bad"] + st["dup"] + st["blank"])}
+
+
+# ══ 點一天看圖（2026-09-18 加）═══════════════════════════════════════════
+#
+# ⭐ Benson 要「點歷史紀錄的某一天 ⇒ 跳出當天的圖、標出哪裡進哪裡出」。
+# ⛔⛔ **這裡一行規則都不重算**：進場時刻、進場價、出場價、出場原因全部讀**落地那一列**（定論），
+#    ⛔ 不准在這裡再跑一次 fast_eval／orb_eval 去「算出來」——那等於第二把尺，兩邊會分岔。
+# ⚠️ 唯一要補的是**停利／停損的出場時刻**（定論只存了出場**價格**）⇒ 從逐筆找
+#    「進場之後、收盤之前，**第一筆**碰到那個出場價的成交」。這是**查表**不是重算規則：
+#    停損那一筆本來就是 run_bracket 挑出來的「第一筆 ≤ 停損價」，停利是「第一筆 ≥ 停利價」。
+#    ⛔ 找不到就回 None ＋ 講出來，**不猜**（跟這個專案「資料不完整時不可以猜」同一條）。
+
+_DAY_FROM_MS, _DAY_TO_MS = SL.ms(8, 45, 0), SL.ms(13, 45, 0)
+
+
+def _hms_to_ms(s):
+    """'09:03:30' ⇒ 當日毫秒；格式不對回 None（⛔ 不猜）"""
+    try:
+        p = [int(x) for x in str(s).split(":")]
+        if len(p) == 2:
+            p.append(0)
+        return SL.ms(p[0], p[1], p[2]) if len(p) == 3 else None
+    except Exception:
+        return None
+
+
+def _entry_at(key, r):
+    """落地那一列的**進場時刻**（字面）。⛔ 全部來自那一列或常數，不重算。"""
+    why = r.get("why")
+    if key in ("orb", "union"):
+        return r.get("at")
+    if key in ("hmq", "rev") and why == "rev":
+        return r.get("rev_at")
+    if key in ("fast", "fast11", "hmq") and why == "fast":
+        return FAST_PX_AT
+    return None
+
+
+def _min_bars(D, t0, t1):
+    """逐筆 ⇒ 1 分 K（標籤＝**這一分鐘開始的時刻**，給人看的；⛔ 跟 tmf_1min.csv 的『結束時間』不同）"""
+    t, p = D["t"], D["p"]
+    lo, hi = int(np.searchsorted(t, t0, side="left")), int(np.searchsorted(t, t1, side="right"))
+    if hi <= lo:
+        return []
+    b = (t[lo:hi] // 60000).astype(np.int64)
+    pp = p[lo:hi]
+    out = []
+    cuts = np.nonzero(np.diff(b))[0] + 1
+    for seg_b, seg_p in zip(np.split(b, cuts), np.split(pp, cuts)):
+        m = int(seg_b[0])
+        out.append(["%02d:%02d" % (m // 60, m % 60), float(seg_p[0]), float(seg_p.max()),
+                    float(seg_p.min()), float(seg_p[-1])])
+    return out
+
+
+def _find_exit(D, i0, d, px, reason, cut_ms):
+    """停利／停損的出場時刻：進場後、收盤前，第一筆碰到出場價的成交。找不到回 None。"""
+    t, p = D["t"], D["p"]
+    j1 = int(np.searchsorted(t, cut_ms, side="right"))
+    seg = p[i0 + 1:j1]
+    if not len(seg):
+        return None
+    if reason == "停利":
+        hit = (seg >= px) if d > 0 else (seg <= px)
+    else:                                   # 停損：run_bracket 挑的就是「第一筆 ≤（多）停損價」
+        hit = (seg <= px) if d > 0 else (seg >= px)
+    k = np.nonzero(hit)[0]
+    return None if not len(k) else i0 + 1 + int(k[0])
+
+
+def day_chart(key, day, rows=None):
+    """
+    ⭐ GET /api/sim/daychart?key=&date= 的內容：那一天的 1 分 K ＋ 進出場標記 ＋ 參考線。
+    ⛔ 唯讀：只讀 sim_lanes/ 與逐筆／本機 1 分 K，不抓資料、不寫檔。
+    回 None ＝ 不認得的 key（呼叫端回 400）；其他問題一律回 ok=True ＋ `notes` 講清楚，⛔ 不丟例外給畫面。
+    """
+    if key not in LANES or not _DATE_RE.match(str(day or "")):
+        return None
+    if rows is None:
+        rows, _st = read_rows()
+    r = rows.get((key, day))
+    out = {"ok": True, "key": key, "name": LANE_NAME[key], "date": day, "session": "night" if key == "night" else "day",
+           "bars": [], "marks": [], "lines": [], "zones": [], "notes": []}
+    if r is None:
+        out["notes"].append("這一天沒有這一條的定論")
+        return out
+    out.update({k: r.get(k) for k in ("decision", "reason", "points", "exit_reason", "calc")})
+    if key == "night":
+        return _night_chart(out, r)
+    try:
+        D = SL.load_day(day)
+    except Exception as e:
+        D = None
+        out["notes"].append("讀不到那天的逐筆：%s" % str(e)[:80])
+    if D is None:
+        out["notes"].append("沒有那天的逐筆資料 ⇒ 畫不出圖")
+        return out
+    out["bars"] = _min_bars(D, _DAY_FROM_MS, _DAY_TO_MS)
+
+    # ── 參考線／區塊（⛔ 全部讀落地那一列，不重算）
+    pick = r.get("pick") if key == "union" else key
+    if key in ("fast", "fast11", "hmq", "rev") or pick in ("fast", "rev"):
+        if r.get("ref") is not None:
+            out["lines"].append({"price": r["ref"], "label": "%s 參考價" % FAST_REF_AT, "style": "ref"})
+    box = r if key == "orb" else (rows.get(("orb", day)) if pick == "orb" else None)
+    if box and box.get("box_hi") is not None and box.get("box_lo") is not None:
+        out["lines"] += [{"price": box["box_hi"], "label": "箱頂", "style": "box"},
+                         {"price": box["box_lo"], "label": "箱底", "style": "box"}]
+        out["zones"].append({"from": ORB_BOX_AT.split("~")[0], "to": ORB_BOX_AT.split("~")[1], "label": "箱子"})
+
+    if r["decision"] == "不做":
+        return out
+
+    # ── 進場
+    d = 1 if r["decision"] == "做多" else -1
+    at = _entry_at(key, r)
+    at_ms = _hms_to_ms(at) if at else None
+    if at_ms is None:
+        out["notes"].append("落地那一列沒有進場時刻 ⇒ 只能標價格、標不了時間")
+        return out
+    i0 = int(np.searchsorted(D["t"], at_ms + 999, side="right")) - 1
+    if i0 < 0:
+        out["notes"].append("進場時刻之前沒有成交 ⇒ 標不上")
+        return out
+    out["marks"].append({"kind": "entry", "at": at, "price": r["entry"], "dir": d,
+                         "label": "%s進場 %s" % (r["decision"], _px(r["entry"]))})
+
+    # ── 停利停損線（有的才畫；開箱不設停利）
+    tp = r.get("tpsl_points")
+    if tp:
+        out["lines"] += [{"price": round(r["entry"] + d * tp, 1), "label": "停利", "style": "tp"},
+                         {"price": round(r["entry"] - d * tp, 1), "label": "停損", "style": "sl"}]
+    elif r.get("sl_points"):
+        out["lines"].append({"price": round(r["entry"] - d * r["sl_points"], 1), "label": "停損", "style": "sl"})
+
+    # ── 出場
+    cut = r.get("cutoff")
+    cut_ms = _hms_to_ms(cut) if cut else _DAY_TO_MS
+    ex_at = None
+    if r.get("exit_reason") == "收盤":
+        ex_at = cut
+    elif r.get("exit_reason") in ("停利", "停損") and r.get("exit") is not None:
+        j = _find_exit(D, i0, d, float(r["exit"]), r["exit_reason"], cut_ms or _DAY_TO_MS)
+        if j is None:
+            out["notes"].append("出場時刻從逐筆重建不出來（找不到碰到 %s 的成交）⇒ 只標價格" % _px(r["exit"]))
+        else:
+            ex_at = _hms_ms(int(D["t"][j]))
+            out["notes"].append("出場時刻是從逐筆找回來的：%s 第一筆碰到 %s 的成交" % (ex_at, _px(r["exit"])))
+    out["marks"].append({"kind": "exit", "at": ex_at, "price": r.get("exit"), "dir": d,
+                         "label": "%s %s" % (r.get("exit_reason") or "出場", _px(r.get("exit")))})
+    out["lines"] = _merge_lines(out["lines"])
+    return out
+
+
+def _merge_lines(lines):
+    """同一個價位的參考線併成一條（例：開箱的停損就是箱底 ⇒ 畫一條「箱底＝停損」，⛔ 不畫兩條疊在一起）"""
+    by = {}
+    for ln in lines:
+        k = round(float(ln["price"]), 1)
+        if k in by:
+            by[k]["label"] += "＝" + ln["label"]
+            if ln["style"] in ("sl", "tp"):          # 停利停損的顏色優先（那是跟錢有關的線）
+                by[k]["style"] = ln["style"]
+        else:
+            by[k] = dict(ln)
+    return list(by.values())
+
+
+def _night_chart(out, r):
+    """夜盤那一條：用本機 1 分 K（⚠️ 標籤是**結束時間**，畫面上換成開始時間）"""
+    try:
+        E = date.fromisoformat(out["date"])
+        # ⭐ 先拿面板背景跟永豐補齊的那一份（`_NIGHT_API` 只放**到齊的**晚上），沒有才用本機 csv ——
+        #    本機 csv 常常只有前半夜（排程沒跑、或 csv 還沒追到隔天凌晨），先讀它會畫到 23:58 就斷掉。
+        bars = _NIGHT_API.get(E)
+        if bars is None or not len(bars):
+            local, _day_e, _lo, _hi = night_bars_local(E, E - timedelta(days=3))
+            bars = local
+    except Exception as e:
+        bars = None
+        out["notes"].append("讀不到那晚的 1 分 K：%s" % str(e)[:80])
+    if bars is None or not len(bars):
+        out["notes"].append("沒有那一晚的 1 分 K ⇒ 畫不出圖")
+        return out
+    ts = pd.to_datetime(bars["ts"])
+    E1 = E + timedelta(days=1)
+    keep = [((t.date() == E and t.hour >= 15) or (t.date() == E1 and t.hour < 5)) for t in ts]
+    b = bars[keep]
+    # ⚠️ 本機 1 分 K 這一份**沒有讀開盤價**（`_csv_bars` 只留 ts／High／Low／Close）
+    #    ⇒ 開盤價用**前一根的收盤價**代替（缺開盤價時的標準畫法，K 棒才連得起來）。
+    #    ⛔ 不可以拿「這一根的收盤」當開盤 —— 那會讓每根 K 棒都變成一條橫線。
+    prev = None
+    for tt, hh, ll, cc in zip(pd.to_datetime(b["ts"]), b["High"], b["Low"], b["Close"]):
+        st = tt - timedelta(minutes=1)                    # 結束時間 ⇒ 開始時間
+        o = float(cc) if prev is None else prev
+        out["bars"].append(["%02d:%02d" % (st.hour, st.minute), o, float(hh), float(ll), float(cc)])
+        prev = float(cc)
+    # ⛔ 畫不到出場那一刻要講出來（不然圖上「出場」標記會飄在圖外，看起來像壞掉）
+    if out["bars"] and not any(x[0] < "05:00" for x in out["bars"]):
+        out["notes"].append("⚠️ 這一晚的 1 分 K 只到 %s（凌晨那段還沒有資料）⇒ 出場那一刻畫不到" % out["bars"][-1][0])
+    if r.get("ref") is not None:
+        out["lines"].append({"price": r["ref"], "label": "美股開盤 %s" % (r.get("ref_label") or ""), "style": "ref"})
+    if r["decision"] == "不做":
+        return out
+    d = 1 if r["decision"] == "做多" else -1
+    out["marks"].append({"kind": "entry", "at": r.get("c_label"), "price": r["entry"], "dir": d,
+                         "label": "%s進場 %s" % (r["decision"], _px(r["entry"]))})
+    tp = r.get("tpsl_points")
+    if tp:
+        out["lines"] += [{"price": round(r["entry"] + d * tp, 1), "label": "停利", "style": "tp"},
+                         {"price": round(r["entry"] - d * tp, 1), "label": "停損", "style": "sl"}]
+    out["marks"].append({"kind": "exit", "at": r.get("exit_label"), "price": r.get("exit"), "dir": d,
+                         "label": "%s %s" % (r.get("exit_reason") or "出場", _px(r.get("exit")))})
+    out["notes"].append("夜盤用 1 分 K 近似（開盤價用前一根收盤代替；⚠️ 看不到一分鐘之內的走法）")
+    out["lines"] = _merge_lines(out["lines"])
+    return out

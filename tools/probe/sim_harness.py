@@ -42,13 +42,35 @@ AF.FAST_HIST = TMP / "af_fast_hist.jsonl"
 WIRED = S.configure(AF.fast_verdict, AF.move_pct, AF.tpsl_points, AF.hist_read,
                     LP.FAST_PCTL, AF.FAST_RULE, reversal_fn=AF.reversal_dir, rev_sec=LP.REV_SEC)
 
+# ══ ⭐ --real N（2026-09-18 加）：把**真的**資料**複製一份**到暫存區再開 ═════════════════
+#    「點一天看圖」要逐筆才畫得出來，捏造的定論沒有對應的逐筆 ⇒ 用真的看版面。
+#    ⛔ **只複製進暫存區**（上面那些常數早就全部導走了）：來源是唯讀的 shutil.copy2，
+#       這支治具**一個位元組都不會寫回 tools/shioaji/**，承諾不變。N＝最近幾個交易日的逐筆。
+REAL = "--real" in sys.argv
+NOW = datetime.now()
+S.SIM_DIR.mkdir(parents=True, exist_ok=True)
+if REAL:
+    import shutil
+    _n = int(sys.argv[sys.argv.index("--real") + 1]) if len(sys.argv) > sys.argv.index("--real") + 1 \
+        and sys.argv[sys.argv.index("--real") + 1].isdigit() else 40
+    for f in (HERE / "sim_lanes").glob("*.jsonl"):
+        shutil.copy2(f, S.SIM_DIR / f.name)
+    (TMP / "tick_hist" / "ticks").mkdir(parents=True, exist_ok=True)
+    (TMP / "tick_hist" / "cache").mkdir(parents=True, exist_ok=True)
+    for f in sorted((HERE / "tick_hist" / "ticks").glob("*.csv.gz"))[-_n:]:
+        shutil.copy2(f, TMP / "tick_hist" / "ticks" / f.name)
+        c = HERE / "tick_hist" / "cache" / (f.name[:10] + ".npz")
+        if c.exists():
+            shutil.copy2(c, TMP / "tick_hist" / "cache" / c.name)
+    if (HERE / "tmf_1min.csv").exists():
+        shutil.copy2(HERE / "tmf_1min.csv", S.MIN1_CSV)
+    print("--real：複製了 sim_lanes 定論＋最近 %d 天逐筆＋tmf_1min.csv 到暫存區（⛔ 唯讀來源）" % _n, flush=True)
+
 # ══ 捏造的定論（價格一律 12000 附近，⛔ 不撞他的真實紀錄）════════════════════
 # ⭐ 2026-09-17：造 `DAYS` 個交易日（跨二十幾個月）—— 內頁那張月表與逐日清單要有東西才看得出版面。
 #    ⚠️ 最近 10 個平日以外的那些標 `calc="backfill"`，跟真的一樣（畫面要分得出回填與即時）。
-NOW = datetime.now()
-S.SIM_DIR.mkdir(parents=True, exist_ok=True)
 _d0 = NOW.date()
-DAYS = 160                      # ⚠️ 再多就只是拖慢治具啟動（append_row 每次都重讀整個資料夾）
+DAYS = 0 if REAL else 160      # ⚠️ --real 就不捏造（用複製過來的真定論）
 _LIVE_N = 10                    # 最近這麼多個平日當成「面板即時算的」
 for _li, _lane in enumerate(S.LANES):
     _k, _made = 1, 0
@@ -95,6 +117,14 @@ class H(BaseHTTPRequestHandler):
         if self.path.startswith("/api/sim/state"):
             return self._send(200, json.dumps(S.state(datetime.now()), ensure_ascii=False),
                               "application/json; charset=utf-8")
+        # ⭐ 點一天看圖（2026-09-18 加）。⛔ 跟面板同一支 `day_chart`、同樣的 400 規則。
+        if self.path.startswith("/api/sim/daychart"):
+            from urllib.parse import parse_qs
+            q = parse_qs(self.path.partition("?")[2])
+            out = S.day_chart((q.get("key") or [""])[0], (q.get("date") or [""])[0])
+            if out is None:
+                return self._send(400, '{"ok":false,"msg":"參數不對"}', "application/json; charset=utf-8")
+            return self._send(200, json.dumps(out, ensure_ascii=False), "application/json; charset=utf-8")
         # ⭐ 點進去一條策略的內頁（2026-09-17 加）。⛔ 跟面板同一支 `lane_detail`，
         #    連「不認得的 key ⇒ 400」都照做 —— 治具跟真的不一樣就驗不到東西。
         if self.path.startswith("/api/sim/lane"):

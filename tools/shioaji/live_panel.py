@@ -5449,6 +5449,32 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .sm-m.hit:focus-visible{outline:2px solid var(--gold-line); outline-offset:1px}
 .sm-m.on{box-shadow:inset 3px 0 0 var(--gold)}
 .sm-tbl tr.hl td{background:var(--gold-soft)}
+/* ⭐ 點一天看圖（2026-09-18）：逐日紀錄每一列都點得下去 ⇒ 跳出那天的 1 分 K ＋ 進出場 */
+.sm-tbl tbody tr[data-d]{cursor:pointer}
+.sm-tbl tbody tr[data-d]:hover td{background:var(--raise)}
+.sm-tbl tbody tr.cur td{background:var(--surface-2); box-shadow:inset 0 -1px 0 var(--gold-line)}
+/* ⚠️ 靠上對齊、⛔ 不要垂直置中：每天內容高度不同（沒交易的日子沒有圖例／說明），
+   置中的話整個浮層會上下跳 ⇒ 連點「後一天」第二下就點空（2026-09-18 實測踩到）。 */
+.sm-day{position:fixed; inset:0; z-index:80; background:rgba(8,10,14,.72);
+  display:flex; align-items:flex-start; justify-content:center; padding:4vh 24px 24px}
+.sm-day[hidden]{display:none}
+.sm-dbox{width:min(1180px,100%); max-height:100%; overflow:auto; background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px 14px}
+.sm-dtop{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.sm-dtop h3{margin:0; font-size:17px; font-weight:650; color:var(--text)}
+.sm-dtop .k{font-weight:650} .sm-dtop .k.none{color:var(--faint); font-weight:500}
+.sm-dtop .p{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:16px}
+.sm-dtop .sp{flex:1}
+.sm-nav{font-size:12px; color:var(--dim); border:1px solid var(--line); border-radius:var(--r-sm);
+  padding:5px 10px; cursor:pointer; user-select:none}
+.sm-nav:hover{background:var(--surface-2); color:var(--text)}
+.sm-nav.off{opacity:.35; pointer-events:none}
+.sm-dwhy{font-size:12.5px; color:var(--dim); line-height:1.6; margin:8px 0 10px}
+.sm-dchart{border:1px solid var(--line-soft); border-radius:var(--r-md); background:var(--bg)}
+.sm-dchart svg{display:block; width:100%; height:auto}
+.sm-dleg{display:flex; flex-wrap:wrap; gap:6px 16px; font-size:11.5px; color:var(--dim); margin-top:9px}
+.sm-dleg i{display:inline-block; width:14px; height:0; border-top:2px solid; vertical-align:middle; margin-right:5px}
+.sm-dnote{font-size:11px; color:var(--faint); margin-top:6px; line-height:1.55}
 .lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
 @media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
 .lb-mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
@@ -5641,6 +5667,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="sm-foot" id="smfoot"></div>
  </div>
  <div class="card sm-card" id="smdet" hidden></div>
+ <div class="sm-day" id="smday" hidden></div>
 </div>
 
 <!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
@@ -7726,8 +7753,9 @@ function smLane(L){
    ⚠️ 「回填」與「即時」要看得出來：`calc` 有值＝事後重算的，沒有＝面板當天即時算的。 */
 function smDetRow(r){
   const trade=r.decision==='做多'||r.decision==='做空';
-  // data-m ＝這一列屬於哪個月（月表點下去要靠它找到第一列）
-  return '<tr data-m="'+esc(String(r.date||'').slice(0,7))+'"><td class="d">'+smDayY(r.date)+'</td>'
+  // data-m ＝這一列屬於哪個月（月表點下去要靠它找到第一列）；data-d ＝ 哪一天（點下去看那天的圖）
+  return '<tr data-m="'+esc(String(r.date||'').slice(0,7))+'" data-d="'+esc(String(r.date||''))+'">'
+    +'<td class="d">'+smDayY(r.date)+'</td>'
     +'<td class="k '+(trade?(r.decision==='做多'?'up':'down'):'none')+'">'+esc(r.decision)+'</td>'
     +'<td class="x">'+(trade?smPx(r.entry)+' → '+smPx(r.exit)+'（'+esc(r.exit_reason||'')+'）':'')+'</td>'
     +'<td class="p '+(trade?smCls(r.points):'')+'">'+(trade?smPts(r.points):'')+'</td>'
@@ -7750,7 +7778,7 @@ function smDetPaint(d){
     +(t.backfill?'　（其中 '+t.backfill+' 天是回填 —— 事後用同一份規則、同一份逐筆重算的；'
       +'其餘是面板當天即時算的）':'')+'</div>';
   h+='<div class="sm-cols"><div><div class="sm-mh">每月累計點數</div>'+smMonths(d.months,true)+'</div>'
-    +'<div><div class="sm-mh">逐日紀錄（'+(d.rows||[]).length+' 天，新到舊）</div>'
+    +'<div><div class="sm-mh">逐日紀錄（'+(d.rows||[]).length+' 天，新到舊．點一列看那天的圖）</div>'
     +'<div class="sm-scroll"><table class="sm-tbl"><thead><tr><th>日期</th><th>判斷</th>'
     +'<th>進 → 出</th><th>點數</th><th>說明</th><th>怎麼算的</th></tr></thead><tbody>'
     +((d.rows||[]).map(smDetRow).join('')||'<tr><td colspan="6" class="why">還沒有算好的日子</td></tr>')
@@ -7777,6 +7805,116 @@ function smJump(m){
   dt.querySelectorAll('.sm-tbl tbody tr.hl').forEach(e=>e.classList.remove('hl'));
   dt.querySelectorAll('.sm-tbl tbody tr[data-m="'+m+'"]').forEach(e=>e.classList.add('hl'));
 }
+/* ── 點一天看圖（2026-09-18）────────────────────────────────────────
+   ⛔ 只打 GET /api/sim/daychart?key=&date=（唯讀、點下去才打）。
+   ⛔ 圖是**自己畫的獨立小圖**，⛔ 不借即時分頁那張（#csvg／paintChart）：那張綁著縮放拖曳、月曆，
+      而且真單在跑的時候它也在用 —— 借來借去最容易把正在交易的那張弄壞。
+   ⛔ 進出場時刻、價格、參考線全部**後端給**；這裡一個時刻都不寫死（前端只負責把它們畫上去）。
+   ⚠️ 出場時刻找不到（後端給 null）⇒ 只畫水平的出場價，⛔ 不猜一個時間。 */
+var SMD={seq:0,list:[],i:-1};
+function smDayClose(){
+  SMD.seq++; SMD.i=-1;
+  const e=document.getElementById('smday'); if(e){ e.hidden=true; e._smh=null; e.innerHTML=''; }
+  document.querySelectorAll('#smdet .sm-tbl tbody tr.cur').forEach(x=>x.classList.remove('cur'));
+}
+function smDayOpen(day){
+  if(!SM.det||!/^\d{4}-\d{2}-\d{2}$/.test(day||'')) return;
+  const rows=[...document.querySelectorAll('#smdet .sm-tbl tbody tr[data-d]')];
+  SMD.list=rows.map(x=>x.getAttribute('data-d'));
+  SMD.i=SMD.list.indexOf(day);
+  rows.forEach(x=>x.classList.toggle('cur',x.getAttribute('data-d')===day));
+  const e=document.getElementById('smday'); if(!e) return;
+  e.hidden=false;
+  smSet('smday','<div class="sm-dbox"><div class="sm-empty">讀取 '+esc(day)+' 的圖…</div></div>');
+  const my=++SMD.seq, k=SM.det;
+  fetch('/api/sim/daychart?key='+encodeURIComponent(k)+'&date='+encodeURIComponent(day),{cache:'no-store'})
+    .then(r=>r.json().catch(()=>({})).then(b=>({s:r.status,b}))).then(({s,b})=>{
+      if(my!==SMD.seq) return;
+      if(s!==200||!b||!b.ok){ smSet('smday','<div class="sm-dbox">'+smDayHead(day,null)
+        +'<div class="sm-empty">'+esc((b&&b.msg)||('讀不到那天的圖（'+s+'）'))+'</div></div>'); return; }
+      smSet('smday','<div class="sm-dbox">'+smDayHead(day,b)+smDayChart(b)+'</div>');
+    }).catch(()=>{ if(my!==SMD.seq) return;
+      smSet('smday','<div class="sm-dbox">'+smDayHead(day,null)+'<div class="sm-empty">讀不到那天的圖（連不到面板）</div></div>'); });
+}
+function smDayStep(dir){
+  // 清單是新到舊 ⇒ 「前一天」＝ 往下一列（index +1）
+  const j=SMD.i+(dir<0?1:-1);
+  if(j>=0&&j<SMD.list.length) smDayOpen(SMD.list[j]);
+}
+function smDayHead(day,b){
+  const prevOk=SMD.i<SMD.list.length-1, nextOk=SMD.i>0;
+  const trade=b&&(b.decision==='做多'||b.decision==='做空');
+  let h='<div class="sm-dtop">'
+    +'<span class="sm-nav'+(prevOk?'':' off')+'" role="button" tabindex="0" data-nav="-1">← 前一天</span>'
+    +'<h3>'+smDayY(day)+(b?'　'+esc(b.name||''):'')+'</h3>';
+  if(b) h+='<span class="k '+(trade?(b.decision==='做多'?'up':'down'):'none')+'">'+esc(b.decision||'')+'</span>'
+    +(trade?'<span class="p '+smCls(b.points)+'">'+smPts(b.points)+' 點</span>':'')
+    +(b.calc?'<small class="src bf">回填</small>':'');
+  h+='<span class="sp"></span>'
+    +'<span class="sm-nav'+(nextOk?'':' off')+'" role="button" tabindex="0" data-nav="1">後一天 →</span>'
+    +'<span class="sm-nav" role="button" tabindex="0" data-nav="0">✕ 關閉</span></div>';
+  if(b&&b.reason) h+='<div class="sm-dwhy">'+esc(b.reason)+'</div>';
+  return h;
+}
+function smDayChart(b){
+  const bars=b.bars||[];
+  if(!bars.length) return '<div class="sm-empty">畫不出圖</div>'+smDayNotes(b);
+  const W=1100,H=440,L=10,R=128,T=14,B=30,pw=W-L-R,ph=H-T-B;
+  // y 範圍：K 棒 ＋ 參考線 ＋ 進出場價，全部塞得下
+  let lo=Infinity,hi=-Infinity;
+  bars.forEach(x=>{ lo=Math.min(lo,x[3]); hi=Math.max(hi,x[2]); });
+  (b.lines||[]).concat(b.marks||[]).forEach(x=>{ if(x.price!=null){ lo=Math.min(lo,x.price); hi=Math.max(hi,x.price); } });
+  const pad=(hi-lo)*0.06||10; lo-=pad; hi+=pad;
+  const n=bars.length, cw=pw/n;
+  const X=i=>L+cw*(i+0.5), Y=p=>T+ph*(hi-p)/(hi-lo);
+  const at=s=>{ if(!s) return -1; const m=String(s).slice(0,5); return bars.findIndex(x=>x[0]===m); };
+  let s='<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">';
+  // 區塊（開箱的箱子那 5 分鐘）
+  (b.zones||[]).forEach(z=>{ const a=at(z.from), c=at(z.to); if(a<0||c<0) return;
+    s+='<rect x="'+(L+cw*a)+'" y="'+T+'" width="'+(cw*(c-a+1))+'" height="'+ph+'" fill="var(--gold-soft)"/>'
+      +'<text x="'+(L+cw*a+3)+'" y="'+(T+12)+'" font-size="11" fill="var(--gold)">'+esc(z.label)+'</text>'; });
+  // 價格格線（5 條）
+  for(let k=0;k<=4;k++){ const p=lo+(hi-lo)*k/4, y=Y(p);
+    s+='<line x1="'+L+'" x2="'+(L+pw)+'" y1="'+y+'" y2="'+y+'" stroke="var(--line-soft)"/>'
+      +'<text x="'+(L+pw+R-6)+'" y="'+(y+4)+'" font-size="10.5" text-anchor="end" fill="var(--ghost)">'+smPx(Math.round(p))+'</text>'; }
+  // 時間刻度：大約 8 個
+  const step=Math.max(1,Math.round(n/8));
+  for(let i=0;i<n;i+=step) s+='<text x="'+X(i)+'" y="'+(H-10)+'" font-size="10.5" text-anchor="middle" fill="var(--faint)">'+esc(bars[i][0])+'</text>';
+  // K 棒（台股：紅漲綠跌）
+  bars.forEach((x,i)=>{ const up=x[4]>=x[1], col=up?'var(--up)':'var(--down)';
+    const yo=Y(x[1]), yc=Y(x[4]), bw=Math.max(1,cw*0.62);
+    s+='<line x1="'+X(i)+'" x2="'+X(i)+'" y1="'+Y(x[2])+'" y2="'+Y(x[3])+'" stroke="'+col+'" stroke-width="1"/>'
+      +'<rect x="'+(X(i)-bw/2)+'" y="'+Math.min(yo,yc)+'" width="'+bw+'" height="'+Math.max(1,Math.abs(yc-yo))+'" fill="'+col+'"/>'; });
+  // 參考線（停利／停損／箱子／參考價）
+  const LC={tp:'var(--gold)',sl:'var(--dim)',box:'var(--ghost)',ref:'var(--faint)'};
+  (b.lines||[]).forEach(ln=>{ const y=Y(ln.price), c=LC[ln.style]||'var(--dim)';
+    s+='<line x1="'+L+'" x2="'+(L+pw)+'" y1="'+y+'" y2="'+y+'" stroke="'+c+'" stroke-width="1.3" stroke-dasharray="6 4"/>'
+      +'<text x="'+(L+pw+6)+'" y="'+(y-3)+'" font-size="11" fill="'+c+'">'+esc(ln.label)+'</text>'
+      +'<text x="'+(L+pw+6)+'" y="'+(y+10)+'" font-size="10" fill="'+c+'">'+smPx(ln.price)+'</text>'; });
+  // 進出場
+  const ms=b.marks||[], en=ms.find(m=>m.kind==='entry'), ex=ms.find(m=>m.kind==='exit');
+  const ie=en?at(en.at):-1, ix=ex?at(ex.at):-1;
+  if(ie>=0&&ix>=0&&en.price!=null&&ex.price!=null)
+    s+='<line x1="'+X(ie)+'" x2="'+X(ix)+'" y1="'+Y(en.price)+'" y2="'+Y(ex.price)+'" stroke="var(--text)" stroke-width="1.2" stroke-dasharray="2 3" opacity=".7"/>';
+  if(en&&ie>=0){ const x=X(ie), y=Y(en.price), d=en.dir||1, tip=d>0?y+4:y-4, base=d>0?y+16:y-16;
+    s+='<polygon points="'+x+','+tip+' '+(x-7)+','+base+' '+(x+7)+','+base+'" fill="var(--gold)" stroke="var(--bg)" stroke-width="1"/>'
+      +'<text x="'+(x+10)+'" y="'+(d>0?base+4:base+2)+'" font-size="12" font-weight="650" fill="var(--gold)">'+esc(en.label)+'（'+esc(en.at)+'）</text>'; }
+  if(ex&&ix>=0&&ex.price!=null){ const x=X(ix), y=Y(ex.price), c=(b.points||0)>=0?'var(--up)':'var(--down)';
+    s+='<circle cx="'+x+'" cy="'+y+'" r="6" fill="var(--bg)" stroke="'+c+'" stroke-width="2.4"/>'
+      +'<text x="'+(x-10)+'" y="'+(y-10)+'" font-size="12" font-weight="650" text-anchor="end" fill="'+c+'">'+esc(ex.label)+'（'+esc(ex.at)+'）</text>'; }
+  else if(ex&&ex.price!=null){   // ⛔ 出場時刻找不到 ⇒ 只畫價格，不猜時間
+    s+='<text x="'+(L+pw-4)+'" y="'+(Y(ex.price)-5)+'" font-size="11.5" text-anchor="end" fill="var(--dim)">'+esc(ex.label)+'（時刻不明）</text>'; }
+  s+='</svg>';
+  let leg='<div class="sm-dleg">';
+  if(en) leg+='<span><b style="color:var(--gold)">▲</b> 進場</span>';
+  if(ex) leg+='<span><b style="color:var(--up)">○</b> 出場（紅＝賺、綠＝賠）</span>';
+  (b.lines||[]).forEach(ln=>{ leg+='<span><i style="border-color:'+(LC[ln.style]||'var(--dim)')+'"></i>'+esc(ln.label)+'</span>'; });
+  if((b.zones||[]).length) leg+='<span><i style="border-color:var(--gold-soft);border-top-width:8px"></i>箱子的時段</span>';
+  return '<div class="sm-dchart">'+s+'</div>'+leg+'</div>'+smDayNotes(b);
+}
+function smDayNotes(b){
+  return (b&&b.notes&&b.notes.length)?'<div class="sm-dnote">'+b.notes.map(esc).join('<br>')+'</div>':'';
+}
 function smDetOpen(k){
   if(!k) return;
   SM.det=k;
@@ -7796,6 +7934,7 @@ function smDetOpen(k){
       SM.err='模擬紀錄讀取失敗（連不到面板）'; smDetPaint(null); });
 }
 function smDetClose(){
+  smDayClose();                         // 那天的圖是掛在這一條底下的 ⇒ 一起收
   SM.det=''; SM.dseq++;                 // ⛔ 流水號往前推：還在路上的那個回應回來時不准再畫
   const c=document.getElementById('smcard'), e=document.getElementById('smdet');
   if(e){ e.hidden=true; e._smh=null; }
@@ -7817,7 +7956,8 @@ function smBind(){
   if(dt){
     dt.addEventListener('click',ev=>{
       if(ev.target.closest('.sm-back')) return smDetClose();
-      const m=ev.target.closest('.sm-m[data-m]'); if(m) smJump(m.getAttribute('data-m'));
+      const m=ev.target.closest('.sm-m[data-m]'); if(m) return smJump(m.getAttribute('data-m'));
+      const tr=ev.target.closest('tr[data-d]'); if(tr) smDayOpen(tr.getAttribute('data-d'));
     });
     dt.addEventListener('keydown',ev=>{
       if(ev.key!=='Enter'&&ev.key!==' ') return;
@@ -7825,7 +7965,24 @@ function smBind(){
       const m=ev.target.closest('.sm-m[data-m]'); if(m){ ev.preventDefault(); smJump(m.getAttribute('data-m')); }
     });
   }
-  document.addEventListener('keydown',ev=>{ if(ev.key==='Escape'&&SM.det) smDetClose(); });
+  const dy=document.getElementById('smday');
+  if(dy){
+    dy.addEventListener('click',ev=>{
+      const nv=ev.target.closest('[data-nav]');
+      if(nv){ const v=+nv.getAttribute('data-nav'); return v===0?smDayClose():smDayStep(v); }
+      if(ev.target===dy) smDayClose();          // 點到灰色背景 ⇒ 關掉
+    });
+    dy.addEventListener('keydown',ev=>{ if(ev.key!=='Enter'&&ev.key!==' ') return;
+      const nv=ev.target.closest('[data-nav]'); if(!nv) return;
+      ev.preventDefault(); const v=+nv.getAttribute('data-nav'); v===0?smDayClose():smDayStep(v); });
+  }
+  // ⭐ Esc 一次只退一層：先關「那天的圖」，再關「那一條的內頁」
+  document.addEventListener('keydown',ev=>{
+    const open=dy&&!dy.hidden;
+    if(ev.key==='Escape'){ if(open) return smDayClose(); if(SM.det) smDetClose(); return; }
+    if(open&&ev.key==='ArrowLeft'){ ev.preventDefault(); smDayStep(-1); }
+    else if(open&&ev.key==='ArrowRight'){ ev.preventDefault(); smDayStep(1); }
+  });
 }
 function smPaint(x){
   if(!x||!x.lanes){ smSet('smlanes',''); SM.keys=''; smSet('smfoot','<span>'+esc(SM.err||'讀取中…')+'</span>'); return; }
@@ -9233,6 +9390,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "msg": "沒有這一條：" + key[:40]})
         return self._json(200, out)
 
+    def _sim_daychart_get(self, qs):
+        """
+        ⭐ 【模擬】內頁點某一天 ⇒ 那天的 1 分 K ＋ 進出場標記：GET /api/sim/daychart?key=&date=（2026-09-18 加）。
+        ⛔ 同一道防護、唯讀：只讀 sim_lanes/ 與本機逐筆／1 分 K，不抓資料、不寫檔、不碰 broker／auto_fire。
+        """
+        ok, code, msg = fire_get_guard(self.headers)
+        if not ok:
+            return self._json(code, {"ok": False, "msg": msg})
+        if sim_lanes is None:
+            return self._json(503, {"ok": False, "msg": "模擬載入失敗"})
+        q = parse_qs(qs)
+        key, day = (q.get("key") or [""])[0], (q.get("date") or [""])[0]
+        try:
+            out = sim_lanes.day_chart(key, day)
+        except Exception as e:
+            return self._json(500, {"ok": False, "msg": "那天的圖讀取失敗：" + str(e)[:160]})
+        if out is None:
+            return self._json(400, {"ok": False, "msg": "參數不對：" + (key + " " + day)[:60]})
+        return self._json(200, out)
+
     def do_GET(self):
         if self.path.partition("?")[0] in ("/api/lab/meta", "/api/lab/run"):
             return self._lab_get()
@@ -9240,6 +9417,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._sim_get()
         if self.path.partition("?")[0] == "/api/sim/lane":
             return self._sim_lane_get(self.path.partition("?")[2])
+        if self.path.partition("?")[0] == "/api/sim/daychart":
+            return self._sim_daychart_get(self.path.partition("?")[2])
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:
