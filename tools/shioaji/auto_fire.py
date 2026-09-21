@@ -2683,6 +2683,12 @@ def orb_today(today, day_row=None):
     out["hist_msg"] = None if hr["ok"] else hr["msg"]
     out["hist_have"] = hr["n"]
     out["hist_missing"] = hr["missing"]
+    # ⭐ 2026-09-21：箱寬門檻（過去 N 天的中位數 %）**在 09:05 以前也要答得出來** ——
+    #    「現在離箱寬門檻還差幾點」那一行要用（`live_panel.fire_gap()`）。
+    #    ⛔ 跟下面那個 `med_pct` 是兩件事：那一個是**今天判定時用的那一個**（箱子畫好才有、
+    #       有定論之後以帳本為準），這一個是**現在這份歷史算出來的**。
+    #       ⛔ 不要把兩個併成一個欄位（判定用哪一個，事後一定要看得出來）。
+    out["hist_med_pct"] = hr["med_pct"]
     if box:
         out.update({"hi": box["hi"], "lo": box["lo"], "w": round(box["w"], 1)})
         thr = (mine or {}).get("thr") or {}

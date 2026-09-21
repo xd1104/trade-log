@@ -62,6 +62,19 @@ broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
 LP.AUTO_DIR = TMP / "autotest"
 LP.AUTO_REAL_DIR = TMP / "real_trades"
+# ⭐ 2026-09-21：兩份歷史也導到暫存區並餵種子 —— 沒有它們的話「今天的門檻」算不出來，
+#    畫面會變成「歷史不夠」那一種（那是另一個情境，不是這支治具要看的那個）。
+#    ⛔ 一樣是**假資料**：走幅／箱寬都是百分比，跟 12000 那條假價規矩不衝突。
+AF.FAST_HIST = TMP / "fast_hist.jsonl"
+AF.ORB_HIST = TMP / "orb_hist.jsonl"
+AF.FAST_HIST.write_text("".join(
+    json.dumps({"date": "2026-07-%02d" % (i + 1), "move_pct": 0.05 + 0.01 * i},
+               ensure_ascii=False) + "\n" for i in range(AF.FAST_RULE["window"])),
+    encoding="utf-8")
+AF.ORB_HIST.write_text("".join(
+    json.dumps({"date": "2026-08-%02d" % (i + 1), "box_pct": 0.30 + 0.01 * i},
+               ensure_ascii=False) + "\n" for i in range(AF.ORB_RULE["hist_n"])),
+    encoding="utf-8")
 # 接常數與算式（讓 wired=True），⛔ 但**不** start()、⛔ 也不動 AUTO_SIG_HOOK
 AF.configure(signal_at=LP.SIGNAL_AT, signal_sec=LP.SIGNAL_SEC, late_ms=LP.AUTO_LATE_MS,
              gap_s=LP.AUTO_GAP_S,
@@ -308,6 +321,42 @@ def _rebuild():
     _sim_rows(sim)
 
 
+def _gap_clock():
+    """
+    「現在離門檻還差幾點」那一份要的**現在**：治具的假時鐘（`/f/clock/09:02:00`）。
+    ⛔ 不用真的現在 —— 探針要在任何時間都看得到 09:02／09:07 那兩種畫面。
+    """
+    v = _fake_now()
+    if v is not None:
+        return v
+    d = date.today()
+    try:
+        h, m, s = (int(x) for x in str(ST["clock"]).split(":"))
+    except Exception:
+        h, m, s = 10, 30, 0
+    return datetime(d.year, d.month, d.day, h, m, s)
+
+
+def _gap_quote():
+    """
+    合成的即時報價，讓那幾行有東西可算。⛔ **一律 12000 附近的假價**
+    （跟這支治具其他地方同一條規矩：一個真實成交價都不准出現）。
+      ・08:59 那一筆 ＝ 走幅的分母（ref0900）
+      ・09:00 那一筆 ＝ 方向（p0900）
+      ・09:01／09:02 兩筆 ＝ 箱子的上下緣
+    ⚠️ 用**產品的** `LP.Today`（⛔ 不自己捏假物件）：`_auto_snap()` 讀的欄位、
+       分鐘索引怎麼算，都要跟正式那條路一模一樣。
+    """
+    d = date.today()
+    st = LP.Today(prev_close=11950.0)
+    st.feed(12000.0, 1, datetime(d.year, d.month, d.day, 8, 59, 30), True)
+    st.feed(12000.0, 1, datetime(d.year, d.month, d.day, 9, 0, 1), True)
+    st.feed(12016.0, 1, datetime(d.year, d.month, d.day, 9, 1, 0), True)
+    st.feed(11978.0, 1, datetime(d.year, d.month, d.day, 9, 2, 0), True)
+    st.feed(12011.0, 1, datetime(d.year, d.month, d.day, 9, 2, 30), True)
+    return st
+
+
 def _apply_arm():
     v = ST["arm"]
     # 上一輪按「關閉」留下來的 .off-* 檔要清掉，不然探針數不準
@@ -403,6 +452,10 @@ class H(BaseHTTPRequestHandler):
             # ⛔ 兩段式確認那句話與 token 都走**產品的**那一份（見上面 do_POST 的理由）
             out["arm_confirm"] = LP.fire_arm_confirm(out.get("live"), _fake_now())
             out["token"] = LP.FIRE_TOKEN
+            # ⭐ 2026-09-21「現在離門檻還差幾點」：走**產品的** `LP.fire_gap()`，
+            #    只有報價與時鐘是治具餵的（⛔ 治具自己算一份的話，產品錯了也會全綠）。
+            LP.CURRENT_STATE["today"] = _gap_quote()
+            out["gap"] = LP.fire_gap(out, now=_gap_clock())
             out["now"] = ST["clock"]           # ⛔ 前端一律用後端時鐘
             return self._j(200, out)
         if p.startswith("/api/state"):

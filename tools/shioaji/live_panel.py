@@ -3829,6 +3829,188 @@ def fire_rule_line(mode, when=None):
             % (when, REV_AT, pct))
 
 
+# ---------------------------------- 【今天】那張卡：現在離每個門檻還有多遠（⛔ 唯讀）
+#
+# ⭐⭐ 2026-09-21 Benson 要的：「開盤的時候我想看到現在離這些門檻還有多遠」。
+#    起因是 09-21 那天開箱的箱子 170 點、門檻 178 點 —— **差 8 點沒做成**，
+#    而畫面要等 09:05 判完才看得出來差多少。三個候選各有各的截止時刻
+#    （快攻 09:03:30／開箱 09:05 定箱、09:30 前突破／純回馬 09:15），
+#    在那之前他只看得到「等 09:05」這種話，看不到「還差幾點」。
+#
+# ⛔⛔ **這一段一個判定都不做，也一個字都不准預測。**
+#    這裡只做減法：「現在的價」減「auto_fire 已經算好的門檻」。
+#    ⛔ 不准出現「今天會做」「應該過得了」「機率」之類的字
+#       （CLAUDE.md：UI 上不得出現任何預測、勝率、期望值、買賣建議）。
+#    真正的判定永遠只有那三次，而且一律以 `autofire/*.jsonl` 落地的那一列為準 ——
+#    這一份在定論出現之後就**自己消失**（`stage=="done"` 就不端了）。
+# ⛔ 門檻的數字**全部來自 auto_fire**：`fast_today()` 的 `thr_pct`、`orb_today()` 的
+#    `hist_med_pct`、換算一律 `auto_fire.approx_points()`、方向一律 `auto_dirs()`。
+#    ⛔ 這裡不准自己算百分位、不准自己乘 0.5%、不准自己判「快不快」。
+# ⚠️ 只有「多方聯軍」才有三個候選 ⇒ 判準跟那張卡同一個（`state()` 的 `union`），
+#    ⛔ 不在這裡比 `method == "U"`。
+# ⚠️ 效能：只做記憶體讀取（`_auto_snap()` 與 `state()` 已經算好的那幾個數）⇒ **零 I/O**。
+#    `/api/fire/state` 每 5 秒被輪詢、HTTP 執行緒跟 4Hz 主迴圈（＝他的停損）搶同一個 GIL。
+
+FIRE_GAP_MAX_AGE_MS = 15000      # 報價超過這麼久沒動就不端距離（⛔ 寧可留白，不拿舊價算）
+FIRE_GAP_FROM_SEC = 8 * 3600 + 45 * 60       # 日盤開盤（08:45）之前不講距離
+
+
+def _gap_box_now(st):
+    """
+    箱子**畫到現在**的高低（⛔ 只是進度，不是定論）⇒ (hi, lo)；算不出來 ⇒ (None, None)。
+
+    ⚠️⚠️ 這一份走 `Today.minute_bar`（on_tick 即時累的），而 09:05 的**定論**走
+       `auto_fire._orb_step()` 讀 `tick_logs/` ⇒ 同一條 tick 流，但不是同一次讀
+       （面板晚開、掉線重連的分鐘會少）。所以這一行在畫面上一律標「進行中」，
+       ⛔ 不可以拿它去判「夠不夠寬」，⛔ 也不可以在 09:05 之後還端它。
+    ⚠️ 分鐘索引 ＝ 時×60＋分（`minute_bar[540]` 就是 09:00 那一分鐘），
+       範圍取 `auto_fire.ORB_BOX_FROM_MS` ~ `ORB_BOX_TO_MS` 的整數分鐘（⛔ 不寫死 540）。
+    """
+    if st is None or not getattr(st, "minute_bar", None):
+        return None, None
+    m0 = int(auto_fire.ORB_BOX_FROM_MS // 60000)
+    m1 = int(auto_fire.ORB_BOX_TO_MS // 60000)
+    hi = lo = None
+    for mi in range(m0, m1):
+        b = st.minute_bar.get(mi)
+        if not isinstance(b, dict):
+            continue
+        h, l = b.get("h"), b.get("l")
+        if isinstance(h, (int, float)) and not isinstance(h, bool):
+            hi = h if hi is None else max(hi, h)
+        if isinstance(l, (int, float)) and not isinstance(l, bool):
+            lo = l if lo is None else min(lo, l)
+    return (None, None) if hi is None or lo is None else (hi, lo)
+
+
+def _gap_fast(out, snap, sec):
+    """快攻：09:03:30 之前的「現在走幾點／門檻幾點」。⇒ 一列或 None。"""
+    if sec >= SIGNAL_SEC:
+        return None                     # 已經判過了，定論在卡片那一行
+    thr_pct = (out.get("fast") or {}).get("thr_pct")
+    px, ref = snap.get("px"), snap.get("ref0900")
+    mv = auto_fire.move_pct(px, ref)
+    if thr_pct is None or mv is None:
+        return {"stage": "live", "msg": "現在還算不出距離（拿不到 09:00 的參考價）"}
+    need = auto_fire.approx_points(thr_pct, ref)
+    now = auto_fire.approx_points(mv, ref)
+    # ⛔ 方向走 `auto_dirs()`（正本），⛔ 不在這裡拿 px−ref 自己判 —— 走幅用的
+    #    參考價（ref0900＝09:00 以前最後一筆）跟方向用的（p0900＝09:00 第一筆）
+    #    是**不同的兩個價**，自己判會悄悄換一把尺。
+    sig_a, sig_b = auto_sig(px, snap.get("open0845"), snap.get("p0900"))
+    d = auto_dirs(sig_a, sig_b).get("A")
+    side = ("現在是往上（做多）" if d == 1 else
+            "現在是往下 —— 只做多，所以就算夠快這個候選也會跳過" if d == -1 else
+            "現在還判不出方向")
+    if need - now > 0:
+        msg = ("現在走 %d 點／門檻 %d 點 —— 還差 %d 點；%s（%s 那一刻才算數）"
+               % (now, need, need - now, side, SIGNAL_AT))
+    else:
+        msg = ("現在走 %d 點／門檻 %d 點 —— 目前夠快；%s（%s 那一刻才算數）"
+               % (now, need, side, SIGNAL_AT))
+    return {"stage": "live", "now_pts": now, "need_pts": need,
+            "gap_pts": need - now, "dir": d, "msg": msg}
+
+
+def _gap_orb(out, snap, sec):
+    """開箱：09:05 以前是「箱子畫到現在多寬」，之後是「離上緣還差幾點」。⇒ 一列或 None。"""
+    O = out.get("orb") or {}
+    if O.get("stage") == "done" or O.get("hist_ok") is False:
+        return None                     # 有定論／今天本來就不可用 ⇒ 卡片那一行已經講了
+    px = snap.get("px")
+    if px is None:
+        return None
+    if sec < auto_fire.ORB_BOX_TO_MS / 1000.0:
+        med = O.get("hist_med_pct")
+        hi, lo = _gap_box_now(CURRENT_STATE.get("today"))
+        if med is None or hi is None:
+            return {"stage": "box", "msg": "箱子還在畫（現在算不出寬度）"}
+        w = int(round(hi - lo))
+        need = auto_fire.approx_points(med, px)
+        tail = "（%s 定案，這是進行中的數字）" % auto_fire.ORB_BOX_TO_AT[:5]
+        if need - w > 0:
+            msg = "箱子畫到現在 %d 點（%g~%g）／需要 %d 點 —— 還差 %d 點%s" % (
+                w, lo, hi, need, need - w, tail)
+        else:
+            msg = "箱子畫到現在 %d 點（%g~%g）／需要 %d 點 —— 目前夠寬%s" % (
+                w, lo, hi, need, tail)
+        return {"stage": "box", "now_pts": w, "need_pts": need,
+                "gap_pts": need - w, "hi": hi, "lo": lo, "msg": msg}
+    if O.get("stage") != "wait" or O.get("hi") is None:
+        return None
+    # 箱子已經定案、還沒突破 ⇒ 離上緣還差幾點（⛔ 只做多，所以只講上緣）
+    gap = int(round(O["hi"] - px))
+    if gap > 0:
+        msg = ("箱子 %g~%g，現在 %g —— 離上緣還差 %d 點（%s 前往上突破才算；只做多）"
+               % (O["lo"], O["hi"], px, gap, O.get("break_by") or ""))
+    else:
+        msg = ("箱子 %g~%g，現在 %g —— 已經在上緣之上，等它落地判定"
+               % (O["lo"], O["hi"], px))
+    return {"stage": "wait", "gap_pts": gap, "hi": O["hi"], "lo": O["lo"], "msg": msg}
+
+
+def _gap_rev(out, snap, sec, day_row):
+    """純回馬：09:03:30~09:15 的「要漲過哪個價才算反轉」。⇒ 一列或 None。"""
+    if sec < SIGNAL_SEC or sec >= REV_SEC:
+        return None                     # 還沒有這個候選／已經判過了
+    fast = None
+    for c in ((day_row or {}).get("cand_rows") or []):
+        if c.get("cand") == "fast":
+            fast = c
+    if fast is None or fast.get("why") != "not_fast":
+        return None                     # 只有 09:03:30 判定「不夠快」的日子才有這個候選
+    px0, d = auto_fire._num(fast.get("px")), fast.get("d")
+    px = snap.get("px")
+    if px0 is None or px is None or d not in (1, -1):
+        return None
+    if d == 1:
+        # 09:03:30 往上 ⇒ 反轉＝往下＝做空，而多方聯軍只做多 ⇒ 今天這個候選做不成。
+        # ⛔ 這不是預測，是規則本身（`union_eval` 的 no_long）。
+        return {"stage": "live", "dir": d,
+                "msg": ("%s 是往上 %g —— 反轉只會變成做空，只做多 ⇒ 這個候選今天做不成"
+                        % (SIGNAL_AT, px0))}
+    gap = int(round(px0 - px))
+    if gap > 0:
+        msg = ("要漲過 %g 才算反轉（現在 %g）—— 還差 %d 點（%s 比一次）"
+               % (px0, px, gap, REV_AT))
+    else:
+        msg = ("已經漲過 %g（現在 %g，多 %d 點）—— %s 那一刻還在上面才算反轉"
+               % (px0, px, -gap, REV_AT))
+    return {"stage": "live", "dir": d, "gap_pts": gap, "ref": px0, "msg": msg}
+
+
+def fire_gap(out, now=None):
+    """
+    【今天】那張卡上，三個候選各一行「現在離門檻還有多遠」。**唯讀、零 I/O。**
+    ⇒ `{"at", "px", "fast", "orb", "rev"}`；沒有東西可講 ⇒ None（⛔ 前端就不畫那幾行）。
+
+    不端的情形（⛔ 一律留白，不拿舊價／猜的數字充數）：
+      ・現在跑的不是多方聯軍（A 沒有三個候選）
+      ・還沒到 08:45、或已經過了開箱的突破截止（`ORB_BREAK_BY`，那之後三個都有定論了）
+      ・沒有即時報價，或報價超過 `FIRE_GAP_MAX_AGE_MS` 沒更新（斷線、休市）
+    """
+    if not out.get("union"):
+        return None
+    now = now or datetime.now()
+    sec = now.hour * 3600 + now.minute * 60 + now.second
+    if sec < FIRE_GAP_FROM_SEC or sec > auto_fire.ORB_BREAK_BY_MS / 1000.0:
+        return None
+    st = CURRENT_STATE.get("today")
+    if st is None:
+        return None
+    snap = _auto_snap(st, now)
+    age = snap.get("quote_age_ms")
+    if snap.get("px") is None or age is None or age > FIRE_GAP_MAX_AGE_MS:
+        return None
+    day_row = next((r for r in (out.get("days") or [])
+                    if r.get("date") == out.get("today")), None)
+    g = {"at": now.strftime("%H:%M:%S"), "px": snap.get("px"),
+         "fast": _gap_fast(out, snap, sec),
+         "orb": _gap_orb(out, snap, sec),
+         "rev": _gap_rev(out, snap, sec, day_row)}
+    return g if any(g[k] for k in auto_fire.CANDS) else None
+
+
 def _fire_arm_log(row):
     """
     ⭐ 「誰在什麼時候、用哪個做法、當下是不是真錢」落地一列。
@@ -5281,6 +5463,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-cand .k{flex:none; width:52px; font-weight:700; color:var(--text)}
 .al-cand .w{min-width:0; flex:1}
 .al-cand.gold .w{color:var(--gold); font-weight:650}
+/* ⭐ 2026-09-21「現在還差幾點」：接在候選那一行下面的第二行。
+   ⛔ 用等寬數字（數字每 5 秒會跳，不等寬會整行左右抖）、⛔ 不用紅綠
+   （這一頁的紅綠只給損益，見 .at-today 那一段的同一條規矩）。 */
+.al-cand .gap{display:block; margin-top:3px; font-size:11.5px; color:var(--faint);
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; line-height:1.55}
 .al-today{margin-top:2px}
 .al-today .t{font-size:17px; font-weight:700; color:var(--text); line-height:1.35}
 .al-today .t.off{font-size:15px; color:var(--dim); font-weight:650}
@@ -8899,6 +9086,9 @@ function alCandRow(D,r,c){
       而舊版在 09:05 以前只寫「等 09:05 畫完箱子」⇒ 畫面講三個候選、實際只跑得出兩個。
       ⛔ 不可以安靜地少一個候選 ⇒ 這一句排在最前面（正本在後端 orb_hist_ready）。 */
    if(O.hist_ok===false&&O.hist_msg){ txt=String(O.hist_msg); tone='warn'; }
+   /* ⚠️ 2026-09-21：底下那一行（D.gap）已經在報「箱子畫到現在幾點」的時候，
+      ⛔ 這一行就不可以再說「之後才看得出來」—— 那兩句擺在一起有一句是假的。 */
+   else if(O.stage==='before'&&(D.gap||{}).orb) txt='箱子畫的是 '+esc(O.box_at||'')+'（'+esc(O.box_at||'').slice(6)+' 定案）';
    else txt=O.msg||(O.stage==='before'?('箱子畫的是 '+esc(O.box_at||'')+'，'+esc(O.box_at||'').slice(6)+' 之後才看得出來'):'');
    if(!txt) txt='等 '+esc(O.box_at||'')+' 畫完箱子';
  }else if(c.k==='rev'){
@@ -8908,8 +9098,14 @@ function alCandRow(D,r,c){
  }else{
    txt='等 '+esc(D.signal_at||'');
  }
+ /* ⭐ 2026-09-21「現在還差幾點」：候選還沒有定論的那段時間才有（後端 D.gap）。
+    ⛔ 那句話**整句都是後端寫的**（live_panel.fire_gap）—— 前端不准自己組字、
+       不准自己拿現價減門檻（那就是第二把尺，而且會跟 09:05／09:15 的定論打架）。
+    ⛔ 後端端 null ⇒ **這一行整行不畫**（⛔ 不寫「—」「計算中」充數：留白看得出來是缺）。 */
+ const G=(D.gap||{})[c.k];
+ const gap=(G&&G.msg)?'<span class="gap">'+esc(String(G.msg))+'</span>':'';
  return '<div class="al-cand'+(tone?' '+tone:'')+'"><span class="k">'+esc(c.name||'')+
-   '</span><span class="w">'+emb(String(txt))+'</span></div>';
+   '</span><span class="w">'+emb(String(txt))+gap+'</span></div>';
 }
 function alCandsHTML(D,r){
  /* ⛔⛔ 2026-09-17：**只有「多方聯軍」才有三個候選**（Benson 裁示：真單繼續跑
@@ -9534,6 +9730,15 @@ class Handler(BaseHTTPRequestHandler):
                 #   拿**現價**照同一支 tpsl_points() 估（⛔ 前端不准自己乘 0.005）。只讀記憶體。
                 _tt = CURRENT_STATE.get("today")
                 out["pts_est"] = auto_fire.tpsl_points(getattr(_tt, "price", None))
+                # ⭐ 2026-09-21：三個候選各一行「現在離門檻還差幾點」（⛔ 唯讀、零 I/O、
+                #    ⛔ 不預測）。算不出來 ⇒ None ⇒ 前端就不畫那幾行（⛔ 不寫「—」充數）。
+                #    ⛔ 一個 try 隔開：這是看的東西，**不可以讓它把整份狀態帶掉**
+                #       （那份狀態裡有他的部位、停損、今天判定）。
+                try:
+                    out["gap"] = fire_gap(out)
+                except Exception as _ge:
+                    out["gap"] = None
+                    out["gap_err"] = "算不出「還差幾點」：%s" % str(_ge)[:120]
                 # 兩段式確認第二段要帶的 token。跨站讀不到這份 JSON ⇒ 拿不到它。
                 out["token"] = FIRE_TOKEN
                 return self._json(200, out)

@@ -224,6 +224,12 @@ chk("  armed == False（出貨狀態）", j.get("armed"), False)
 chk("  flag_exists == False", j.get("flag_exists"), False)
 chk("  講得出開關檔叫什麼", j.get("flag"), "AUTO_ORDERS_ON")
 say("sim" in j, "  帶得出跟模擬那一頁的對照（fire_sim_pairs）", str(list(j))[:80])
+# ⭐ 2026-09-21：「現在離門檻還差幾點」那一份（`fire_gap`）有沒有真的接上端點。
+#    ⚠️ 斷言的是**鍵在不在**，⛔ 不是值 —— 這個治具沒有報價、也不在盤中，值本來就該是
+#       None（那正是「拿不到就留白」）。鍵不見了 ＝ 端點那一行被刪掉了。
+say("gap" in j, "  帶得出「現在離門檻還差幾點」那一份（fire_gap）", str(j.get("gap")))
+say(j.get("gap") is None and "gap_err" not in j,
+    "  ⇒ 沒報價／不在盤中的時候是乾淨的 None（⛔ 不是錯誤、⛔ 也不是假數字）")
 chk("  帶得出收盤平倉的時刻（正本在 live_panel）", j.get("eod_at"), LP.EOD_CLOSE_AT)
 say(isinstance(j.get("days"), list) and isinstance(j.get("ledger"), dict),
     "  帶得出每一天送了沒與帳本")
