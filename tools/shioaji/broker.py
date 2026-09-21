@@ -387,6 +387,25 @@ MARGIN_FIELDS = ("equity_amount", "equity", "available_margin", "initial_margin"
                  "today_balance", "yesterday_balance", "order_margin_premium")
 
 
+def _fetch_word(st):
+    """
+    永豐那個 `status` 到底是「拿到了」還是「還在拿」⇒ 回小寫字串（沒有 ⇒ `"none"`）。
+
+    ⛔⛔ 2026-09-21 他第一天打開【帳戶總覽】就中：`FetchStatus` **不是 Python 的 Enum**，
+       **沒有 `.name`** ⇒ 舊寫法 `getattr(st, "name", st)` 退回物件本身、
+       `str()` 出來是 `"FetchStatus.Fetched"` ⇒ 比不到 `"fetched"` ⇒
+       **明明拿到了卻一直說「還沒到齊（FetchStatus.Fetched）」**。
+    ⇒ 三種來源都認：`.value`（'Fetched'）、`str()` 的最後一節、字串本身。
+    ⚠️ 只有 Fetched / Fetching / Unfetch 三種（`shioaji._core.FetchStatus`）。
+    """
+    if st is None:
+        return "none"
+    v = getattr(st, "value", None)
+    if not isinstance(v, str) or not v:
+        v = str(st).rsplit(".", 1)[-1]
+    return v.strip().lower()
+
+
 def account_margin():
     """
     跟券商問「帳戶現在有多少錢」。⚠️ **唯讀**，⛔ 一張單都不會送。
@@ -406,9 +425,9 @@ def account_margin():
         return None, "問不到帳戶餘額：%s" % str(e)[:120]
     if m is None:
         return None, "永豐沒有回傳帳戶餘額"
-    st = getattr(m, "status", None)
-    if st is not None and str(getattr(st, "name", st)).lower() not in ("fetched", "none"):
-        return None, "永豐回的帳戶餘額還沒到齊（%s）" % str(getattr(st, "name", st))
+    st = _fetch_word(getattr(m, "status", None))
+    if st not in ("fetched", "none"):
+        return None, "永豐回的帳戶餘額還沒到齊（%s）" % st
     out = {}
     for k in MARGIN_FIELDS:
         v = getattr(m, k, None)

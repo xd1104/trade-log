@@ -4808,7 +4808,9 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 /* 沒有警報時完全不佔位（.right 有 gap:14px，空的節點照樣會多一段空隙） */
 #tab-live #xal:empty{display:none}
 #tab-live #xal{position:sticky; top:8px; z-index:20}
-#tab-live #acct:empty{display:none}
+#acct:empty{display:none}
+/* 【帳戶】自己一頁（2026-09-21）：一張卡不要拉成整個螢幕寬，字會散掉 */
+#tab-acct{max-width:560px}
 
 /* ── 【帳戶總覽】（2026-09-21）：券商端的錢。
    ⛔ 紅綠只給「賺賠」那一個數字（跟這一頁其他地方同一條規矩）；
@@ -5802,6 +5804,11 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
     <div><div class="nm">早盤儀表板</div><div class="sub" id="sub">連線中…</div></div></div>
   <div class="tabs">
     <button data-tab="live" class="on">即時</button>
+    <!-- 【帳戶】券商端的錢（2026-09-21 Benson 指定要自己一頁）。
+         ⚠️ 排在【即時】右邊是刻意的：它講的是「現在的狀態」，跟即時是同一類；
+         ⛔ 它**唯讀**，所以不影響「愈往右愈接近真錢」那條動線（⛔ 也不可以排到
+         【自動下單】右邊 —— 那一頁永遠是最右邊的終點）。 -->
+    <button data-tab="acct">帳戶</button>
     <!-- ⚠️ 2026-09-16 分頁重整（Benson 交辦）：拿掉【細節】與【回顧】（他已經不看了），
          把「模擬（不會下單）」從【策略實驗室】最上面搬出來獨立成一頁。
          現在四顆的動線是「現在 → 規則自己在跑（不下單）→ 研究 → 會真的送單」，
@@ -5851,11 +5858,18 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          #xal  跨分頁警報（兩個分頁都看得到，沒警報時 :empty 完全不佔位）
          #ntabs 頁籤（浮動點數是裡面的獨立節點 #tabbadge）
          #zone  練習／真實其中一區（切分頁時才重建骨架） -->
-    <!-- ⭐ 2026-09-21【帳戶總覽】：券商端的「帳戶還剩多少錢」（獨立一張卡，Benson 指定）。
-         ⛔ 只顯示後端 /api/state 的 `equity`（每分鐘更新一次）＋ /api/account/hist 的曲線；
-         ⛔ 這一區一顆會動到錢的按鈕都沒有，也 ⛔ 不參與下單那條路。 -->
-    <div id="xal"></div><div id="ntabs"></div><div id="zone"></div><div id="acct"></div>
+    <div id="xal"></div><div id="ntabs"></div><div id="zone"></div>
   </div></div>
+</div>
+
+<!-- ══════════ 【帳戶】：券商端的「帳戶還剩多少錢」（2026-09-21）══════════
+     ⚠️ 2026-09-21 傍晚 Benson 改主意：本來掛在【即時】右欄，他要**自己一個分頁**。
+     ⛔ 這一頁**完全唯讀**：一顆會動到錢的按鈕都沒有，也不參與下單那條路。
+     ⛔ 只放一個空容器：數字、判斷句（夠不夠下一口）、本月變化全部從後端來
+        （/api/state 的 `equity`，後端每分鐘才真的問券商一次），
+        曲線另外拿 /api/account/hist（一天才多一個點，10 分鐘拿一次）。 -->
+<div id="tab-acct" hidden>
+  <div id="acct"></div>
 </div>
 
 <!-- ══════════ 【模擬】：七條策略每天事後照規則算一次（⛔ 不會下單）══════════
@@ -6781,10 +6795,6 @@ function paintRight(s,nf){
   // ② 頁籤（浮動點數是裡面的獨立節點）
   setEl('ntabs', tabsHTML(R));
   paintBadge(R);
-  // ②b 【帳戶總覽】（2026-09-21）：當下的數字跟著 s.equity 來，曲線 10 分鐘拿一次。
-  //     ⛔ 它是獨立節點 —— 下面那一大塊重建骨架時不可以把這張卡一起換掉。
-  acctPoll();
-  setEl('acct', acctHTML(s));
   // ③ 整區：只有切分頁／開關真實下單／演練↔真實 才重建骨架
   const zone=document.getElementById('zone');
   if(!zone) return;
@@ -6896,6 +6906,10 @@ async function tick(nf){
  document.getElementById('ph').innerHTML='<span style="color:'+ph[1]+'">'+ph[0]+'</span>';
  document.getElementById('sub').innerHTML='<span class="dot '+dot+'"></span>'+
    ((s.conn&&s.conn.contract_name)||'微台')+(s.replay?'・重播':'');
+
+ // 【帳戶】這一頁的數字就在這份 s 裡（後端每分鐘換一次）⇒ 在這裡畫，
+ // ⛔ 不另開一條輪詢（那會變成同一份資料問兩次）。
+ if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); }
 
  // 【回顧】分頁時只更新頂列的時鐘／連線燈；即時分頁的 DOM 一律不動。
  // 後端的報價、持倉監控、±100 自動停利停損跑在 shioaji 回呼裡，完全不受影響。
@@ -7954,6 +7968,7 @@ function setTab(t){
  // 離開【模擬】也把 60 秒輪詢停掉（smEnter 的 again 自己也會檢查一次）
  if(t!=='sim'&&SM.timer){ clearTimeout(SM.timer); SM.timer=null; }
  document.getElementById('tab-live').hidden=(t!=='live');
+ document.getElementById('tab-acct').hidden=(t!=='acct');
  document.getElementById('tab-sim').hidden=(t!=='sim');
  document.getElementById('tab-lab').hidden=(t!=='lab');
  document.getElementById('tab-fire').hidden=(t!=='fire');
@@ -7967,6 +7982,9 @@ function setTab(t){
  // 【自動下單】同樣不掛在 500ms 的 tick 上：後端的送單、持倉監控、±100 停利停損
  // 全程都在跑，切不切進這一頁完全不影響。
  else if(t==='fire'){ alEnter(); }
+ // 【帳戶】唯讀：數字跟著 500ms 的 tick 走（後端每分鐘才真的問券商），
+ // 切進來先畫一次，順便把曲線拿回來（⛔ 不要等 0.5 秒才有東西，那會閃一下空白）。
+ else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); }
  // 切回即時時立刻呼叫一次 tick()（後端的報價、持倉監控、±100 自動停利停損
  // 全程都在跑，切分頁完全不影響那一條路）
  else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); }

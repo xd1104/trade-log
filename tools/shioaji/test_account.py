@@ -145,6 +145,39 @@ broker._state["api"] = None
 m4, err4 = broker.account_margin()
 say(m4 is None and "永豐" in (err4 or ""), "  還沒連上永豐 ⇒ 說清楚", str(err4))
 
+print("\n=== ②b ⛔ 永豐的 FetchStatus 不是 Python Enum（2026-09-21 他第一天就中）===")
+
+
+class FetchLike:
+    """永豐 `FetchStatus` 的替身：**沒有 `.name`**，`str()` 是 'FetchStatus.Fetched'。"""
+
+    def __init__(self, v):
+        self.value = v
+
+    def __str__(self):
+        return "FetchStatus." + self.value
+
+
+class NoValue:
+    """更糟的：連 `.value` 都沒有 ⇒ 只能從 `str()` 的最後一節認。"""
+
+    def __str__(self):
+        return "FetchStatus.Fetched"
+
+
+chk("  有 .value ⇒ 認得出 Fetched", broker._fetch_word(FetchLike("Fetched")), "fetched")
+chk("  Fetching 照樣認得出來", broker._fetch_word(FetchLike("Fetching")), "fetching")
+chk("  沒有 status ⇒ none", broker._fetch_word(None), "none")
+chk("  ⛔ 只有 str() 也要認得出來", broker._fetch_word(NoValue()), "fetched")
+wire(FakeApi(FakeMargin(status=FetchLike("Fetched"))))
+m5, err5 = broker.account_margin()
+say(m5 is not None and err5 is None,
+    "  ⭐ 這種 status ⇒ **拿得到數字**（舊版會寫「還沒到齊（FetchStatus.Fetched）」）",
+    str(err5))
+wire(FakeApi(FakeMargin(status=FetchLike("Unfetch"))))
+m6, err6 = broker.account_margin()
+say(m6 is None and "還沒到齊" in (err6 or ""), "  真的還沒到齊時照樣擋得住", str(err6))
+
 print("\n=== ③ 畫面那一份：問不到的時候不准有金額 ===")
 reset_eq()
 LP.EQUITY.update({"m": None, "err": "問不到帳戶餘額：連線逾時"})
@@ -237,6 +270,16 @@ say(not (HERE / "equity").exists(),
     "  ⛔⛔ 真的 tools/shioaji/equity/ 沒有被這支測試建出來")
 say("tools/shioaji/equity/" in (HERE.parent.parent / ".gitignore").read_text(encoding="utf-8"),
     "  ⛔⛔ equity/ 有在 .gitignore 裡（真實金額不上傳）")
+
+print("\n=== ⑪ 【帳戶】是自己一個分頁（2026-09-21 他改的）===")
+SRC = (HERE / "live_panel.py").read_text(encoding="utf-8")
+say('data-tab="acct"' in SRC, "  分頁列上有那顆鈕")
+say('id="tab-acct"' in SRC, "  有那一頁的容器")
+say("document.getElementById('tab-acct').hidden" in SRC, "  切分頁時會跟著開關")
+say(SRC.count('id="acct"') == 1, "  ⛔ 那張卡只有一個地方畫（⛔ 不可以同時掛在即時右欄）",
+    str(SRC.count('id="acct"')))
+say("if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); }" in SRC,
+    "  在 500ms 的 tick 裡畫（⛔ 不另開一條輪詢問同一份資料）")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))
