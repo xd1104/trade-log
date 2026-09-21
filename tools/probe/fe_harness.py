@@ -224,6 +224,29 @@ _tick_fixtures()
 LP.TICK_DIR = TICKLOGS
 LP.TRADE_DIR = TICKSIM
 LP.broker.TRADE_DIR = TICKREAL
+
+# ⭐ 2026-09-21【帳戶總覽】：那張卡的內容走**產品的** `LP.equity_view()`
+#    （治具自己捏一份 payload 的話，產品算錯也會全綠）。
+#    ⛔ 金額全是**捏造的整數**（repo 是公開的，跟假帳號 0000000 同一條規矩）。
+#    ⛔ 導到暫存區，絕不碰 tools/shioaji/equity/。
+EQROOT = pathlib.Path(tempfile.gettempdir()) / "trade-log-equity-harness"
+LP.EQUITY_DIR = EQROOT
+EQROOT.mkdir(parents=True, exist_ok=True)
+(EQROOT / "2026.jsonl").write_text("".join(
+    json.dumps({"date": d, "equity": e, "deposit": dep}, ensure_ascii=False) + "\n"
+    for d, e, dep in [("2026-09-01", 200000, 0), ("2026-09-02", 201200, 0),
+                      ("2026-09-03", 200400, 0), ("2026-09-04", 203100, 0),
+                      ("2026-09-08", 202600, 0), ("2026-09-09", 204800, 0),
+                      ("2026-09-10", 304100, 100000), ("2026-09-11", 305600, 0),
+                      ("2026-09-14", 304900, 0), ("2026-09-15", 307300, 0)]),
+    encoding="utf-8")
+LP._EQ_HIST["key"] = None
+LP.EQUITY.update({
+    "at": "09:31:00", "err": None, "lot1": 13000.0, "lot1_at": "2026-09-15",
+    "m": {"equity_amount": 308450.0, "available_margin": 262300.0,
+          "initial_margin": 13000.0, "risk_indicator": 999.0, "margin_call": 0.0,
+          "future_open_position": 1200.0, "future_settle_profitloss": 800.0,
+          "fee": 60.0, "tax": 6.0, "deposit_withdrawal": 0.0}})
 LP.TICK_CACHE.clear()
 LP.TODAY_TRADES[:] = [{
     "date": TICKDATES["full"], "dir": "short", "entry": 12030, "exit": 11930,
@@ -341,6 +364,8 @@ def state():
     # ⛔ 產品的 `/api/state` 帶 token（前端 `pfetch()` 靠它），治具少帶的話
     #    每一顆鈕在探針裡都會 403 —— 這裡走**產品的**那一個字串，不自己生一份。
     s["token"] = LP.FIRE_TOKEN
+    # ⭐【帳戶總覽】：走產品的那一支（⛔ 治具不自己組那張卡的內容）
+    s["equity"] = LP.equity_view()
     s["today_trades"] = json.loads(json.dumps(SIM_TRADES))
     s["chips"]["price"] = tick_px(47134)
     s["real"] = {"live": False, "ca_ok": True, "ca_msg": None,
@@ -428,6 +453,12 @@ class H(BaseHTTPRequestHandler):
                 return self._send(404, json.dumps({"error": "這天沒有逐筆紀錄"},
                                                   ensure_ascii=False))
             return self._send(200, json.dumps(out, ensure_ascii=False))
+        if self.path.startswith("/api/account/hist"):
+            # ⭐【帳戶總覽】的曲線：讀治具那份捏造的權益紀錄（走產品的讀檔那一支）
+            rows = LP.equity_hist_read()[-LP.EQUITY_HIST_MAX:]
+            return self._send(200, json.dumps({"ok": True, "rows": [
+                {"date": r.get("date"), "equity": r.get("equity"),
+                 "deposit": r.get("deposit")} for r in rows]}, ensure_ascii=False))
         if self.path.startswith("/api/state"):
             return self._send(200, json.dumps(state(), ensure_ascii=False))
         if self.path.startswith("/api/bars"):

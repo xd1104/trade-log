@@ -4808,6 +4808,28 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 /* 沒有警報時完全不佔位（.right 有 gap:14px，空的節點照樣會多一段空隙） */
 #tab-live #xal:empty{display:none}
 #tab-live #xal{position:sticky; top:8px; z-index:20}
+#tab-live #acct:empty{display:none}
+
+/* ── 【帳戶總覽】（2026-09-21）：券商端的錢。
+   ⛔ 紅綠只給「賺賠」那一個數字（跟這一頁其他地方同一條規矩）；
+   ⛔ 金額一律等寬數字（每分鐘會換一次，不等寬整張卡會抖）。 */
+.ac{border:1px solid var(--line); border-radius:var(--r-md); background:var(--surface);
+  padding:13px 14px 12px}
+.ac .hd{display:flex; align-items:baseline; justify-content:space-between; gap:8px}
+.ac .hd .t{font-size:13px; font-weight:700; color:var(--text)}
+.ac .hd .at{font-size:10.5px; color:var(--faint); font-family:var(--font-mono)}
+.ac .big{font-size:23px; font-weight:700; color:var(--text); line-height:1.25; margin-top:6px;
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.ac .sub{font-size:11.5px; color:var(--dim); line-height:1.65; margin-top:3px;
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.ac .sub .up{color:var(--up)} .ac .sub .down{color:var(--down)}
+.ac .line{margin-top:8px; padding-top:8px; border-top:1px solid var(--line-soft);
+  font-size:11.5px; color:var(--dim); line-height:1.6}
+.ac .warn{color:var(--gold); font-weight:650}
+.ac .miss{font-size:12px; color:var(--faint); line-height:1.6; margin-top:5px}
+.ac .spark{margin-top:9px}
+.ac .spark svg{display:block; width:100%; height:42px}
+.ac .spark .cap{font-size:10.5px; color:var(--faint); margin-top:3px}
 
 /* ── ① 跨分頁警報：站在練習分頁也看得到 ───────────────────────── */
 .n-x{border-radius:var(--r-md); padding:12px 14px; font-size:13px; font-weight:700;
@@ -5829,7 +5851,10 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          #xal  跨分頁警報（兩個分頁都看得到，沒警報時 :empty 完全不佔位）
          #ntabs 頁籤（浮動點數是裡面的獨立節點 #tabbadge）
          #zone  練習／真實其中一區（切分頁時才重建骨架） -->
-    <div id="xal"></div><div id="ntabs"></div><div id="zone"></div>
+    <!-- ⭐ 2026-09-21【帳戶總覽】：券商端的「帳戶還剩多少錢」（獨立一張卡，Benson 指定）。
+         ⛔ 只顯示後端 /api/state 的 `equity`（每分鐘更新一次）＋ /api/account/hist 的曲線；
+         ⛔ 這一區一顆會動到錢的按鈕都沒有，也 ⛔ 不參與下單那條路。 -->
+    <div id="xal"></div><div id="ntabs"></div><div id="zone"></div><div id="acct"></div>
   </div></div>
 </div>
 
@@ -6667,6 +6692,85 @@ function realRow(t, hint, ph){
       前端一樣不可以用 new Date() 自己算今天（跨午夜兩邊會不同一天）。 */
 function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
 
+/* ══════════ 【帳戶總覽】（2026-09-21 Benson 交辦）══════════
+   券商端的「帳戶還剩多少錢」。⛔ 這一區**唯讀**：沒有任何按鈕、不碰下單那條路。
+   ⛔ 判斷句（夠不夠下一口、本月變化）**整句都是後端算的**（live_panel.equity_view）——
+      前端不准自己拿可動用去比保證金，⛔ 也不准自己算「這個月賺多少」。
+   ⛔ 問不到的時候要**照實說**：⛔ 不可以把上一次的金額留在畫面上假裝是現在的
+      （後端問不到就把數字清掉了，這裡只負責把那句話印出來）。
+   ⚠️ 當下的數字跟著 /api/state 每 0.5 秒進來（後端每分鐘才真的問一次券商）；
+      曲線是另一支 /api/account/hist，10 分鐘拿一次就夠（它一天才多一個點）。 */
+const ACCT={hist:null,at:0,pending:false,err:''};
+function acctPoll(){
+ if(ACCT.pending) return;
+ const now=Date.now();
+ if(ACCT.hist!==null&&now-ACCT.at<600000) return;
+ ACCT.pending=true; ACCT.at=now;
+ fetch('/api/account/hist',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(x=>{
+   ACCT.pending=false;
+   ACCT.hist=(x&&x.ok&&Array.isArray(x.rows))?x.rows:[];
+   ACCT.err=(x&&!x.ok&&x.msg)?String(x.msg):'';
+ }).catch(()=>{ ACCT.pending=false; ACCT.hist=ACCT.hist||[]; });
+}
+function acctMoney(v){
+ if(v==null||isNaN(v)) return '—';
+ return Math.round(Number(v)).toLocaleString('en-US');
+}
+function acctPM(v){
+ if(v==null||isNaN(v)) return '<span>—</span>';
+ const n=Math.round(Number(v));
+ const cls=n>0?'up':(n<0?'down':'');
+ return '<span class="'+cls+'">'+(n>0?'+':'')+n.toLocaleString('en-US')+'</span>';
+}
+/* 權益曲線。⛔ 只畫已經落地的那幾天（一天一點），⛔ 不把「現在」補成一個點
+   —— 那一點的時間跟其他點不是同一種東西（收盤後才記）。
+   ⚠️ 出入金那天標一個點：不標的話他某天匯錢進去，曲線看起來會像大賺一筆。 */
+function acctSpark(rows){
+ const pts=(rows||[]).filter(r=>r&&r.equity!=null&&!isNaN(r.equity));
+ if(pts.length<2) return '<div class="spark"><div class="cap">'+
+   (pts.length?'已經記了 1 天 —— 兩天以上才畫得出曲線':'還沒有任何一天的紀錄（每天 14:00 之後記一次）')+
+   '</div></div>';
+ const ys=pts.map(r=>Number(r.equity)), lo=Math.min.apply(null,ys), hi=Math.max.apply(null,ys);
+ const W=260,H=42,pad=3,rng=(hi-lo)||1;
+ const xy=i=>[pad+(W-2*pad)*(pts.length<2?0:i/(pts.length-1)),
+              H-pad-(H-2*pad)*((ys[i]-lo)/rng)];
+ const d=pts.map((_,i)=>{const p=xy(i);return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1);}).join(' ');
+ const dots=pts.map((r,i)=>{
+   if(!r.deposit||isNaN(r.deposit)||Number(r.deposit)===0) return '';
+   const p=xy(i);
+   return '<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="2.6" '+
+     'fill="var(--gold)"></circle>';
+ }).join('');
+ const dep=pts.some(r=>r.deposit&&Number(r.deposit)!==0);
+ return '<div class="spark"><svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" '+
+   'aria-hidden="true"><path d="'+d+'" fill="none" stroke="var(--dim)" stroke-width="1.4" '+
+   'stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>'+dots+'</svg>'+
+   '<div class="cap">'+esc(pts[0].date)+' ~ '+esc(pts[pts.length-1].date)+'　'+pts.length+' 天'+
+   (dep?'　●＝那天有出入金':'')+'</div></div>';
+}
+function acctHTML(s){
+ const E=s&&s.equity;
+ if(!E) return '';                       /* 後端還沒有這一份 ⇒ 整張卡不畫（⛔ 不寫假的） */
+ const hd='<div class="hd"><span class="t">帳戶總覽</span><span class="at">'+
+   (E.at?esc(E.at)+'　':'')+'券商端</span></div>';
+ if(!E.ok){
+   return '<div class="ac">'+hd+'<div class="miss">'+esc(E.err||'問不到帳戶餘額')+'</div></div>';
+ }
+ const en=E.enough||{};
+ const mo=E.month;
+ return '<div class="ac">'+hd+
+   '<div class="big">'+acctMoney(E.equity)+'</div>'+
+   '<div class="sub">今日 '+acctPM(E.day_pl)+
+     '（未平倉 '+acctPM(E.float_pl)+'／平倉 '+acctPM(E.settle_pl)+
+     '／成本 −'+acctMoney(E.cost)+'）</div>'+
+   '<div class="line'+(en.ok===false?' warn':'')+'">'+esc(en.msg||'')+'</div>'+
+   (mo?('<div class="line">本月 '+acctPM(mo.net)+
+        '（從 '+esc(mo.from)+' 起記'+(mo.deposit?'，已扣掉出入金 '+acctMoney(mo.deposit):'')+
+        '）</div>'):'')+
+   acctSpark(ACCT.hist)+
+   '</div>';
+}
+
 /* ---------------- 右欄總繪製 ----------------
    ⛔ 呼叫端一定要用 holdingNow 擋著：長按送單期間含那顆按鈕的節點不准重繪。 */
 function paintRight(s,nf){
@@ -6677,6 +6781,10 @@ function paintRight(s,nf){
   // ② 頁籤（浮動點數是裡面的獨立節點）
   setEl('ntabs', tabsHTML(R));
   paintBadge(R);
+  // ②b 【帳戶總覽】（2026-09-21）：當下的數字跟著 s.equity 來，曲線 10 分鐘拿一次。
+  //     ⛔ 它是獨立節點 —— 下面那一大塊重建骨架時不可以把這張卡一起換掉。
+  acctPoll();
+  setEl('acct', acctHTML(s));
   // ③ 整區：只有切分頁／開關真實下單／演練↔真實 才重建骨架
   const zone=document.getElementById('zone');
   if(!zone) return;
@@ -9615,6 +9723,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._sim_lane_get(self.path.partition("?")[2])
         if self.path.partition("?")[0] == "/api/sim/daychart":
             return self._sim_daychart_get(self.path.partition("?")[2])
+        # ⭐ 2026-09-21【帳戶總覽】的權益曲線（一天一點）。⚠️ **唯讀**。
+        #    ⛔⛔ 這是**真實金額** ⇒ 跟 /api/state、/api/fire/state 同一個守衛
+        #       （沒有這一道，DNS rebinding 下別的網頁讀得到他的帳戶餘額）。
+        #    ⚠️ 當下的數字在 /api/state 的 `equity` 裡（每分鐘更新）；這一支只給歷史，
+        #       ⛔ 不要在這裡再算一份「現在多少錢」（那就是第二把尺）。
+        if self.path.partition("?")[0] == "/api/account/hist":
+            ok, code, msg = fire_get_guard(self.headers)
+            if not ok:
+                return self._json(code, {"ok": False, "msg": msg})
+            try:
+                rows = equity_hist_read()[-EQUITY_HIST_MAX:]
+            except Exception as e:
+                return self._json(200, {"ok": False, "rows": [],
+                                        "msg": "讀不出權益紀錄：%s" % str(e)[:120]})
+            return self._json(200, {"ok": True, "rows": [
+                {"date": r.get("date"), "equity": r.get("equity"),
+                 "deposit": r.get("deposit")} for r in rows]})
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:
@@ -9984,6 +10109,236 @@ def poll_index():
         INDEX["ms"] = round(took * 1000)
         # 補足到固定週期；工作本身就超過週期時至少留 0.3 秒，不要把 API 打爆
         time.sleep(max(0.3, INDEX_EVERY - took))
+
+
+# ---------------------------------------------------------------- 【帳戶總覽】
+#
+# ⭐⭐ 2026-09-21 Benson 要的：「我的期貨帳戶裡面剩下多少錢」，外加三件事
+#    ①「錢夠不夠明天那一口」②「今天賺賠多少（券商端的數字）」③ 每天記一個權益數字畫成曲線。
+#
+# ⛔⛔ **這一整段唯讀**：只叫 `broker.account_margin()`（`api.margin()`），⛔ 一張單都不送。
+# ⛔⛔ **真實金額不上傳**：每天那一列寫在 `tools/shioaji/equity/`（已 gitignore），
+#    跟 `real_orders/`、`real_trades/` 同一條鐵律 —— repo 是公開的。
+# ⚠️ **這是券商端的真相，跟面板自己算的點數不是同一件事**（手續費、稅、其他部位都算進去）。
+#    ⇒ 畫面上一律標「券商端」，⛔ 不可以拿它去對策略績效（那會得到兩個都對但不一樣的數字）。
+# ⚠️ 節奏：盤中 60 秒一次、其餘 10 分鐘一次，而且 ⛔ **送單那幾刻前後 10 秒不問**
+#    （09:03:30／09:15／13:43:30）—— 那幾秒的連線全部留給送單。
+
+EQUITY_DIR = HERE / "equity"            # ⛔ gitignore（真實金額只留在這台電腦）
+EQUITY_EVERY = 60.0                     # 盤中多久問一次
+EQUITY_EVERY_OFF = 600.0                # 非盤中
+EQUITY_BUSY_END = pd.Timestamp("14:30").time()   # 問得密一點的時段結束（日盤收完再留 45 分）
+EQUITY_QUIET_S = 10                     # 送單那幾刻前後幾秒不問
+EQUITY_WRITE_AFTER = 14 * 3600          # 每天幾點之後才把當天那一列落地（日盤收完）
+EQUITY_HIST_MAX = 120                   # 曲線最多畫幾天
+EQUITY = {"at": None, "m": None, "err": "還在問券商…（每分鐘更新一次）",
+          "lot1": None, "lot1_at": None}
+_EQ_HIST = {"key": None, "rows": []}
+
+
+def _eq_quiet(now):
+    """現在是不是「送單那幾刻」⇒ ⛔ 不去問帳戶（連線留給送單）。"""
+    sec = now.hour * 3600 + now.minute * 60 + now.second
+    for t in (SIGNAL_SEC, REV_SEC, EOD_CLOSE_SEC):
+        if t is not None and abs(sec - t) <= EQUITY_QUIET_S:
+            return True
+    return False
+
+
+def equity_hist_read():
+    """
+    讀 `equity/*.jsonl`（一天一列，舊到新）。⚠️ 唯讀、`(mtime,size)` 快取。
+    ⛔ 壞列跳過就好：這是給畫面看的曲線，⛔ 不可以因為一列壞掉就整段不顯示。
+    """
+    try:
+        files = sorted(EQUITY_DIR.glob("*.jsonl"))
+    except OSError:
+        return []
+    key = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    if _EQ_HIST["key"] == key:
+        return list(_EQ_HIST["rows"])
+    rows, seen = [], set()
+    for p in files:
+        try:
+            txt = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in txt.splitlines():
+            if not line.strip():
+                continue
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            d = o.get("date") if isinstance(o, dict) else None
+            if not isinstance(d, str) or d in seen:
+                continue
+            seen.add(d)
+            rows.append(o)
+    rows.sort(key=lambda r: r["date"])
+    _EQ_HIST.update(key=key, rows=rows)
+    return list(rows)
+
+
+def _equity_write_day(m, now):
+    """
+    把今天那一列落地（一天一列、只 append）。⇒ 有沒有真的寫。
+    ⛔ 14:00 以前不寫（日盤還沒收完，寫下去的是半路的數字）。
+    ⛔ 今天已經有一列就不再寫（⛔ 不覆蓋、不改舊列）。
+    """
+    if (now.hour * 3600 + now.minute * 60 + now.second) < EQUITY_WRITE_AFTER:
+        return False
+    today = str(now.date())
+    if any(r.get("date") == today for r in equity_hist_read()):
+        return False
+    row = {"date": today, "at": now.strftime("%H:%M:%S"),
+           "equity": m.get("equity_amount"), "avail": m.get("available_margin"),
+           "deposit": m.get("deposit_withdrawal"),
+           "settle_pl": m.get("future_settle_profitloss"),
+           "float_pl": m.get("future_open_position"),
+           "fee": m.get("fee"), "tax": m.get("tax"),
+           "lot1": EQUITY.get("lot1")}
+    try:
+        EQUITY_DIR.mkdir(parents=True, exist_ok=True)
+        with (EQUITY_DIR / (today[:4] + ".jsonl")).open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _EQ_HIST["key"] = None          # ⛔ 快取要作廢，不然畫面到明天才看得到這一列
+        return True
+    except Exception as e:
+        EQUITY["err"] = "今天那一列寫不進去：%s" % str(e)[:100]
+        return False
+
+
+def _equity_lot1(m):
+    """
+    「一口要壓多少保證金」—— **從他自己的帳戶學**：有部位的時候原始保證金是多少就記多少。
+    ⛔⛔ 不准寫死一個數字（微台的保證金期交所會調，寫死的那天起畫面就是錯的），
+       ⛔ 也不准拿沒有部位時的 0 當答案 ⇒ 沒學到就是**不知道**（畫面照實說）。
+    ⚠️ 只在「剛好 1 口」的時候學（他就是只下 1 口；多口會學成 2 倍）。
+    """
+    im = m.get("initial_margin")
+    if not isinstance(im, (int, float)) or im <= 0:
+        return
+    pos = broker._state.get("position")
+    qty = int((pos or {}).get("qty") or 0)
+    if qty != 1:
+        return
+    EQUITY["lot1"] = float(im)
+    EQUITY["lot1_at"] = str(date.today())
+
+
+def _equity_lot1_restore():
+    """
+    開機時把「上次學到的一口保證金」從落地的紀錄裡讀回來（最新那一列有值的）。
+    ⛔ 讀不到就維持 None ＝ **不知道**（畫面照實說），⛔ 不猜一個數字。
+    """
+    try:
+        for r in reversed(equity_hist_read()):
+            v = r.get("lot1")
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                EQUITY["lot1"], EQUITY["lot1_at"] = float(v), r.get("date")
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _equity_month(rows, m, now):
+    """這個月帳戶變了多少（⛔ 扣掉出入金 —— 匯錢進去不是賺到）。⇒ dict 或 None。"""
+    mth = str(now.date())[:7]
+    mine = [r for r in rows if str(r.get("date", ""))[:7] == mth
+            and isinstance(r.get("equity"), (int, float))]
+    now_eq = m.get("equity_amount")
+    if not mine or not isinstance(now_eq, (int, float)):
+        return None
+    base = float(mine[0]["equity"])
+    dep = sum(float(r.get("deposit") or 0) for r in mine)
+    return {"from": mine[0]["date"], "n": len(mine), "base": base,
+            "now": float(now_eq), "change": round(float(now_eq) - base, 1),
+            "deposit": round(dep, 1),
+            "net": round(float(now_eq) - base - dep, 1)}
+
+
+def equity_view(now=None):
+    """
+    【帳戶總覽】那張卡要的一份（⚠️ 唯讀）。⇒ dict；⛔ 問不到就 `ok:False` ＋ 一句話
+    （⛔ 不留上一次的數字在畫面上假裝是現在的）。
+    """
+    now = now or datetime.now()
+    m, err = EQUITY.get("m"), EQUITY.get("err")
+    if not m:
+        return {"ok": False, "err": err or "還沒問到帳戶餘額", "at": EQUITY.get("at")}
+    rows = equity_hist_read()
+    lot1, avail = EQUITY.get("lot1"), m.get("available_margin")
+    # 「錢夠不夠明天那一口」⛔ 學不到一口要多少 ⇒ 照實說不知道（⛔ 不猜一個數字）
+    if not isinstance(avail, (int, float)):
+        enough = {"ok": None, "why": "no_avail", "msg": "券商沒給可動用保證金 —— 判不出夠不夠"}
+    elif not lot1:
+        enough = {"ok": None, "why": "no_lot1",
+                  "msg": "還不知道一口要壓多少保證金（等下一次有部位時就學起來）"}
+    else:
+        ok = avail >= lot1
+        enough = {"ok": ok, "why": None, "need": lot1, "avail": float(avail),
+                  "since": EQUITY.get("lot1_at"),
+                  "msg": ("可動用 %s／一口約 %s —— %s"
+                          % (format(int(round(avail)), ","), format(int(round(lot1)), ","),
+                             "夠下一口" if ok else "⚠️ 不夠，明天那一口會送失敗"))}
+    fee = float(m.get("fee") or 0) + float(m.get("tax") or 0)
+    pl = None
+    if isinstance(m.get("future_open_position"), (int, float)) \
+            and isinstance(m.get("future_settle_profitloss"), (int, float)):
+        pl = round(float(m["future_open_position"]) + float(m["future_settle_profitloss"])
+                   - fee, 1)
+    return {"ok": True, "err": None, "at": EQUITY.get("at"),
+            "equity": m.get("equity_amount"), "avail": avail,
+            "float_pl": m.get("future_open_position"),
+            "settle_pl": m.get("future_settle_profitloss"),
+            "cost": round(fee, 1), "day_pl": pl,
+            "risk": m.get("risk_indicator"), "margin_call": m.get("margin_call"),
+            "deposit": m.get("deposit_withdrawal"),
+            "enough": enough, "month": _equity_month(rows, m, now),
+            "hist_n": len(rows)}
+
+
+def poll_equity():
+    """
+    背景問「帳戶還有多少錢」。⚠️ **唯讀**（`broker.account_margin()` ⇒ `api.margin()`）。
+    ⛔ 送單那幾刻前後 10 秒不問；⛔ 沒連上永豐就不問（⛔ 不重試到把流量吃完）。
+    ⚠️ 節奏扣掉工作時間（跟 `poll_index` 同一個作法）。
+    """
+    while True:
+        t0 = time.time()
+        now = datetime.now()
+        try:
+            if SESSION_REF.get("api") is not None and not _eq_quiet(now):
+                m, err = broker.account_margin()
+                if m:
+                    EQUITY.update({"m": m, "err": None,
+                                   "at": now.strftime("%H:%M:%S")})
+                    _equity_lot1(m)
+                    _equity_write_day(m, now)
+                else:
+                    # ⛔ 問不到就把數字清掉：畫面寧可寫「問不到」，
+                    #    ⛔ 也不可以繼續顯示一個看起來是現在、其實是十分鐘前的金額。
+                    EQUITY.update({"m": None, "err": err or "問不到帳戶餘額"})
+                # ⛔⛔ **先算完再進鎖**：`equity_view()` 會讀 equity/（磁碟），
+                #    而 `state_lock` 是 4Hz 主迴圈（＝他的停損）每一圈都要拿的鎖。
+                #    ⛔ 不可以把任何 I/O 留在鎖裡面。
+                view = equity_view(now)
+                with state_lock:
+                    STATE["equity"] = view
+        except Exception as e:                        # noqa: BLE001 ⛔ 這條執行緒不准死
+            try:
+                EQUITY.update({"m": None, "err": "帳戶查詢出錯：%s" % str(e)[:100]})
+                view = equity_view(now)               # ⛔ 同上：讀檔留在鎖外面
+                with state_lock:
+                    STATE["equity"] = view
+            except Exception:
+                pass
+        t = now.time()
+        # 盤中（08:45 開盤 ~ 14:30）問密一點；其餘時間 10 分鐘一次就夠
+        every = EQUITY_EVERY if (SESSION_OPEN <= t <= EQUITY_BUSY_END) else EQUITY_EVERY_OFF
+        time.sleep(max(5.0, every - (time.time() - t0)))
 
 
 def serve():
@@ -10539,6 +10894,16 @@ def main():
                       "period": hist.period, "n_days_total": hist.n_days})
     threading.Thread(target=poll_index, daemon=True).start()
     threading.Thread(target=poll_phone, daemon=True).start()
+    # ⭐ 2026-09-21【帳戶總覽】：每分鐘問一次「帳戶還有多少錢」。⚠️ 唯讀、⛔ 一張單都不送；
+    #    ⛔ 只接在 main()（治具與 --replay 走不到這裡 ⇒ 測試不會去連永豐）。
+    # ⚠️ 先放一份「還在問」進去：不然第一分鐘那張卡整個不見，看起來像功能壞了。
+    _eq_boot = equity_view()                          # ⛔ 讀檔留在鎖外面（見 poll_equity）
+    with state_lock:
+        STATE["equity"] = _eq_boot
+    # ⭐ 開機先把上次學到的「一口要壓多少保證金」讀回來（⛔ 不然重開一次就忘記、
+    #    畫面要等到下一次有部位才講得出夠不夠）。
+    _equity_lot1_restore()
+    threading.Thread(target=poll_equity, daemon=True, name="equity").start()
 
     # 【策略實驗室】收盤後補抓當天日盤逐筆。⛔ 起不來只印警告（見 start_strategy_lab_fetch）。
     start_strategy_lab_fetch()

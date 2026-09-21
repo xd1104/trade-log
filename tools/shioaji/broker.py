@@ -369,6 +369,57 @@ def entries_today():
     return n
 
 
+# ---------------------------------------------------------------- 帳戶還有多少錢
+
+# ⭐⭐ 2026-09-21 Benson 要的【帳戶總覽】。**這一支只問、不動任何東西。**
+#    ⛔ 放在這個檔是因為帳號（`_state["account"]`）在這裡 —— ⛔ 但它跟送單那條路
+#       一點關係都沒有：不拿 `_lock`、不碰 `_state["position"]`、不送任何委託。
+#    ⚠️ 永豐的欄位名對照（`shioaji._core.Margin`，⛔ 不要自己改名字）：
+#       equity_amount 權益總值／equity 權益數／available_margin 可動用（可出金）
+#       initial_margin 原始保證金／maintenance_margin 維持保證金／margin_call 追繳
+#       risk_indicator 風險指標／future_open_position 未沖銷期貨浮動損益
+#       future_settle_profitloss 期貨平倉損益／deposit_withdrawal 存提
+#       fee 手續費／tax 期交稅／today_balance 今日餘額／yesterday_balance 前日餘額
+MARGIN_FIELDS = ("equity_amount", "equity", "available_margin", "initial_margin",
+                 "maintenance_margin", "margin_call", "risk_indicator",
+                 "future_open_position", "today_future_open_position",
+                 "future_settle_profitloss", "deposit_withdrawal", "fee", "tax",
+                 "today_balance", "yesterday_balance", "order_margin_premium")
+
+
+def account_margin():
+    """
+    跟券商問「帳戶現在有多少錢」。⚠️ **唯讀**，⛔ 一張單都不會送。
+    ⇒ `(數字 dict, None)`；問不到 ⇒ `(None, 一句話)`。
+    ⛔ 問不到就是問不到：**不猜、不拿上一次的數字頂**（呼叫端負責留白）——
+       錢的數字編一個出來比留白危險得多。
+    ⚠️ 永豐回來的物件有 `status`（FetchStatus）：不是 Fetched 就當成沒問到。
+    """
+    api, acc = _state["api"], _state["account"]
+    if api is None:
+        return None, "面板還沒連上永豐"
+    if acc is None:
+        return None, "找不到期貨帳號（面板登入時沒撈到）"
+    try:
+        m = api.margin(acc)
+    except Exception as e:
+        return None, "問不到帳戶餘額：%s" % str(e)[:120]
+    if m is None:
+        return None, "永豐沒有回傳帳戶餘額"
+    st = getattr(m, "status", None)
+    if st is not None and str(getattr(st, "name", st)).lower() not in ("fetched", "none"):
+        return None, "永豐回的帳戶餘額還沒到齊（%s）" % str(getattr(st, "name", st))
+    out = {}
+    for k in MARGIN_FIELDS:
+        v = getattr(m, k, None)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue                      # ⛔ 看不懂的欄位就不端（⛔ 不要填 0 當作「沒有」）
+        out[k] = float(v)
+    if not out:
+        return None, "永豐回的帳戶餘額看不懂（一個數字都讀不出來）"
+    return out, None
+
+
 # ---------------------------------------------------------------- 對帳
 
 def broker_position():
