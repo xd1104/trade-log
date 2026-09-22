@@ -162,7 +162,24 @@ if back:
 chk("  ⛔ 出場原因亂寫會被擋下來", S._valid_row(dict(r, exit_reason="亂寫的")), False)
 chk("  「時間到」是合法的出場原因", "時間到" in S._EXITS, True)
 
-print("\n=== ⑥ ⛔ 收尾 ===")
+print("\n=== ⑥ 內頁那張圖（⛔ Benson 2026-09-22 抓到：畫成日盤、又沒標進出場）===")
+S.MIN1_CSV = TMP / "bars.csv"                 # ⛔ 圖用的 1 分 K 也導到暫存區
+BARS.to_csv(S.MIN1_CSV, index=False)
+S._CSV.update(key=None, df=None)
+_c = S.day_chart("usml", str(E), _rows)
+chk("  是夜盤那張圖（⛔ 不是日盤）", _c["session"], "night")
+_lo, _hi = S._usml_window(E, back or r)
+say(bool(_c["bars"]) and _c["bars"][0][0] >= S._hm(_lo - 2) and _c["bars"][-1][0] <= S._hm(_hi + 2),
+    "  只畫美股開盤前後那一段（⛔ 不是整晚 14 小時）",
+    ("%s ~ %s" % (_c["bars"][0][0], _c["bars"][-1][0])) if _c["bars"] else "沒有 K 棒")
+_k = {m["kind"]: m for m in _c["marks"]}
+say("entry" in _k and _k["entry"]["at"], "  有進場標記（含時刻）", str(_k.get("entry", {}).get("at")))
+say("exit" in _k and _k["exit"]["at"], "  有出場標記（含時刻）", str(_k.get("exit", {}).get("at")))
+say(any(l["label"] == "停損" for l in _c["lines"]), "  有停損那條線")
+say(not any(l["label"] == "停利" for l in _c["lines"]),
+    "  ⛔ 沒有停利線（這條線本來就沒有停利，畫了就是假的）")
+
+print("\n=== ⑦ ⛔ 收尾 ===")
 say(S.SIM_DIR != REAL_SIM and str(TMP) in str(S.SIM_DIR), "  全程在暫存區", str(S.SIM_DIR))
 say(not (HERE / "sim_lanes" / ("%s.jsonl" % str(E)[:7])).exists()
     or not any(str(E) in ln and '"usml"' in ln

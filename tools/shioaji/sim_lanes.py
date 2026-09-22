@@ -914,6 +914,10 @@ def usml_eval(E, bars, spy, ctx):
     else:
         ex, ex_why, ex_at = float(c[-1]), "時間到", int(mm[seg][-1])
     return {"lane": "usml", "date": str(E),
+            # ⭐ 2026-09-22：進場時刻與美股開盤那一刻的價要**落地**——內頁那張圖靠它們標記
+            #    （⛔ 圖上不准重算規則，一律讀這一列）
+            "at": _hm(T + usml.ENTRY_OFFSET),
+            "ref": round(float(tx.get(T, entry)), 1), "ref_label": _hm(T),
             "decision": "做多" if d > 0 else "做空", "why": "model",
             "reason": "模型算上漲機率 %.0f%%（%s 進場、抱 %d 分鐘）"
                       % (p * 100, _hm(T + usml.ENTRY_OFFSET), usml.HOLD_MIN),
@@ -1847,14 +1851,16 @@ def day_chart(key, day, rows=None):
     if rows is None:
         rows, _st = read_rows()
     r = rows.get((key, day))
-    out = {"ok": True, "key": key, "name": LANE_NAME[key], "date": day, "session": "night" if key == "night" else "day",
+    out = {"ok": True, "key": key, "name": LANE_NAME[key], "date": day,
+           # ⭐ 2026-09-22：美股開盤模型也是夜盤（⛔ 不可以畫成日盤那張圖）
+           "session": "night" if key in ("night", "usml") else "day",
            "bars": [], "marks": [], "lines": [], "zones": [], "notes": []}
     if r is None:
         out["notes"].append("這一天沒有這一條的定論")
         return out
     out.update({k: r.get(k) for k in ("decision", "reason", "points", "exit_reason", "calc")})
-    if key == "night":
-        return _night_chart(out, r)
+    if key in ("night", "usml"):
+        return _night_chart(out, r, lane=key)
     try:
         D = SL.load_day(day)
     except Exception as e:
@@ -1934,8 +1940,24 @@ def _merge_lines(lines):
     return list(by.values())
 
 
-def _night_chart(out, r):
-    """夜盤那一條：用本機 1 分 K（⚠️ 標籤是**結束時間**，畫面上換成開始時間）"""
+def _usml_window(E, r):
+    """
+    美股開盤模型那張圖要畫的時間範圍（分鐘數，夜盤座標）。
+    ⛔ 不畫整晚 14 小時 —— 那 30 分鐘的交易會變成圖上一條細縫，等於沒畫。
+    ⇒ 美股開盤前 1 小時 ~ 出場後 1 小時。
+    """
+    T = usml.us_open_min(E)
+    return T - 60, T + usml.ENTRY_OFFSET + usml.HOLD_MIN + 60
+
+
+def _night_chart(out, r, lane="night"):
+    """
+    夜盤那兩條（`night`／`usml`）的圖：用本機 1 分 K（⚠️ 標籤是**結束時間**，畫面上換成開始時間）。
+    ⚠️ 2026-09-22 一般化給第八條用：
+      ・`usml` 只畫美股開盤前後那一段（見 `_usml_window`），整晚那張圖看不出東西
+      ・進場時刻：夜盤那條在 `c_label`、美股開盤模型在 `at`
+      ・美股開盤模型**沒有停利**（只有停損）⇒ 只畫停損那條線
+    """
     try:
         E = date.fromisoformat(out["date"])
         # ⭐ 先拿面板背景跟永豐補齊的那一份（`_NIGHT_API` 只放**到齊的**晚上），沒有才用本機 csv ——
@@ -1953,6 +1975,11 @@ def _night_chart(out, r):
     ts = pd.to_datetime(bars["ts"])
     E1 = E + timedelta(days=1)
     keep = [((t.date() == E and t.hour >= 15) or (t.date() == E1 and t.hour < 5)) for t in ts]
+    if lane == "usml":
+        # ⛔ 只留美股開盤前後那一段（整晚那張圖裡，30 分鐘的交易看不見）
+        lo, hi = _usml_window(E, r)
+        keep = [k and (lo <= ((t.hour * 60 + t.minute) + (1440 if t.date() == E1 else 0)) <= hi)
+                for k, t in zip(keep, ts)]
     b = bars[keep]
     # ⚠️ 本機 1 分 K 這一份**沒有讀開盤價**（`_csv_bars` 只留 ts／High／Low／Close）
     #    ⇒ 開盤價用**前一根的收盤價**代替（缺開盤價時的標準畫法，K 棒才連得起來）。
@@ -1964,21 +1991,37 @@ def _night_chart(out, r):
         out["bars"].append(["%02d:%02d" % (st.hour, st.minute), o, float(hh), float(ll), float(cc)])
         prev = float(cc)
     # ⛔ 畫不到出場那一刻要講出來（不然圖上「出場」標記會飄在圖外，看起來像壞掉）
-    if out["bars"] and not any(x[0] < "05:00" for x in out["bars"]):
+    if lane == "night" and out["bars"] and not any(x[0] < "05:00" for x in out["bars"]):
         out["notes"].append("⚠️ 這一晚的 1 分 K 只到 %s（凌晨那段還沒有資料）⇒ 出場那一刻畫不到" % out["bars"][-1][0])
+    if not out["bars"]:
+        out["notes"].append("這一段沒有 1 分 K ⇒ 畫不出圖")
+        return out
     if r.get("ref") is not None:
         out["lines"].append({"price": r["ref"], "label": "美股開盤 %s" % (r.get("ref_label") or ""), "style": "ref"})
     if r["decision"] == "不做":
         return out
     d = 1 if r["decision"] == "做多" else -1
-    out["marks"].append({"kind": "entry", "at": r.get("c_label"), "price": r["entry"], "dir": d,
+    # ⚠️ 進場時刻：夜盤那條在 `c_label`、美股開盤模型在 `at`。
+    #    ⛔ 舊的回填列（2026-09-22 之前）沒有 `at` ⇒ 用那一晚的美股開盤時刻推
+    #       （夏冬令是查得出來的固定規則，不是「猜」）。
+    at = r.get("c_label") or r.get("at")
+    if at is None and lane == "usml":
+        at = _hm(usml.us_open_min(E) + usml.ENTRY_OFFSET)
+    out["marks"].append({"kind": "entry", "at": at, "price": r["entry"], "dir": d,
                          "label": "%s進場 %s" % (r["decision"], _px(r["entry"]))})
     tp = r.get("tpsl_points")
     if tp:
         out["lines"] += [{"price": round(r["entry"] + d * tp, 1), "label": "停利", "style": "tp"},
                          {"price": round(r["entry"] - d * tp, 1), "label": "停損", "style": "sl"}]
+    elif r.get("stop_points"):
+        # ⚠️ 美股開盤模型**沒有停利**（時間到就平）⇒ 只有停損那一條線
+        out["lines"].append({"price": round(r["entry"] - d * r["stop_points"], 1),
+                             "label": "停損", "style": "sl"})
     out["marks"].append({"kind": "exit", "at": r.get("exit_label"), "price": r.get("exit"), "dir": d,
                          "label": "%s %s" % (r.get("exit_reason") or "出場", _px(r.get("exit")))})
     out["notes"].append("夜盤用 1 分 K 近似（開盤價用前一根收盤代替；⚠️ 看不到一分鐘之內的走法）")
+    if lane == "usml":
+        out["notes"].append("只畫美股開盤前後（%s ~ %s）—— 整晚那張圖看不出這 30 分鐘"
+                            % (_hm(_usml_window(E, r)[0]), _hm(_usml_window(E, r)[1])))
     out["lines"] = _merge_lines(out["lines"])
     return out
