@@ -179,7 +179,29 @@ say(any(l["label"] == "停損" for l in _c["lines"]), "  有停損那條線")
 say(not any(l["label"] == "停利" for l in _c["lines"]),
     "  ⛔ 沒有停利線（這條線本來就沒有停利，畫了就是假的）")
 
-print("\n=== ⑦ ⛔ 收尾 ===")
+print("\n=== ⑦ 1 分 K 存回本機（2026-09-22：⛔ 不要再用完就丟）===")
+S.MIN1_CSV = TMP / "store.csv"
+_old = pd.DataFrame({"ts": ["2026-09-16 23:59:00"], "Open": [1], "High": [1],
+                     "Low": [1], "Close": [1], "Volume": [1], "Amount": [1]})
+_old.to_csv(S.MIN1_CSV, index=False)
+_new = pd.DataFrame({"ts": pd.to_datetime(["2026-09-17 15:02:00", "2026-09-16 23:59:00",
+                                           "2026-09-17 15:01:00"]),
+                     "Open": [9, 9, 9], "High": [9, 9, 9], "Low": [9, 9, 9],
+                     "Close": [9, 9, 9], "Volume": [9, 9, 9], "Amount": [9, 9, 9]})
+chk("  新的存得進去（重複的不算）", S.min1_store(_new), (2, None))
+_got = pd.read_csv(S.MIN1_CSV)
+chk("  欄位沒被弄壞", list(_got.columns), S.MIN1_COLS)
+chk("  ⛔ 依時間排序（night_frame 假設舊到新）", list(_got["ts"]), sorted(_got["ts"]))
+chk("  ⛔ 舊的那一根不被新的蓋掉",
+    float(_got[_got["ts"] == "2026-09-16 23:59:00"]["Close"].iloc[0]), 1.0)
+chk("  再存一次不會重複長大", S.min1_store(_new)[0], 0)
+S.min1_store(pd.DataFrame({"ts": pd.to_datetime(["2026-09-17 15:03:00"]),
+                           "High": [8], "Low": [8], "Close": [8]}))
+chk("  只有 H/L/C 的也存得進去、格式不壞",
+    list(pd.read_csv(S.MIN1_CSV).columns), S.MIN1_COLS)
+chk("  ⛔ 空的不會丟例外", S.min1_store(None), (0, None))
+
+print("\n=== ⑧ ⛔ 收尾 ===")
 say(S.SIM_DIR != REAL_SIM and str(TMP) in str(S.SIM_DIR), "  全程在暫存區", str(S.SIM_DIR))
 say(not (HERE / "sim_lanes" / ("%s.jsonl" % str(E)[:7])).exists()
     or not any(str(E) in ln and '"usml"' in ln

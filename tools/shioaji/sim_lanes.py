@@ -1120,6 +1120,52 @@ def night_bars_local(E, since):
     return g, day_e, dd.min(), dd.max()
 
 
+MIN1_COLS = ["ts", "Open", "High", "Low", "Close", "Volume", "Amount"]
+
+
+def min1_store(raw):
+    """
+    ⭐⭐ 2026-09-22：把跟永豐要回來的 1 分 K **存回本機那份 csv**（Benson 交辦）。
+
+    背景：以前 `fetch_night` 只在記憶體合併、**用完就丟** ⇒ `tmf_1min.csv` 從 2026-09-16 凍住，
+    要重算歷史的東西（回填、研究）都只看得到 9/16 以前；而面板只回看最近 10 個平日晚上
+    ⇒ **超過那個窗口的洞永遠補不回來**。⛔ 他明確說不靠 Windows 排程（重灌會被清掉）⇒ 面板自己存。
+
+    ⛔ 鐵律（照 `backfill_min1.py` 那一套）：concat → `drop_duplicates("ts")` →
+       **依 ts 排序** → 先寫 `.tmp` 再原子換檔。排序是必要的：`night_frame()` 假設舊到新。
+    ⚠️ 欄位要對齊本機那份；缺的補空，⛔ 不准只存 High/Low/Close（那會把整份檔案格式弄壞）。
+    ⇒ (新增幾根, 錯誤字串或 None)。⛔ 永遠不丟例外：存不進去不可以影響模擬那條路。
+    """
+    try:
+        if raw is None or not len(raw):
+            return 0, None
+        new = raw.copy()
+        new["ts"] = pd.to_datetime(new["ts"])
+        for c in MIN1_COLS:
+            if c not in new.columns:
+                new[c] = np.nan
+        new = new[MIN1_COLS]
+        if MIN1_CSV.exists():
+            old = pd.read_csv(MIN1_CSV)
+            old["ts"] = pd.to_datetime(old["ts"])
+            before = len(old)
+            both = pd.concat([old, new], ignore_index=True)
+        else:
+            before = 0
+            both = new
+        both = both.drop_duplicates(subset="ts", keep="first").sort_values("ts")
+        added = len(both) - before
+        if added <= 0:
+            return 0, None
+        tmp = MIN1_CSV.with_suffix(".csv.tmp")
+        both.to_csv(tmp, index=False)
+        tmp.replace(MIN1_CSV)
+        _CSV.update(key=None, df=None)          # ⛔ 讀檔快取作廢，不然畫面還停在舊的
+        return int(added), None
+    except Exception as e:
+        return 0, str(e)[:120]
+
+
 def fetch_night(api, has_position, E, local, now):
     """跟永豐要 E 與 E+1 兩天的 1 分 K，跟本機合併。回 DataFrame（到齊）或狀態字串。"""
     if ("kbars", str(E), str(now.date())) in _TRIED:
@@ -1128,6 +1174,7 @@ def fetch_night(api, has_position, E, local, now):
     if g is not None:
         return g
     frames = [] if local is None or local.empty else [local]
+    raws = []                                  # ⭐ 原封不動的那幾份（要存回本機 csv 用）
     got, errs = 0, []
     try:
         contract = api.Contracts.Futures.TMF[SL.CONTRACT_CODE]
@@ -1145,6 +1192,7 @@ def fetch_night(api, has_position, E, local, now):
         if not df.empty:
             df = df.copy()
             df["ts"] = pd.to_datetime(df["ts"])
+            raws.append(df)                    # ⭐ 整天原樣留一份（含 Open／Volume／Amount）
             frames.append(df[["ts", "High", "Low", "Close"]])
             got += 1
     if not got:
@@ -1160,7 +1208,16 @@ def fetch_night(api, has_position, E, local, now):
         _FAIL_AT["kbars"] = now
         return _set_fetch("kbars", "incomplete", "%s 晚上的 1 分 K 還沒到齊，10 分鐘後再試" % E, now)
     _FAIL_AT["kbars"] = None
-    _set_fetch("kbars", "saved", "已補 %s 晚上的 1 分 K" % E, now)
+    # ⭐⭐ 2026-09-22：**存回本機 csv**（⛔ 不要再用完就丟）。
+    #    ⚠️ 只在「這一晚到齊了」之後才存：半截的資料存進去，以後分不出是真的缺還是抓到一半。
+    #    ⛔ 存不進去不影響這一輪的結果（模擬照算），只把話講到畫面上。
+    added, err = min1_store(pd.concat(raws, ignore_index=True) if raws else None)
+    msg = "已補 %s 晚上的 1 分 K" % E
+    if err:
+        msg += "（⚠️ 存回本機檔失敗：%s）" % err
+    elif added:
+        msg += "（順手存回本機檔 %d 根）" % added
+    _set_fetch("kbars", "saved", msg, now)
     return out
 
 
