@@ -67,5 +67,8 @@ tools/shioaji/equity/
 tools/shioaji/sim_lanes/
 # ⛔⛔ 【模擬】美股開盤模型（2026-09-22）：SPY 行情快取與小狀態檔，⛔ 不上傳
 tools/shioaji/us_spy/
+tools/shioaji/us_bars/
+tools/shioaji/tsm_ctx.json
+tools/shioaji/tsm_ctx.json.*
 tools/shioaji/usml_ctx.json
 tools/shioaji/usml_ctx.json.*

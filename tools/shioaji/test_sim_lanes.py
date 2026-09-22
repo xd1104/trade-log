@@ -753,8 +753,8 @@ st_code, body = req("/api/sim/state")
 chk("  GET ⇒ 200", st_code, 200)
 # ⛔ 這裡**寫死** key 與名字：拿 S.LANES／S.LANE_NAME 去比是自己比自己（一起改就永遠綠，
 #    2026-09-16 突變 N15 當場抓到這個假綠燈）。
-LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "usml"]
-LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢", "美股開盤模型"]
+LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm"]
+LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢", "台積電快攻"]
 chk("  ⛔ 後端 LANES 就是這八條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
 chk("  端點端出來的八條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
 chk("  ⛔ 八條的名字就是 Benson 定的那八個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
