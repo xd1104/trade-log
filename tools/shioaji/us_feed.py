@@ -154,3 +154,42 @@ def first5(sym, E, feed="sip", fetch=True, now=None):
     done = datetime(E.year, E.month, E.day, 9, 30, tzinfo=NY) + timedelta(minutes=BAR_MIN)
     return {"open": o, "close": c, "mv_pct": 100.0 * (c - o) / o,
             "done_at": done.astimezone(TPE).replace(tzinfo=None)}
+
+
+LIVE_TIMEOUT = 8
+
+
+def first5_live(sym, E, feed="iex", now=None):
+    """
+    ⭐ **即時版**（2026-09-22 夜盤真單用）：直接跟 Alpaca 要 E 那天美東 9:30 開始的那一根 5 分 K。
+    ⇒ 同 `first5()` 的 dict，或 None（還沒收完／還沒出來／抓不到）。⛔ 不寫檔、不丟例外。
+    ⛔⛔ 那一根 9:35 才收完 ⇒ 台北時間還沒到 `done_at` 一律回 None（⛔ 不准拿半根當整根）。
+    ⚠️ 免費方案即時只有 **IEX**（SIP 即時是 403）；研究驗過用 IEX 判快不快，回測沒有變差。
+    """
+    done = datetime(E.year, E.month, E.day, 9, 30, tzinfo=NY) + timedelta(minutes=BAR_MIN)
+    now = now or datetime.now(TPE)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=TPE)
+    if now < done:
+        return None
+    k, s = _keys()
+    if not k:
+        return None
+    start = (done - timedelta(minutes=BAR_MIN)).astimezone(timezone.utc)
+    q = {"symbols": sym.upper(), "timeframe": "5Min", "limit": "5", "adjustment": "raw", "feed": feed,
+         "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "end": done.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    try:
+        req = urllib.request.Request(URL + "?" + urllib.parse.urlencode(q), headers={
+            "APCA-API-KEY-ID": k, "APCA-API-SECRET-KEY": s})
+        with urllib.request.urlopen(req, timeout=LIVE_TIMEOUT) as r:
+            j = json.loads(r.read().decode())
+        bars = (j.get("bars") or {}).get(sym.upper()) or []
+    except Exception:
+        return None
+    for b in bars:
+        t0 = datetime.fromisoformat(str(b["t"]).replace("Z", "+00:00")).astimezone(NY)
+        if (t0.hour, t0.minute) == (9, 30) and t0.date() == E and float(b["o"]) > 0:
+            o, c = float(b["o"]), float(b["c"])
+            return {"open": o, "close": c, "mv_pct": 100.0 * (c - o) / o,
+                    "done_at": done.astimezone(TPE).replace(tzinfo=None)}
+    return None

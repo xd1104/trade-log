@@ -935,9 +935,16 @@ def wiring_fails(text):
                     isinstance(x, ast.Attribute) and x.attr == "RECOVER_HOOK"
                     and getattr(x.value, "id", "") == "broker" for x in n.targets):
                 where_r.append((name, ast.unparse(n.value)))
-    if where_r != [("main", "auto_fire.recover_meta")]:
+    # ⭐ 2026-09-22 起接的是 `_recover_chain`（先問夜盤那一口，不認得才交給 auto_fire.recover_meta）。
+    #    ⛔ 日盤那一口的行為不准變：鏈子的最後一步一定要是 `return got if got else auto_fire.recover_meta(pos)`。
+    if where_r != [("main", "_recover_chain")]:
         bad.append(f"broker.RECOVER_HOOK 的指派點不對：{where_r}"
                    "（重啟撿回的自動下單部位會掉回 SL_POINTS）")
+    ch = ast.unparse(fns["_recover_chain"]) if "_recover_chain" in fns else ""
+    if ("night_fire.recover_meta(pos)" not in ch
+            or "return got if got else auto_fire.recover_meta(pos)" not in ch
+            or ch.index("night_fire.recover_meta(pos)") > ch.index("auto_fire.recover_meta(pos)")):
+        bad.append("_recover_chain 沒有「夜盤認不得就交給 auto_fire.recover_meta」（日盤那一口的停損會掉回 130）")
     # ⑤ _auto_tick 的**兩個**分支都要通知掛勾（晚到那一邊也要留下原因）
     tk = ast.unparse(fns["_auto_tick"]) if "_auto_tick" in fns else ""
     if tk.count("AUTO_SIG_HOOK(") != 2:
@@ -1061,7 +1068,9 @@ MUT = [
      '        AUTO.update({"day": d, "done": False, "settled": False,'),
     # ── 2026-09-15：撿回部位補停損點數的接線
     ("⛔ 撿回部位補停損的掛勾沒接（重啟後自動下單那一口停損掉回 130）",
-     "    broker.RECOVER_HOOK = auto_fire.recover_meta", "    pass"),
+     "    broker.RECOVER_HOOK = _recover_chain", "    pass"),
+    ("⛔ 撿回鏈子不再交給日盤那一支（日盤那一口重啟後停損掉回 130）",
+     "    return got if got else auto_fire.recover_meta(pos)", "    return got"),
     # ── ⭐ 2026-09-15 晚上：快攻回馬槍（09:15）的接線
     ("⛔ 回馬槍掛勾沒接（09:15 什麼都不會發生）",
      "    AUTO_REV_HOOK = auto_fire.on_reversal", "    pass"),

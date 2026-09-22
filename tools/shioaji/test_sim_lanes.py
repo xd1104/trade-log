@@ -1650,6 +1650,17 @@ AUTH_PATCH = [
      '        STATE["equity"] = _eq_boot\n'
      '    _equity_lot1_restore()\n'
      '    threading.Thread(target=poll_equity, daemon=True, name="equity").start()\n'),
+    # ⭐⭐ 2026-09-22 **有授權的例外**（Benson 交辦：台積電快攻接真單、預設關閉）：
+    #   main() 多兩件事 —— ① 撿回部位的掛勾改接 `_recover_chain`（先問夜盤那一口、不認得才交給
+    #   auto_fire.recover_meta，⛔ 日盤那一口的行為不變，test_auto_fire ④b 在守）；
+    #   ② 起【夜盤自動下單】的執行緒（包 try，起不來只印警告）。⛔ 主迴圈與停損一行都沒動。
+    ("【夜盤自動下單】撿回部位的掛勾改成鏈子（夜盤 → 日盤）",
+     '    broker.RECOVER_HOOK = auto_fire.recover_meta\n',
+     '    # ⭐ 2026-09-22：夜盤那一口先問 night_fire（它認得就用它自己的點數），不認得才交給日盤那一支。\n    broker.RECOVER_HOOK = _recover_chain\n'),
+    ("【夜盤自動下單】main() 起夜盤那一條執行緒（包 try）",
+     '    _arm = auto_fire.arm()\n',
+     '    # ⭐⭐ 2026-09-22【夜盤自動下單】台積電快攻。⛔ 自己的執行緒、自己的開關（NIGHT_ORDERS_ON）；\n    #    主迴圈一行都不動。價格讀 Today.price／last_recv（就是停損看的那一個）。\n    #    ⛔ 包 try：它起不來只印警告，日盤與停損照跑。\n    try:\n        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session)\n        night_fire.start()\n        _na = night_fire.arm()\n        print("【夜盤自動下單】" + (_na["msg"] + ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")\n                                    if _na["on"] else "關閉中 —— " + _na["msg"]))\n    except Exception as e:\n        print("⚠️ 【夜盤自動下單】起不來（日盤不受影響）：%s" % str(e)[:160])\n'
+     '    _arm = auto_fire.arm()\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")

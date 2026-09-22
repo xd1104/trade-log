@@ -2999,6 +2999,27 @@ Benson 要在面板上**模擬**幾條策略、跟真單（快攻回馬槍）分
   就是快攻／開箱／純回馬；夜盤那條負責抓夜盤 1 分 K 給台積電快攻用），內頁與圖也照樣認得。
   `test_sim_lanes` 開頭讓端點端出全部（逐條邏輯照舊驗），另外寫死驗「真正的畫面只有這兩條」。
 
+## ⭐⭐ 【夜盤自動下單】台積電快攻（2026-09-22 加，⛔ 預設關閉）
+
+Benson：「幫我準備把台積電快攻放到真單，然後預設先不要開」。
+- **開關 `tools/shioaji/NIGHT_ORDERS_ON`（內容 `T`）**，跟日盤 `AUTO_ORDERS_ON` 完全分開（gitignore `NIGHT_ORDERS_ON*`）。
+  ⛔ `night_fire.py` 對它只做 exists／read_bytes／replace／with_name（test_night_fire ⑦ 用 AST 守）⇒ 只有他自己建得出來。
+  關：把檔案改名（`disarm()`）。開了之後送不送真錢照樣看 `REAL_ORDERS_ON`。
+- 規則同【模擬】台積電快攻，但**即時用 IEX**（免費方案 SIP 即時 403）：快不快拿 IEX 走幅跟過去 40 晚 IEX 走幅比；
+  框寬用 `tsm_ctx.json`（【模擬】那條每天早上更新的振幅）。研究驗過 IEX 版回測每筆 +53（SIP 版 +46）。
+- 流程（`night_fire` 自己的執行緒，⛔ 4Hz 主迴圈一行都沒動）：done_at（夏 21:35／冬 22:35）+3 秒起問 Alpaca
+  （`us_feed.first5_live`，⛔ done_at 以前一律 None、連網路都不問）→ 90 秒內拿不到就不做 → 報價 ≤5 秒且是夜盤 →
+  框寬合理（0.1%~3%）→ `broker.can_enter` → **先落地 sending 再送** → `broker.enter(dir, px, w, sl_points=w)`。
+  面板比 done_at 晚 2 分鐘才走到（剛開機）⇒ `late` 不補單。有 sending 沒 result ⇒ ⛔ 不重送。
+- **04:58 平倉只平自己那一口**（方向＋進場價 ±3 點認人）；手動部位不碰；已沒部位記 flat。
+- 重啟撿回：`broker.RECOVER_HOOK = _recover_chain`（先 `night_fire.recover_meta`、不認得才 `auto_fire.recover_meta`）；
+  主迴圈那一刻沒認出來的，`night_fire._recover_poll()` 在工作執行緒補正（⛔ 不讓它掉回 130）。
+  test_auto_fire ④b 與突變守「日盤那一口的行為不變」；test_sim_lanes 的 AUTH_PATCH 寫死這兩段 main() 改動。
+- 帳本 `nightfire/YYYY-MM.jsonl`（gitignore）；端點 `GET /api/nightfire/state`（fire_get_guard）；
+  【自動下單】分頁最下面一張**唯讀**卡（⛔ 沒有按鈕）。
+- ⚠️ 停損靠面板（永豐沒有停損單）⇒ 有部位時面板要整晚開著；本金偏緊（權益 3.96 萬、一口保證金 3.5 萬），已告知。
+- 探針 `test_night_fire.py`（假券商／假報價／假 Alpaca，暫存資料夾）。
+
 ## 桌面 App（panel_app.pyw）
 
 雙擊桌面／開始功能表的「早盤儀表板」→ `pythonw.exe panel_app.pyw`：

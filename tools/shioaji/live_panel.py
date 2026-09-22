@@ -56,6 +56,7 @@ import pandas as pd
 
 import broker            # 真實下單。預設 dry run，見那個檔開頭的說明
 import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
+import night_fire        # 夜盤自動下單（台積電快攻）。預設**關著**（沒有 NIGHT_ORDERS_ON 就完全不送；跟日盤開關分開）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 # 【策略實驗室】歷史逐筆回測（唯讀）。⛔ 不 import broker、不碰任何下單路徑。
 # ⛔⛔ 一定要包 try（2026-09-14 lab-qa 退件 R1）：這是研究功能，它載入失敗（少一個套件、
@@ -5957,6 +5958,13 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="al-empty" id="alempty"></div>
   <div class="at-notes" id="alnotes"></div>
  </div>
+
+ <!-- ⭐ 2026-09-22【夜盤自動下單】台積電快攻：**唯讀**狀態卡（GET /api/nightfire/state）。
+      ⛔ 一顆鈕都沒有（開：他自己建 NIGHT_ORDERS_ON；關：把那個檔改名）。跟上面日盤那一套完全分開。 -->
+ <div class="card" id="nfcard">
+  <div class="sec-head"><h2>夜盤自動下單</h2><span class="count" id="nfstate"></span></div>
+  <div class="al-today" id="nfbody">載入中…</div>
+ </div>
 </div>
 
 <!-- ══════════ 【策略實驗室】：歷史逐筆回測（2026-09-14 取代【自動下單（模擬）】的畫面）══════════
@@ -8759,13 +8767,35 @@ function alSigned(v){ const n=alN(v); return n==null?'—':(n>0?'+':'')+n.toFixe
 function alEnter(){
  /* ⛔ 每次切進這一頁都回到「未確認」（⛔ 不可以留著上次展開到一半的確認條）。 */
  ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';
- alFetch();
+ alFetch(); NF.n=0; nfFetch();
  if(AL.timer) clearTimeout(AL.timer);
  AL.timer=setTimeout(alLoop,5000);
 }
 function alLoop(){
  if(TAB!=='fire'){ AL.timer=null; return; }
- alFetch(); AL.timer=setTimeout(alLoop,5000);
+ alFetch(); nfFetch(); AL.timer=setTimeout(alLoop,5000);
+}
+/* ⭐ 夜盤自動下單的唯讀狀態卡。⛔ 只打 GET、不帶 token、沒有任何按鈕。 */
+const NF={n:0};
+function nfFetch(){
+ if((NF.n++)%6) return;                        /* 跟著 alLoop 走，約 30 秒一次就夠 */
+ fetch('/api/nightfire/state',{cache:'no-store'}).then(r=>r.json()).then(nfPaint)
+   .catch(()=>{ setEl('nfstate',''); setEl('nfbody','<span class="warn">讀不到夜盤自動下單的狀態</span>'); });
+}
+function nfPaint(x){
+ if(!x||!x.ok){ setEl('nfstate',''); setEl('nfbody','<span class="warn">'+esc((x&&x.msg)||'讀不到狀態')+'</span>'); return; }
+ setEl('nfstate', x.on ? (x.live?'<span class="al-badge on">開著・真單</span>':'<span class="al-badge">開著・演練</span>')
+                       : '<span class="al-badge">關著</span>');
+ const rows=(x.recent||[]).map(o=>'<div>'+esc(o.E||'')+'　'+esc(o.rec==='result'
+      ?((o.dir==='long'?'做多':'做空')+' '+(o.entry==null?'':o.entry)+(o.ok?'':'（沒送成：'+(o.err||'')+'）'))
+      :(o.msg||o.why||''))+'</div>').join('');
+ setEl('nfbody',
+   '<div><b>'+esc(x.name||'')+'</b>：'+esc(x.rule||'')+'</div>'
+  +(x.tonight?'<div>今晚 '+esc(x.tonight.look_at)+' 看台積電 ADR 開盤那根 5 分 K</div>':'')
+  +'<div>'+esc(x.msg||'')+(x.on?'':'　'+esc(x.how_on||''))+'</div>'
+  +'<div class="warn">'+esc(x.warn||'')+'</div>'
+  +(rows?'<div class="at-notes">'+rows+'</div>':'')
+  +(x.errors?'<div class="warn">背景出錯 '+x.errors+' 次：'+esc(x.last_err||'')+'</div>':''));
 }
 function alFetch(){
  const my=++AL.seq; AL.pending=true;
@@ -9837,6 +9867,15 @@ class Handler(BaseHTTPRequestHandler):
         #    都不可以變成「幫他打開自動下單」（GET 連 CORS 那一關都不用過）。
         if self.path.split("?", 1)[0] == "/api/fire/on":
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
+        if self.path.split("?", 1)[0] == "/api/nightfire/state":
+            # 夜盤自動下單的狀態（唯讀：開關、今晚看幾點、最近幾列定論）。⛔ 沒有 token，但有真實價格 ⇒ 同一道 GET 守衛。
+            ok, code, msg = fire_get_guard(self.headers)
+            if not ok:
+                return self._json(code, {"ok": False, "msg": msg})
+            try:
+                return self._json(200, night_fire.state())
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": "夜盤自動下單狀態讀不出來：%s" % str(e)[:120]})
         if self.path.startswith("/api/fire/state"):
             # ⛔⛔ 這份 JSON 裡有 `token` ⇒ 它自己也要過 ③⑤⑥（2026-09-09 lab-qa）。
             #    沒有這一道的話，DNS rebinding 下別的網站讀得到 token ⇒ 第 ④ 道形同虛設。
@@ -10647,6 +10686,23 @@ def start_sim_lanes():
         return False
 
 
+def _nf_quote():
+    """夜盤自動下單要的台指報價 ⇒ (價, 幾秒前)。⛔ 只讀屬性（同停損那一個價），拿不到回 (None, None)。"""
+    st = CURRENT_STATE.get("today")
+    if st is None or st.price is None or st.last_recv is None:
+        return None, None
+    return float(st.price), time.time() - st.last_recv
+
+
+def _recover_chain(pos):
+    """broker.RECOVER_HOOK：夜盤那一口先問 night_fire，不認得才交給 auto_fire。⛔ 只讀記憶體、不丟例外。"""
+    try:
+        got = night_fire.recover_meta(pos)
+    except Exception:
+        got = None
+    return got if got else auto_fire.recover_meta(pos)
+
+
 def main():
     # ⛔ 09:03:30 的掛勾只有這裡會接（接上去就會真的送單，見 auto_fire.py）。
     #    13:43:30 的收盤平倉掛勾同理（接上去就會真的送出平倉單）。
@@ -10873,7 +10929,8 @@ def main():
     # ⛔⛔ 重啟撿回部位時補「自動下單那一口自己的停損點數」（沒補就掉回 SL_POINTS ⇒ 提早被洗掉）。
     #    **只有 main() 會接**（治具與 --replay 不接 ⇒ 撿回來的部位照舊用 SL_POINTS）。
     #    掛上去的 recover_meta 只讀記憶體（它在主迴圈的 reconcile 裡被叫）。
-    broker.RECOVER_HOOK = auto_fire.recover_meta
+    # ⭐ 2026-09-22：夜盤那一口先問 night_fire（它認得就用它自己的點數），不認得才交給日盤那一支。
+    broker.RECOVER_HOOK = _recover_chain
     auto_fire.start()
     AUTO_SIG_HOOK = auto_fire.on_signal
     # ⛔⛔ 收盤自動平倉：**只平自動下單自己開的那一口**（auto_fire._looks_ours）。
@@ -10881,6 +10938,17 @@ def main():
     AUTO_EOD_HOOK = auto_fire.on_eod
     # ⭐⭐ 快攻回馬槍：09:03:30 不夠快的日子，REV_AT 那一刻反轉了才送（auto_fire._rev 讀帳本判斷）。
     AUTO_REV_HOOK = auto_fire.on_reversal
+    # ⭐⭐ 2026-09-22【夜盤自動下單】台積電快攻。⛔ 自己的執行緒、自己的開關（NIGHT_ORDERS_ON）；
+    #    主迴圈一行都不動。價格讀 Today.price／last_recv（就是停損看的那一個）。
+    #    ⛔ 包 try：它起不來只印警告，日盤與停損照跑。
+    try:
+        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session)
+        night_fire.start()
+        _na = night_fire.arm()
+        print("【夜盤自動下單】" + (_na["msg"] + ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")
+                                    if _na["on"] else "關閉中 —— " + _na["msg"]))
+    except Exception as e:
+        print("⚠️ 【夜盤自動下單】起不來（日盤不受影響）：%s" % str(e)[:160])
     _arm = auto_fire.arm()
     print("【自動下單】" + ("已開啟：" + _arm["msg"] +
                            ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")

@@ -72,3 +72,6 @@ tools/shioaji/tsm_ctx.json
 tools/shioaji/tsm_ctx.json.*
 tools/shioaji/usml_ctx.json
 tools/shioaji/usml_ctx.json.*
+# ⛔⛔ 【夜盤自動下單】開關與帳本（2026-09-22）：開關只有 Benson 能建；帳本含真實價格
+tools/shioaji/NIGHT_ORDERS_ON*
+tools/shioaji/nightfire/
