@@ -56,21 +56,30 @@ import numpy as np
 import pandas as pd
 
 import strategy_lab as SL        # 逐筆讀取／run_bracket／結算日／抓取的逾時與流量上限（⛔ 那個模組也不碰下單）
+import spy_feed                  # SPY 5 分 K（⛔ 唯讀行情，IEX）
+import usml                      # ⛔ 美股開盤模型的**特徵與推論正本**（研究端訓練也 import 它）
 
 HERE = Path(__file__).resolve().parent
 SIM_DIR = HERE / "sim_lanes"          # ⚠️ 測試會導到暫存區；函式一律在呼叫時才讀這些常數
 FAST_HIST = HERE / "fast_hist.jsonl"  # ⛔ 唯讀（真單在用的那一份，寫它的是 auto_fire）
 MIN1_CSV = HERE / "tmf_1min.csv"      # ⛔ 唯讀（夜盤 1 分 K 先看本機，缺的才跟永豐要）
 
-LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night")
+LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night", "usml")
 # 逐筆那六條：同一天只讀一次 tick_hist、也只算一次 day_pack（⛔ 不要一條算一次）
 TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
 # ⛔ 2026-09-16 Benson 定名：**面板文字一律用這些名字**。
 #    lane key 刻意沒改（`sim_lanes/*.jsonl` 裡已經落地的舊資料照樣讀得到，⛔ 不做資料遷移）。
 LANE_NAME = {"fast": "快攻", "fast11": "早收", "hmq": "回馬槍", "rev": "純回馬",
-             "orb": "開箱", "union": "多方聯軍", "night": "夜盤順勢"}
+             "orb": "開箱", "union": "多方聯軍", "night": "夜盤順勢",
+             "usml": "美股開盤模型"}
 SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐筆",
-            "orb": "逐筆", "union": "逐筆", "night": "1 分 K"}
+            "orb": "逐筆", "union": "逐筆", "night": "1 分 K", "usml": "1 分 K ＋ SPY"}
+
+# ── 美股開盤模型（2026-09-22 加；研究報告 tick-research/night_ml_results_2026-09-22.md）
+#    ⛔ 特徵與推論的正本在 `usml.py`，⛔ 這裡不准再寫一份
+USML_STOP_FRAC = 0.003        # 0.3% 停損（Benson 2026-09-22 拍板：理由是保護，不是績效）
+USML_FEE, USML_SPREAD = 5.0, 2.0
+USML_CTX = HERE / "usml_ctx.json"     # 日盤收盤與夜盤振幅的小快取（⛔ gitignore）
 
 # ── 快攻（fast／hmq／rev／fast11 共用的前半）
 FAST_REF_MS = SL.ms(9, 0, 0)              # 09:00:00.000（含）以前最後一筆
@@ -811,6 +820,111 @@ def night_eval(E, bars):
     return row
 
 
+# ══ 美股開盤模型（2026-09-22）═══════════════════════════════════════════
+#
+# 規則正本在 `usml.py`（特徵與推論），這裡只做「把一晚算成一列定論」。
+#   進場 ＝ 美股開盤 +5 分鐘那一根的收盤；出場 ＝ 再過 30 分鐘（或先碰到 0.3% 停損）
+#   方向 ＝ 模型算的上漲機率 >0.5 做多、<0.5 做空；⛔ **全做**（不設機率門檻）
+#   ⭐ 但**每一列都記下機率** ⇒ 累積一兩個月之後，可以用**沒看過的資料**回答
+#      「機率要多高才做」（Benson 2026-09-22 的決定：⛔ 現在不挑門檻）
+# ⚠️ 同一分鐘同時碰到停損與到期 ⇒ 算停損（保守，跟夜盤那條同一個口徑）
+
+
+def _usml_ctx_read():
+    try:
+        return json.loads(USML_CTX.read_text(encoding="utf-8"))
+    except Exception:
+        return {"day_close": {}, "night_range": {}}
+
+
+def _usml_ctx_write(ctx):
+    """⛔ 先寫 .tmp 再換檔（面板可能同時在讀）。寫不進去不致命：下一輪再試。"""
+    try:
+        tmp = USML_CTX.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(ctx, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(USML_CTX)
+    except Exception:
+        pass
+
+
+def _usml_day_close(bars, E):
+    """從那一份 1 分 K 裡取 E 當天的日盤收盤（≤13:45 最後一根）。沒有 ⇒ None。"""
+    if bars is None or len(bars) == 0:
+        return None
+    ts = pd.to_datetime(bars["ts"])
+    m = (ts.dt.hour * 60 + ts.dt.minute).to_numpy(np.int64)
+    dd = ts.dt.date.to_numpy()
+    sel = (dd == E) & (m >= 8 * 60 + 46) & (m <= 13 * 60 + 45)
+    if not sel.any():
+        return None
+    c = bars["Close"].to_numpy(float)[sel]
+    return float(c[np.argmax(m[sel])])
+
+
+def usml_eval(E, bars, spy, ctx):
+    """
+    一晚的「美股開盤模型」。⇒ 定論那一列或 `_pending(...)`。
+    ⛔ 缺任何一樣（模型、SPY、前一日收盤、波動歷史、K 棒）一律 pending 或照實說不做，
+       ⛔ 不猜、不用舊資料頂。
+    """
+    E = E if isinstance(E, date) else date.fromisoformat(str(E))
+    model = usml.load_model()
+    if model is None:
+        return _none_row("usml", E, "no_model",
+                         "還沒有模型檔（usml_model.json）—— 這一條算不出來")
+    mm, H, L, C = night_frame(bars, E)
+    if not len(mm):
+        return _pending("no_bars", "沒有這一晚的 1 分 K")
+    T = usml.us_open_min(E)
+    need = T + usml.ENTRY_OFFSET + usml.HOLD_MIN
+    if not bool(np.any(mm >= need)):
+        return _pending("incomplete", "1 分 K 還沒到齊（要到 %s）" % _hm(need))
+    if spy is None:
+        return _pending("no_spy", "還沒拿到那一晚的 SPY（美股 5 分 K）")
+    tx = {int(k): float(v) for k, v in zip(mm, C)}
+    day_close = _usml_day_close(bars, E)
+    prev = None
+    for back in range(1, 8):                 # 往前找最近的一個交易日收盤（⛔ 最多找 7 天）
+        prev = ctx["day_close"].get(str(E - timedelta(days=back)))
+        if prev:
+            break
+    rngs = [v for k, v in sorted(ctx["night_range"].items()) if k < str(E)][-20:]
+    if day_close is None or prev is None or len(rngs) < 20:
+        return _pending("no_ctx", "還缺日盤收盤或過去 20 晚的波動（資料還在補）")
+    f, entry, why = usml.features(E, tx, spy, day_close, float(prev),
+                                  float(np.mean(rngs)))
+    if f is None:
+        return _none_row("usml", E, "no_feat", why or "算不出特徵")
+    p = usml.prob_up(model, f)
+    d = 1 if p > 0.5 else -1
+    i0 = int(np.searchsorted(mm, T + usml.ENTRY_OFFSET, side="right")) - 1
+    i1 = int(np.searchsorted(mm, need, side="right")) - 1
+    seg = slice(i0 + 1, i1 + 1)
+    h, l, c = H[seg], L[seg], C[seg]
+    if not len(c):
+        return _pending("no_after", "進場之後沒有 K 棒")
+    stop = entry * USML_STOP_FRAC
+    hit = (l <= entry - stop) if d > 0 else (h >= entry + stop)
+    cost = USML_FEE + USML_SPREAD
+    if hit.any():
+        k = int(np.argmax(hit))
+        ex, ex_why, ex_at = entry - d * stop, "停損", int(mm[seg][k])
+    else:
+        ex, ex_why, ex_at = float(c[-1]), "時間到", int(mm[seg][-1])
+    return {"lane": "usml", "date": str(E),
+            "decision": "做多" if d > 0 else "做空", "why": "model",
+            "reason": "模型算上漲機率 %.0f%%（%s 進場、抱 %d 分鐘）"
+                      % (p * 100, _hm(T + usml.ENTRY_OFFSET), usml.HOLD_MIN),
+            "entry": round(entry, 1), "exit": round(ex, 1), "exit_reason": ex_why,
+            "exit_label": _hm(ex_at),
+            "points": round(d * (ex - entry) - cost, 1), "cost": cost,
+            "stop_points": round(stop, 1), "prob": round(p, 4),
+            "us_open": _hm(T), "us_dst": usml.us_dst(E),
+            "model_through": model.get("trained_through"),
+            "feat": {k: round(v, 4) for k, v in f.items()},
+            "src": SRC_NAME["usml"]}
+
+
 # ══ 落地 ══════════════════════════════════════════════════════════════
 
 def _valid_row(o):
@@ -1241,6 +1355,59 @@ def _step_night(now, rows, get_api, has_position):
     STATE["pending"]["night"] = pend
 
 
+def _step_usml(now, rows, get_api, has_position):
+    """
+    美股開盤模型那一條。⚠️ **沾夜盤那條的光**：1 分 K 一律用本機或夜盤那步已經抓回來的
+    （`_NIGHT_API`）⇒ ⛔ 不額外跟永豐要東西。SPY 另外跟 Alpaca 要（唯讀行情）。
+    ⛔ 缺什麼就 pending，下一輪再來；⛔ 不猜。
+    """
+    pend = {}
+    evs = night_evenings(now)
+    since = min(evs) - timedelta(days=30)      # 前 30 天：要拿來補 day_close／夜盤振幅
+    ctx = _usml_ctx_read()
+    dirty = False
+    for E in sorted(evs):
+        es = str(E)
+        try:
+            bars = _NIGHT_API.get(E)
+            if bars is None:
+                bars = night_bars_local(E, since)[0]
+            # ⭐ 不管這一晚算不算得出來，先把「日盤收盤」與「夜盤振幅」記進小快取
+            #    （那是**下一晚**要用的前一日收盤與 20 晚波動）
+            dc = _usml_day_close(bars, E)
+            if dc and ctx["day_close"].get(es) != round(dc, 1):
+                ctx["day_close"][es] = round(dc, 1)
+                dirty = True
+            mm, H, L, C = night_frame(bars, E)
+            if len(mm) >= NIGHT_MIN_BARS:
+                rng = round(float((C.max() - C.min()) / C.min() * 100), 4)
+                if ctx["night_range"].get(es) != rng:
+                    ctx["night_range"][es] = rng
+                    dirty = True
+            if ("usml", es) in rows:
+                continue
+            spy = None
+            try:
+                spy = spy_feed.evening(E)
+            except Exception as e:
+                _note_err("SPY %s" % es, e)
+            res = usml_eval(E, bars, spy, ctx)
+            if res.get("pending"):
+                pend[es] = res
+            elif append_row(res):
+                rows[("usml", es)] = res
+        except Exception as e:
+            _note_err("%s %s" % (LANE_NAME["usml"], es), e)
+            pend[es] = _pending("error", "計算出錯：" + str(e)[:80])
+    if dirty:
+        # 只留最近 400 天，檔案不要一直長
+        for k in ("day_close", "night_range"):
+            if len(ctx[k]) > 400:
+                ctx[k] = dict(sorted(ctx[k].items())[-400:])
+        _usml_ctx_write(ctx)
+    STATE["pending"]["usml"] = pend
+
+
 def step(get_api, has_position, now=None):
     """背景一輪。⛔ 永遠不往外丟例外（計數＋主控台＋畫面）。"""
     try:
@@ -1248,6 +1415,8 @@ def step(get_api, has_position, now=None):
         rows, _st = read_rows()
         _step_ticks(now, rows, get_api, has_position)
         _step_night(now, rows, get_api, has_position)
+        # ⭐ 2026-09-22 第八條：⛔ 一定排在夜盤之後（它要用夜盤那步抓回來的 1 分 K）
+        _step_usml(now, rows, get_api, has_position)
         STATE["steps"] += 1
         STATE["last_step_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
         return True
@@ -1279,6 +1448,13 @@ def _rule_text(lane):
     if lane == "night":
         return ("美股開盤（夏令 21:30、冬令 22:30）後 5 分鐘往哪走就順勢做 1 口；停利停損 ±%g%%，"
                 "同一分鐘兩邊都碰到算停損，沒碰到就 04:58 平" % (NIGHT_TPSL_FRAC * 100))
+    if lane == "usml":
+        m = usml.load_model()
+        thru = ("（模型訓練到 %s）" % m.get("trained_through")) if m else "（⛔ 還沒有模型檔）"
+        return ("美股開盤後 %d 分鐘，把台指與 SPY 的 13 項當下資訊丟給模型算上漲機率："
+                ">50%% 做多、<50%% 做空，1 口，抱 %d 分鐘平倉；停損 %g%%（保護用）。"
+                "⛔ 目前**全做不設機率門檻**，每一列都記下機率，之後用前瞻資料再決定門檻%s"
+                % (usml.ENTRY_OFFSET, usml.HOLD_MIN, USML_STOP_FRAC * 100, thru))
     if lane == "union":
         at = _hms_sec(_CFG["rev_sec"]) if _CFG.get("rev_sec") else "?"
         # ⛔ 候選的名字是「快攻／開箱／**純回馬**」（「回馬槍」是 hmq 那一條，⛔ 不要混用）
@@ -1330,6 +1506,33 @@ def _rule_detail(lane):
     回 {"plain": 白話一句, "steps": [{"k": 小標, "v": 內容}, ...]}。
     """
     src = {"k": "資料", "v": "逐筆成交" if lane in TICK_LANES else "1 分 K（⚠️ 近似，不是逐筆）"}
+    if lane == "usml":
+        m = usml.load_model()
+        return {"plain": "美股一開盤，把台指跟美股當下的狀況一起丟給模型，它說漲就做多、說跌就做空，抱半小時。",
+                "steps": [{"k": "資料", "v": "台指 1 分 K ＋ **SPY 5 分 K**（美股；用 IEX，"
+                                          "跟實盤即時拿得到的同一份）"},
+                          {"k": "什麼時候進場", "v": "美股開盤後 %d 分鐘（夏令 21:35、冬令 22:35）"
+                                                % usml.ENTRY_OFFSET},
+                          {"k": "怎麼決定方向", "v": "把 13 項當下就知道的資訊（台指開盤走勢、"
+                                                "**SPY 這 5 分鐘往哪走**、**台指有沒有跟上 SPY**、"
+                                                "15:00 跳空、前一個日盤漲跌、近期波動…）丟給模型，"
+                                                "算出「接下來 %d 分鐘上漲的機率」：>50%% 做多、<50%% 做空"
+                                                % usml.HOLD_MIN},
+                          {"k": "⛔ 現在不挑門檻", "v": "機率 51% 跟 80% 一樣做。"
+                                                  "**每一列都把機率記下來**，"
+                                                  "等累積一兩個月的新資料，再用模型沒看過的紀錄回答"
+                                                  "「機率要多高才值得做」"},
+                          {"k": "怎麼出場", "v": "進場後 %d 分鐘平倉；中途碰到 %g%% 就停損"
+                                             % (usml.HOLD_MIN, USML_STOP_FRAC * 100)},
+                          {"k": "為什麼有停損", "v": "**不是為了賺更多，是為了保護** —— 這是夜盤部位，"
+                                                "面板萬一半夜掛掉，沒有停損就沒人看著"},
+                          {"k": "同一根兩邊都碰到", "v": "算**停損**（1 分 K 看不出誰先到，一律往壞的算）"},
+                          {"k": "模型哪來的", "v": "離線訓練、每個月重訓一次；"
+                                               "這一列用的是訓練到 %s 的那一版（⛔ 面板上不訓練）"
+                                               % ((m or {}).get("trained_through") or "（還沒有模型檔）")},
+                          {"k": "成本", "v": _fee_txt(USML_FEE + USML_SPREAD,
+                                                   "（手續費 %g ＋ 買賣價差 %g）"
+                                                   % (USML_FEE, USML_SPREAD))}]}
     if lane == "night":
         return {"plain": "美股一開盤的那 5 分鐘往哪走，就跟著做一口，抱到清晨。",
                 "steps": [src,

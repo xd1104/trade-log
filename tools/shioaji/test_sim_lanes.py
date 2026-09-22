@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-【模擬】分頁（七條）離線測試（2026-09-15 晚上，2026-09-16 擴到七條，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
+【模擬】分頁（八條）離線測試（2026-09-15 晚上，2026-09-16 擴到七條，lab-dev）。⛔ 不連永豐、⛔ 不碰 8770、⛔ 不建開關檔。
 
   ① 快攻：快做多停利／快做空停損（用觸發價）／不快不做／歷史不夠／門檻只用這天以前的列／
      13:43:30 收盤平／結算日 13:30／沒有逐筆＝資料缺（不是定論）
@@ -10,7 +10,7 @@
   ⑤ 背景例外不外丟（step 與 loop 各驗）＋計數
   ⑥ 端點 GET /api/sim/state：200、唯讀（前後雜湊一樣）、跨站 403、POST 不接、模組是 None ⇒ 503；
      sim_lanes 載入失敗時 import live_panel 照樣成功
-  ⑦ 前端：獨立的 #tab-sim、七條並排、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
+  ⑦ 前端：獨立的 #tab-sim、八條並排、只打 GET /api/sim/state、沒有下單路徑、沒有建議口吻、不跟真單清單混用
   ⑪ 新的四條：hmq（快＋09:15 反轉）／rev（只做反轉那一半）／fast11（只換收盤時刻）／orb（箱子濾網）
   ⑫ 規則函式一律用注入的那一份（⛔ sim_lanes 裡沒有另一把尺）
   ⑧ AST：sim_lanes 不 import／引用 broker、auto_fire；主迴圈那幾支跟固定基準 a71087e 一模一樣（沒有基準 ⇒ 記「未驗」）
@@ -753,16 +753,16 @@ st_code, body = req("/api/sim/state")
 chk("  GET ⇒ 200", st_code, 200)
 # ⛔ 這裡**寫死** key 與名字：拿 S.LANES／S.LANE_NAME 去比是自己比自己（一起改就永遠綠，
 #    2026-09-16 突變 N15 當場抓到這個假綠燈）。
-LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night"]
-LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢"]
-chk("  ⛔ 後端 LANES 就是這七條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
-chk("  端點端出來的七條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
-chk("  ⛔ 七條的名字就是 Benson 定的那七個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
+LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "usml"]
+LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢", "美股開盤模型"]
+chk("  ⛔ 後端 LANES 就是這八條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
+chk("  端點端出來的八條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
+chk("  ⛔ 八條的名字就是 Benson 定的那八個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
 chk("  ⛔ 後端端出去的字裡沒有舊名字",
     [w for w in ("早盤快攻", "快攻回馬槍", "回馬槍那一半", "快攻 11:00 平", "ORB", "美股開盤順勢")
      if w in json.dumps(body, ensure_ascii=False)], [])
 say(all(body["lanes"][ln]["rule"] and "沒有接上" not in body["lanes"][ln]["rule"] for ln in S.LANES),
-    "  七條都有規則句（後端給的）")
+    "  八條都有規則句（後端給的）")
 L = body.get("lanes", {}).get("fast", {})
 say(len(L.get("months", [])) == 6 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 6 個月、第一個標「本月」")
 say(all(k in L for k in ("recent", "today", "pending", "rule", "fetch")) and "errors" in body and "file" in body,
@@ -817,11 +817,12 @@ tab_code = _re.sub(r"<!--.*?-->", " ", tab, flags=_re.S)
 say(_re.match(r'\s*<div id="tab-sim" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
     "  【模擬】是獨立分頁，卡是它的第一個子元素")
 card = tab_code
-say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標題與七條的容器")
+say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標題與八條的容器")
 say('id="tab-tick"' not in page and 'id="tab-review"' not in page,
     "  【細節】與【回顧】兩個分頁的容器都不在了")
-chk("  分頁列恰好四顆，順序＝即時／模擬／策略實驗室／自動下單",
-    _re.findall(r'<button data-tab="([a-z0-9]+)"', page), ["live", "sim", "lab", "fire"])
+# ⚠️ 2026-09-21 加了【帳戶】分頁（唯讀，排在即時右邊）⇒ 變五顆
+chk("  分頁列恰好五顆，順序＝即時／帳戶／模擬／策略實驗室／自動下單",
+    _re.findall(r'<button data-tab="([a-z0-9]+)"', page), ["live", "acct", "sim", "lab", "fire"])
 _j0 = page.index("/* ══════════════ 【模擬】分頁：七條策略")
 sjs = page[_j0:page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測", _j0)]
 say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬那一段 JS（不多不少）")
@@ -858,7 +859,7 @@ say("if(t==='sim'){ smEnter(); }" in page, "  切進【模擬】才問（不掛 
 say("if(TAB!=='sim') return;" in sjs, "  離開這一頁就停止每 60 秒的輪詢")
 say("e._smh!==html" in sjs and "innerHTML===" not in sjs, "  沒變就別動 DOM：比的是節點上快取的字串（不讀回 innerHTML）")
 say("my!==SM.seq" in sjs, "  請求帶流水號，只認最後一次")
-say("Object.keys(x.lanes)" in sjs, "  七條的順序由後端決定（前端不寫死 lane 名字）")
+say("Object.keys(x.lanes)" in sjs, "  八條的順序由後端決定（前端不寫死 lane 名字）")
 chk("  前端 JS 沒有寫死任何一條 lane 的 key", [k for k in S.LANES if ("'%s'" % k) in sjs_code], [])
 fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
 chk("  【自動下單】那一頁沒有模擬的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
@@ -1625,6 +1626,19 @@ AUTH_PATCH = [
      '                   else f"（結算日提前到 {EOD_CLOSE_AT_EXPIRY}）"))\n'
      '          + "（⛔ 只平自動下單開的那一口）"\n'
      '          + (f"　⚠️ {_ep[\'err\']}" if _ep["err"] else ""))\n'),
+    # ⭐ 2026-09-21 **有授權的例外**（Benson 交辦【帳戶總覽】）：main() 多起一條
+    #   每分鐘問一次券商餘額的背景執行緒。⚠️ 它**唯讀**、不碰下單那條路，
+    #   但因為動到 main()，一樣要寫進這張清單才准過（⛔ 不准把基準往前搬）。
+    ("【帳戶總覽】：main() 多一條唯讀的餘額輪詢（＋開機先放一份狀態、讀回一口保證金）",
+     '    threading.Thread(target=poll_index, daemon=True).start()\n'
+     '    threading.Thread(target=poll_phone, daemon=True).start()\n',
+     '    threading.Thread(target=poll_index, daemon=True).start()\n'
+     '    threading.Thread(target=poll_phone, daemon=True).start()\n'
+     '    _eq_boot = equity_view()\n'
+     '    with state_lock:\n'
+     '        STATE["equity"] = _eq_boot\n'
+     '    _equity_lot1_restore()\n'
+     '    threading.Thread(target=poll_equity, daemon=True, name="equity").start()\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")
