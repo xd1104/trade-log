@@ -188,7 +188,7 @@ try:
 except ValueError:
     say(True, "  ⛔ 已下架的 usml 寫不進去")
 st = S.state(now=datetime(2026, 6, 11, 3, 0))      # 05:10 前 ⇒ 講的是昨晚那一場
-chk("  畫面只有八條、沒有 usml", list(st["lanes"]), list(S.LANES))
+chk("  畫面只有多方聯軍與台積電快攻、沒有 usml", list(st["lanes"]), ["union", "tsm"])
 chk("  今天那一格讀的是自己的列（⛔ 不是夜盤順勢那條）", st["lanes"]["tsm"]["today"].get("row", {}).get("points"),
     r["points"])
 

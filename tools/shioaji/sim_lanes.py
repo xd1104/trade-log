@@ -69,6 +69,11 @@ LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm")
 #    usml（美股開盤模型）2026-09-22 晚下架：SPY 時間標記偷看未來 5 分鐘，策略不成立
 #    （tick-research/night_ml_CORRECTION_2026-09-22.md）。
 RETIRED_LANES = ("usml",)
+# ⭐ 2026-09-22 Benson：「模擬就留下多方聯軍跟台積電快攻」⇒ **畫面只端這兩條**。
+#    ⛔ 其他幾條照樣在背景算、照樣落地：多方聯軍的三個候選就是快攻／開箱／純回馬，
+#       夜盤那條負責跟永豐抓夜盤 1 分 K（台積電快攻吃它抓回來的）⇒ 拿掉就壞。
+#    點進去（/api/sim/lane）與圖（/api/sim/daychart）照樣認得全部 LANES（多方聯軍的圖要讀開箱那一列畫箱子）。
+SHOWN_LANES = ("union", "tsm")
 # 逐筆那六條：同一天只讀一次 tick_hist、也只算一次 day_pack（⛔ 不要一條算一次）
 TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
 # ⛔ 2026-09-16 Benson 定名：**面板文字一律用這些名字**。
@@ -1777,7 +1782,7 @@ def state(now=None):
     now = now or datetime.now()
     rows, st = read_rows()
     lanes = {}
-    for lane in LANES:
+    for lane in SHOWN_LANES:
         lr = sorted((r for (ln, _d), r in rows.items() if ln == lane), key=lambda r: r["date"], reverse=True)
         pend = STATE["pending"][lane]
         lanes[lane] = {"name": LANE_NAME[lane], "rule": _rule_text(lane), "src": SRC_NAME[lane],

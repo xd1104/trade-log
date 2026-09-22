@@ -5588,9 +5588,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    ⛔ 條數是後端決定的 ⇒ 這裡用 repeat(N) 寫死欄數只是**版面**，不是條數；加減條不必改 JS。 */
 #tab-sim .sm-card{padding:14px 16px 12px}
 .sm-note{font-size:11.5px; color:var(--faint); margin:-2px 2px 10px}
-.sm-lanes{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:9px}
-@media(max-width:1460px){ .sm-lanes{grid-template-columns:repeat(4,minmax(0,1fr))} }
-@media(max-width:1080px){ .sm-lanes{grid-template-columns:repeat(2,minmax(0,1fr))} }
+.sm-lanes{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px}   /* 2026-09-22 起畫面只剩兩條（sim_lanes.SHOWN_LANES） */
 @media(max-width:640px){ .sm-lanes{grid-template-columns:minmax(0,1fr)} }
 .sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:10px 11px 9px; min-width:0}
 .sm-lt{display:flex; flex-direction:column; gap:1px}

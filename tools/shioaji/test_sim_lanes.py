@@ -79,6 +79,10 @@ import pandas as pd
 import auto_fire as AF
 import live_panel as LP
 import sim_lanes as S
+# ⭐ 2026-09-22 起畫面只端兩條（S.SHOWN_LANES）。⛔ 但其他幾條照樣在背景算、照樣要驗 ⇒
+#    這支測試**先讓端點端出全部**，逐條的邏輯照舊驗；「真的畫面只有兩條」在 ⑥ 另外寫死驗。
+REAL_SHOWN = S.SHOWN_LANES
+S.SHOWN_LANES = S.LANES
 import strategy_lab as SL
 
 FAIL = 0
@@ -758,6 +762,13 @@ LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯
 chk("  ⛔ 後端 LANES 就是這八條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
 chk("  端點端出來的八條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
 chk("  ⛔ 八條的名字就是 Benson 定的那八個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
+# ⛔ 寫死：Benson 2026-09-22「模擬就留下多方聯軍跟台積電快攻」
+chk("  ⛔ 真正的畫面只端兩條：多方聯軍、台積電快攻（寫死）", list(REAL_SHOWN), ["union", "tsm"])
+S.SHOWN_LANES = REAL_SHOWN
+_two = S.state(NOW) if "NOW" in globals() else S.state()
+chk("  ⛔ 端點真的只端那兩條、順序一樣", list(_two["lanes"]), ["union", "tsm"])
+S.SHOWN_LANES = S.LANES
+say(set(REAL_SHOWN) <= set(S.LANES), "  畫面那兩條都還在 LANES 裡（背景照算）")
 chk("  ⛔ 後端端出去的字裡沒有舊名字",
     [w for w in ("早盤快攻", "快攻回馬槍", "回馬槍那一半", "快攻 11:00 平", "ORB", "美股開盤順勢")
      if w in json.dumps(body, ensure_ascii=False)], [])
