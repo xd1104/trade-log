@@ -147,7 +147,22 @@ say(isinstance(r.get("feat"), dict) and len(r["feat"]) == len(usml.FEATURES),
     "  13 個特徵都存下來了（事後要重算得出來）")
 say((r["decision"] == "做多") == (r["prob"] > 0.5), "  方向跟機率一致")
 
-print("\n=== ⑤ ⛔ 收尾 ===")
+print("\n=== ⑤ 落地：append_row 真的收得下（⛔ 第一版漏測這一關，結果回填就炸了）===")
+S.SIM_DIR.mkdir(parents=True, exist_ok=True)
+say(S.append_row(dict(r, calc="backfill")), "  定論寫得進去")
+say(not S.append_row(dict(r, calc="backfill")), "  ⛔ 同一天同一條不會重複寫")
+_rows, _st = S.read_rows()
+back = _rows.get(("usml", str(E)))
+say(back is not None, "  讀得回來")
+if back:
+    chk("  讀回來的方向一樣", back["decision"], r["decision"])
+    chk("  讀回來的點數一樣", back["points"], r["points"])
+    say(isinstance(back.get("prob"), float), "  機率也留著（之後挑門檻要用）")
+    chk("  回填的標記留著", back.get("calc"), "backfill")
+chk("  ⛔ 出場原因亂寫會被擋下來", S._valid_row(dict(r, exit_reason="亂寫的")), False)
+chk("  「時間到」是合法的出場原因", "時間到" in S._EXITS, True)
+
+print("\n=== ⑥ ⛔ 收尾 ===")
 say(S.SIM_DIR != REAL_SIM and str(TMP) in str(S.SIM_DIR), "  全程在暫存區", str(S.SIM_DIR))
 say(not (HERE / "sim_lanes" / ("%s.jsonl" % str(E)[:7])).exists()
     or not any(str(E) in ln and '"usml"' in ln

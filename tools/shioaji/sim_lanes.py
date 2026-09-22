@@ -143,7 +143,9 @@ RECENT_N = 15
 _MONTH_RE = re.compile(r"^\d{4}-\d{2}\.jsonl$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DECISIONS = ("做多", "做空", "不做")
-_EXITS = ("停利", "停損", "收盤")
+# ⭐ 2026-09-22 多一種「時間到」：美股開盤模型是**抱滿 30 分鐘就平**，
+#    那既不是停利也不是收盤（收盤指的是那個時段的最後一根）。⛔ 不要硬套既有的三種。
+_EXITS = ("停利", "停損", "收盤", "時間到")
 
 # 注入的規則正本（live_panel.main → start_sim_lanes → configure）。沒接 ⇒ 逐筆那幾條只記「沒接上」，⛔ 不猜。
 _CFG = {"verdict": None, "move_pct": None, "tpsl": None, "reversal": None, "hist_read": None,
