@@ -89,7 +89,11 @@ SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐�
 #    +43.5／筆 t 2.61、2020-24 只有 t 1.36 ⇒ 接近門檻、證明不了 ⇒ 用從今天起的新資料考）
 #    美股開盤第一根 5 分 K 的台積電 ADR 走幅 ≥ 過去 40 晚的 8 成 ⇒ 順著做台指；
 #    停利停損 ＝ 進場價 × 過去 20 晚「進場到 04:58」振幅% 的平均；沒碰到 04:58 平。
-TSM_SYM, TSM_FEED = "TSM", "sip"
+# ⛔⛔ 2026-09-23 改用 **IEX**（原本是 SIP）：真單（night_fire）即時只拿得到 IEX（免費方案 SIP 即時 403）。
+#    模擬的用途是**幫真單做前瞻考試** ⇒ 兩邊一定要同一份資料，否則模擬考的是「他做不到的版本」。
+#    實例：2026-09-22 同一根 K 棒，SIP +0.81%（門檻 0.80 ⇒ 做多 +170）、IEX +0.65%（門檻 0.71 ⇒ 不做）。
+#    ⚠️ 換 feed ⇒ 走幅與門檻都會變 ⇒ 舊的 tsm 定論要整段重算（backfill_tsm.py）。
+TSM_SYM, TSM_FEED = "TSM", "iex"
 TSM_WIN, TSM_MIN_N, TSM_PCTL = tsm_rule.WIN, tsm_rule.MIN_N, tsm_rule.PCTL
 TSM_RNG_N = tsm_rule.RNG_N
 TSM_ENTRY_TOL = 3             # 台指那一分鐘沒成交時，進場那一根最多往回找幾分鐘
@@ -1587,7 +1591,7 @@ def _rule_detail(lane):
     src = {"k": "資料", "v": "逐筆成交" if lane in TICK_LANES else "1 分 K（⚠️ 近似，不是逐筆）"}
     if lane == "tsm":
         return {"plain": "美股一開盤，看台積電 ADR 頭 5 分鐘衝得比平常兇，就跟著它的方向做台指一口，抱到清晨。",
-                "steps": [{"k": "資料", "v": "台指 1 分 K ＋ 台積電 ADR（TSM）美股開盤第一根 5 分 K（Alpaca SIP）"},
+                "steps": [{"k": "資料", "v": "台指 1 分 K ＋ 台積電 ADR（TSM）美股開盤第一根 5 分 K（Alpaca **IEX**，跟真單即時拿得到的同一份）"},
                           {"k": "什麼時候看", "v": "美股開盤第一根 5 分 K **收完**的那一刻（夏令 21:35、冬令 22:35）"},
                           {"k": "快不快", "v": "那 5 分鐘台積電 ADR 走了百分之幾（不分漲跌），要 ≥ 過去 %d 晚裡"
                                             "「%g 成的晚上」的水準才算快；不快就不做" % (TSM_WIN, TSM_PCTL / 10)},

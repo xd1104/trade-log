@@ -66,23 +66,24 @@ us_feed._fetch_month = lambda *a, **k: None       # ⛔ 不連 Alpaca
 print("=== ① ⛔ 時間對齊（Alpaca 標開始時間）===")
 E = date(2026, 6, 10)            # 夏令 ⇒ 美東 9:30 ＝ 台北 21:30
 us_feed.DIR.mkdir(parents=True)
-with (us_feed.DIR / "TSM-sip-2026-06.csv").open("w", newline="", encoding="utf-8") as f:
+with (us_feed.DIR / "TSM-iex-2026-06.csv").open("w", newline="", encoding="utf-8") as f:
     w = csv.writer(f)
     w.writerow(["start_utc", "open", "close"])
     w.writerow(["2026-06-10T13:25:00Z", 99.0, 100.0])      # 盤前 9:25（⛔ 不是開盤那根）
     w.writerow(["2026-06-10T13:30:00Z", 100.0, 101.0])     # 開盤第一根 9:30~9:35
     w.writerow(["2026-06-10T13:35:00Z", 101.0, 150.0])     # 9:35~9:40（⛔ 未來，不准用）
     w.writerow(["2026-06-12T13:30:00Z", 100.0, 100.5])     # 06-11 沒有 ⇒ 休市
-first = us_feed.first5("TSM", E)
+first = us_feed.first5("TSM", E, feed=S.TSM_FEED)
 say(isinstance(first, dict) and abs(first["mv_pct"] - 1.0) < 1e-9,
     "  取的是美東 9:30 開始那一根（+1.00%），⛔ 不是盤前、⛔ 也不是 9:35 那根", str(first and first["mv_pct"]))
 chk("  那一根收完的台北時刻 ＝ 21:35（夏令）", first["done_at"], datetime(2026, 6, 10, 21, 35))
-chk("  06-11 月檔在、那天沒有 ⇒ 美股休市", us_feed.first5("TSM", date(2026, 6, 11)), "closed")
-chk("  06-30 之後沒資料 ⇒ None（還沒拿到，⛔ 不是休市）", us_feed.first5("TSM", date(2026, 6, 30)), None)
+chk("  06-11 月檔在、那天沒有 ⇒ 美股休市", us_feed.first5("TSM", date(2026, 6, 11), feed=S.TSM_FEED), "closed")
+chk("  06-30 之後沒資料 ⇒ None（還沒拿到，⛔ 不是休市）", us_feed.first5("TSM", date(2026, 6, 30), feed=S.TSM_FEED), None)
+chk("  ⛔ 模擬跟真單用同一份資料（IEX）", S.TSM_FEED, "iex")
 Ew = date(2026, 1, 14)           # 冬令
-with (us_feed.DIR / "TSM-sip-2026-01.csv").open("w", newline="", encoding="utf-8") as f:
+with (us_feed.DIR / "TSM-iex-2026-01.csv").open("w", newline="", encoding="utf-8") as f:
     f.write("start_utc,open,close\n2026-01-14T14:30:00Z,100,99\n")
-chk("  冬令 ⇒ 22:35", us_feed.first5("TSM", Ew)["done_at"], datetime(2026, 1, 14, 22, 35))
+chk("  冬令 ⇒ 22:35", us_feed.first5("TSM", Ew, feed=S.TSM_FEED)["done_at"], datetime(2026, 1, 14, 22, 35))
 
 # ── 造一晚合成的 1 分 K（⛔ 假價，12000 附近）
 T = S.us_open_min(E)
