@@ -56,6 +56,7 @@ import numpy as np
 import pandas as pd
 
 import strategy_lab as SL        # 逐筆讀取／run_bracket／結算日／抓取的逾時與流量上限（⛔ 那個模組也不碰下單）
+import trend_rule                # 夜盤跟勢的門檻正本（⛔ 同上）
 import tsm_rule                  # 台積電快攻的門檻與框寬正本（⛔ 這裡不准自己算 percentile）
 import us_feed                   # 美股 5 分 K（⛔ 唯讀行情；⛔ Alpaca 標**開始**時間，見該檔檔頭）
 
@@ -64,7 +65,7 @@ SIM_DIR = HERE / "sim_lanes"          # ⚠️ 測試會導到暫存區；函式
 FAST_HIST = HERE / "fast_hist.jsonl"  # ⛔ 唯讀（真單在用的那一份，寫它的是 auto_fire）
 MIN1_CSV = HERE / "tmf_1min.csv"      # ⛔ 唯讀（夜盤 1 分 K 先看本機，缺的才跟永豐要）
 
-LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm")
+LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend")
 # ⛔ 已下架的線：檔案裡的舊列**照樣讀得進來**（不算壞資料、不做資料遷移），但畫面不顯示、⛔ 也不准再寫。
 #    usml（美股開盤模型）2026-09-22 晚下架：SPY 時間標記偷看未來 5 分鐘，策略不成立
 #    （tick-research/night_ml_CORRECTION_2026-09-22.md）。
@@ -73,16 +74,18 @@ RETIRED_LANES = ("usml",)
 #    ⛔ 其他幾條照樣在背景算、照樣落地：多方聯軍的三個候選就是快攻／開箱／純回馬，
 #       夜盤那條負責跟永豐抓夜盤 1 分 K（台積電快攻吃它抓回來的）⇒ 拿掉就壞。
 #    點進去（/api/sim/lane）與圖（/api/sim/daychart）照樣認得全部 LANES（多方聯軍的圖要讀開箱那一列畫箱子）。
-SHOWN_LANES = ("union", "tsm")
+#    2026-09-23 加「夜盤跟勢」（trend）：跟台積電快攻並排考前瞻。
+SHOWN_LANES = ("union", "tsm", "trend")
 # 逐筆那六條：同一天只讀一次 tick_hist、也只算一次 day_pack（⛔ 不要一條算一次）
 TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
 # ⛔ 2026-09-16 Benson 定名：**面板文字一律用這些名字**。
 #    lane key 刻意沒改（`sim_lanes/*.jsonl` 裡已經落地的舊資料照樣讀得到，⛔ 不做資料遷移）。
 LANE_NAME = {"fast": "快攻", "fast11": "早收", "hmq": "回馬槍", "rev": "純回馬",
              "orb": "開箱", "union": "多方聯軍", "night": "夜盤順勢",
-             "tsm": "台積電快攻"}
+             "tsm": "台積電快攻", "trend": "夜盤跟勢"}
 SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐筆",
-            "orb": "逐筆", "union": "逐筆", "night": "1 分 K", "tsm": "1 分 K ＋ 台積電 ADR"}
+            "orb": "逐筆", "union": "逐筆", "night": "1 分 K", "tsm": "1 分 K ＋ 台積電 ADR",
+            "trend": "1 分 K"}
 
 # ── 台積電快攻（2026-09-22 晚加；**前瞻考試**用，⛔ 不是可以上真單的結論）
 #    研究：tick-research/scripts/night_controls.py（規則）、audit_2026-09-22/tsm_chk.py（重評：
@@ -99,6 +102,14 @@ TSM_RNG_N = tsm_rule.RNG_N
 TSM_ENTRY_TOL = 3             # 台指那一分鐘沒成交時，進場那一根最多往回找幾分鐘
 TSM_FEE, TSM_SPREAD = 5.0, 2.0
 TSM_CTX = HERE / "tsm_ctx.json"       # 過去每晚的走幅與振幅（⛔ gitignore）
+
+# ── 夜盤跟勢（2026-09-23 加；研究 tick-research/usopen_scan.py、七項檢查 usopen_best_check.py）
+#    美股開盤+10 分鐘進場，看台指前 30 分走幅 ≥ 過去 40 晚第 80 百分位 ⇒ 順勢做 1 口，抱到 04:58。
+#    ⛔ 不設停利停損（研究就是這樣定的）。門檻正本在 `trend_rule.py`。
+#    ⚠️ 2020-08~2024-06 每筆 −2.6（沒有效果）、2024-07 之後才明顯 ⇒ **前瞻考試中，不是結論**。
+TREND_FEE, TREND_SPREAD = 5.0, 2.0
+TREND_CTX = HERE / "trend_ctx.json"   # 過去每晚的走幅（⛔ gitignore）
+TREND_TOL = 3                         # 進場那一根最多往回找幾分鐘
 
 # ── 快攻（fast／hmq／rev／fast11 共用的前半）
 FAST_REF_MS = SL.ms(9, 0, 0)              # 09:00:00.000（含）以前最後一筆
@@ -966,6 +977,101 @@ def tsm_eval(E, bars, first, ctx):
     return row
 
 
+# ══ 夜盤跟勢（2026-09-23）═══════════════════════════════════════════════
+#
+# ⛔ 只用台指自己的 1 分 K（標籤＝結束時間）：進場＝美股開盤+10 那一根的收盤，
+#    訊號＝同一根減掉 30 分鐘前那一根；門檻＝過去 40 晚 |走幅| 的第 80 百分位（⛔ 只用過去）。
+# ⛔ 沒有停利停損，一路抱到 04:58。
+
+
+def _trend_ctx_read():
+    try:
+        c = json.loads(TREND_CTX.read_text(encoding="utf-8"))
+        return {"sig": dict(c.get("sig") or {})}
+    except Exception:
+        return {"sig": {}}
+
+
+def _trend_ctx_write(ctx):
+    """⛔ 先寫 .tmp 再換檔；只留最近 400 晚。"""
+    try:
+        if len(ctx["sig"]) > 400:
+            ctx["sig"] = dict(sorted(ctx["sig"].items())[-400:])
+        tmp = TREND_CTX.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(ctx, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(TREND_CTX)
+    except Exception:
+        pass
+
+
+def _trend_at(mm, C, minute):
+    """標籤 ≤ minute 的最後一根（最多往回 TREND_TOL 分）⇒ (索引, 價)；沒有 ⇒ (None, None)。"""
+    i = int(np.searchsorted(mm, minute, side="right")) - 1
+    if i < 0 or minute - int(mm[i]) > TREND_TOL:
+        return None, None
+    return i, float(C[i])
+
+
+def trend_sig(E, bars):
+    """這一晚的走幅（點）⇒ 沒算出來回 None。⛔ 只用進場那一刻以前的 K 棒。"""
+    mm, H, L, C = night_frame(bars, E)
+    if not len(mm):
+        return None
+    T = us_open_min(E)
+    i0, p = _trend_at(mm, C, T + trend_rule.ENTRY_OFFSET)
+    _, p0 = _trend_at(mm, C, T + trend_rule.ENTRY_OFFSET - trend_rule.LOOKBACK)
+    if i0 is None or p0 is None:
+        return None
+    return round(p - p0, 2)
+
+
+def trend_eval(E, bars, ctx):
+    """一晚的「夜盤跟勢」⇒ 定論那一列或 `_pending(...)`。"""
+    E = E if isinstance(E, date) else date.fromisoformat(str(E))
+    mm, H, L, C = night_frame(bars, E)
+    if not len(mm):
+        return _pending("no_bars", "沒有這一晚的 1 分 K")
+    if not night_complete(mm):
+        return _pending("incomplete", "1 分 K 還沒到齊（最後一根 %s，要到 04:58）" % _hm(int(mm[-1])))
+    if len(mm) < NIGHT_MIN_BARS:
+        return _pending("few_bars", "這一晚只有 %d 根 1 分 K（少於 %d，資料有洞）" % (len(mm), NIGHT_MIN_BARS))
+    T = us_open_min(E)
+    base = {"us_open": _hm(T), "us_dst": us_dst(E)}
+    i0, entry = _trend_at(mm, C, T + trend_rule.ENTRY_OFFSET)
+    j0, p0 = _trend_at(mm, C, T + trend_rule.ENTRY_OFFSET - trend_rule.LOOKBACK)
+    if i0 is None or p0 is None:
+        return _none_row("trend", E, "no_entry", "台指在 %s 前後沒有成交 K 棒"
+                         % _hm(T + trend_rule.ENTRY_OFFSET), base)
+    mv = entry - p0
+    base.update({"ref": round(p0, 1), "ref_label": _hm(int(mm[j0])),
+                 "c_label": _hm(int(mm[i0])), "at": _hm(int(mm[i0])), "move": round(mv, 1)})
+    es = str(E)
+    past = [v for k, v in sorted(ctx["sig"].items()) if k < es][-trend_rule.WIN:]
+    if len(past) < trend_rule.MIN_N:
+        return _none_row("trend", E, "no_hist", "過去的走幅歷史還不夠（%d 晚，要 %d 晚）"
+                         % (len(past), trend_rule.MIN_N), base)
+    thr = trend_rule.threshold(past)
+    base["thr_points"] = round(thr, 1)
+    if not trend_rule.is_fast(mv, thr):
+        return _none_row("trend", E, "not_fast", "台指這 30 分鐘走 %+.0f 點，沒到門檻 %.0f 點（不夠兇）"
+                         % (mv, thr), base)
+    d = 1 if mv > 0 else -1
+    after = np.nonzero((mm > mm[i0]) & (mm <= NIGHT_EXIT_MIN))[0]
+    if not len(after):
+        return _pending("no_after", "進場之後沒有 K 棒")
+    k = after[-1]
+    ex = float(C[k])
+    cost = TREND_FEE + TREND_SPREAD
+    row = {"lane": "trend", "date": es, "decision": "做多" if d > 0 else "做空", "why": "trend_fast",
+           "reason": "台指 %s 前 30 分鐘走 %+.0f 點（門檻 %.0f）⇒ %s"
+                     % (_hm(T + trend_rule.ENTRY_OFFSET), mv, thr, "做多" if d > 0 else "做空"),
+           "entry": round(entry, 1), "exit": round(ex, 1), "exit_reason": "收盤",
+           "exit_label": _hm(int(mm[k])), "points": round(d * (ex - entry) - cost, 1), "cost": cost,
+           "src": SRC_NAME["trend"]}
+    row.update(base)
+    return row
+
+
 # ══ 落地 ══════════════════════════════════════════════════════════════
 
 def _valid_row(o):
@@ -1493,6 +1599,41 @@ def _step_tsm(now, rows, get_api, has_position):
     STATE["pending"]["tsm"] = pend
 
 
+def _step_trend(now, rows, get_api, has_position):
+    """
+    夜盤跟勢那一條。⚠️ 跟台積電快攻一樣**沾夜盤那步的 1 分 K**，⛔ 不額外跟永豐要東西；
+    ⛔ 也不需要任何外部行情（只看台指自己）。
+    """
+    pend = {}
+    evs = night_evenings(now)
+    since = min(evs) - timedelta(days=3)
+    ctx = _trend_ctx_read()
+    dirty = False
+    for E in sorted(evs):
+        es = str(E)
+        try:
+            bars = _NIGHT_API.get(E)
+            if bars is None:
+                bars = night_bars_local(E, since)[0]
+            if ("trend", es) not in rows:
+                res = trend_eval(E, bars, ctx)
+                if res.get("pending"):
+                    pend[es] = res
+                elif append_row(res):
+                    rows[("trend", es)] = res
+            # ⭐ 定論之後才把這一晚的走幅記進歷史（⛔ 今晚的不准給今晚自己用）
+            sg = trend_sig(E, bars)
+            if sg is not None and ctx["sig"].get(es) != sg:
+                ctx["sig"][es] = sg
+                dirty = True
+        except Exception as e:
+            _note_err("%s %s" % (LANE_NAME["trend"], es), e)
+            pend[es] = _pending("error", "計算出錯：" + str(e)[:80])
+    if dirty:
+        _trend_ctx_write(ctx)
+    STATE["pending"]["trend"] = pend
+
+
 def step(get_api, has_position, now=None):
     """背景一輪。⛔ 永遠不往外丟例外（計數＋主控台＋畫面）。"""
     try:
@@ -1502,6 +1643,7 @@ def step(get_api, has_position, now=None):
         _step_night(now, rows, get_api, has_position)
         # ⭐ 第八條：⛔ 一定排在夜盤之後（它要用夜盤那步抓回來的 1 分 K）
         _step_tsm(now, rows, get_api, has_position)
+        _step_trend(now, rows, get_api, has_position)
         STATE["steps"] += 1
         STATE["last_step_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
         return True
@@ -1533,6 +1675,10 @@ def _rule_text(lane):
     if lane == "night":
         return ("美股開盤（夏令 21:30、冬令 22:30）後 5 分鐘往哪走就順勢做 1 口；停利停損 ±%g%%，"
                 "同一分鐘兩邊都碰到算停損，沒碰到就 04:58 平" % (NIGHT_TPSL_FRAC * 100))
+    if lane == "trend":
+        return ("美股開盤後 %d 分鐘，看台指**自己**前 %d 分鐘走了幾點；比過去 %d 晚裡 %g 成的晚上兇，"
+                "就順著那個方向做 1 口，⛔ 不設停利停損，抱到 04:58 平。⛔ 前瞻考試中，不會下單"
+                % (trend_rule.ENTRY_OFFSET, trend_rule.LOOKBACK, trend_rule.WIN, trend_rule.PCTL / 10))
     if lane == "tsm":
         return ("美股開盤第一根 5 分 K（夏令 21:30~21:35、冬令 22:30~22:35）台積電 ADR 走幅比過去 %d 晚裡 %g 成的晚上大，"
                 "就順著它的方向做台指 1 口；停利停損 ＝ 進場價 × 過去 %d 晚振幅平均，"
@@ -1589,6 +1735,21 @@ def _rule_detail(lane):
     回 {"plain": 白話一句, "steps": [{"k": 小標, "v": 內容}, ...]}。
     """
     src = {"k": "資料", "v": "逐筆成交" if lane in TICK_LANES else "1 分 K（⚠️ 近似，不是逐筆）"}
+    if lane == "trend":
+        return {"plain": "美股開盤後十分鐘，如果台指自己正在走一段大的，就跟著那個方向做一口，抱到清晨。",
+                "steps": [{"k": "資料", "v": "只用台指自己的 1 分 K（⛔ 不看美股、不看台積電）"},
+                          {"k": "什麼時候看", "v": "美股開盤後 %d 分鐘（夏令 21:40、冬令 22:40）"
+                                              % trend_rule.ENTRY_OFFSET},
+                          {"k": "看什麼", "v": "台指在那之前 %d 分鐘走了幾點（不分漲跌）" % trend_rule.LOOKBACK},
+                          {"k": "做不做", "v": "要 ≥ 過去 %d 晚裡「%g 成的晚上」的水準才做；不夠兇就不做"
+                                           % (trend_rule.WIN, trend_rule.PCTL / 10)},
+                          {"k": "做哪一邊", "v": "往上走就做多、往下走就做空，1 口"},
+                          {"k": "怎麼出場", "v": "⛔ **不設停利停損**，一路抱到 04:58 夜盤收盤"},
+                          {"k": "為什麼在這裡", "v": "2024-07 以後那段歷史上這樣做是賺的，"
+                                               "但 **2020-08~2024-06 那段幾乎打平＝沒有效果** ⇒ "
+                                               "很可能只是這兩年的行情特徵 ⇒ **用新資料考**。⛔ 這一條不會下單"},
+                          {"k": "成本", "v": _fee_txt(TREND_FEE + TREND_SPREAD,
+                                                   "（手續費 %g ＋ 買賣價差 %g）" % (TREND_FEE, TREND_SPREAD))}]}
     if lane == "tsm":
         return {"plain": "美股一開盤，看台積電 ADR 頭 5 分鐘衝得比平常兇，就跟著它的方向做台指一口，抱到清晨。",
                 "steps": [{"k": "資料", "v": "台指 1 分 K ＋ 台積電 ADR（TSM）美股開盤第一根 5 分 K（Alpaca **IEX**，跟真單即時拿得到的同一份）"},
@@ -1919,13 +2080,13 @@ def day_chart(key, day, rows=None):
     r = rows.get((key, day))
     out = {"ok": True, "key": key, "name": LANE_NAME[key], "date": day,
            # ⭐ 台積電快攻也是夜盤（⛔ 不可以畫成日盤那張圖）
-           "session": "night" if key in ("night", "tsm") else "day",
+           "session": "night" if key in ("night", "tsm", "trend") else "day",
            "bars": [], "marks": [], "lines": [], "zones": [], "notes": []}
     if r is None:
         out["notes"].append("這一天沒有這一條的定論")
         return out
     out.update({k: r.get(k) for k in ("decision", "reason", "points", "exit_reason", "calc")})
-    if key in ("night", "tsm"):
+    if key in ("night", "tsm", "trend"):
         return _night_chart(out, r, lane=key)
     try:
         D = SL.load_day(day)

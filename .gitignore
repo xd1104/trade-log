@@ -69,6 +69,8 @@ tools/shioaji/sim_lanes/
 tools/shioaji/us_spy/
 tools/shioaji/us_bars/
 tools/shioaji/tsm_ctx.json
+tools/shioaji/trend_ctx.json
+tools/shioaji/trend_ctx.json.*
 tools/shioaji/tsm_ctx.json.*
 tools/shioaji/usml_ctx.json
 tools/shioaji/usml_ctx.json.*
