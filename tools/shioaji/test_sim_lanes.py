@@ -1689,6 +1689,13 @@ AUTH_PATCH = [
      '            health.configure(real_fn=_health_real)\n'
      '    except Exception as e:\n'
      '        print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])\n'),
+    # ⭐ 2026-09-23 **有授權的例外**（Benson 交辦：夜盤跟勢接真單）：夜盤那一條多接一個
+    #   **唯讀**的「某一分鐘最後一筆成交價」（`_nf_minute_close`，只讀 Today.minute_close）。
+    #   ⛔ 主迴圈與停損一行都沒動；仍在同一個 try 裡。
+    ("【夜盤自動下單】夜盤跟勢多接一個唯讀的分鐘收盤價",
+     '        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session)\n',
+     '        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session,\n'
+     '                             minute_close_fn=_nf_minute_close)\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")

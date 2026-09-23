@@ -58,7 +58,8 @@ FAKE = {"can": (True, None), "first": None, "quote": (46000.0, 1.0), "sess": "ni
 
 def fake_enter(d, px, tp, sl_points=None):
     CALLS["enter"].append((d, px, tp, sl_points))
-    pos = {"dir": d, "entry": px + 1, "qty": 1, "entry_time": "21:35:04", "sl_points": sl_points, "tp_points": tp}
+    pos = {"dir": d, "entry": px + FAKE.get("slip", 1), "qty": 1, "entry_time": "21:35:04",
+           "sl_points": sl_points, "tp_points": tp}
     broker._state["position"] = pos
     return True, None, pos
 
@@ -304,6 +305,194 @@ ch = lp[lp.index("def _recover_chain"):lp.index("def main():")]
 say(ch.index("night_fire.recover_meta") < ch.index("auto_fire.recover_meta"), "  鏈子順序：夜盤 → 日盤")
 say(REAL_FLAG.exists() == REAL_EXISTED, "  ⛔ 真的 NIGHT_ORDERS_ON 沒被碰（存在與否跟開跑前一樣）")
 chk("  state() 讀得出來", NF.state(now=datetime(2026, 6, 10, 20, 0))["ok"], True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+print("\n=== ⑧ 夜盤跟勢（R，2026-09-23 接上送單）===")
+# ⛔ 一樣全假：假券商、假報價、假分鐘收盤價、暫存的 trend_ctx.json。
+import math  # noqa: E402
+import random  # noqa: E402
+import re  # noqa: E402
+
+import pandas as pd  # noqa: E402
+
+import sim_lanes  # noqa: E402
+import trend_rule  # noqa: E402
+
+NF.TREND_CTX = TMP / "trend_ctx.json"
+MC = {}                                             # 假的 Today.minute_close（開始時間標記）
+NF.configure(quote_fn=lambda: FAKE["quote"], session_fn=lambda now: FAKE["sess"],
+             minute_close_fn=lambda m: MC.get(m))
+TA = NF.trend_at(E)
+W1 = date(2026, 1, 14)
+chk("  夏令：夜盤跟勢 21:40 看", TA, datetime(2026, 6, 10, 21, 40))
+chk("  冬令：22:40 看", NF.trend_at(W1), datetime(2026, 1, 14, 22, 40))
+for _d in (E, W1):
+    _t = NF.trend_at(_d)
+    chk("  %s 跟模擬同一個時刻（us_open_min + ENTRY_OFFSET）" % _d,
+        _t.hour * 60 + _t.minute, sim_lanes.us_open_min(_d) + trend_rule.ENTRY_OFFSET)
+
+
+def ctx_write(n=40, last=E - timedelta(days=1), val=100.0):
+    sig = {str(last - timedelta(days=i)): (val if i % 2 else -val * 0.5) for i in range(n)}
+    NF.TREND_CTX.write_text(json.dumps({"sig": sig}), encoding="utf-8")
+
+
+def r_reset(px=46000.0, ref=45800.0):
+    reset()
+    NF.ARM_FLAG.write_text("R", encoding="ascii")
+    ctx_write()
+    MC.clear()
+    MC[21 * 60 + 9] = ref                          # 21:09 那一分鐘最後一筆 ＝ 模擬「21:10 那根」的收盤
+    FAKE.update(quote=(px, 1.0), first=None)       # ⛔ 夜盤跟勢不看台積電（first 是 None 也要能做）
+
+
+def r_rows():
+    return [o for o in NF.rows_of(E) if o.get("rec") in ("skip", "result", "sending")]
+
+
+# 門檻：過去 40 晚 |走幅| ＝ 一半 100、一半 50 ⇒ 第 80 百分位
+thr_want = trend_rule.threshold([100.0 if i % 2 else -50.0 for i in range(40)])
+SL0_WANT = float(math.floor(46000 * 0.02 * 0.975))   # 成交前帶的保守值
+SL_WANT = float(math.floor(46001 * 0.02))            # 成交（假券商 +1 點滑價）後換成成交價 × 2%
+r_reset()
+run_until(T5, TA - timedelta(seconds=1))
+chk("  ⛔ 開著 R：21:35 台積電那一刻不動、21:40 以前一張都不送", (CALLS["enter"], r_rows()), ([], []))
+run_until(TA, TA + timedelta(seconds=30))
+chk("  走 +200 點（≥ 門檻 %.0f）⇒ 送一張做多" % thr_want, [c[0] for c in CALLS["enter"]], ["long"])
+c0 = CALLS["enter"][0] if CALLS["enter"] else (None,) * 4
+chk("  ⛔⛔ 不設停利：broker.enter 的 tp 是 None（券商端一張限價單都不掛）", c0[2], None)
+chk("  送單時先帶保守停損（報價 × 2% × 0.975）", c0[3], SL0_WANT)
+chk("  ⭐ 成交後部位的停損換成 成交價 × 2%（無條件捨去）",
+    (broker._state["position"] or {}).get("sl_points"), SL_WANT)
+res = [o for o in NF.rows_of(E) if o.get("rec") == "result"]
+chk("  帳本那一列標 method R、tp_points None、no_tp",
+    (res[0].get("method"), res[0].get("tp_points"), res[0].get("no_tp")) if res else None, ("R", None, True))
+chk("  帳本記下訊號、門檻、用了哪一分鐘（事後查得到為什麼做）",
+    (res[0].get("mv"), res[0].get("thr"), res[0].get("ref_at")) if res else None,
+    (200.0, round(thr_want, 1), "21:09"))
+run_until(TA + timedelta(seconds=30), TA + timedelta(seconds=90))
+chk("  ⛔ 一晚只送一次", len(CALLS["enter"]), 1)
+# ⛔⛔ 偷看未來：歷史檔裡要是已經有今晚（或之後）的值，門檻一律不准用到
+_c = json.loads(NF.TREND_CTX.read_text(encoding="utf-8"))
+_c["sig"].update({str(E): 99999.0, str(E + timedelta(days=1)): 99999.0})
+NF.TREND_CTX.write_text(json.dumps(_c), encoding="utf-8")
+_past, _newest = NF.past_sigs(E)
+chk("  ⛔ 門檻只用今晚以前的走幅（今晚與之後的值不准混進來）",
+    (max(abs(v) for v in _past), _newest), (100.0, str(E - timedelta(days=1))))
+
+print("  -- 不送的理由 --")
+for name, setup, want in [
+    ("走幅沒到門檻", lambda: FAKE.update(quote=(45850.0, 1.0)), "not_fast"),
+    ("拿不到 30 分鐘前那一分鐘", lambda: MC.clear(), "no_ref"),
+    ("歷史只有 10 晚", lambda: ctx_write(n=10), "no_hist"),
+    ("歷史最新一晚是 20 天前（面板很久沒開）", lambda: ctx_write(last=E - timedelta(days=20)), "no_hist"),
+    ("歷史檔不存在", lambda: NF.TREND_CTX.unlink(), "no_hist"),
+    ("報價 30 秒沒更新", lambda: FAKE.update(quote=(46000.0, 30.0)), "no_quote"),
+    ("不是夜盤時段", lambda: FAKE.update(sess="day"), "no_quote"),
+    ("券商那一關擋下", lambda: FAKE.update(can=(False, "已有部位")), "cannot"),
+]:
+    r_reset()
+    setup()
+    run_until(TA, TA + timedelta(seconds=20))
+    rs = [o for o in NF.rows_of(E) if o.get("rec") == "skip"]
+    chk("  %s ⇒ 不送（%s）" % (name, want),
+        (CALLS["enter"], rs[-1]["why"] if rs else None, rs[-1].get("method") if rs else None),
+        ([], want, "R"))
+r_reset(px=45600.0)
+run_until(TA, TA + timedelta(seconds=20))
+chk("  走 −200 點 ⇒ 做空", [c[0] for c in CALLS["enter"]], ["short"])
+
+print("  -- ⛔⛔ 停損點數不可以超過面板的上限（超過會被換成手動 130 點）--")
+_frac = float(re.search(r"^POS_POINTS_MAX_FRAC = ([0-9.]+)", lp, re.M).group(1))
+chk("  面板的上限還是 2%（改了這裡要一起重想 R_SL_PCT）", _frac, 0.02)
+_worst = None
+for _px in (45987.0, 46025.0, 46030.0, 46049.0, 23012.5, 61237.0):
+    for _slip in (-40, -30, -3, 0, 3, 30):
+        r_reset(px=_px, ref=_px + 300)                  # 往下走 300 ⇒ 做空
+        FAKE["slip"] = _slip
+        run_until(TA, TA + timedelta(seconds=5))
+        _p = broker._state["position"] or {}
+        _sl0 = CALLS["enter"][0][3] if CALLS["enter"] else None
+        for _v, _e in ((_p.get("sl_points"), _p.get("entry")), (_sl0, _px + _slip)):
+            if _v is None or _e is None or _v > _e * _frac:
+                _worst = (_px, _slip, _v, _e)
+FAKE.pop("slip", None)
+chk("  各種報價 × 滑價（做空成交比報價低 40 點也算）：送單時與成交後的停損都 ≤ 成交價 × 2%",
+    _worst, None)
+r_reset()
+_late = TA + timedelta(seconds=NF.LATE_S + 5)
+run_until(_late, _late + timedelta(seconds=20))
+chk("  ⛔ 面板比 21:40 晚 2 分鐘以上才走到 ⇒ 不補單（late）", (CALLS["enter"], last_skip()), ([], "late"))
+
+print("  -- 30 分鐘前那一分鐘：跟模擬對齊（面板開始時間標記 vs 1 分 K 結束時間標記）--")
+MC.clear()
+MC[21 * 60 + 9] = 45800.0
+MC[21 * 60 + 10] = 45000.0                          # ⛔ 21:10 開始的那一分鐘 ≠ 模擬的「21:10 那根」
+chk("  先找 21:09（＝模擬標籤 21:10 那根）", NF.ref_price(E), (45800.0, "21:09"))
+MC.pop(21 * 60 + 9)
+MC[21 * 60 + 6] = 45700.0
+chk("  21:09～21:07 沒成交 ⇒ 往回找到 21:06（容忍 3 分鐘）", NF.ref_price(E), (45700.0, "21:06"))
+MC.pop(21 * 60 + 6)
+MC[21 * 60 + 5] = 45600.0
+chk("  ⛔ 超過容忍（21:05）⇒ 拿不到，⛔ 不用更早的價", NF.ref_price(E), (None, None))
+chk("  容忍度跟模擬是同一個數", sim_lanes.TREND_TOL, 3)
+
+# 同一串假成交 ⇒ 模擬 trend_sig 與真單（現價 − ref_price）算出同一個走幅
+rnd = random.Random(7)
+_bad = None
+for trial in range(40):
+    trades, p = {}, 46000.0
+    for mi in range(15 * 60, 22 * 60):              # 每分鐘最後一筆成交（開始時間標記）
+        p += rnd.choice([-6, -3, 0, 3, 6])
+        if rnd.random() < 0.3:                      # 有些分鐘沒有成交
+            continue
+        trades[mi] = p
+    bars = pd.DataFrame([{"ts": datetime(2026, 6, 10, (mi + 1) // 60, (mi + 1) % 60),
+                          "Open": v, "High": v, "Low": v, "Close": v} for mi, v in sorted(trades.items())])
+    sim_mv = sim_lanes.trend_sig(E, bars)
+    MC.clear()
+    MC.update(trades)
+    ks = [k for k in trades if k <= 21 * 60 + 39]
+    last_mi = max(ks) if ks else None               # 21:40:01 那一刻的現價 ＝ 21:39 以前最後一筆
+    ref, _ = NF.ref_price(E)
+    live_mv = (round(trades[last_mi] - ref, 2)
+               if (ref is not None and last_mi is not None and 21 * 60 + 39 - last_mi <= 3) else None)
+    if sim_mv != live_mv:
+        _bad = (trial, sim_mv, live_mv)
+        break
+chk("  40 串隨機成交（三成的分鐘沒成交）：模擬 trend_sig 與真單算出同一個走幅", _bad, None)
+
+print("  -- 撿回部位（重啟）與 04:58 --")
+r_reset()
+run_until(TA, TA + timedelta(seconds=5))
+pos = dict(broker._state["position"] or {})
+_real_eo = NF.evening_of
+NF.evening_of = lambda now: E                       # recover_meta 看「現在」是不是同一晚
+got = NF.recover_meta(dict(pos))
+NF.evening_of = _real_eo
+chk("  ⛔ 撿回來：停損 2%、no_tp、⛔ 沒有 tp_points（不可以 float(None) 掉回手動 130）",
+    got, {"sl_points": SL_WANT, "no_tp": True, "sl_src": "nightfire"})
+broker._state["position"] = dict(pos, recovered=True, tp_points=130.0, sl_points=130.0, sl_src="unmatched")
+NF._recover_poll()
+p2 = broker._state["position"]
+chk("  工作執行緒補正：停損換成 2%、no_tp、拿掉 130 的停利",
+    (p2.get("sl_points"), p2.get("no_tp"), "tp_points" in p2, p2.get("sl_src")),
+    (SL_WANT, True, False, "nightfire"))
+broker._state["position"] = dict(pos)
+E1 = E + timedelta(days=1)
+run_until(datetime(E1.year, E1.month, E1.day, 4, 58, 0), datetime(E1.year, E1.month, E1.day, 4, 58, 10))
+chk("  04:58 平掉夜盤跟勢那一口", CALLS["close"], ["night_eod"])
+
+print("  -- 畫面 --")
+st = NF.state(now=datetime(2026, 6, 10, 20, 0))
+chk("  開著 R ⇒ state 的 method 是 R、今晚 21:40 看", (st["method"], st["tonight"]["look_at"]), ("R", "21:40"))
+say("不設停利" in st["rules"]["R"] and "2%" in st["rules"]["R"], "  R 那句規則講得出「不設停利」與「2%」",
+    st["rules"]["R"])
+say(st["rules"]["T"] == st["rule"], "  舊紀錄的預設規則仍是台積電快攻那句")
+NF.ARM_FLAG.write_text("T", encoding="ascii")
+chk("  開著 T ⇒ 今晚 21:35 看", NF.state(now=datetime(2026, 6, 10, 20, 0))["tonight"]["look_at"], "21:35")
+say(REAL_FLAG.exists() == REAL_EXISTED, "  ⛔ ⑧ 跑完真的 NIGHT_ORDERS_ON 仍然沒被碰")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))

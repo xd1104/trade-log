@@ -4112,26 +4112,34 @@ def fire_arm_on(mode, who="panel"):
 #   規則那句話的正本在 `night_fire.state()["rule"]`，代號與名字的正本在 `night_fire.METHODS`。
 #   ⛔⛔ key 一定要跟 `night_fire.METHODS` 對得起來；這裡多列一條**不會**讓它出現在畫面上
 #      （畫面跑的是 `night_fire.METHODS` 那一份）—— 這是刻意的：接不上的做法按不下去。
-#   ⚠️ `no_sl=True`（不設停利也不設停損）是**畫面上一定要講兩次**的那一種
-#      （確認條 ＋ `.al-risk`），⛔ 不可以只靠規則那句話裡有沒有提到。
+#   ⚠️ `risk`（這一條跟一般做法不一樣的出場／停損安排）是**畫面上一定要講兩次**的那一種
+#      （確認條 ＋ 開著時的 `.al-risk`），⛔ 不可以只靠規則那句話裡有沒有提到。
+#   ⭐ 2026-09-23 R 接上送單：原本設計「不設停利也不設停損」，Benson 當天拍板改成
+#      **不設停利＋2% 保護停損** ⇒ `no_sl` 那個旗子拿掉，改成照實講的 `risk`。
 NIGHT_METHOD_INFO = {
-    "T": {"no_sl": False},
-    # ⚠️ 「夜盤跟勢」(R) 目前**還沒接上送單那一段**（見 CLAUDE.md 2026-09-23 那節）：
-    #    `night_fire.METHODS` 裡沒有它 ⇒ 畫面上不會出現這一列。這一筆先寫在這裡，
-    #    等它真的接上的那一天只要在 night_fire 加代號，揭露就自動跟上。
+    "T": {},
     "R": {"beta": "尚未通過前瞻驗證",
           "note": "2024-07 起那段每筆 +122 點，但 2020-08~2024-06 那段每筆 −2.6 點。"
                   "目前在【模擬】那一頁考前瞻。",
-          "no_sl": True},
+          # ⛔ 用 **粗體** 標記、前端走 emb()（先 esc 再換 <b>）；⛔ 不准直接塞 HTML。
+          "risk": ("這一條**不設停利**（券商端一張單都沒有），只有 **%g%% 保護停損**"
+                   "（活在這台面板裡），其餘抱到 **04:58** 才平。"
+                   "【模擬】那一條照研究不設停損，兩邊這一點不一樣。"
+                   % (night_fire.R_SL_PCT * 100))},
 }
 
 
-def night_methods(rule=""):
+def night_methods(rules=None):
     """
     夜盤畫面上那組**單選**的清單。⛔ 只有一個地方組（產品的 GET 與治具都叫這一支）——
     治具另寫一份的話，探針量到的是治具的樣子。
+    `rules`：`night_fire.state()["rules"]`（每一條自己那句話）；舊呼叫端傳字串 ⇒ 每條都用它。
     """
-    return [dict({"k": k, "name": night_fire.METHOD_NAME.get(k, k), "rule": rule or ""},
+    def _r(k):
+        if isinstance(rules, dict):
+            return rules.get(k) or ""
+        return rules or ""
+    return [dict({"k": k, "name": night_fire.METHOD_NAME.get(k, k), "rule": _r(k)},
                  **NIGHT_METHOD_INFO.get(k, {}))
             for k in night_fire.METHODS]
 
@@ -6319,6 +6327,14 @@ function livePx(s){
    ⚠️ 2026-09-23 v3：以前右上角那顆「去看部位 →」是切到右欄的【真實】分區，
       那一區已經拿掉了 ⇒ 那顆鈕跟著拿掉（⛔ 不留一顆按下去什麼都不會發生的鈕）。
       三種警報的文字**一個字都沒改**。 */
+/* 不設停利（no_tp）的那一口是哪一條規則開的（2026-09-23 夜盤跟勢接上送單後才需要分）。
+   ⚠️ 看**現在的時段**而不是進場時間：重啟撿回來的部位 entry_time 是空的。
+      開箱只在日盤（09:0x 進、13:43:30 平），夜盤時段手上一口不設停利的只可能是夜盤跟勢。 */
+function isNightNow(){
+  const h=new Date().getHours();
+  return h>=15||h<5;
+}
+function noTpTag(){ return isNightNow()?'夜盤跟勢':'開箱'; }
 function xalHTML(R){
   const P=R.position;
   if(!P) return '';
@@ -6330,7 +6346,7 @@ function xalHTML(R){
   /* ⛔ 「開箱」那一口照規則就沒有停利（P.no_tp）⇒ ⛔ 不可以跳「停利沒有掛上券商」的警報
      （那是出事了才該跳的），但**券商端一張單都沒有**這件事要照實講。 */
   if(P.no_tp)
-    return '<div class="n-x n-att"><div class="g">&#9888; 開箱：券商端無掛單'+
+    return '<div class="n-x n-att"><div class="g">&#9888; '+noTpTag()+'：券商端無掛單'+
       '<div class="s">這一口沒有停利單、永豐又沒有停損單 —— '+
       '停損與收盤平倉<b>都靠面板</b>。面板關掉或電腦睡著就都不會發生。</div></div></div>';
   if(!P.has_target)
@@ -8401,9 +8417,10 @@ function alPaint(){
                '（永豐沒有停損單）。</span></p>'+
              '<p><i>&#9888;</i><span>所以有部位的晚上<b>面板要整晚開著</b> —— '+
                '04:58 才會自動平倉。</span></p>'):'')+
-       /* ⭐ 夜盤那一條「不設停利也不設停損」時的第三重揭露（⛔ 只有那一條在跑時才出現）。 */
-       (nOn&&nfNoSL(nfd)?('<p><i>&#9888;</i><span>夜盤選的是<b>'+esc(nfName(nfd,nfd.method))+
-         '</b> —— 這一條<b>不設停利也不設停損</b>，進場後抱到 04:58 才平。</span></p>'):'')+
+       /* ⭐ 夜盤那一條有特別的出場安排（夜盤跟勢：不設停利、2% 保護停損）時的第三重揭露
+          （⛔ 只有那一條在跑時才出現；⛔ 句子是後端 NIGHT_METHOD_INFO 的 risk，前端不寫第二份）。 */
+       (nOn&&nfRisk(nfd)?('<p><i>&#9888;</i><span>夜盤選的是<b>'+esc(nfName(nfd,nfd.method))+
+         '</b> —— '+emb(nfRisk(nfd))+'</span></p>'):'')+
      '</div>'
    : '');
 
@@ -8485,9 +8502,12 @@ function alPosHTML(D,row){
    '<div class="r"><span>現價</span><b>'+f(livePx(s))+'</b></div>'+
    '<div class="r"><span>停損 / 停利</span><b>'+(R.sl==null?'—':f(R.sl))+' / '+
      (P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'+
-   (D&&D.eod_at?'<div class="r"><span>沒平掉就</span><b>'+esc(D.eod_at)+' 自動平</b></div>':'')+
+   /* ⚠️ 夜盤時段手上那一口是夜盤自動下單開的 ⇒ 04:58 平（⛔ 不是日盤的 13:43:30）。 */
+   (isNightNow()
+     ? '<div class="r"><span>沒平掉就</span><b>04:58 自動平</b></div>'
+     : (D&&D.eod_at?'<div class="r"><span>沒平掉就</span><b>'+esc(D.eod_at)+' 自動平</b></div>':''))+
    nfline+
-   (P.no_tp?'<div class="n" style="color:var(--gold)">開箱：券商端無掛單 —— '+
+   (P.no_tp?'<div class="n" style="color:var(--gold)">'+noTpTag()+'：券商端無掛單 —— '+
      '這一口沒有停利單、永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。</div>':'')+
    '</div>';
 }
@@ -8637,11 +8657,12 @@ function alSwDay(D){
  if(D.off_msg) h+='<div class="n">'+esc(D.off_msg)+'</div>';
  return h+'</div></div>';
 }
-/* 夜盤那一條有沒有「不設停利停損」（⛔ 由後端標，⛔ 前端不准照代號猜）。 */
-function nfNoSL(x){
+/* 現在開著的那一條夜盤做法有沒有特別的出場安排要講（⛔ 句子由後端給，⛔ 前端不准照代號猜）。
+   ⇒ 那句話（含 **粗體** 標記，呼叫端走 emb()）；沒有 ⇒ ''。 */
+function nfRisk(x){
  const MS=(x&&x.methods)||[], k=(x&&x.method)||null;
  const hit=MS.filter(m=>m.k===k)[0];
- return !!(hit&&hit.no_sl);
+ return (hit&&typeof hit.risk==='string')?hit.risk:'';
 }
 /* ── 夜盤那一組：做法**單選** ＋ 開關 ───────────────────────── */
 function alSwNight(){
@@ -8663,7 +8684,11 @@ function alSwNight(){
      '<span class="ds">'+esc(m.rule||x.rule||'')+'</span></span></button>';
  });
  h+='</div><div class="al-selfoot">';
- const C=x.arm_confirm;
+ /* ⭐ 2026-09-23：確認句**每條做法各一份**（x.arm_confirm[代號]）⇒ 拿「他正要打開的那一條」。
+    ⛔ 拿不到那一條的 ⇒ 不畫確認鈕（跟日盤 alConf() 同一個規矩）。
+    沒有在選的時候（只是要判斷「後端有沒有回報真錢／演練」）看清單第一條的那一份。 */
+ const CS=(x.arm_confirm&&typeof x.arm_confirm==='object')?x.arm_confirm:{};
+ const C=pend?(CS[pend]||null):(CS[(MS[0]||{}).k]||null);
  if(pend&&C&&typeof C.text==='string'){
    const R=MS.filter(m=>m.k===pend)[0]||{}, CU=MS.filter(m=>m.k===cur)[0]||{};
    const swap=(on&&pend!==cur);
@@ -8673,14 +8698,16 @@ function alSwNight(){
      q='要把夜盤的做法從<b>'+esc(CU.name||cur)+'</b>換成<b>'+esc(R.name||pend)+'</b>。'+
        '程式會<b>先關閉、再用新的做法重新開啟</b>（開關檔不覆蓋，只能先關再開）。'+
        '<span class="w2">已經進場的那一晚<b>不受影響</b> —— 照原本的做法（'+esc(CU.name||cur)+
-       '）抱到 04:58。換的是<b>之後的晚上</b>。</span>';
+       '）抱到 04:58。換的是<b>之後的晚上</b>。</span>'+
+       /* 換過去之後是真錢還是演練，一樣要講（後端那一句，⛔ 前端不自己拼）。 */
+       '<span class="w2">'+(C.live?'⚠️ ':'')+emb(C.text)+'</span>';
    else
      q=(C.live?'⚠️ ':'')+emb(C.text)+
        '<span class="w2">要用「<b>'+esc(R.name||pend)+'</b>」開始嗎？</span>';
    q+='<span class="w2">'+esc(R.rule||x.rule||'')+'</span>';
    if(R.beta&&R.note) q+='<span class="w2">&#9888; '+esc(R.name||pend)+' <b>'+esc(R.beta)+
      '</b>：'+esc(R.note)+'</span>';
-   if(R.no_sl) q+='<span class="w2">&#9888; 這一條<b>不設停利也不設停損</b>，進場後抱到 04:58 才平。</span>';
+   if(typeof R.risk==='string'&&R.risk) q+='<span class="w2">&#9888; '+emb(R.risk)+'</span>';
    h+='<div class="al-conf'+(C.live?' real':'')+'"><div class="q">'+q+'</div>'+
      '<div class="btns2">'+
        '<button class="btn go" data-nfyes="1"'+(NFON.busy?' disabled':'')+'>'+
@@ -9660,8 +9687,11 @@ class Handler(BaseHTTPRequestHandler):
                 #      ⛔ 也**不可以把還沒接好的做法先畫上去**（畫得出來就按得下去）。
                 #   ⚠️ 每一條的附加揭露（規則一句話／beta 旗標／歷史數字／有沒有停損）
                 #      放在 `NIGHT_METHOD_INFO`，⛔ 一樣是後端的一份（見那個常數）。
-                out["methods"] = night_methods(out.get("rule"))
-                out["arm_confirm"] = night_arm_confirm(out.get("live"))
+                out["methods"] = night_methods(out.get("rules") or out.get("rule"))
+                # ⭐ 2026-09-23 夜盤有兩條了 ⇒ 確認句**每條做法各一份**（跟日盤 2026-09-17 同一招）。
+                #   ⛔ 只給一份的話，選夜盤跟勢時確認條會寫「照『台積電快攻』跑」（實測抓到）。
+                out["arm_confirm"] = {m: night_arm_confirm(out.get("live"), m)
+                                      for m in night_fire.METHODS}
                 return self._json(200, out)
             except Exception as e:
                 return self._json(500, {"ok": False, "msg": "夜盤自動下單狀態讀不出來：%s" % str(e)[:120]})
@@ -10505,8 +10535,10 @@ def _health_real():
                                 "最近 %d 天還沒有算得出點數的真單" % FIRE_REAL_DAYS)}
     except Exception as e:
         out["union"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
+    # ⭐ 2026-09-23 夜盤有兩條了（T 台積電快攻／R 夜盤跟勢）⇒ 依帳本那一列的 `method` 分開數；
+    #    ⚠️ 2026-09-23 以前的列沒有 `method`，那時只有 T ⇒ 算 T。⛔ 不可以兩條混成一張卡。
     try:
-        n = 0
+        n = {"T": 0, "R": 0}
         for f in sorted(night_fire.NF_DIR.glob("*.jsonl")) if night_fire.NF_DIR.exists() else []:
             if not night_fire._MONTH_RE.match(f.name):
                 continue
@@ -10516,10 +10548,12 @@ def _health_real():
                 except Exception:
                     continue
                 if o.get("rec") == "result" and o.get("ok"):
-                    n += 1
-        out["tsm"] = {"n": n, "avg": None,
-                      "msg": ("送出了 %d 口；⛔ 夜盤帳本沒有出場價（出場在券商端成交），"
-                              "點數留白" % n) if n else "還沒有送出過真單"}
+                    k = o.get("method") or "T"
+                    n[k] = n.get(k, 0) + 1
+        for k, lane in (("T", "tsm"), ("R", "trend")):
+            out[lane] = {"n": n.get(k, 0), "avg": None,
+                         "msg": ("送出了 %d 口；⛔ 夜盤帳本沒有出場價（出場在券商端成交），"
+                                 "點數留白" % n[k]) if n.get(k) else "還沒有送出過真單"}
     except Exception as e:
         out["tsm"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
     return out
@@ -10531,6 +10565,18 @@ def _nf_quote():
     if st is None or st.price is None or st.last_recv is None:
         return None, None
     return float(st.price), time.time() - st.last_recv
+
+
+def _nf_minute_close(m):
+    """
+    夜盤跟勢要的「某一分鐘（開始時間標記）最後一筆成交價」⇒ 價或 None。
+    ⛔ 只讀屬性（`Today.minute_close` 是停損迴圈那一份的同一個 dict，⛔ 不寫、不拷貝整份）。
+    """
+    st = CURRENT_STATE.get("today")
+    if st is None:
+        return None
+    v = st.minute_close.get(int(m))
+    return float(v) if isinstance(v, (int, float)) else None
 
 
 def _recover_chain(pos):
@@ -10781,7 +10827,8 @@ def main():
     #    主迴圈一行都不動。價格讀 Today.price／last_recv（就是停損看的那一個）。
     #    ⛔ 包 try：它起不來只印警告，日盤與停損照跑。
     try:
-        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session)
+        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session,
+                             minute_close_fn=_nf_minute_close)
         night_fire.start()
         _na = night_fire.arm()
         print("【夜盤自動下單】" + (_na["msg"] + ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")

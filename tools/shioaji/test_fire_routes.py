@@ -599,6 +599,19 @@ j = as_json(b) or {}
 say(c == 200 and j.get("ok") is True,
     "    /api/nightfire/off：真的關得掉（本來就關著也回成功）", f"{c} {b[:60]}")
 say(not NF.ARM_FLAG.exists(), "      ⛔⛔ 這條路結構上只會關，⛔ 不會建出開關檔")
+# ⭐ 2026-09-23 夜盤跟勢接上送單：確認句**每條做法各一份**（只給一份時，選夜盤跟勢會被寫成
+#    「照『台積電快攻』跑」—— 瀏覽器實測抓到）；做法清單每條帶自己那句規則。
+c, ct, b = get("/api/nightfire/state")
+j = as_json(b) or {}
+_ac = j.get("arm_confirm") or {}
+chk("    /api/nightfire/state：確認句每條做法各一份、名字對得上",
+    {k: (v or {}).get("method_name") for k, v in _ac.items()} if isinstance(_ac, dict) else _ac,
+    {k: NF.METHOD_NAME[k] for k in NF.METHODS})
+_ms = {m.get("k"): m for m in (j.get("methods") or [])}
+say(set(_ms) == set(NF.METHODS) and all(_ms[k].get("rule") == NF.RULE_LINE[k] for k in NF.METHODS),
+    "    做法清單每條帶**自己**那句規則（⛔ 不是全部共用台積電快攻那句）")
+say("2%" in ((_ms.get("R") or {}).get("risk") or "") and (_ms.get("R") or {}).get("beta"),
+    "    夜盤跟勢帶「尚未通過前瞻驗證」與 2% 停損的揭露")
 
 # ── ③d ⛔ Content-Length 的兩個坑（2026-09-09 lab-qa 建議 2）
 print("\n  ── ⛔ Content-Length（⛔ 不可以讓外面決定要讀幾個位元組）")

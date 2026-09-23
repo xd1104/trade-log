@@ -2143,7 +2143,7 @@ say(not AF.ARM_FLAG.exists(), "    ⇒ ⛔ 開關檔仍然沒有被建出來")
 # ⚠️⚠️ 2026-09-23 v3：`alOnHTML()` 併進最底下那張「開關」卡的 `alSwDay()`
 #    （Benson 拍板：**日盤畫面上不給選做法**，只有一顆「打開日盤自動下單」）⇒ 切點跟著換。
 #    量的東西一條都沒少：第一段零請求、確認條那句話從後端拿、真錢有自己的樣子。
-_alon = page[page.index("function alSwDay"):page.index("function nfNoSL")]
+_alon = page[page.index("function alSwDay"):page.index("function nfRisk")]
 _alarm = page[page.index("function alArm"):page.index("document.addEventListener('click'",
                                                       page.index("function alArm"))]
 say(len(_alon) > 800 and "data-alon=" in _alon, "  尺的自證：alSwDay 那一段切得出來",
@@ -3681,7 +3681,7 @@ chk("  state() 端出 rev_at 與 leg 名字", (_st.get("rev_at"), _st.get("leg_n
 #    ⭐ 那一段現在**每個做法各一句**，而且正本在後端 `fire_rule_line()`
 #       ⇒ 前端只准顯示（⛔ 不准再寫死一份，那正是 lab-qa 建議 2 抓到的病）。
 # ⚠️ 2026-09-23 v3：那一段搬進 `alSwDay()`（日盤那一組開關），量的東西不變。
-_on = page[page.index("function alSwDay("):page.index("function nfNoSL(")]
+_on = page[page.index("function alSwDay("):page.index("function nfRisk(")]
 _on_nc = _re.sub(r"/\*.*?\*/", " ", _on, flags=_re.S)
 say("emb(alRuleFull(D,k))" in _on_nc,
     "  ⛔ 那一組印的規則是照後端 rule_line（⛔ 前端不准寫第二份）")

@@ -463,8 +463,8 @@ class H(BaseHTTPRequestHandler):
         #    （治具另寫一份的話，「產品錯了」在探針上會全綠）。開關檔已經導到暫存區。
         if p.split("?", 1)[0] == "/api/nightfire/state":
             out = NF.state()
-            out["methods"] = LP.night_methods(out.get("rule"))
-            out["arm_confirm"] = LP.night_arm_confirm(out.get("live"))
+            out["methods"] = LP.night_methods(out.get("rules") or out.get("rule"))
+            out["arm_confirm"] = {m: LP.night_arm_confirm(out.get("live"), m) for m in NF.METHODS}
             return self._j(200, out)
         # ⭐ 2026-09-23【健檢】：走**產品的** `health.state()`（⛔ 唯讀）。
         #    ⚠️ 市場狀態那一區要讀 tmf_1min.csv 與 tick-research 的 soxx（都**唯讀**）；
