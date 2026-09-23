@@ -464,7 +464,9 @@ arm_clear()
 # ⛔⛔ 2026-09-17 Benson 裁示：**A 還是「快攻回馬槍」，真單繼續跑它**；
 #    多方聯軍是多一個可以選的（U），⛔ 不是取代 A。
 chk("  ⛔ 現在有兩個做法：A（快攻回馬槍）＋U（多方聯軍）", list(AF.METHODS), ["A", "U"])
-chk("  ⛔⛔ 預設（他不動開關檔）就是 A", AF.DEFAULT_METHOD, "A")
+# ⚠️ 2026-09-23 v3：面板上日盤那顆「打開」不給選、帶的就是 DEFAULT_METHOD ⇒ 要是他在跑的 U。
+#    ⛔ A 照舊留在 METHODS（他手改開關檔成 A 時照樣能跑、名字照樣是「快攻回馬槍」）。
+chk("  ⛔⛔ 面板「打開」預填的做法是 U（多方聯軍）", AF.DEFAULT_METHOD, "U")
 chk("  ⛔⛔ A 這個代號的名字是「快攻回馬槍」（⛔ 不准被多方聯軍佔走）",
     AF.METHOD_NAME["A"], "快攻回馬槍")
 chk("    U 才是「多方聯軍」", AF.METHOD_NAME["U"], "多方聯軍")
@@ -1186,11 +1188,16 @@ say('"/api/fire/state"' not in LPSRC.split("def do_POST")[1].split("def do_GET")
     "  ⛔ do_POST 裡沒有這個端點（畫面上按不到開關）")
 page = LPSRC[LPSRC.index('PAGE = r"""'):]
 # ⚠️ 2026-09-14 隔壁那一頁從 #tab-auto 換成 #tab-lab（【策略實驗室】），切點跟著改；量的東西不變。
-fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
+# ⚠️⚠️ 2026-09-23 v3：【策略實驗室】整頁移除、【自動下單】變成最後一個 tab div ⇒
+#    結束標記改成它自己的「══ 【自動下單】到此 ══」那行註解（⛔ 全檔只准出現一次，
+#    改字要一起改 tools/probe/autotest-backend.py ①／test_strategy_lab.py ⑥／test_sim_lanes.py ⑦）。
+say(page.count("<!-- ══ 【自動下單】到此 ══") == 1,
+    "  ⛔ 「自動下單到此」那行註解全檔只出現一次（抄第二份切片會變成負的）")
+fire_html = page[page.index('<div id="tab-fire"'):page.index("<!-- ══ 【自動下單】到此 ══")]
 # ⛔ 尺的自證：切出來的區段不是空的，而且真的是【自動下單】那一頁
 #    （之前切點落在一段註解上 ⇒ 切到空字串，底下六條「沒有 X」恆真）
-say(len(fire_html) > 500 and 'id="alstate"' in fire_html and 'id="tab-lab"' not in fire_html,
-    "  尺的自證：切出來的【自動下單】那一段不是空的（有 #alstate、不含隔壁頁）", f"{len(fire_html)} 字")
+say(len(fire_html) > 500 and 'id="albar"' in fire_html and 'id="tab-hc"' not in fire_html,
+    "  尺的自證：切出來的【自動下單】那一段不是空的（有 #albar、不含隔壁頁）", f"{len(fire_html)} 字")
 import re as _re
 fire_html_nc = _re.sub(r"<!--.*?-->", " ", fire_html, flags=_re.S)
 for tag in ("<button", "<form", "<input", "data-act", "data-rdir", "type=submit"):
@@ -1938,19 +1945,36 @@ print("\n=== ⑬b ⭐⭐ 打開那一顆（⛔ 唯一一個會建立開關檔的
 _lptree = ast.parse(LPSRC)
 _arm_fn = next((n for n in ast.walk(_lptree)
                 if isinstance(n, ast.FunctionDef) and n.name == "fire_arm_on"), None)
-say(_arm_fn is not None, "  live_panel 有 fire_arm_on()（建開關檔的唯一入口）")
-# ⛔⛔ 建檔這件事**只能在那一個函式裡**。同一把尺掃全檔：任何一個
-#    `os.open(...)` / `open(..., "w")` 打在 ARM_FLAG 上的地方都要落在 fire_arm_on 裡。
-_arm_lines = range(_arm_fn.lineno, (_arm_fn.end_lineno or _arm_fn.lineno) + 1) \
-    if _arm_fn else range(0)
+say(_arm_fn is not None, "  live_panel 有 fire_arm_on()（日盤建開關檔的唯一入口）")
+# ⭐⭐ 2026-09-23：夜盤也補了畫面上的開關（Benson 交辦）⇒ 建檔的地方變成**恰好兩個**
+#    （日盤 fire_arm_on／夜盤 night_arm_on），⛔ 不准有第三個。
+#    ⛔ 這條放寬的只有「數量 1 → 2」，**紅線本身沒有放寬**：
+#       ・兩個都必須落在 live_panel 的那兩個具名函式裡
+#       ・`auto_fire.py` 不准建 AUTO_ORDERS_ON（本檔 ⑬ 的 AST 在守）
+#       ・`night_fire.py` 不准建 NIGHT_ORDERS_ON（test_night_fire.py ⑦ 的 AST 在守）
+_narm_fn = next((n for n in ast.walk(_lptree)
+                 if isinstance(n, ast.FunctionDef) and n.name == "night_arm_on"), None)
+say(_narm_fn is not None, "  live_panel 有 night_arm_on()（夜盤建開關檔的唯一入口）")
+# ⛔⛔ 建檔這件事**只能在那兩個函式裡**。同一把尺掃全檔：任何一個
+#    `os.open(...)` / `open(..., "w")` 打在開關檔上的地方都要落在那兩支裡面。
+def _fn_lines(fn):
+    return range(fn.lineno, (fn.end_lineno or fn.lineno) + 1) if fn else range(0)
+
+
+_arm_lines = _fn_lines(_arm_fn)
+_narm_lines = _fn_lines(_narm_fn)
 _creators = []
 for _n in ast.walk(_lptree):
     if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n):
+        _ln = getattr(_n, "lineno", -1)
         _creators.append((ast.unparse(_n)[:60],
-                          getattr(_n, "lineno", -1) in _arm_lines))
-say(len(_creators) == 1 and _creators[0][1],
-    "  ⛔⛔ 整支 live_panel 只有一個地方在建立開關檔，而且它就在 fire_arm_on 裡",
+                          "fire_arm_on" if _ln in _arm_lines
+                          else ("night_arm_on" if _ln in _narm_lines else "⛔ 別的地方")))
+say(len(_creators) == 2 and sorted(w for _s, w in _creators) == ["fire_arm_on", "night_arm_on"],
+    "  ⛔⛔ 整支 live_panel 只有兩個地方在建立開關檔（日盤 fire_arm_on／夜盤 night_arm_on）",
     str(_creators))
+say(_narm_fn is not None and "O_EXCL" in ast.unparse(_narm_fn),
+    "  ⛔ 夜盤那一顆用的也是 O_CREAT|O_EXCL（已經開著再按 ⇒ 409，⛔ 不覆蓋）")
 say(_arm_fn is not None and "O_EXCL" in ast.unparse(_arm_fn),
     "  ⛔ 用的是 O_CREAT|O_EXCL ⇒ **結構上不可能蓋掉他已經有的那個檔**")
 def _nodoc(fn):
@@ -2008,7 +2032,7 @@ _cr = LP.fire_arm_confirm(True)
 _cd = LP.fire_arm_confirm(False)
 say(_cr["live"] is True and _cd["live"] is False and _cr["text"] != _cd["text"],
     "  ⛔ 真錢與演練兩句話不一樣", (_cr["text"][:24] + " ／ " + _cd["text"][:16]))
-chk("  ⛔ 不指定做法時就是預設那一個（A 快攻回馬槍）", _cr["mode"], AF.DEFAULT_METHOD)
+chk("  ⛔ 不指定做法時就是預設那一個（U 多方聯軍）", _cr["mode"], AF.DEFAULT_METHOD)
 # ⚠️ 2026-09-15（規格改變）：自動下單的停利停損是 ±0.5%，⛔ 那句話不准再寫手動的 130 點
 # ⭐ 2026-09-17：那句話拆成兩半 —— `text`（真錢／演練）＋ `rule_line`（這個做法每天做什麼）。
 #    ⛔ 兩半都是他按下去之前看得到的，所以兩半一起比。
@@ -2116,24 +2140,33 @@ say(not AF.ARM_FLAG.exists(), "    ⇒ ⛔ 開關檔仍然沒有被建出來")
 
 # ⛔⛔ 前端那半（畫面／接線）—— 端到端由 `tools/probe/fire-tab.mjs` ⑪ 量，
 #    這裡是純 Python 這一層，兩層都要有（Q9 那次就是這一層整片空白）。
-_alon = page[page.index("function alOnHTML"):page.index("function alArm")]
+# ⚠️⚠️ 2026-09-23 v3：`alOnHTML()` 併進最底下那張「開關」卡的 `alSwDay()`
+#    （Benson 拍板：**日盤畫面上不給選做法**，只有一顆「打開日盤自動下單」）⇒ 切點跟著換。
+#    量的東西一條都沒少：第一段零請求、確認條那句話從後端拿、真錢有自己的樣子。
+_alon = page[page.index("function alSwDay"):page.index("function nfNoSL")]
 _alarm = page[page.index("function alArm"):page.index("document.addEventListener('click'",
                                                       page.index("function alArm"))]
-say("if(D.flag_exists) return ''" in _alon,
-    "  ⛔ 已經開著的時候不畫「打開」（⛔ 開與關不可以同時在畫面上）")
-# ⛔ 先剝註解再比：alOnHTML 與 alArm 之間的那段**說明文字**現在就含「pfetch()」
-#    ⇒ 連註解一起比的話這一條會變成假紅（同一個坑的反面）。
+say(len(_alon) > 800 and "data-alon=" in _alon, "  尺的自證：alSwDay 那一段切得出來",
+    f"{len(_alon)} 字")
+say("D.flag_exists" in _alon and "alOffNote('day'" in _alon,
+    "  ⛔ 已經開著的時候畫的是「關閉」那一組（⛔ 開與關不可以同時在畫面上）")
+# ⛔⛔ **日盤畫面上不准出現第二種做法可以選**（Benson 2026-09-23）。
+say(_alon.count("data-alon=") == 1,
+    "  ⛔⛔ 日盤只有**一顆**「打開」（⛔ 沒有做法可以選）", str(_alon.count("data-alon=")))
+say("D.default_method" in page and "alDayName" in page,
+    "  ⛔ 送出去的做法是後端給的預設（⛔ 前端不准寫死 'U'）")
+# ⛔ 先剝註解再比：那一段的**說明文字**含「pfetch()」⇒ 連註解一起比會變成假紅。
 _alon_nc = _re.sub(r"(?m)^\s*//.*$", " ",
                    _re.sub(r"/\*.*?\*/", " ", _alon, flags=_re.S))
 say("fetch(" not in _alon_nc,
-    "  ⛔⛔ 第一段（兩顆做法鈕）那一段**一個 fetch 都沒有**（沒確認就不准送）")
+    "  ⛔⛔ 第一段（那顆「打開」）那一段**一個 fetch 都沒有**（沒確認就不准送）")
 # ⚠️ ⛔ 比的是 `emb(C.text)`（**真的畫出去的那一段**）不是 `C.text` ——
 #    `typeof C.text!=='string'` 那道防呆本身就含 "C.text"，比 "C.text" 的話
 #    「把文案改成前端寫死」那個突變**打不紅**（2026-09-09 fire-mutate Ⓝ7 實測）。
 #    ⚠️ 2026-09-17 `esc(` → `emb(`（建議 1：`**粗體**` 要真的變粗體）。
 say("emb(C.text)" in _alon and "arm_confirm" in _alon,
     "  ⛔ 確認條那句話是從後端拿的（⛔ 前端不准自己猜真錢／演練）")
-say("emb(alRuleFull(D,m))" in _alon,
+say("emb(alRuleFull(D,k))" in _alon,
     "  ⛔ 規則那一行也是從後端拿的（⛔ 前端不准自己寫一份規則說明）")
 say("al-conf real" in _alon or "' real'" in _alon,
     "  ⛔ 真錢那一條有自己的樣子（⛔ 兩種模式不可以長一樣）")
@@ -2150,18 +2183,24 @@ say("ALON.step='idle'" in _alent,
 #    看 armed 的話那顆鈕會消失 ⇒ **壞掉的開關檔他關不掉**，而「關」是安全方向。
 #    ⚠️ 這一條只能比前端原始碼（那是瀏覽器才跑得到的一行），
 #      真正端到端量它的是 `tools/probe/fire-tab.mjs` ⑧c —— 兩層都要有。
-_alp0 = LPSRC.rindex("setEl('aloff',")
-_alpaint = LPSRC[_alp0:LPSRC.index("setEl('alcount'", _alp0)]
-say("D.flag_exists" in _alpaint,
-    "  ⛔ 「關閉」鈕的顯示條件用的是 flag_exists（檔案在不在）")
-say("D.armed" not in _alpaint,
-    "  ⛔⛔ 而且**沒有**用 armed（開關檔壞掉時 armed=False ⇒ 那顆鈕會消失、關不掉）",
-    _alpaint[:80].replace("\n", " "))
-# ⛔ 條件**只能是這一個**，不准加料（`true||D.flag_exists`、`D.armed||D.flag_exists`…）：
-#    加料之後「關著的時候整頁 0 顆按鈕」那條鐵律就破了，而上面兩項照樣綠。
-_alcond = _alpaint.split("setEl('aloff',", 1)[1].split("?", 1)[0].strip()
-chk("  ⛔ 那個條件逐字就是 D.flag_exists（⛔ 不准 || 也不准 &&）",
+# ⚠️ 2026-09-23 v3：那顆「關閉」從 #aloff 搬到狀態列上的藥丸（alBarHTML）——
+#    量的東西一模一樣：顯示條件必須是 `flag_exists`，⛔ 不准是 armed、⛔ 不准加料。
+_alp0 = LPSRC.index("function alBarHTML(D){")
+_alpaint = LPSRC[_alp0:LPSRC.index("function alPaint(){", _alp0)]
+say("data-aloff" in _alpaint,
+    "  「關閉」鈕畫在狀態列那顆藥丸上（alBarHTML）")
+_alcond = _alpaint.split("const dayOff=", 1)[1].split(";", 1)[0].strip()
+chk("  ⛔ 日盤那個條件逐字就是 D.flag_exists（⛔ 不准 || 也不准 &&）",
     _alcond, "D.flag_exists")
+# ⛔⛔ 「壞掉的開關檔要關得掉」：`canOff` 這個位置吃的是 dayOff（flag_exists），
+#    ⛔ 不是 dayArm（armed）。加料或換成 armed 的話，他把開關檔存成 UTF-16 就關不掉了。
+_alcall = _alpaint.split("let h=alPillHTML(", 1)[1].split(");", 1)[0]
+say("dayOff, 'data-aloff=\"1\"'" in _alcall,
+    "  ⛔⛔ 那顆鈕吃的是 dayOff（檔案在不在），⛔ 不是 dayArm",
+    " ".join(_alcall.split()))
+# 夜盤同一條（2026-09-23 新增的那顆）
+say("!!x.flag_exists, 'data-nfoff=\"1\"'" in _alpaint,
+    "  ⛔⛔ 夜盤那顆也是看 flag_exists（⛔ 不是 x.on）")
 
 # ══ ⑬c ⭐⭐ 確認條那句話：「今天」還是「下一個交易日」（2026-09-09 退件 R2）═══
 #    ⚠️ 原本寫死「**下一個交易日** 09:03:30」，但 `auto_fire` **沒有「今天開的不算」
@@ -2395,12 +2434,26 @@ say("PTOK=s.token" in _ptokfn.replace(" ", ""),
     "  ⛔ ptok()：還沒拿到 token 時先去要一次（畫面剛開就按下去也按得動）")
 chk("  ⛔ 整份前端**剛好兩個**地方會寫 PTOK（⛔ 不多不少）",
     _page_nc.count("PTOK=s.token"), 2)
-# ⛔ 每一個會改變狀態的端點都要有人呼叫 pfetch（⛔ 少一個 ＝ 那顆鈕壞了）
+# ⛔ 每一個**畫面上按得到**的狀態改變端點都要有人呼叫 pfetch（⛔ 少一個 ＝ 那顆鈕壞了）
 # ⚠️ 2026-09-16 名單少了 /api/replay：【回顧】整頁拿掉之後前端**沒有人**叫它了
-#    （後端那支與 replay_log/ 刻意留著，見 REVIEW-SPEC.md 開頭）。⛔ 其餘一個都不准少。
-for _ep in ("/api/real/enter", "/api/real/close", "/api/note",
-            "/api/fire/on", "/api/fire/off"):
+#    （後端那支與 replay_log/ 刻意留著，見 REVIEW-SPEC.md 開頭）。
+# ⚠️⚠️ 2026-09-23 v3 名單再少兩個：/api/real/enter 與 /api/real/close ——
+#    【即時】那一頁的「真實下單」「練習下單」兩個操作區塊整組從**畫面上**拿掉了
+#    （Benson 拍板：那一頁只留看盤）。**後端那四支一行都沒拆**（見下面那一條），
+#    ⛔ 所以這裡不是「壞了」，是「畫面上沒有那顆鈕了」。
+# ⭐ 2026-09-23 名單多兩個：/api/nightfire/on、/api/nightfire/off（夜盤補的那顆開關）。
+for _ep in ("/api/note", "/api/fire/on", "/api/fire/off",
+            "/api/nightfire/on", "/api/nightfire/off"):
     say(f"pfetch('{_ep}'" in _page_nc, f"  ⛔ 前端用 pfetch 打 {_ep}")
+# ⛔⛔ 「畫面拆了、後端不准跟著拆」：那四支路由必須還在 do_POST 裡
+#    （real_trades/ 是【自動下單】出場價的唯一真相來源；practice.json 手機 App 在讀）。
+_posts = LPSRC.split("def do_POST")[1].split("def do_GET")[0]
+for _ep in ("/api/real/enter", "/api/real/close", "/api/enter", "/api/close"):
+    say(f'self.path == "{_ep}"' in _posts,
+        f"  ⛔⛔ 後端照舊有 {_ep}（畫面拆了，後端一行都沒拆）")
+for _ep in ("/api/real/enter", "/api/real/close"):
+    say(f"pfetch('{_ep}'" not in _page_nc,
+        f"  ⛔ 而且【即時】那一頁真的按不到 {_ep} 了（沒有任何前端呼叫端）")
 say("/api/replay" not in _page_nc,
     "  /api/replay 已經沒有前端呼叫端（【回顧】整頁拿掉了；後端那支還在）")
 say("pfetch(url,body)" in _page_nc.replace(" ", ""),
@@ -3069,21 +3122,22 @@ chk("  ⛔ 09:03:30 之前不預告判定（verdict None）", _st["fast"].get("v
 say("tp" not in _st, "  ⛔ state() 不再端出手動那個 tp（±130）", str(sorted(_st)))
 _c, _ct, _b = hit("/api/fire/state")
 say(_c in (200, 403), "  （/api/fire/state 行為面由 test_fire_routes 驗）", str(_c))
-_alp = page[page.index("function alPaint"):page.index("function alOnHTML")]
+_alp = page[page.index("function alPaint"):page.index("function alPosHTML")]
 _alp_nc = _re.sub(r"/\*.*?\*/", " ", _alp, flags=_re.S)
 say("alFastHTML(D)" in _alp_nc and "setEl('alfast'" in _alp_nc,
     "  畫面畫得出今天的門檻與判定（#alfast）")
-_alon_nc2 = _re.sub(r"/\*.*?\*/", " ", page[page.index("function alOnHTML"):page.index("function alArm")],
-                    flags=_re.S)
-# ⭐⭐ 2026-09-17：做法有兩個了 ⇒ 鈕**照後端 D.methods 生**（⛔ 不准在前端寫死代號）。
-#    ⛔ 寫死 'A' 的話新做法按不動、寫死 'B' 的話又冒出一顆按不動的鈕。
-say("data-alon=\"A\"" not in _alon_nc2 and "data-alon=\"B\"" not in _alon_nc2,
-    "  ⛔⛔ 打開鈕的代號⛔ 不准寫死在前端（A／B 都不准）")
-say("MS.map(" in _alon_nc2 and "data-alon=\"'+esc(x.k)+'\"" in _alon_nc2
-    and "D.methods" in _alon_nc2,
-    "  ⛔ 鈕是照後端 D.methods 生出來的（現在兩顆：快攻回馬槍／多方聯軍）")
-say("x.k===D.default_method" in _alon_nc2,
-    "  ⛔ 而且標得出「現在在跑的是哪一條」（預設那一個）")
+_alon_nc2 = _re.sub(r"/\*.*?\*/", " ", _alon, flags=_re.S)
+# ⭐⭐ 2026-09-17：做法有兩個了 ⇒ 鈕**照後端生**（⛔ 不准在前端寫死代號）。
+# ⚠️⚠️ 2026-09-23 v3（Benson 拍板）：**日盤畫面上不給選做法** ⇒ 只剩一顆鈕，
+#    它帶的代號是**後端給的那一個**（armed 時是 D.method、關著時是 D.default_method），
+#    ⛔ 照樣不准在前端寫死。
+say("data-alon=\"A\"" not in _alon_nc2 and "data-alon=\"B\"" not in _alon_nc2
+    and "data-alon=\"U\"" not in _alon_nc2,
+    "  ⛔⛔ 打開鈕的代號⛔ 不准寫死在前端（A／B／U 都不准）")
+say("data-alon=\"'+esc(k)+'\"" in _alon_nc2 and "D.default_method" in _alon_nc2,
+    "  ⛔ 那一顆帶的是後端給的做法（關著時是預設那一個）")
+say("alDayName(D)" in _alon_nc2,
+    "  ⛔ 名字也是後端來的（alDayName ⇒ D.methods／default_method）")
 _rule_js = page[page.index("function alPct("):page.index("function alFastHTML(")]
 say("0.005" not in _rule_js and "0.5" not in _re.sub(r"/\*.*?\*/", " ", _rule_js, flags=_re.S),
     "  ⛔ 前端規則那一句沒有寫死 0.5／0.005（一律 D.rule）")
@@ -3626,10 +3680,11 @@ chk("  state() 端出 rev_at 與 leg 名字", (_st.get("rev_at"), _st.get("leg_n
 # ⛔⛔ 2026-09-17：關著的時候他看到的是 `alOnHTML` 那一段（規則句只在開著時才畫）——
 #    ⭐ 那一段現在**每個做法各一句**，而且正本在後端 `fire_rule_line()`
 #       ⇒ 前端只准顯示（⛔ 不准再寫死一份，那正是 lab-qa 建議 2 抓到的病）。
-_on = page[page.index("function alOnHTML("):page.index("function alArm(")]
+# ⚠️ 2026-09-23 v3：那一段搬進 `alSwDay()`（日盤那一組開關），量的東西不變。
+_on = page[page.index("function alSwDay("):page.index("function nfNoSL(")]
 _on_nc = _re.sub(r"/\*.*?\*/", " ", _on, flags=_re.S)
-say("MS.map(" in _on_nc and "emb(alRuleFull(D,x.k))" in _on_nc,
-    "  ⛔ 關著時每個做法各印自己的規則（照後端 rule_line）")
+say("emb(alRuleFull(D,k))" in _on_nc,
+    "  ⛔ 那一組印的規則是照後端 rule_line（⛔ 前端不准寫第二份）")
 for _w in ("只做多", "最早觸發", "開箱", "純回馬", "不設停利", "券商端"):
     say(_w not in _on_nc,
         "  ⛔⛔ 前端沒有寫死「%s」（那是 U 的規則，寫死的話跑 A 時整段是假話）" % _w)
@@ -3660,7 +3715,11 @@ say("emb(alRuleTxt(D))" in page,
 _th = page[page.index("function alTodayHTML("):page.index("function alEodHTML(")]
 say("r.rec==='wait'" in _th and "r.why==='no_reversal'" in _th and "alLeg(D,r)" in _th,
     "  ⛔ 今天那張卡分得出「等 09:15 中」「沒反轉」「快攻／回馬槍」")
-_ac = page[page.index("function alCard("):page.index("function alTblHTML(")]
+# ⚠️ 2026-09-23 v3：alTblHTML() 併進 alRows()（日盤與夜盤合併成同一份清單）⇒ 結束錨點改用
+#    alCard 後面那一支 alNotesHTML（⛔ 不可以用 alRows —— 它排在 alCard **前面**，
+#    切片會變成空字串，底下那幾條「分得出／沒有」就全部恆真了）。
+_ac = page[page.index("function alCard("):page.index("function alNotesHTML(")]
+say(len(_ac) > 1000 and "function alCard(" in _ac, "  尺的自證：alCard 那一段切得出來", f"{len(_ac)} 字")
 say("'等反轉'" in _ac and "'沒反轉'" in _ac, "  紀錄卡片的 tag 分得出「等反轉」「沒反轉」")
 _nt = page[page.index("function alNotesHTML("):]
 say("L.wait" in _nt[:900], "  ⛔ 前端帳本等式也把 wait 數進去")

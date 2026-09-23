@@ -128,8 +128,12 @@ run_until(T5 + timedelta(seconds=30), T5 + timedelta(seconds=60))
 chk("  ⛔ 重跑／重啟不會送第二張", len(CALLS["enter"]), 1)
 recs = [o["rec"] for o in NF.rows_of(E)]
 chk("  帳本先 sending 再 result", recs[:2], ["sending", "result"])
+# ⭐ 2026-09-23 v3 驗收補：state() 要端出「現在是哪一條」—— 少了它，畫面上「目前在跑」標不出來、
+#    點目前那一條會跳出「從（空白）換成…」的確認條、「不設停損」的揭露永遠不會出現。
+chk("  state() 開著時端出 method（畫面靠它認得目前那一條）", NF.state()["method"], "T")
 NF.ARM_FLAG.write_text("U", encoding="utf-8")
 chk("  開關寫別的字 ⇒ 關著（⛔ 不猜）", NF.arm()["on"], False)
+chk("  看不懂的開關檔 ⇒ state() 的 method 是 None（⛔ 不猜）", NF.state()["method"], None)
 NF.ARM_FLAG.write_text("T", encoding="utf-8")
 
 print("\n=== ② 各種不送的理由 ===")
@@ -244,6 +248,53 @@ for n in ast.walk(tree):
 chk("  ⛔ night_fire 對開關檔只做 exists／read_bytes／replace／with_name", bad, [])
 say("open(" not in src.split("def _append")[0].split("def disarm")[0], "  開關那段沒有 open()")
 lp = (HERE / "live_panel.py").read_text(encoding="utf-8")
+
+# ══ ⑦b ⭐⭐ 2026-09-23：**不變式換新的**（PM 授權）══════════════════════
+#
+# ⚠️⚠️ 舊的不變式是「**只有他自己建得出來** `NIGHT_ORDERS_ON`」——
+#    Benson 2026-09-23 交辦「夜盤的開關也要做到畫面上」之後那條**已經不成立**了。
+#    ⛔ 但**不可以只是把斷言刪掉**（那等於這塊從此沒人守）⇒ 換成更精確的一條：
+#    **整個 repo 只有 `live_panel.night_arm_on()` 這一個地方建得出那個檔**，
+#    而且它走的是 `O_CREAT|O_EXCL`（⇒ 結構上不可能蓋掉他已經有的那一個）。
+#    ⛔ `night_fire` 那一半的老規矩一條都沒放寬（上面 ⑦ 照舊）：
+#       **會送單的那個模組打不開自己的開關**。
+print("\n=== ⑦b ⛔⛔ 只有 live_panel 的那個端點建得出 NIGHT_ORDERS_ON ===")
+_lptree = ast.parse(lp)
+_narm = next((n for n in ast.walk(_lptree)
+              if isinstance(n, ast.FunctionDef) and n.name == "night_arm_on"), None)
+say(_narm is not None, "  live_panel 有 night_arm_on()（唯一的建檔入口）")
+_nlines = range(_narm.lineno, (_narm.end_lineno or _narm.lineno) + 1) if _narm else range(0)
+say(_narm is not None and "O_EXCL" in ast.unparse(_narm),
+    "  ⛔ 而且用 O_CREAT|O_EXCL（已經開著再按 ⇒ 409，⛔ 不覆蓋）")
+say(_narm is not None and "night_fire.METHODS" in ast.unparse(_narm),
+    "  ⛔ mode 拿 night_fire.METHODS 比（⛔ 不自己寫一份做法清單）")
+# ⛔ 整個 tools/shioaji 掃一遍：除了 night_arm_on，沒有第二個地方碰得到那個檔名
+_darm = next((n for n in ast.walk(_lptree)
+              if isinstance(n, ast.FunctionDef) and n.name == "fire_arm_on"), None)
+_dlines = range(_darm.lineno, (_darm.end_lineno or _darm.lineno) + 1) if _darm else range(0)
+_creators = []
+for _p in sorted(HERE.glob("*.py")):
+    if _p.name.startswith("test_"):
+        continue
+    _s = _p.read_text(encoding="utf-8")
+    for _n in ast.walk(ast.parse(_s)):
+        if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n):
+            _where = _p.name
+            if _p.name == "live_panel.py":
+                _ln = getattr(_n, "lineno", -1)
+                _where = ("night_arm_on" if _ln in _nlines
+                          else ("fire_arm_on" if _ln in _dlines else "live_panel（別的地方）"))
+            _creators.append(_where)
+chk("  ⛔⛔ 整個 tools/shioaji 建得出開關檔的地方只有那兩支"
+    "（日盤 fire_arm_on／夜盤 night_arm_on）",
+    sorted(set(_creators)), ["fire_arm_on", "night_arm_on"])
+# 尺的自證：同一把尺在 live_panel 裡抓得到「日盤那一支」（⇒ 不是因為尺壞了才只有一個）
+say(sum(1 for _n in ast.walk(_lptree)
+        if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n)) == 2,
+    "  負控組：同一把尺在 live_panel 裡剛好抓到兩個建檔點（日盤＋夜盤）")
+say('self.path == "/api/nightfire/on"' in lp and 'self.path == "/api/nightfire/off"' in lp,
+    "  ⛔ 夜盤有**自己的一組**端點（⛔ 沒有跟日盤共用同一支）")
+say("night_fire.disarm()" in lp, "  ⛔ 關那一條走 night_fire.disarm()（改名不刪）")
 m = lp[lp.index("def main():"):]
 say("night_fire.start()" in m and m.index("try:", m.index("夜盤自動下單】台積電快攻")) < m.index("night_fire.start()"),
     "  main() 接線包在 try 裡")

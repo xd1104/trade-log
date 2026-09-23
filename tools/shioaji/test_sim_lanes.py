@@ -822,8 +822,9 @@ print("\n=== ⑦ 前端 ===")
 import re as _re
 page = LP.PAGE
 # ⚠️ 切到【自動下單】那段註解之前為止：#tab-sim 之後緊接的是 #tab-fire，
-#    用 index('<div id="tab-lab"') 會把整個【自動下單】吃進來（第一版就踩到，altbl／/api/fire 全被算成模擬的）。
-tab = page[page.index('<div id="tab-sim"'):page.index("<!-- ══════════ 【自動下單】")]
+#    用下一個 tab 的 div 當邊界會把中間那段大註解吃進來（第一版就踩到，altbl／/api/fire 全被算成模擬的）。
+# ⚠️ 2026-09-23 v3：#tab-sim 之後緊接的是新的【健檢】(#tab-hc) ⇒ 結束標記跟著換。
+tab = page[page.index('<div id="tab-sim"'):page.index("<!-- ══════════ 【健檢】")]
 tab_code = _re.sub(r"<!--.*?-->", " ", tab, flags=_re.S)
 say(_re.match(r'\s*<div id="tab-sim" hidden>\s*<div class="card sm-card" id="smcard">', tab_code) is not None,
     "  【模擬】是獨立分頁，卡是它的第一個子元素")
@@ -832,11 +833,15 @@ say("模擬（不會下單）" in card and 'id="smlanes"' in card, "  卡的標�
 say('id="tab-tick"' not in page and 'id="tab-review"' not in page,
     "  【細節】與【回顧】兩個分頁的容器都不在了")
 # ⚠️ 2026-09-21 加了【帳戶】分頁（唯讀，排在即時右邊）⇒ 變五顆
-chk("  分頁列恰好五顆，順序＝即時／帳戶／模擬／策略實驗室／自動下單",
-    _re.findall(r'<button data-tab="([a-z0-9]+)"', page), ["live", "acct", "sim", "lab", "fire"])
+# ⚠️ 2026-09-23 v3：【策略實驗室】整頁移除、新增【健檢】（排在【模擬】與【自動下單】中間）
+#    ⇒ 還是五顆，但第四顆換成 hc。⛔【自動下單】永遠是最右邊那一顆。
+chk("  分頁列恰好五顆，順序＝即時／帳戶／模擬／健檢／自動下單",
+    _re.findall(r'<button data-tab="([a-z0-9]+)"', page), ["live", "acct", "sim", "hc", "fire"])
 _j0 = page.index("/* ══════════════ 【模擬】分頁：七條策略")
-sjs = page[_j0:page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測", _j0)]
-say("function smLoad" in sjs and "function lbRun" not in sjs and len(sjs) > 1500, "  切出來的是模擬那一段 JS（不多不少）")
+# ⚠️ 2026-09-23 v3：模擬那段 JS 後面接的不再是【策略實驗室】，是兩頁共用的迷你圖工具。
+sjs = page[_j0:page.index("/* ══════════════ 迷你圖", _j0)]
+say("function smLoad" in sjs and "function hcPaint" not in sjs and len(sjs) > 1500,
+    "  切出來的是模擬那一段 JS（不多不少）")
 sjs_code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", " ", sjs, flags=_re.S).splitlines())
 fetches = sorted(set(x.split("'")[1].split("?")[0] for x in sjs.split("fetch(")[1:]))
 # ⭐ 2026-09-17 多了「點進去一條」的內頁 ⇒ 第二個端點。⛔ 兩個都是 GET、都是唯讀；
@@ -872,10 +877,22 @@ say("e._smh!==html" in sjs and "innerHTML===" not in sjs, "  沒變就別動 DOM
 say("my!==SM.seq" in sjs, "  請求帶流水號，只認最後一次")
 say("Object.keys(x.lanes)" in sjs, "  八條的順序由後端決定（前端不寫死 lane 名字）")
 chk("  前端 JS 沒有寫死任何一條 lane 的 key", [k for k in S.LANES if ("'%s'" % k) in sjs_code], [])
-fire_html = page[page.index('<div id="tab-fire"'):page.index('<div id="tab-lab"')]
+# ⚠️⚠️ 2026-09-23 v3：舊的切片邊界是【策略實驗室】那一頁與它後面那行「到此」註解，
+#    那一頁整個拿掉了 ⇒ 兩條都改量**還在的分頁**（⛔ 不留一把量到空白區間還恆綠的尺）：
+#      ・【自動下單】＝ #tab-fire → 「══ 【自動下單】到此 ══」那行註解
+#      ・新的【健檢】 ＝ #tab-hc  → 「══ 【健檢】到此 ══」那行註解
+#    ⛔ 兩行註解全檔各只准出現一次；改字要一起改 tools/probe/autotest-backend.py ①
+#       與 test_strategy_lab.py ⑥。
+chk("  ⛔ 「自動下單到此」那行註解全檔只出現一次", page.count("<!-- ══ 【自動下單】到此 ══"), 1)
+fire_html = page[page.index('<div id="tab-fire"'):page.index("<!-- ══ 【自動下單】到此 ══")]
+say(len(fire_html) > 1500 and 'id="altbl"' in fire_html, "  切出來的確實是【自動下單】那一段 HTML",
+    str(len(fire_html)))
 chk("  【自動下單】那一頁沒有模擬的東西（清單完全分開）", [w for w in ("smcard", "sm-", "/api/sim") if w in fire_html], [])
-lab_html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
-chk("  【策略實驗室】那一頁已經沒有模擬卡", [w for w in ("smcard", "sm-lane", "/api/sim") if w in lab_html], [])
+hc_html = page[page.index('<div id="tab-hc"'):page.index("<!-- ══ 【健檢】到此 ══")]
+say(len(hc_html) > 400 and 'id="hccards"' in hc_html, "  切出來的確實是【健檢】那一段 HTML",
+    str(len(hc_html)))
+chk("  【健檢】那一頁沒有模擬卡（⛔ 兩頁的資料來源不同，不准借同一張卡）",
+    [w for w in ("smcard", "sm-lane", "/api/sim") if w in hc_html], [])
 
 
 # ══ ⑦b 卡片瘦身 ＋ 點進去的內頁（2026-09-17 Benson 交辦）═══════════════
@@ -1661,6 +1678,17 @@ AUTH_PATCH = [
      '    _arm = auto_fire.arm()\n',
      '    # ⭐⭐ 2026-09-22【夜盤自動下單】台積電快攻。⛔ 自己的執行緒、自己的開關（NIGHT_ORDERS_ON）；\n    #    主迴圈一行都不動。價格讀 Today.price／last_recv（就是停損看的那一個）。\n    #    ⛔ 包 try：它起不來只印警告，日盤與停損照跑。\n    try:\n        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session)\n        night_fire.start()\n        _na = night_fire.arm()\n        print("【夜盤自動下單】" + (_na["msg"] + ("（真單）" if broker.is_live() else "（真單開關關著 ⇒ 只會演練）")\n                                    if _na["on"] else "關閉中 —— " + _na["msg"]))\n    except Exception as e:\n        print("⚠️ 【夜盤自動下單】起不來（日盤不受影響）：%s" % str(e)[:160])\n'
      '    _arm = auto_fire.arm()\n'),
+    # ⭐ 2026-09-23 **有授權的例外**（Benson 交辦【健檢】分頁）：main() 多一段把
+    #   「真單那一半」的唯讀函式接給 health（⛔ 這裡不做任何 I/O、⛔ 不碰下單那條路、
+    #   ⛔ 包 try ⇒ 它出事只印警告）。⚠️ 動到 main() 就要寫進這張清單才准過。
+    ("【健檢】main() 多一段接線（唯讀、包 try）",
+     '    start_strategy_lab_fetch()\n',
+     '    start_strategy_lab_fetch()\n'
+     '    try:\n'
+     '        if health is not None:\n'
+     '            health.configure(real_fn=_health_real)\n'
+     '    except Exception as e:\n'
+     '        print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")

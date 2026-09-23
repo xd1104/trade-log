@@ -38,6 +38,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "shioaji"))
 import auto_fire as AF          # noqa: E402
 import broker                   # noqa: E402
+import night_fire as NF         # noqa: E402
 import live_panel as LP         # noqa: E402
 
 # 埠可以用環境變數覆寫（⛔ 預設 8775／8776，⛔ 永遠不可以是 8770）。
@@ -57,6 +58,11 @@ if AF.ARM_FLAG.exists():
 
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"
 AF.FIRE_DIR = TMP / "autofire"
+# ⭐ 2026-09-23：夜盤那一套（畫面上補了開關）也全部導到暫存區。
+#   ⛔ **絕對不可以碰他真的 NIGHT_ORDERS_ON** —— 那是他的真錢開關，
+#      而且這支治具會真的走產品的 `night_arm_on()`／`night_fire.disarm()`。
+NF.ARM_FLAG = TMP / "NIGHT_ORDERS_ON"
+NF.NF_DIR = TMP / "nightfire"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
@@ -431,14 +437,42 @@ class H(BaseHTTPRequestHandler):
                 ST["arm"] = "off"          # 治具的狀態跟著同步，重建資料集才不會又寫回去
             return self._j(200 if ok else 409,
                            {"ok": ok, "msg": msg, "armed": AF.arm()["on"]})
-        # ⛔ 除了上面那一顆，這一頁不該打到這裡來（探針會攔請求驗證）
+        # ⭐ 2026-09-23 夜盤那一組開／關（v3 驗收補上：少了這兩條，畫面上夜盤的開關
+        #    在治具裡按下去一律 404，那組流程等於從來沒被點過）。
+        #    ⛔ 一樣走**產品的** `LP.night_arm_on()`／`NF.disarm()`；開關檔已導到暫存區。
+        if self.path == "/api/nightfire/on":
+            try:
+                body = json.loads(raw or b"{}")
+            except Exception:
+                body = {}
+            code, out = LP.night_arm_on(body.get("mode"), who="harness")
+            return self._j(code, out)
+        if self.path == "/api/nightfire/off":
+            ok, msg = NF.disarm()
+            return self._j(200 if ok else 409,
+                           {"ok": ok, "msg": msg, "armed": NF.arm()["on"]})
+        # ⛔ 除了上面那幾顆，這一頁不該打到這裡來（探針會攔請求驗證）
         return self._j(404, {"ok": False, "msg": "治具不送單"})
 
     def do_GET(self):
         p = self.path
-        # ⛔ 武裝那顆只收 POST（產品是 405；治具照抄同一個語意）
-        if p.split("?", 1)[0] == "/api/fire/on":
+        # ⛔ 武裝那兩顆只收 POST（產品是 405；治具照抄同一個語意）
+        if p.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on"):
             return self._j(405, {"ok": False, "msg": "這個端點只收 POST"})
+        # ⭐ 2026-09-23 夜盤狀態：走**產品的** `night_fire.state()` ＋ `night_arm_confirm()`
+        #    （治具另寫一份的話，「產品錯了」在探針上會全綠）。開關檔已經導到暫存區。
+        if p.split("?", 1)[0] == "/api/nightfire/state":
+            out = NF.state()
+            out["methods"] = LP.night_methods(out.get("rule"))
+            out["arm_confirm"] = LP.night_arm_confirm(out.get("live"))
+            return self._j(200, out)
+        # ⭐ 2026-09-23【健檢】：走**產品的** `health.state()`（⛔ 唯讀）。
+        #    ⚠️ 市場狀態那一區要讀 tmf_1min.csv 與 tick-research 的 soxx（都**唯讀**）；
+        #       讀不到就回 market_ready=false，畫面照樣畫得出策略健檢那一半。
+        if p.split("?", 1)[0] == "/api/health/state":
+            if LP.health is None:
+                return self._j(503, {"ok": False, "msg": "【健檢】載入失敗"})
+            return self._j(200, LP.health.state())
         if p.startswith("/api/fire/state"):
             out = AF.state()
             out["sim"] = LP.fire_sim_pairs(out.get("days") or [])
@@ -450,7 +484,11 @@ class H(BaseHTTPRequestHandler):
                                              now=ST["clock"],
                                              eod_at=out.get("eod_at"))
             # ⛔ 兩段式確認那句話與 token 都走**產品的**那一份（見上面 do_POST 的理由）
-            out["arm_confirm"] = LP.fire_arm_confirm(out.get("live"), _fake_now())
+            # ⚠️ 2026-09-23 修：產品端出的是**每個做法各一份**（2026-09-17 起），
+            #    治具還停在舊的「一份」⇒ 前端 `alConf()` 取不到 ⇒ 規則那一行整段空白，
+            #    看起來像產品壞了。⛔ 治具要跟產品同形狀（不然探針量到的是治具的樣子）。
+            out["arm_confirm"] = {m: LP.fire_arm_confirm(out.get("live"), _fake_now(), mode=m)
+                                  for m in AF.METHODS}
             out["token"] = LP.FIRE_TOKEN
             # ⭐ 2026-09-21「現在離門檻還差幾點」：走**產品的** `LP.fire_gap()`，
             #    只有報價與時鐘是治具餵的（⛔ 治具自己算一份的話，產品錯了也會全綠）。
@@ -475,7 +513,26 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b)
             return
-        b = LP.PAGE.encode("utf-8")
+        # ⭐ 2026-09-23：`/tab/<名字>` ＝ 開啟就切到那一頁（給無頭瀏覽器 `--dump-dom` 用）。
+        #   ⛔ **只加一行 `setTab(...)`**，⛔ 一個字的產品程式都不改；
+        #   ⛔ 產品自己**沒有**這條路（面板一律從 `#tab-live` 開始）。
+        page = LP.PAGE
+        _t = p.split("?", 1)[0]
+        if _t.startswith("/tab/"):
+            _k = "".join(c for c in _t[5:] if c.isalpha())[:8]
+            page = page.replace(
+                "</script></body></html>",
+                "\nwindow.addEventListener('error',function(ev){"
+                "var d=document.createElement('pre');d.id='__probe_err__';"
+                "d.textContent='JS ERROR: '+ev.message+' @'+ev.lineno+':'+ev.colno;"
+                "document.body.appendChild(d);});"
+                "window.addEventListener('unhandledrejection',function(ev){"
+                "var d=document.createElement('pre');d.id='__probe_rej__';"
+                "d.textContent='UNHANDLED: '+ev.reason;document.body.appendChild(d);});"
+                "\ntry{setTab(%r);}catch(e){var d=document.createElement('pre');"
+                "d.id='__probe_settab__';d.textContent='setTab ERROR: '+e;"
+                "document.body.appendChild(d);}\n</script></body></html>" % _k)
+        b = page.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -553,6 +610,10 @@ class C(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # ⭐ 2026-09-23【健檢】真單那一半的接線（⛔ 唯讀）。跟 `live_panel.main()` 同一支函式 ——
+    #    治具自己寫一份的話，探針量到的是治具的樣子。⚠️ 帳本路徑都已經導到暫存區。
+    if LP.health is not None:
+        LP.health.configure(real_fn=LP._health_real)
     threading.Thread(target=lambda: ThreadingHTTPServer(("127.0.0.1", CTL), C).serve_forever(),
                      daemon=True).start()
     print(f"治具資料：{TMP}")

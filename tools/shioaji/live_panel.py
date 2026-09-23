@@ -58,6 +58,15 @@ import broker            # 真實下單。預設 dry run，見那個檔開頭的
 import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
 import night_fire        # 夜盤自動下單（台積電快攻）。預設**關著**（沒有 NIGHT_ORDERS_ON 就完全不送；跟日盤開關分開）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
+# 【健檢】那一頁（唯讀）。⛔ 不 import broker、不碰任何下單路徑、一個位元組都不寫。
+# ⛔⛔ 一定要包 try（跟 strategy_lab 同一條理由）：它是「看的東西」，載入失敗
+#    絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
+#    看門狗無限重開、**停損沒人盯**。失敗時 health=None：/api/health/state 回 503，其他照跑。
+try:
+    import health
+except Exception as _hc_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
+    health = None
+    print("⚠️ 【健檢】載入失敗（其他功能不受影響）：%s" % _hc_err, flush=True)
 # 【策略實驗室】歷史逐筆回測（唯讀）。⛔ 不 import broker、不碰任何下單路徑。
 # ⛔⛔ 一定要包 try（2026-09-14 lab-qa 退件 R1）：這是研究功能，它載入失敗（少一個套件、
 #    檔案壞掉）絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
@@ -4092,6 +4101,124 @@ def fire_arm_on(mode, who="panel"):
                  "msg": a["msg"] if a["on"] else (a["msg"] or "開關建好了")}
 
 
+# ══ ⭐⭐ 【夜盤自動下單】的開關（2026-09-23 Benson 交辦：補一顆畫面上的開關）══════
+#
+# ⛔⛔ **建檔只准寫在這裡**（跟日盤 `fire_arm_on()` 同一條規矩）：
+#    `night_fire.py` 對 `ARM_FLAG` **只准** exists／read_bytes／replace／with_name
+#    —— `test_night_fire.py` ⑦ 用 AST 在守。**會送單的那個模組打不開自己的開關。**
+# ⛔ 關（`night_fire.disarm()`）是**改名不刪**：內容留著、檔名就是幾點關的。
+
+# ⭐ 夜盤每一條做法的**附加揭露**（2026-09-23）。⛔ 這裡只放「畫面要多講的那幾樣」——
+#   規則那句話的正本在 `night_fire.state()["rule"]`，代號與名字的正本在 `night_fire.METHODS`。
+#   ⛔⛔ key 一定要跟 `night_fire.METHODS` 對得起來；這裡多列一條**不會**讓它出現在畫面上
+#      （畫面跑的是 `night_fire.METHODS` 那一份）—— 這是刻意的：接不上的做法按不下去。
+#   ⚠️ `no_sl=True`（不設停利也不設停損）是**畫面上一定要講兩次**的那一種
+#      （確認條 ＋ `.al-risk`），⛔ 不可以只靠規則那句話裡有沒有提到。
+NIGHT_METHOD_INFO = {
+    "T": {"no_sl": False},
+    # ⚠️ 「夜盤跟勢」(R) 目前**還沒接上送單那一段**（見 CLAUDE.md 2026-09-23 那節）：
+    #    `night_fire.METHODS` 裡沒有它 ⇒ 畫面上不會出現這一列。這一筆先寫在這裡，
+    #    等它真的接上的那一天只要在 night_fire 加代號，揭露就自動跟上。
+    "R": {"beta": "尚未通過前瞻驗證",
+          "note": "2024-07 起那段每筆 +122 點，但 2020-08~2024-06 那段每筆 −2.6 點。"
+                  "目前在【模擬】那一頁考前瞻。",
+          "no_sl": True},
+}
+
+
+def night_methods(rule=""):
+    """
+    夜盤畫面上那組**單選**的清單。⛔ 只有一個地方組（產品的 GET 與治具都叫這一支）——
+    治具另寫一份的話，探針量到的是治具的樣子。
+    """
+    return [dict({"k": k, "name": night_fire.METHOD_NAME.get(k, k), "rule": rule or ""},
+                 **NIGHT_METHOD_INFO.get(k, {}))
+            for k in night_fire.METHODS]
+
+
+def night_arm_confirm(live, mode=None):
+    """
+    夜盤兩段式確認**第二段那句話的正本**（⛔ 前端不准自己算「現在是不是真錢」）。
+    ⚠️ `live` 由呼叫端傳進來（就是 `night_fire.state()` 算的那一個 `broker.is_live()`），
+       ⛔ 這裡不再問第二次 —— 同一件事兩把尺一定有一把是錯的。
+    ⚠️ 這裡**不講「第一次是今天還是明天」**：夜盤那一刻（美股開盤）算不算「今晚」
+       牽涉到夏令時間與 15:00 的分界，⛔ 猜一句比不講更糟 ——
+       畫面上改寫「每個交易日的晚上」，而「今晚幾點看」由 `state()["tonight"]` 照實講。
+    """
+    mode = mode if mode in night_fire.METHODS else night_fire.METHODS[0]
+    name = night_fire.METHOD_NAME[mode]
+    if live:
+        return {"live": True, "mode": mode, "method_name": name,
+                "text": ("現在是**真實下單模式**。打開之後，程式每個交易日的晚上會"
+                         "**用你的錢**照「%s」送單。" % name)}
+    return {"live": False, "mode": mode, "method_name": name,
+            "text": ("現在是演練模式，每個交易日的晚上會照「%s」跑完整條路，"
+                     "但不會真的送單。" % name)}
+
+
+def night_arm_on(mode, who="panel"):
+    """
+    ⭐⭐ **整個 repo 唯一一個會建立 `NIGHT_ORDERS_ON` 的地方。**
+    回傳 `(http_code, payload)`。⛔ 呼叫端必須先過 `fire_post_guard()`。
+    規矩逐條照抄日盤那一顆（⛔ 兩邊不一樣就是兩把尺）：
+      - `mode` 只准 `night_fire.METHODS` 裡那幾個，⛔ **先驗再寫**
+        （不准寫進檔案再回頭驗 —— 驗失敗那一瞬間開關就是開著的）。
+      - 寫檔用 `O_CREAT|O_EXCL` ⇒ **結構上不可能蓋掉他已經有的那個檔**
+        （已經開著再按 ⇒ 409，⛔ 不是換做法；連「兩個視窗同時按」都擋得住）。
+      - 內容就是一個 ASCII 大寫字母，⛔ 不加 BOM、不加換行（跟 `_decode_flag()` 對齊）。
+    """
+    if not isinstance(mode, str) or mode not in night_fire.METHODS:
+        return 400, {"ok": False,
+                     "msg": "做法只認得 %s（%s）" % (
+                         "／".join(night_fire.METHODS),
+                         "／".join(night_fire.METHOD_NAME[k] for k in night_fire.METHODS))}
+    flag = night_fire.ARM_FLAG
+    live = broker.is_live()
+    try:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(flag), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return 409, {"ok": False, "armed": night_fire.arm()["on"],
+                     "msg": "已經開著了，要換做法請先關掉"}
+    except Exception as e:
+        return 500, {"ok": False, "msg": "打不開：" + str(e)[:150]}
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(mode.encode("ascii"))
+            f.flush()
+    except Exception as e:
+        # 檔案建出來但內容沒寫成 ⇒ 那是個「看不懂的開關檔」（night_fire 會拒絕下單），
+        # ⛔ 但不可以留著讓他以為開好了：走產品自己的 disarm() 收乾淨。
+        try:
+            night_fire.disarm()
+        except Exception:
+            pass
+        return 500, {"ok": False, "msg": "寫不進去：" + str(e)[:150]}
+    a = night_fire.arm()
+    # ⛔ 落地一列（跟日盤同一個格式、同一個資料夾規矩：⛔ 不塞進 nightfire/YYYY-MM.jsonl
+    #    —— 那個檔的 rec 只認得 skip／result／eod，多一種會讓既有的統計看成壞資料）。
+    warn = None
+    try:
+        night_fire.NF_DIR.mkdir(parents=True, exist_ok=True)
+        p = night_fire.NF_DIR / ("arm-" + str(date.today())[:7] + ".jsonl")
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"rec": "arm", "date": str(date.today()),
+                                "at": datetime.now().isoformat(timespec="seconds"),
+                                "method": mode, "live": live, "who": str(who)[:60],
+                                "src": "panel", "flag": flag.name,
+                                "armed": a["on"]}, ensure_ascii=False) + "\n")
+            f.flush()
+    except Exception as e:
+        warn = "開關打開了，但這一筆沒有記錄下來：" + str(e)[:120]
+        print("⚠️ [夜盤自動下單] " + warn, flush=True)
+    print("[夜盤自動下單] 從面板打開：%s（%s）" % (
+        night_fire.METHOD_NAME.get(mode, mode),
+        "真實下單模式" if live else "演練模式"), flush=True)
+    return 200, {"ok": True, "armed": a["on"], "method": a["method"],
+                 "live": live, "warn": warn,
+                 "msg": a["msg"] if a["on"] else (a["msg"] or "開關建好了")}
+
+
 # ---------------------------------------------------------------- 回顧分頁
 
 _VOLREF = {"map": None}
@@ -5576,10 +5703,6 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
      ⛔ 不可以改成壓縮泳道，也不可以縮寫名字（規格 §9.3）。 */
   .at-wrap{aspect-ratio:520/620}
 }
-/* ══ 【策略實驗室】分頁：歷史逐筆回測（版面照 lab-ux 定案 demo test/ux-demo/strategy-lab.html）══
-   ⛔ class 一律 lb- 開頭：這個面板的 .tag／.hero／.sum／.step 早就被別頁用掉了，共用名字會互相污染。
-   ⛔ 紅漲綠跌：.up／.down 沿用全站的變數，這一頁不另立顏色。 */
-#tab-lab .card{margin-bottom:0}
 /* ══ 【模擬】分頁（class 一律 sm- 開頭，⛔ 不借別頁的名字；2026-09-16 從 #tab-lab 搬過來，class 名一個都沒改）══
    ⛔ 紅漲綠跌：沿用全站的 .up／.down 變數，這一頁不另立顏色。
    ⚠️ **並排**是 Benson 指定的（一眼比得出來）：2026-09-16 第七條「多方聯軍」加進來之後，
@@ -5685,118 +5808,172 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .sm-dleg{display:flex; flex-wrap:wrap; gap:6px 16px; font-size:11.5px; color:var(--dim); margin-top:9px}
 .sm-dleg i{display:inline-block; width:14px; height:0; border-top:2px solid; vertical-align:middle; margin-right:5px}
 .sm-dnote{font-size:11px; color:var(--faint); margin-top:6px; line-height:1.55}
-.lb-grid{display:grid; grid-template-columns:318px minmax(0,1fr); gap:14px; align-items:start}
-@media(max-width:900px){ .lb-grid{grid-template-columns:minmax(0,1fr)} }
-.lb-mono{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
-.lb-cond{padding:16px 18px 18px}
-.lb-sh{font-size:11.5px; color:var(--dim); letter-spacing:1.6px; font-weight:650; margin-bottom:12px;
-  display:flex; justify-content:space-between; align-items:baseline; gap:8px}
-.lb-sh .lb-to{font-size:11px; color:var(--faint); letter-spacing:0; font-weight:500; white-space:nowrap}
-.lb-sh .lb-to b{font-family:var(--font-mono); font-weight:650; color:var(--dim)}
-.lb-f{margin-bottom:15px}
-.lb-f>.lb-k{font-size:12px; color:var(--dim); margin-bottom:6px; display:flex; justify-content:space-between; align-items:baseline}
-.lb-f>.lb-k em{font-style:normal; font-size:11px; color:var(--faint)}
-.lb-inp{width:100%; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text);
-  font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:15px; font-weight:600; padding:7px 10px; outline:none}
-.lb-inp:focus{border-color:var(--gold-line)}
-.lb-inp.bad{border-color:var(--up-line)}
-.lb-inp::placeholder{color:var(--faint); font-weight:500; font-family:var(--font-sans); font-size:13px}
-.lb-timebox{display:flex; gap:6px}
-.lb-timebox .lb-inp{flex:1 1 auto; text-align:center; letter-spacing:1px; min-width:0}
-.lb-step{flex:0 0 auto; border:1px solid var(--line); background:transparent; color:var(--dim); border-radius:var(--r-sm);
-  font-size:12px; padding:0 9px; font-family:var(--font-sans); cursor:pointer}
-.lb-step:hover{color:var(--text); border-color:var(--ghost)}
-.lb-hint{font-size:11px; color:var(--gold); margin-top:5px}
-.lb-dirs{display:grid; grid-template-columns:1fr 1fr; gap:5px; background:var(--surface-2); border:1px solid var(--line-soft);
-  border-radius:10px; padding:3px}
-.lb-dirs button{border:0; background:transparent; color:var(--dim); font-family:var(--font-sans); font-size:12.5px; font-weight:600;
-  padding:7px 4px; border-radius:8px; cursor:pointer; line-height:1.3}
-.lb-dirs button small{display:block; font-size:10.5px; font-weight:500; color:var(--faint)}
-.lb-dirs button.on{background:var(--gold-soft); color:var(--gold)}
-.lb-dirs button.on small{color:rgba(227,169,81,.7)}
-.lb-pair{display:grid; grid-template-columns:1fr 1fr; gap:8px}
-.lb-unit{position:relative}
-.lb-unit .lb-inp{padding-right:30px}
-.lb-unit span{position:absolute; right:10px; top:50%; transform:translateY(-50%); font-size:11px; color:var(--faint); pointer-events:none}
-.lb-subk{font-size:11px; color:var(--faint); margin-bottom:4px}
-.lb-grp{border-top:1px solid var(--line-soft); padding-top:13px; margin-top:2px}
-.lb-wd{display:flex; gap:4px}
-.lb-wd button{flex:1 1 0; border:1px solid var(--line); background:transparent; color:var(--dim); border-radius:8px;
-  font-family:var(--font-sans); font-size:12.5px; padding:5px 0; cursor:pointer}
-.lb-wd button.on{background:var(--surface-2); color:var(--faint); border-color:var(--line-soft); text-decoration:line-through}
-.lb-tog{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12.5px; color:var(--text);
-  cursor:pointer; user-select:none; padding:3px 0}
-.lb-tog small{display:block; font-size:11px; color:var(--faint)}
-.lb-sw{flex:0 0 auto; width:34px; height:20px; border-radius:10px; background:var(--ghost); position:relative; transition:background .15s}
-.lb-sw::after{content:""; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:var(--dim);
-  transition:transform .15s,background .15s}
-.lb-tog.on .lb-sw{background:var(--gold-soft); box-shadow:inset 0 0 0 1px var(--gold-line)}
-.lb-tog.on .lb-sw::after{transform:translateX(14px); background:var(--gold)}
-.lb-run{width:100%; margin-top:16px; border:1px solid var(--gold-line); background:var(--gold-soft); color:var(--gold);
-  border-radius:var(--r-md); font-family:var(--font-sans); font-size:14.5px; font-weight:700; letter-spacing:2px; padding:11px; cursor:pointer}
-.lb-run:hover{background:rgba(227,169,81,.2)}
-.lb-run.stale{background:var(--gold); color:#1a1408}
-.lb-run:disabled{opacity:.5; cursor:default}
-.lb-approx{font-size:10.5px; color:var(--faint); margin-top:10px; line-height:1.55}
-.lb-approx.err{color:var(--gold)}
 
-.lb-rhead{display:flex; align-items:center; justify-content:space-between; gap:14px; margin:2px 2px 10px; min-height:28px}
-.lb-sum{font-size:12px; color:var(--dim); display:flex; gap:8px; flex-wrap:wrap; align-items:center}
-.lb-sum .sep{color:var(--ghost)}
-.lb-tries{font-size:11.5px; color:var(--faint); border:1px solid var(--line); border-radius:999px; padding:3px 11px; white-space:nowrap}
-.lb-tries b{font-family:var(--font-mono); color:var(--dim); font-weight:650}
-.lb-tries.warn{color:var(--gold); border-color:var(--gold-line); background:var(--gold-soft)}
-.lb-tries.warn b{color:var(--gold)}
-.lb-results{transition:opacity .15s}
-.lb-results.stale{opacity:.38}
-.lb-periods{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px}
-.lb-pc{padding:15px 18px 14px; display:flex; flex-direction:column}
-.lb-ph{display:flex; align-items:baseline; gap:10px; margin-bottom:12px}
-.lb-ph .t{font-size:13px; font-weight:750; letter-spacing:1.4px}
-.lb-ph .r{font-size:11.5px; color:var(--faint)}
-.lb-ph .n{margin-left:auto; font-size:11.5px; color:var(--dim)}
-.lb-ph .n b{font-weight:650; color:var(--text)}
-.lb-hero{display:grid; grid-template-columns:1.05fr 1fr 1fr; gap:10px; align-items:end}
-.lb-hero .k{font-size:11px; color:var(--faint); letter-spacing:1.4px; margin-bottom:4px}
-.lb-hero .v{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-weight:680; line-height:1; letter-spacing:-.8px; white-space:nowrap}
-.lb-hero .v.big{font-size:40px}
-.lb-hero .v.mid{font-size:26px}
-.lb-hero .v small{font-size:13px; color:var(--dim); font-weight:500; margin-left:2px; letter-spacing:0}
-.lb-hero .cash{font-size:11.5px; color:var(--faint); margin-top:5px; white-space:nowrap}
-.lb-hero .v.na{color:var(--ghost)}
-.lb-tag{display:inline-block; font-size:10.5px; font-weight:650; border-radius:5px; padding:1px 6px; margin-top:6px; white-space:nowrap}
-.lb-tag.warn{color:var(--gold); background:var(--gold-soft)}
-.lb-exits{margin-top:14px}
-.lb-xbar{display:flex; height:6px; border-radius:3px; overflow:hidden; gap:2px; background:var(--surface-2)}
-.lb-xbar i{display:block; height:100%; border-radius:3px}
-.lb-xbar .tp{background:var(--up)} .lb-xbar .sl{background:var(--down)} .lb-xbar .eod{background:var(--ghost)}
-.lb-xleg{display:flex; justify-content:space-between; font-size:11.5px; color:var(--faint); margin-top:6px}
-.lb-xleg b{font-family:var(--font-mono); font-weight:650; color:var(--dim); margin-left:4px}
-.lb-guard{margin-top:13px; border-top:1px solid var(--line-soft); padding-top:10px; display:grid; grid-template-columns:auto 1fr auto;
-  column-gap:12px; row-gap:6px; align-items:center; font-size:12px}
-.lb-guard .gk{color:var(--dim)}
-.lb-guard .gv{font-family:var(--font-mono); font-variant-numeric:tabular-nums; color:var(--text); text-align:right}
-.lb-guard .gs{font-size:11px; min-width:74px; text-align:right; color:var(--faint)}
-.lb-guard .gs.warn{color:var(--gold); font-weight:650}
-.lb-pc.empty .lb-hero .v,.lb-pc.empty .gv{color:var(--ghost)}
-.lb-emptymsg{margin-top:12px; border:1px dashed var(--line); border-radius:var(--r-md); padding:12px 14px; font-size:12.5px; color:var(--dim); text-align:center}
-.lb-emptymsg b{color:var(--text); font-weight:650}
-.lb-emptymsg small{display:block; font-size:11px; color:var(--faint); margin-top:2px}
-.lb-verdict{display:flex; align-items:center; gap:10px; font-size:12px; color:var(--dim); margin:-2px 2px 10px}
-.lb-verdict .dot{width:7px; height:7px; border-radius:50%; background:var(--ghost); flex:0 0 auto}
-.lb-verdict.half .dot{background:var(--gold)}
-.lb-verdict b{color:var(--text); font-weight:650}
-.lb-curve{padding:14px 18px 12px; position:relative}
-.lb-ch{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:6px}
-.lb-ch .t{font-size:11.5px; color:var(--dim); letter-spacing:1.6px; font-weight:650}
-.lb-leg{display:flex; gap:14px; font-size:11px; color:var(--faint)}
-.lb-leg i{display:inline-block; width:16px; height:0; border-top:2px solid var(--gold); vertical-align:middle; margin-right:5px}
-.lb-leg i.dash{border-top:2px dashed var(--dim)}
-#lbsvg{display:block; width:100%; height:318px}
-#lbsvg text{font-family:var(--font-mono); font-size:10.5px; fill:var(--faint)}
-.lb-tip{position:absolute; pointer-events:none; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:6px 9px;
-  font-size:11.5px; font-family:var(--font-mono); white-space:nowrap; color:var(--dim); display:none; z-index:5}
-.lb-tip b{color:var(--text)}
+/* ══ 【即時】右欄那兩張唯讀小卡（2026-09-23 v3）══
+   ⛔ `.right` 自己有 gap，卡片再帶 margin-bottom 就是雙倍間距。 */
+.right>.card{margin-bottom:0}
+.right>.card:empty{display:none}
+
+/* ══ 【自動下單】v3 新增的版面件（2026-09-23）══
+   ⛔ 一個新顏色都沒加：全部用 :root 既有 token。⛔ 紅綠只給損益，開／關一律金色與中性灰。 */
+.al-bar{display:flex; gap:9px; flex-wrap:wrap; align-items:stretch; margin-bottom:13px}
+.al-pill{display:flex; align-items:center; gap:11px; background:var(--surface-2);
+  border:1px solid var(--line); border-radius:999px; padding:7px 9px 7px 14px; flex:1 1 260px; min-width:0}
+.al-pill .lb{font-size:10px; color:var(--faint); letter-spacing:1px; flex:none}
+.al-pill .nm{font-size:13.5px; font-weight:700; color:var(--dim); white-space:nowrap}
+.al-pill .st{font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px 4px;
+  background:var(--surface); color:var(--faint); margin-left:auto; white-space:nowrap}
+.al-pill.on{border-color:var(--gold-line); background:var(--gold-soft)}
+.al-pill.on .nm{color:var(--gold)}
+.al-pill.on .st{background:rgba(227,169,81,.22); color:var(--gold)}
+.al-pill .off{border:1px solid var(--line); background:transparent; color:var(--faint);
+  font-family:var(--font-sans); font-size:11.5px; border-radius:999px; padding:5px 12px; cursor:pointer; flex:none}
+.al-pill .off:hover{color:var(--text); border-color:var(--faint)}
+.al-now{display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; align-items:start}
+@media(max-width:900px){ .al-now{grid-template-columns:minmax(0,1fr)} }
+.al-pos{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md); padding:11px 13px 12px}
+.al-pos.live{border-color:var(--gold-line)}
+.al-pos .hd{font-size:10px; color:var(--faint); letter-spacing:1.2px; display:flex;
+  justify-content:space-between; align-items:center; gap:8px}
+.al-pos .big{font-size:27px; font-weight:700; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  line-height:1.1; margin:6px 0 8px}
+.al-pos .r{display:flex; justify-content:space-between; gap:8px; font-size:11.5px; color:var(--dim);
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; padding:3px 0; border-top:1px solid var(--line-soft)}
+.al-pos .r span{color:var(--faint)}
+.al-pos .n{font-size:11px; color:var(--faint); line-height:1.6; margin-top:7px}
+.al-pos .none{font-size:13px; color:var(--dim); margin-top:8px; line-height:1.6}
+.al-perf{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line-soft);
+  border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden}
+@media(max-width:620px){ .al-perf{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .al-perf .c:last-child{grid-column:1/-1} }
+.al-perf .c{background:var(--surface); padding:10px 13px 11px; min-width:0}
+.al-perf .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px}
+.al-perf .v{font-size:21px; font-weight:700; font-family:var(--font-mono); font-variant-numeric:tabular-nums; margin-top:2px}
+.al-perf .s{font-size:11px; color:var(--faint); font-family:var(--font-mono); margin-top:2px}
+.al-spark{max-width:760px; margin:10px 0 2px}
+.al-spark svg{display:block; width:100%; height:auto}
+.al-chips{display:flex; gap:6px; flex-wrap:wrap; margin:0 2px 9px}
+.al-chip{border:1px solid var(--line); background:var(--surface-2); color:var(--dim); font-size:11.5px;
+  font-family:var(--font-sans); border-radius:999px; padding:5px 13px; cursor:pointer}
+.al-chip.on{background:var(--gold-soft); color:var(--gold); border-color:var(--gold-line)}
+.al-fold{margin-top:9px}
+.al-fold summary{cursor:pointer; font-size:12px; color:var(--dim); padding:6px 2px; list-style:none}
+.al-fold summary::-webkit-details-marker{display:none}
+.al-fold summary:before{content:'▸ '; color:var(--faint)}
+.al-fold[open] summary:before{content:'▾ '}
+.al-fold summary:hover{color:var(--text)}
+.al-fold>div{font-size:12px; color:var(--dim); line-height:1.75; padding:4px 2px 8px}
+.al-fold b{color:var(--text)}
+/* ⭐ 開關（2026-09-23 定案）：日盤一組（⛔ 不給選做法，固定多方聯軍）、
+   夜盤一組（做法**單選**）。⛔ 打開／換做法都是真錢動作 ⇒ 兩段式；關閉一鍵。 */
+.al-sel{border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden; margin-bottom:12px}
+.al-selh{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 13px 10px;
+  background:var(--surface-2); border-bottom:1px solid var(--line)}
+.al-selh .lb{font-size:10.5px; color:var(--faint); letter-spacing:1.2px; font-weight:700}
+.al-selh .st{font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px 4px;
+  background:var(--bg); color:var(--faint); white-space:nowrap}
+.al-selh .st.on{background:var(--gold-soft); color:var(--gold)}
+.al-selh .sp{flex:1; min-width:0}
+.al-selh .off{border:1px solid var(--line); background:transparent; color:var(--faint);
+  font-family:var(--font-sans); font-size:11.5px; font-weight:650; border-radius:999px;
+  padding:4px 12px 5px; cursor:pointer; white-space:nowrap}
+.al-selh .off:hover{color:var(--text); border-color:var(--faint)}
+.al-selh .nm{font-size:14px; font-weight:700; color:var(--dim); white-space:nowrap}
+.al-selh.on .nm{color:var(--gold)}
+.al-selbody{padding:12px 13px 13px; background:var(--surface)}
+.al-selbody .ds{font-size:11.5px; color:var(--faint); line-height:1.65}
+/* 夜盤那一組是**單選**（⛔ 不准做成可以同時開：兩條方向一致 95%、損益相關 0.88） */
+.al-picks{display:flex; flex-direction:column}
+.al-pick{display:flex; gap:11px; align-items:flex-start; text-align:left; width:100%;
+  padding:11px 13px 12px; background:var(--surface); border:0; border-top:1px solid var(--line-soft);
+  cursor:pointer; font-family:var(--font-sans)}
+.al-picks .al-pick:first-child{border-top:0}
+.al-pick:hover{background:var(--surface-2)}
+.al-pick:focus-visible{outline:1px solid var(--gold); outline-offset:-2px}
+.al-pick .rd{width:15px; height:15px; border-radius:50%; border:1.5px solid var(--ghost);
+  flex:none; margin-top:2px; position:relative}
+.al-pick.on .rd{border-color:var(--gold)}
+.al-pick.on .rd::after{content:''; position:absolute; inset:3px; border-radius:50%; background:var(--gold)}
+.al-pick.sel .rd{border-color:var(--text)}
+.al-pick.sel .rd::after{content:''; position:absolute; inset:3px; border-radius:50%; background:var(--text)}
+.al-pick .w{min-width:0; flex:1}
+.al-pick .nm{font-size:14px; font-weight:700; color:var(--text); display:flex; align-items:center;
+  gap:8px; flex-wrap:wrap; line-height:1.35}
+.al-pick.on .nm{color:var(--gold)}
+.al-pick .ds{font-size:11.5px; color:var(--faint); line-height:1.6; margin-top:3px}
+.al-pick .now{font-size:10px; font-weight:700; color:var(--gold); background:var(--gold-soft);
+  border-radius:5px; padding:1px 7px; letter-spacing:.5px; white-space:nowrap}
+.al-pick .beta{font-size:10px; font-weight:700; color:var(--gold); border:1px solid var(--gold-line);
+  border-radius:5px; padding:1px 7px; white-space:nowrap}
+.al-selfoot{padding:11px 13px 13px; background:var(--surface); border-top:1px solid var(--line-soft)}
+.al-selfoot .n{font-size:11.5px; color:var(--faint); line-height:1.7}
+.al-selfoot .n b{color:var(--dim); font-weight:650}
+.al-selfoot .al-conf{margin-top:0}
+.al-conf .q .w2{display:block; margin-top:6px; font-size:12px; font-weight:600; color:var(--dim)}
+.al-conf.real .q .w2{color:var(--up)}
+
+/* ══ 【健檢】分頁（2026-09-23 加；class 一律 hc- 前綴）══
+   ⛔ 燈號用**面板既有語彙**（Benson 拍板）：正常＝中性灰、明顯變差＝金色描邊、
+      連 15 筆為負＝金色實心。⛔ 不用紅黃綠 —— 這個面板的綠色是「賠錢」，會直接打架。
+   ⛔ 燈號旁邊**永遠要有那個詞**，⛔ 不准只有顏色。 */
+.hc-hint{font-size:11.5px; color:var(--faint); line-height:1.7; margin:-2px 2px 12px}
+.hc-grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px}
+@media(max-width:860px){ .hc-grid{grid-template-columns:minmax(0,1fr)} }
+.hc-card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:15px 17px 14px}
+.hc-card.warn{border-color:var(--gold-line)}
+.hc-top{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.hc-nm{font-size:16px; font-weight:700; color:var(--text); line-height:1.25}
+.hc-nm i{display:block; font-style:normal; font-size:11px; font-weight:500; color:var(--faint); margin-top:2px; font-family:var(--font-mono)}
+.hc-lamp{margin-left:auto; display:inline-flex; align-items:center; gap:7px; font-size:11.5px;
+  font-weight:650; border-radius:999px; padding:3px 11px 4px; border:1px solid var(--line);
+  background:var(--surface-2); color:var(--dim); white-space:nowrap}
+.hc-lamp b{width:8px; height:8px; border-radius:50%; background:currentColor; flex:none}
+.hc-lamp.ok{color:var(--dim); background:var(--surface-2); border-color:var(--line)}
+.hc-lamp.na{color:var(--faint); background:var(--surface-2); border-color:var(--line)}
+.hc-lamp.wn{color:var(--gold); background:var(--gold-soft); border-color:var(--gold-line)}
+.hc-lamp.bd{color:#12161C; background:var(--gold); border-color:var(--gold)}
+.hc-nums{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line-soft);
+  border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden; margin-top:13px}
+@media(max-width:520px){ .hc-nums{grid-template-columns:repeat(2,minmax(0,1fr))} }
+.hc-nums .c{background:var(--surface-2); padding:10px 13px 11px; min-width:0}
+.hc-k{font-size:10.5px; color:var(--faint); letter-spacing:.4px}
+.hc-v{font-size:24px; font-weight:700; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  line-height:1.15; margin-top:3px}
+.hc-v small{font-size:12px; font-weight:600; color:var(--faint); margin-left:3px; letter-spacing:0}
+.hc-d{font-size:11px; color:var(--faint); font-family:var(--font-mono); font-variant-numeric:tabular-nums; margin-top:4px}
+.hc-d em{font-style:normal; color:var(--dim)}
+.hc-spark{margin-top:12px}
+.hc-spark svg{display:block; width:100%; height:auto}
+.hc-foot{font-size:11px; color:var(--faint); font-family:var(--font-mono); margin-top:9px;
+  display:flex; flex-wrap:wrap; gap:6px}
+.hc-foot .sep{color:var(--ghost)}
+.hc-real{font-size:11.5px; color:var(--dim); line-height:1.7; margin-top:9px;
+  border-top:1px solid var(--line-soft); padding-top:8px}
+.hc-real b{color:var(--text)}
+.hc-na{font-size:12.5px; color:var(--dim); line-height:1.8; padding:14px 2px 6px}
+.hc-na b{color:var(--text)}
+.hc-mkt{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px}
+@media(max-width:860px){ .hc-mkt{grid-template-columns:minmax(0,1fr)} }
+.hc-m{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:14px 16px 13px}
+.hc-m.warn{border-color:var(--gold-line)}
+.hc-m .t{font-size:12.5px; font-weight:650; color:var(--text)}
+.hc-m .t i{display:block; font-style:normal; font-size:10.5px; font-weight:500; color:var(--faint); margin-top:2px; line-height:1.5}
+.hc-m .v{font-size:30px; font-weight:700; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  line-height:1.1; margin-top:10px; color:var(--text)}
+.hc-m .v small{font-size:14px; font-weight:600; color:var(--faint); margin-left:2px; letter-spacing:0}
+.hc-band{position:relative; height:6px; border-radius:3px; background:var(--surface-2); margin-top:13px}
+.hc-band i{position:absolute; top:0; bottom:0; border-radius:3px; background:var(--line)}
+.hc-band u{position:absolute; top:-4px; width:2px; height:14px; border-radius:1px; background:var(--gold)}
+.hc-scale{display:flex; justify-content:space-between; font-size:10px; color:var(--ghost);
+  font-family:var(--font-mono); margin-top:6px}
+.hc-pos{font-size:11.5px; color:var(--dim); margin-top:8px; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.hc-pos b{color:var(--text); font-weight:700}
+.hc-lines{font-size:11.5px; color:var(--dim); margin-top:7px; line-height:1.7; font-family:var(--font-mono)}
+.hc-legend{display:flex; gap:18px; flex-wrap:wrap; font-size:11px; color:var(--faint); margin:13px 2px 0}
+.hc-legend span{display:inline-flex; align-items:center; gap:7px}
+.hc-legend .hc-lamp{margin-left:0; font-style:normal; font-size:10.5px; padding:2px 9px 3px}
+.hc-legend .hc-lamp b{width:7px; height:7px}
+.hc-foot2{font-size:11.5px; color:var(--faint); line-height:1.7; margin:2px 4px 0}
 </style></head><body><div class="app">
 <div class="topbar">
   <div class="brand"><div class="mark">&#9702;</div>
@@ -5817,15 +5994,19 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
     <!-- 【模擬】：七條策略每天事後照規則算一次，⛔ 一口單都不會送（後端 sim_lanes.py）。
          放在【即時】右邊：它講的是「同一天，如果照規則做會怎樣」，跟研究頁是兩件事。 -->
     <button data-tab="sim">模擬</button>
-    <!-- 【策略實驗室】放右邊倒數第二：這一頁是研究性質，接在模擬後面。⛔ 不可以插在【即時】前面。
-         ⚠️ 2026-09-14 取代原本的【自動下單（模擬）】（Benson 玩過 lab-ux demo 後拍板）。
-            那一頁的**畫面**拿掉了，但 autotest/ 的模擬紀錄（_auto_tick／_auto_record／
-            _auto_settle、/api/auto/*）照樣在後端跑 —— 【自動下單】每一筆的「模擬那邊」就是讀它。
-         ⛔ 這一頁只顯示**歷史回測結果**：不預測、不建議、不自動找「最好的參數」。 -->
-    <button data-tab="lab">策略實驗室</button>
-    <!-- ⛔⛔ 【自動下單】＝**會真的送出委託單**的那一頁，所以放最右（動線的終點）。
-         這一頁本身**沒有任何開關**：要用只能自己在硬碟上建 tools/shioaji/AUTO_ORDERS_ON，
-         而且照樣受 REAL_ORDERS_ON 管。⛔ 不准在這裡加按鈕。 -->
+    <!-- ⭐⭐ 2026-09-23 v3：【策略實驗室】(#tab-lab) 的**畫面整頁移除**（Benson 交辦）。
+         ⛔ **後端一行都沒拆**：/api/lab/meta、/api/lab/run、strategy_lab.py、
+            autotest/ 的模擬紀錄與 /api/auto/* 照樣在跑
+            ——【自動下單】每一筆紀錄的「模擬那邊」就是讀 /api/auto/*，拆掉會少一塊。
+         ⚠️ 那一頁原本的結束標記（「到此」那行註解）是三把尺的切片邊界
+            （autotest-backend.py ①／test_strategy_lab.py ⑥／test_sim_lanes.py ⑦）——
+            移除時三把尺一起改成量新的【健檢】與【自動下單】（⛔ 不留量到空白區間的尺）。 -->
+    <!-- ⭐ 【健檢】：正在跑真單那幾條的體檢 ＋ 市場狀態。⛔ 唯讀、⛔ 不預測不建議。
+         排在【模擬】與【自動下單】中間是刻意的：動線是「現在 → 錢 → 規則在跑（不下單）
+         → 正在跑真單的那幾條體檢 → 會真的送單」，愈往右愈接近真錢。
+         ⛔ 不可以排到【自動下單】右邊（那一頁永遠是最右邊的終點）。 -->
+    <button data-tab="hc">健檢</button>
+    <!-- ⛔⛔ 【自動下單】＝**會真的送出委託單**的那一頁，所以放最右（動線的終點）。 -->
     <button data-tab="fire">自動下單</button>
   </div>
   <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
@@ -5853,11 +6034,19 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         <span class="sk"></span><span class="sk"></span><span class="sk"></span></div>
     </div>
   </div><div class="right">
-    <!-- 右欄拆成三個各自比對自己字串的節點：
-         #xal  跨分頁警報（兩個分頁都看得到，沒警報時 :empty 完全不佔位）
-         #ntabs 頁籤（浮動點數是裡面的獨立節點 #tabbadge）
-         #zone  練習／真實其中一區（切分頁時才重建骨架） -->
-    <div id="xal"></div><div id="ntabs"></div><div id="zone"></div>
+    <!-- ⭐⭐ 2026-09-23 v3（Benson 拍板：規格 §1 方案 A）：右欄**只留看盤要看的兩張唯讀小卡**。
+         拿掉的是「練習下單」「真實下單」兩個操作區塊、練習交易紀錄、實際交易紀錄、
+         練習成績／真實成績、以及練習／真實那兩顆頁籤（#ntabs／#tabbadge／#zone）。
+         ⛔⛔ **這一輪只拆畫面，後端一行都沒拆**：/api/enter、/api/close、/api/real/enter、
+            /api/real/close、practice_trades/、real_trades/、data/practice.json 的同步照舊
+            ——手機 App 在讀 practice.json，real_trades/ 是【自動下單】出場價的唯一真相來源。
+         右欄三個各自比對自己字串的節點：
+           #xal    跨分頁警報（沒警報時 :empty 完全不佔位）
+           #lvpos  今天的部位（⛔ 唯讀、⛔ 零按鈕）
+           #lvacct 帳戶摘要（⛔ 唯讀、⛔ 零按鈕；金額一律標「券商端」） -->
+    <div id="xal"></div>
+    <div class="card" id="lvpos"></div>
+    <div class="card" id="lvacct"></div>
   </div></div>
 </div>
 
@@ -5895,62 +6084,105 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
  <div class="sm-day" id="smday" hidden></div>
 </div>
 
-<!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
-     ⛔⛔ **開難、關易**（Benson 2026-09-09 拍板；同日下午他要求「開」也做到畫面上）：
-       ・**開**＝ #alon 那兩顆做法鈕 → **第二段確認條** → 「確定，打開」
-         → POST /api/fire/on（六道防護，見 live_panel.fire_post_guard）。
-         ⛔ **兩段式不可以拿掉**：這是這個面板上唯一一顆會武裝真錢的鈕。
-         ⛔ 確認條那句話（現在是真錢還是演練）**一律從後端拿**（arm_confirm），
-            ⛔ 前端不准自己猜 —— 講錯的代價是「他以為只是演練，結果真的送了一口」。
-         ⛔ 第一段沒按「確定」之前**一個請求都不准出去**（fire-tab.mjs ⑪ 在守）。
-       ・**關**有一顆按鈕（#aloff → POST /api/fire/off）。關掉永遠是安全的動作，
-         所以**不跳確認**（⛔ 開跳、關不跳，這個不對稱是刻意的）。
-       ・⛔ 開著的時候**只有**「關閉」那一顆（⛔ 沒有「換做法」——
-         換做法牽涉到「今天已經進場了怎麼辦」，這一輪不做；再按一次開的話後端回 409）。
-         守衛：fire-tab.mjs ②／⑧c／⑩／⑪。
-     ⛔ 這一段刻意放在 #tab-lab **之前**：autotest-backend.py ① 掃的是
-        #tab-lab 那個 div 到「【策略實驗室】到此」那行註解之間（研究頁的紅線
-        「一行都不碰下單路徑」），放進去會讓那把尺量到不該量的東西。
-        ⚠️ 2026-09-16【回顧】拿掉之後，那個結束標記換成【策略實驗室】後面那行
-           「到此」註解（⛔ 全檔只准出現一次，這裡刻意不把它原字抄下來 ——
-           抄一份就會被 page.index() 先找到、把切片切成負的）。
-           ⛔ 改那行要一起改 autotest-backend.py ①、test_strategy_lab.py ⑥、test_sim_lanes.py ⑦。 -->
-<div id="tab-fire" hidden>
-
- <div class="card l1">
-  <div class="at-head">
-   <div class="at-title">
-    <div class="h al-state" id="alstate"></div>
-    <div class="s" id="alsub"></div>
-   </div>
-  </div>
-  <div class="al-gates" id="algates"></div>
-  <!-- ⭐ 2026-09-15：今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 /api/fire/state 的 fast 來。 -->
-  <div class="al-fast" id="alfast"></div>
-  <!-- ⭐⭐ 風險條（2026-09-10）：整段〈怎麼開〉的教學砍掉之後**必須留下來**的那兩句
-       （停損活在這台電腦裡／這個開關沒有有效期）。⛔ 一句都不准再刪。
-       開著才畫；關著的時候「沒有有效期」那句改掛在他正要按的那顆鈕旁邊。 -->
-  <div id="alrisk"></div>
-  <!-- ⭐ 打開（兩段式）。⛔ 只有開關**關著**時才會有東西畫進來（alPaint）：
-       開著的時候這裡是空的（要換做法請先關掉），關著的時候 #aloff 是空的。
-       ⛔ 兩個永遠不會同時有東西 —— 「開」與「關」同時在畫面上會讓他按錯。 -->
-  <div class="al-on" id="alon"></div>
-  <!-- 關閉鈕。⛔ 只有開關檔存在時才會有東西畫進來（alPaint），
-       關著的時候這裡是空的 —— 沒東西可關就不該有按鈕。 -->
-  <div class="al-off" id="aloff"></div>
- </div>
-
- <!-- 今天那一口**已經出場**時整張卡收起來（alPaint 設 hidden），改併進底下「紀錄」的第一列
-      （金框＋「今天」＋「已出場」標，2026-09-14 一件事只講一次）。
-      ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／持有中／收盤警示）照舊畫在這裡。 -->
- <div class="card" id="altodaycard">
-  <div class="sec-head"><h2>今天</h2><span class="count" id="alcount"></span></div>
-  <div class="al-today" id="altoday"></div>
+<!-- ══════════ 【健檢】：正在跑真單那幾條的體檢 ＋ 市場狀態（2026-09-23 加）══════════
+     後端 health.py，唯讀端點 GET /api/health/state（過 fire_get_guard）。
+     ⛔⛔ **這一頁不准出現預測、勝率、期望值、訊號強度、買賣建議**（CLAUDE.md 開頭那條鐵律）。
+        燈號**只描述已經發生的數字**，⛔ 不准附「要不要關掉／要不要加碼」。
+     ⛔⛔ **不可以掛在 5 秒輪詢上**：切進這一頁才打一次，後端整天快取（來源檔的 mtime 當快取鍵）。
+        市場狀態第一次要讀兩個大檔（幾秒，跑在後端的背景執行緒）⇒ 還沒算完時這裡會隔幾秒
+        再問一次，⛔ 算完就停（見 hcEnter）。
+     ⛔ class 一律 hc- 前綴（al-／at-／sm-／tk-／dt-／n- 都被別頁佔走了）。
+     ⛔ 只放空容器：燈號、門檻、百分位全部由後端決定 —— 前端自己算一份就是第二把尺。 -->
+<div id="tab-hc" hidden>
+ <div class="card l1" style="margin-bottom:14px">
+  <div class="sec-head"><h2>策略健檢</h2><span class="count" id="hcstamp"></span></div>
+  <div class="hc-hint" id="hcsrc"></div>
+  <div class="hc-grid" id="hccards"></div>
+  <div class="hc-legend" id="hcleg"></div>
  </div>
 
  <div class="card">
+  <div class="sec-head"><h2>市場狀態</h2><span class="count">現在 vs 過去一年</span></div>
+  <div class="hc-hint">只是把已經發生的數字畫成位置，⛔ 沒有預測、沒有買賣建議。</div>
+  <div class="hc-mkt" id="hcmkt"></div>
+ </div>
+
+ <div class="hc-foot2" id="hcfoot"></div>
+</div>
+<!-- ══ 【健檢】到此 ══ （⛔ 這行是 tools/probe/autotest-backend.py ①／
+     test_strategy_lab.py ⑥／test_sim_lanes.py ⑦ 切「健檢那一段 HTML」的結束標記，
+     ⛔ 全檔只准出現一次、⛔ 改字要三個檔一起改 ——
+     抄第二份會被 page.index() 先找到、把切片切成負的。 -->
+
+<!-- ══════════ 【自動下單】：會真的送出委託單的那一頁 ══════════
+     ⛔⛔ **開難、關易**（Benson 2026-09-09 拍板；同日下午他要求「開」也做到畫面上）：
+       ・**開**＝ #alon／#nfon 那幾顆做法鈕 → **第二段確認條** → 「確定，打開」
+         → POST /api/fire/on（日盤）／POST /api/nightfire/on（夜盤，2026-09-23 加）。
+         兩支都走六道防護（見 live_panel.fire_post_guard）。
+         ⛔ **兩段式不可以拿掉**：這是這個面板上僅有的兩個會武裝真錢的地方。
+         ⛔ 確認條那句話（現在是真錢還是演練）**一律從後端拿**（arm_confirm），
+            ⛔ 前端不准自己猜 —— 講錯的代價是「他以為只是演練，結果真的送了一口」。
+         ⛔ 第一段沒按「確定」之前**一個請求都不准出去**（fire-tab.mjs ⑪ 在守）。
+       ・**關**是狀態列上那一顆（→ POST /api/fire/off ／ /api/nightfire/off）。
+         關掉永遠是安全的動作，所以**不跳確認**（⛔ 開跳、關不跳，這個不對稱是刻意的）。
+       ・⛔ 開著的時候**只有**「關閉」那一顆（⛔ 沒有「換做法」——再按一次開的話後端回 409）。
+     ⭐⭐ 2026-09-23 v3 重新編排（Benson 拍板，規格 §2）：
+       ① 狀態列（日盤／夜盤兩顆藥丸並排，「關閉」鈕就在這裡）
+       ② 今天（左＝結論＋三個候選／右＝現在的部位）
+       ③ 風險兩句（⛔ 一字不刪，位置從開關區搬到「今天」底下）
+       ④ 最近做得如何（⛔ 不放勝率、不放期望值、不放勝敗場數）
+       ⑤ 紀錄（日盤與夜盤**合併在同一份清單**，靠 chips 篩；⛔ 只在畫面上合併，
+          ⛔ 不准合併檔案、⛔ 不准共用 rule 命名空間）
+       ⑥ 開關與規則（沉到最底：一年按不到幾次的東西）
+     ⛔ 這一頁永遠是分頁的最右邊（動線的終點）。 -->
+<div id="tab-fire" hidden>
+
+ <div class="card l1">
+  <!-- ① 狀態列：日盤／夜盤兩顆藥丸。⛔ 開／關用金色與中性灰，⛔ 不准用紅綠（紅綠只給損益）。
+       「關閉」鈕就在這裡（原 #aloff）：關掉永遠是安全的動作、要好按、⛔ 照舊不跳確認。 -->
+  <div class="al-bar" id="albar"></div>
+  <!-- 條件式的警告（真單關著／送單出過錯／結算日判不出來…）⛔ 一條都不准少 -->
+  <div class="at-head"><div class="at-title"><div class="s" id="alsub"></div></div></div>
+  <div class="al-gates" id="algates"></div>
+  <!-- ⭐ 2026-09-15：今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 /api/fire/state 的 fast 來。 -->
+  <div class="al-fast" id="alfast"></div>
+
+  <!-- ② 今天：左＝結論（七種結局的文案⛔ 一句都不改）＋三個候選，右＝現在的部位 -->
+  <div class="al-now">
+   <!-- 今天那一口**已經出場**時左半整塊收起來（alPaint 設 hidden），改併進底下「紀錄」的第一列
+        （金框＋「今天」＋「已出場」標，2026-09-14 一件事只講一次）。
+        ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／持有中／收盤警示）照舊畫在這裡。 -->
+   <div id="altodaybox">
+    <div class="sec-head"><h2>今天</h2><span class="count" id="alcount"></span></div>
+    <div class="al-today" id="altoday"></div>
+   </div>
+   <!-- ⛔ 右邊這張**唯讀**：一顆鈕都沒有。 -->
+   <div id="alpos"></div>
+  </div>
+
+  <!-- ③ 風險兩句（2026-09-10）：⛔⛔ 一句都不准刪
+       （停損活在這台電腦裡／這個開關沒有有效期）。開著才畫。 -->
+  <div id="alrisk"></div>
+ </div>
+
+ <!-- ④ 最近做得如何：⛔ 不放勝率、不放期望值、不放勝敗場數。
+      資料用 /api/fire/state 現有的帳本列＋real 出場價算，⛔ 不新開端點。 -->
+ <div class="card">
+  <div class="sec-head"><h2>最近做得如何</h2><span class="count" id="alperfn"></span></div>
+  <div class="al-perf" id="alperf"></div>
+  <div class="al-spark" id="alsparkbox"></div>
+  <div class="al-empty">同一份數字在【健檢】那一頁有跟歷史基準的對照。</div>
+ </div>
+
+ <!-- ⑤ 紀錄 -->
+ <div class="card">
   <div class="sec-head"><h2>紀錄</h2><span class="count" id="allogn"></span></div>
-  <!-- ⛔⛔ 跟練習成績／真實成績底下那份清單**同一種卡片**（`.list` ＋ `.trade`）。
+  <!-- 日盤／夜盤篩選 chips。⚠️ 兩邊是**不同的帳本**（autofire/ vs nightfire/），
+       合併只發生在**畫面**上。
+       ⛔⛔ 這裡是**空容器**：這一頁的靜態 HTML 一顆 button／form／input 都不准有
+       （test_auto_fire.py ⑪ 在守）—— 所有控制項一律由 alPaint 畫進來。 -->
+  <div class="al-chips" id="alfilter"></div>
+  <!-- ⛔⛔ 跟練習／真實那份清單**同一種卡片**（`.list` ＋ `.trade`）。
        ⛔ `.list>*{flex:none}` 由 `.list` 自己帶著，⛔ 不可以省 ——
           `.list` 是有 max-height 的 flex 直欄，少了那條、筆數一多就是**把每一列壓扁**
           （實測 107px 被壓成 21.6px），而且筆數少的時候完全看不出來。 -->
@@ -5959,104 +6191,27 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="at-notes" id="alnotes"></div>
  </div>
 
- <!-- ⭐ 2026-09-22【夜盤自動下單】台積電快攻：**唯讀**狀態卡（GET /api/nightfire/state）。
-      ⛔ 一顆鈕都沒有（開：他自己建 NIGHT_ORDERS_ON；關：把那個檔改名）。跟上面日盤那一套完全分開。 -->
- <div class="card" id="nfcard">
-  <div class="sec-head"><h2>夜盤自動下單</h2><span class="count" id="nfstate"></span></div>
-  <div class="al-today" id="nfbody">載入中…</div>
+ <!-- ⑥ 開關：沉到最底（開難關易 —— 關在最上面隨手可及，開在最底下要捲下來）。
+      ⛔ 「打開」那幾顆鈕＋第二段紅底確認條**一道都不准少**。
+      ⭐⭐ 2026-09-23 定案（規格 §2.7）：
+        ・**日盤**＝多方聯軍，⛔ **畫面上不給選做法**（後端 auto_fire.METHODS 仍支援 A，
+          但前端固定送 `U`；⛔ 整頁不准出現第二種做法可以選）。
+        ・**夜盤**＝做法**單選**（清單從後端 night_fire.METHODS 來，⛔ 前端不寫死）。
+          ⛔ 單選是刻意的：兩條同時開＝加倉，結構上就不可能。
+        ・換做法一定是**先關再開**（開關檔不覆蓋，後端已經開著再 on 會回 409）。
+      ⛔ 這裡只放空容器：兩組的內容都由 alPaint 畫進來（⛔ 靜態 HTML 一顆 button 都不准有）。 -->
+ <div class="card" id="alswitchcard">
+  <div class="sec-head"><h2>開關</h2><span class="count">一年按不到幾次的東西放這裡</span></div>
+  <div id="alswitch"></div>
  </div>
 </div>
 
-<!-- ══════════ 【策略實驗室】：歷史逐筆回測（2026-09-14 取代【自動下單（模擬）】的畫面）══════════
-     版面、文案、防騙區（天數／拿掉最賺的 5 天／雜訊範圍／試了幾組／兩段都好才算數）
-     照 lab-ux 定案 demo（test/ux-demo/strategy-lab.html，Benson 玩過說可以）。
-     ⛔⛔ 這一頁**只顯示歷史回測結果**（CLAUDE.md「UI 不得出現預測…」那條照樣適用）：
-        文案一律歷史口吻，⛔ 不預測、不建議、不給勝率預估／期望值／訊號強度，
-        ⛔ 不做「最佳參數」自動搜尋 —— 按一次只算他自己填的那一組。
-     ⛔ 一顆會送單的東西都沒有：沒有 form／submit／[data-act]／[data-rdir]，
-        只打 GET /api/lab/meta 與 GET /api/lab/run（按「回測」才打）。
-     ⚠️ 原本那一頁的**後端**（autotest/ 的模擬紀錄、/api/auto/*）照樣在跑，只是不畫了。 -->
-<div id="tab-lab" hidden>
- <!-- ⚠️ 2026-09-16：原本掛在這裡最上面那張「模擬（不會下單）」已經搬到獨立的【模擬】分頁（#tab-sim）。 -->
- <div class="lb-grid">
-  <!-- ===== 左：條件 ===== -->
-  <div class="card l1 lb-cond" id="lbform">
-   <div class="lb-sh"><span>條件</span><span class="lb-to" id="lbto"></span></div>
-
-   <div class="lb-f">
-    <div class="lb-k">進場時間<em>08:46 ～ 13:00</em></div>
-    <div class="lb-timebox">
-     <button type="button" class="lb-step" data-lbdt="-60">−1分</button>
-     <input class="lb-inp" id="lbt" value="" maxlength="8" spellcheck="false">
-     <button type="button" class="lb-step" data-lbdt="60">+1分</button>
-    </div>
-    <div class="lb-hint" id="lbthint" hidden></div>
-   </div>
-
-   <div class="lb-f">
-    <div class="lb-k">方向</div>
-    <div class="lb-dirs" id="lbdir">
-     <!-- 「自動下單的方向」⛔ 不寫死：lbFire() 讀 /api/fire/state 的 method（A＝開盤快才做，方向跟這顆同一套）才標，讀不到就不標
-          ⚠️ 2026-09-15：B 不再是自動下單的做法 ⇒ 「跟 08:45 開盤比」那顆永遠不標 -->
-     <button type="button" data-lbv="bar5" class="on">跟這根 5 分 K 開盤比<small id="lbm-bar5">&nbsp;</small></button>
-     <button type="button" data-lbv="open">跟 08:45 開盤比<small id="lbm-open">&nbsp;</small></button>
-     <button type="button" data-lbv="long">一律做多<small>&nbsp;</small></button>
-     <button type="button" data-lbv="short">一律做空<small>&nbsp;</small></button>
-    </div>
-   </div>
-
-   <div class="lb-f lb-pair">
-    <div><div class="lb-subk">停利</div><div class="lb-unit"><input class="lb-inp" id="lbtp" type="number" min="1" max="2000" step="10" value=""><span>點</span></div></div>
-    <div><div class="lb-subk">停損</div><div class="lb-unit"><input class="lb-inp" id="lbsl" type="number" min="1" max="2000" step="10" value=""><span>點</span></div></div>
-   </div>
-
-   <div class="lb-grp">
-    <div class="lb-f lb-pair">
-     <div><div class="lb-subk">開盤跳空至少</div><div class="lb-unit"><input class="lb-inp" id="lbgap" type="number" min="0" max="2000" step="10" placeholder="不限"><span>點</span></div></div>
-     <div><div class="lb-subk">夜盤震幅至少</div><div class="lb-unit"><input class="lb-inp" id="lbnr" type="number" min="0" max="2000" step="10" placeholder="不限"><span>點</span></div></div>
-    </div>
-    <div class="lb-f">
-     <div class="lb-subk">跳過星期</div>
-     <div class="lb-wd" id="lbwd"><button type="button" data-lbv="1">一</button><button type="button" data-lbv="2">二</button><button type="button" data-lbv="3">三</button><button type="button" data-lbv="4">四</button><button type="button" data-lbv="5">五</button></div>
-    </div>
-    <div class="lb-tog" id="lbexpw" role="switch" aria-checked="false"><span>避開結算週<small>每月第三個週三那一週</small></span><i class="lb-sw"></i></div>
-   </div>
-
-   <div class="lb-grp" style="margin-top:12px">
-    <div class="lb-tog on" id="lbcost" role="switch" aria-checked="true"><span>算進成本<small>手續費 5 點＋買賣價進出</small></span><i class="lb-sw"></i></div>
-   </div>
-
-   <button type="button" class="lb-run" id="lbrun">回測</button>
-   <div class="lb-approx" id="lbapprox">逐筆成交回測：進場用當時的買賣價，停損用碰到的那一筆成交價</div>
-  </div>
-
-  <!-- ===== 右：結果 ===== -->
-  <div>
-   <div class="lb-rhead">
-    <div class="lb-sum lb-mono" id="lbsum"></div>
-    <div class="lb-tries" id="lbtries" hidden></div>
-   </div>
-   <div class="lb-results" id="lbresults">
-    <div class="lb-verdict half" id="lbverdict"><i class="dot"></i><span><b>兩段都好才算數</b>　按「回測」看這組條件在歷史上的結果</span></div>
-    <div class="lb-periods">
-     <div class="card lb-pc empty" id="lbpdesign"></div>
-     <div class="card lb-pc empty" id="lbpvalid"></div>
-    </div>
-    <div class="card lb-curve">
-     <div class="lb-ch"><span class="t">累積點數</span><span class="lb-leg"><span><i></i>這組條件</span><span><i class="dash"></i>拿掉最賺的 5 天</span></span></div>
-     <svg id="lbsvg" viewBox="0 0 1000 318"></svg>
-     <div class="lb-tip" id="lbtip"></div>
-    </div>
-   </div>
-  </div>
- </div>
-</div>
-
-<!-- ══ 【策略實驗室】到此 ══ （⛔ 這行是 autotest-backend.py ①／test_strategy_lab.py ⑥／
-     test_sim_lanes.py ⑦ 切「研究頁那一段 HTML」的結束標記，⛔ 改字要三個檔一起改）
-     ⚠️ 2026-09-16【回顧】(#tab-review) 整頁拿掉（Benson 已經不看）—— 連同「重播練習」。
-        後端 /api/review、/api/replay、/api/bars（不帶 full）與 day_bars(full=False) **刻意留著**：
-        day_bars() 是即時分頁也在用的同一支，replay_log/ 的舊紀錄也還在。 -->
+<!-- ══ 【自動下單】到此 ══ （⛔ 這行是 tools/probe/autotest-backend.py ①／
+     test_strategy_lab.py ⑥／test_sim_lanes.py ⑦ 切分頁那一段 HTML 的結束標記，
+     ⛔ 全檔只准出現一次、⛔ 改字要三個檔一起改。
+     ⚠️ 2026-09-23 v3：舊的邊界是【策略實驗室】後面那行「到此」註解，那一頁整個拿掉了 ⇒
+        三把尺一起改成量【健檢】(#tab-hc → #tab-fire) 與【自動下單】(#tab-fire → 這一行)，
+        ⛔ 不留一把量到空白區間還恆綠的尺。 -->
 
 <!-- 頁尾那兩行（「只顯示已經發生的客觀數字…」「練習下單與【自動下單（模擬）】都是模擬…」）
      2026-09-14 依 lab-ux 定案 A 拿掉：第一句是給工程的原則（正本在 CLAUDE.md），
@@ -6125,89 +6280,30 @@ function pfetch(url,body){
     });
 }
 
-/* ---------------- 真實下單 ----------------
-   ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。
-   記住狀態的話，某天心不在焉點到就是一個真實部位。 */
-var REAL_ON=false, HOLD_MS=650, holdTimer=null, holdingNow=false;
-/* ---------------- 右欄分頁：練習 ／ 真實 ----------------
-   老闆 2026-09-01 拍板：**不自動切分頁**（lab-ux 提案 §2 的 A 案）。
-   有真實部位時靠「頁籤上的浮動點數」＋「跨分頁警報橫幅」讓他知道，
-   不搶他的畫面 —— 被搶走畫面本身也是一種傷害。
-   ⚠️ RTAB 跟 REAL_ON 一樣只活在記憶體裡：重新整理一律回到練習分頁。 */
-var RTAB='sim';
-var LASTS=null;                    // 最後一次拿到的 /api/state，切分頁時直接拿它重畫
-function setRTab(t){
-  if(RTAB===t) return;
-  RTAB=t;
-  // 先用手上的狀態立刻換過去（不等 fetch 回來，也不會因為 /api/state 掛掉就卡住）
-  if(LASTS) paintRight(LASTS,true);
-  tick(true);
-}
-function realToggle(){ REAL_ON=!REAL_ON; lastReal=''; tick(true); }
-function holdStart(el,dir){
-  holdEnd(el);
-  holdingNow=true;
-  el.classList.add('holding');
-  // 只綁在按鈕本身：mouseleave 綁在按鈕上時，游標在按鈕內部的子元素之間移動
-  // **不會**觸發。之前是 document + capture，游標稍微一動、離開任何一個
-  // 子元素就被判定成放開，所以按到一半就自己取消。
-  el.addEventListener('mouseleave',onLeave);
-  window.addEventListener('mouseup',onUp,true);
-  holdTimer=setTimeout(function(){
-    // 保險：按鈕已經不在畫面上就不要送單。理論上有 holdingNow 擋著不會發生，
-    // 但這是真錢，寧可多一道。
-    if(!document.body.contains(el)){ holdEnd(el); return; }
-    holdEnd(el); realFire(dir);
-  },HOLD_MS);
-}
-function onLeave(e){ holdEnd(e.currentTarget); }
-// 認 data-rdir 不認 class：按鈕的樣式名稱會改，「它是不是下單鈕」不會改
-function onUp(){ document.querySelectorAll('[data-rdir].holding').forEach(holdEnd); }
-function holdEnd(el){
-  clearTimeout(holdTimer); holdTimer=null; holdingNow=false;
-  if(!el) return;
-  el.classList.remove('holding');
-  el.removeEventListener('mouseleave',onLeave);
-  window.removeEventListener('mouseup',onUp,true);
-}
-var firing=false;
-function realFire(dir){
-  holdingNow=false;
-  // 【擋連按】券商回報部位有 1~2 秒延遲，他以為沒送出去再按一次 ⇒ 兩張都出去、
-  // 變成 2 口，而且兩張停利單都掛了、面板只記得後面那張，先掛的**永遠撤不掉**
-  // （lab-qa 退件第 1 條）。平倉早就有 closing 擋著，進場一直沒有 —— 又是一邊做了一邊沒做。
-  if(firing) return;
-  firing=true; lastReal=''; tick(true);
-  pfetch('/api/real/enter',JSON.stringify({dir:dir}))
-   .then(r=>r.json()).then(r=>{
-      // warn＝進場成功但停利沒掛上，那也要跳出來讓他知道（不是失敗，但不能沉默）
-      if(!r.ok||r.warn) alert(r.msg||'送不出去');
-    })
-   .catch(()=>alert('送不出去，面板可能剛好在重啟'))
-   .then(()=>{ firing=false; lastReal=''; tick(true); });
-}
-var closing=false;
-function realClose(){
-  // 【連按要擋】平倉是反向下單：送兩張的話第二張會開出一個反向的新部位。
-  // 拿掉確認框之後連點的機率更高，這道就更不能少。
-  if(closing) return;
-  closing=true;
-  lastReal=''; tick(true);                 // 立刻把按鈕變成「平倉中…」
-  pfetch('/api/real/close')
-   .then(r=>r.json()).then(r=>{ if(!r.ok) alert(r.msg||'平不掉'); })
-   .catch(()=>alert('送不出去，請自己到大戶投平倉'))
-   .then(()=>{ closing=false; lastReal=''; tick(true); });
-}
 /* ══════════════════════════════════════════════════════════════════════
-   右欄：跨分頁警報 ＋ 頁籤 ＋ 練習／真實兩個分區
+   右欄：跨分頁警報 ＋ 兩張**唯讀**小卡（2026-09-23 v3）
    ----------------------------------------------------------------------
+   ⭐⭐ 2026-09-23 改版（Benson 拍板：規格 §1 方案 A）：【即時】**只留看盤**。
+      「練習下單」「真實下單」兩個操作區塊、練習交易紀錄、實際交易紀錄、
+      練習成績／真實成績整組從**畫面上**拿掉；右欄改成兩張唯讀小卡：
+        ① 今天的自動下單（做法／方向／浮動點數／進場・停損・停利・收盤平倉時刻）
+        ② 帳戶（權益總值／今日損益／還下不下得了一口）
+      ⛔⛔ **兩張卡一顆按鈕都沒有**（沒有 [data-act]／[data-rdir]／form／submit）。
+      ⛔⛔ **後端一行都沒拆**：/api/enter、/api/close、/api/real/enter、/api/real/close、
+         practice_trades/、real_trades/、data/practice.json 的同步照舊 ——
+         手機 App 在讀 practice.json、real_trades/ 是【自動下單】出場價的唯一真相來源。
+      ⚠️ 兩張卡的資料**都已經在 /api/state 裡**（position／real／equity）⇒
+         ⛔ 不新增端點、⛔ 不多一條輪詢。
    ⛔ 每一塊各自比對「上次自己設進去的字串」（快取在節點上，見 setEl）——
-      整塊 innerHTML 每 0.5 秒重建的話，使用者按下去的那一瞬間按鈕會連同
-      事件一起被換掉；長按送單的那顆更嚴重（時間到照樣送單，他以為取消了）。
+      整塊 innerHTML 每 0.5 秒重建的話，畫面會一直閃。
    ══════════════════════════════════════════════════════════════════════ */
 
-/* 沒有即時報價時，現價退回「最後一根 K 棒的收盤」，並在旁邊明寫「非即時」。
-   ⚠️ 這只是顯示用；沒有即時報價時兩區的下單鈕都是真的 disabled。 */
+/* 平倉原因的字。⛔ 【自動下單】那一頁的紀錄卡也在用（rwhy），
+   ⛔ 不可以跟著右欄那兩區一起被刪掉。 */
+const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的', eod:'收盤'};
+function rwhy(t){ return RWHY[t&&t.reason]||'其他'; }
+
+/* 沒有即時報價時，現價退回「最後一根 K 棒的收盤」。 */
 function livePx(s){
   const p=(s.chips||{}).price;
   if(p!=null) return p;
@@ -6216,501 +6312,92 @@ function livePx(s){
 }
 
 /* ---------------- 跨分頁警報 ----------------
-   停損活在這台電腦的 Python 迴圈裡。他站在練習分頁時，真錢那一邊照樣要看得到。
-   ⚠️ 秒數每秒在變，所以骨架與秒數拆成兩個節點：寫在一起的話「去看部位」
-      那顆鈕會跟著每秒被重建，滑鼠停在上面剛好碰到就按不動（跟 #cupd 同一個坑）。
+   停損活在這台電腦的 Python 迴圈裡。⛔ 他在哪一個分頁都要看得到。
+   ⚠️ 秒數每秒在變，所以骨架與秒數拆成兩個節點（寫在一起整塊會每秒重建）。
    ⚠️ 這一塊不掛任何 CSS 動畫（舊版 .ralarm.bad 的 1.1 秒呼吸永遠演不完半個循環，
-      因為每 0.5 秒就從頭開始 —— 看起來是在抖不是在呼吸）。 */
+      因為每 0.5 秒就從頭開始 —— 看起來是在抖不是在呼吸）。
+   ⚠️ 2026-09-23 v3：以前右上角那顆「去看部位 →」是切到右欄的【真實】分區，
+      那一區已經拿掉了 ⇒ 那顆鈕跟著拿掉（⛔ 不留一顆按下去什麼都不會發生的鈕）。
+      三種警報的文字**一個字都沒改**。 */
 function xalHTML(R){
   const P=R.position;
   if(!P) return '';
-  const go=(RTAB==='real')?'':'<button class="go" data-rgo="1">去看部位 &rarr;</button>';
   if(R.stale_sec!=null)
     return '<div class="n-x n-bad"><div class="g">&#9888; 報價已中斷 '+
       '<span class="num" id="xalsec"></span> 秒　停損現在沒人在看'+
       '<div class="s">停損活在這台電腦裡，收不到報價就判斷不了。'+
-      '請立刻到大戶投確認部位。</div></div>'+go+'</div>';
+      '請立刻到大戶投確認部位。</div></div></div>';
   /* ⛔ 「開箱」那一口照規則就沒有停利（P.no_tp）⇒ ⛔ 不可以跳「停利沒有掛上券商」的警報
      （那是出事了才該跳的），但**券商端一張單都沒有**這件事要照實講。 */
   if(P.no_tp)
     return '<div class="n-x n-att"><div class="g">&#9888; 開箱：券商端無掛單'+
       '<div class="s">這一口沒有停利單、永豐又沒有停損單 —— '+
-      '停損與收盤平倉<b>都靠面板</b>。面板關掉或電腦睡著就都不會發生。</div></div>'+go+'</div>';
+      '停損與收盤平倉<b>都靠面板</b>。面板關掉或電腦睡著就都不會發生。</div></div></div>';
   if(!P.has_target)
     return '<div class="n-x n-att"><div class="g">&#9888; 停利沒有掛上券商　賺的那一邊沒有保護'+
       '<div class="s">請到大戶投自己補掛一張 '+f(R.tp)+' 的平倉限價單，或直接平倉。</div></div>'+
-      go+'</div>';
+      '</div>';
   return '';
 }
 
-/* ---------------- 頁籤 ---------------- */
-function tabsHTML(R){
-  return '<div class="n-tabs">'+
-    '<button class="n-tab t-sim'+(RTAB==='sim'?' on':'')+'" data-rtab="sim">'+
-      '<div class="t">練習</div><div class="s">模擬・不會送單</div></button>'+
-    '<button class="n-tab t-real'+(RTAB==='real'?' on':'')+'" data-rtab="real">'+
-      '<div class="t">真實</div><div class="s">'+(R.live?'真的會送單':'演練模式')+'</div>'+
-      '<span class="badge" id="tabbadge" hidden></span></button></div>';
-}
-/* 浮動點數是獨立節點：整條頁籤不可以因為點數跳動就被重建。 */
-function paintBadge(R){
-  const e=document.getElementById('tabbadge');
-  if(!e) return;
-  const P=R.position;
-  let cls='', txt='';
-  if(P&&RTAB!=='real'){
-    if(R.stale_sec!=null||!P.has_target){ cls='alert'; txt='!'; }
-    else { cls=sgn(R.float_pts); txt=(R.float_pts==null?'—':pm(R.float_pts)); }
-  }
-  const k=cls+'|'+txt;
-  if(e.__k===k) return;
-  e.__k=k;
-  e.className='badge'+(cls?' '+cls:'');
-  e.textContent=txt;
-  e.hidden=!txt;
-}
-
-/* ══════════════ 練習分頁 ══════════════════════════════════════════
-   結構跟真實那一區對稱：下單區 → 今天的練習交易 → 練習成績。
-   下單維持**單擊**（練習不需要長按防呆），按鈕維持描邊＋淡底 ——
-   那是它跟真實區在形狀上的分界，不要改成實心。 */
-function simZone(){
-  /* 2026-09-14 減字（lab-ux 定案 A）：「模擬・不會送單」只留頁籤那一顆；
-     副標與藥丸併成右邊一行小字。⛔ 停利點數照樣從 RULE_TP 來，不寫死。 */
-  return '<div class="n-zone z-sim">'+
-    '<div class="n-hd"><div class="grow"><div class="t">練習下單</div></div>'+
-    '<span class="meta">微台 1 口・&plusmn;'+RULE_TP+' 點</span></div>'+
-    '<div class="n-sep"></div><div class="n-bd" id="simbody"></div>'+
-    '<div id="simtr"></div><div id="simstats"></div></div>';
-}
-function simBody(s){
-  const P=s.position;
-  if(P)
-    return '<div class="pnl"><div class="v '+sgn(P.float_pts)+'">'+pm(P.float_pts)+'</div>'+
-      '<div class="l">'+(P.dir==='long'?'做多':'做空')+'　進場 '+f(P.entry)+'　'+P.entry_time+'</div></div>'+
-      '<div class="plimit"><span>停利 '+f(P.tp)+'</span><span>停損 '+f(P.sl)+'</span></div>'+
-      '<div class="btns"><button class="btn flat2" data-act="close">手動平倉</button>'+
-      '<button class="btn ghost" data-act="undo">取消</button></div>'+
-      noteBox('t|open',P.note,'data-nopen="1"','＋ 記下現在為什麼這樣做',
-              '現在為什麼想這樣做？（平倉後會留在這筆紀錄裡）');
-  // 【紀錄正確性】沒有即時報價就不能開單 —— 拿舊價／收盤價記進練習成績，那筆成績是假的。
-  // 這不是 UX 取捨，所以按鈕真的停用（後端 /api/enter 也擋一次）。
-  const q=quoteState(s), off=q!=='live', dis=off?' disabled':'';
-  let h='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(livePx(s))+
-    (off?'<span class="qty" style="margin-left:8px">非即時</span>':'')+'</div></div></div>'+
-    '<div class="btns" style="margin-top:12px">'+
-    '<button class="btn long" data-act="long"'+dis+'>&#9650; 做多</button>'+
-    '<button class="btn short" data-act="short"'+dis+'>&#9660; 做空</button></div>';
-  if(off) h+='<div class="n-why">'+(q==='closed'
-    ? '<b>休市中，沒有即時報價</b><br>練習下單要用當下的真實成交價才有意義，'+
-      '不然記進成績的是假成績。開盤後才能按。'
-    : '<b>目前收不到報價</b><br>無法確定進場價 —— 恢復報價後才能按。')+'</div>';
-  return h;
-}
-/* 今天的練習交易：跟真實那一區同一套固定欄表格。
-   ⚠️ 心得（note）要留著 —— 那是跟手機 App 同一個欄位，事後補寫的。
-      所以每一筆包成 .n-item：上面一列固定欄、下面掛心得。 */
-function simTrades(s){
-  const T=s.today_trades||[];
-  if(!T.length)
-    return '<div class="n-trh">今天的練習交易　<span class="c">還沒有</span></div>';
-  let sum=0; T.forEach(t=>sum+=t._net);
-  let h='<div class="n-trh">今天的練習交易　<span class="c">'+T.length+' 筆</span>'+
-    '<span class="net '+sgn(sum)+'">'+pm(Math.round(sum*10)/10)+' 點</span></div>'+
-    '<div class="n-trl">';
-  T.slice().reverse().forEach(t=>{ h+=simRow(t); });      // 新的在上面
-  return h+'</div>';
-}
-function simRow(t){
-  const why={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'其他';
-  return '<div class="n-item"><div class="n-row">'+
-    '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
-    '<span class="tm">'+esc(String(t.time||'—').slice(0,5))+'&rarr;'+
-      esc(String(t._exit_time||'—').slice(0,5))+'</span>'+
-    '<span class="px">'+f(t.entry)+'&rarr;'+f(t.exit)+'</span>'+
-    '<span class="wy">'+why+'</span>'+
-    '<span class="pt '+sgn(t._net)+'">'+pm(t._net)+'</span></div>'+
-    noteBox(nkey('t',t),t.note,nattr(t),'＋ 寫下今天的心得',
-            '今天的盤感、進出場理由、紀律有沒有守…')+'</div>';
-}
-
-/* ══════════════ 真實分頁 ══════════════════════════════════════════
-   ⚠️ REAL_ON 刻意不記進 localStorage：每次開面板都要重新打開。 */
-function realZone(R){
-  /* 2026-09-14 減字（lab-ux 定案 A）：「真的會送單／演練模式」頁籤已經在講，這裡不再掛第二顆藥丸；
-     只留「關閉中・按右邊打開」那一顆（那是開關狀態的提示，頁籤上沒有）。 */
-  const chip = !REAL_ON ? '<span class="n-chip c-off">關閉中・按右邊打開</span>' : '';
-  return '<div class="n-zone z-real">'+
-    '<div class="n-hd"><div class="grow"><div class="t">真實下單</div></div>'+
-    '<span class="meta">微台 1 口・&plusmn;'+RULE_TP+' 點</span>'+
-    chip+'<div class="sw'+(REAL_ON?' on':'')+'" data-rt="1"><i></i></div></div>'+
-    // ⛔ 【有部位就一定要看得到，開關關著也一樣】
-    //    `REAL_ON` 只是「要不要露出下單按鈕」的保險蓋，不是「有沒有部位」。
-    //    舊寫法在開關關著時整個 body 都不畫 ⇒ **站在寫著「真實」的那一頁，
-    //    反而看不到自己的真實部位、也沒有平倉鈕**，唯一的提示（頁籤上的浮動點數）
-    //    又剛好只在「不在真實頁」時才掛 ⇒ 站在真實頁＝知道得最少（lab-qa 退件第 2 條）。
-    //    而且看門狗重啟是常態、`REAL_ON` 又刻意不記憶 ⇒ **重啟後一定是關的**，
-    //    偏偏 reconcile 會把券商那口單撿回來 —— 這個組合遲早會遇到。
-    ((REAL_ON || R.position) ?
-      '<div class="n-sep"></div><div class="n-bd" id="realbody"></div>' : '')+
-    // ⛔ 【成績單不受保險蓋管】Benson 2026-09-02：「不用打開真實下單也可以看得到」。
-    //    `REAL_ON` 管的是「會不會送單」，看自己過去的成績跟送不送單無關 ——
-    //    而且開關刻意不記憶（重啟後一定是關的），綁在一起等於每天早上都看不到昨天的成績。
-    '<div id="realstats"></div>'+
-    '<div class="n-foot" id="realfoot"></div></div>';
-}
-function realBody(s){
+/* ---------------- ① 今天的部位（唯讀小卡）----------------
+   ⛔⛔ **唯讀**：⛔ 沒有任何按鈕、⛔ 不重複畫規則說明（規則的正本在【自動下單】那一頁）。
+   ⛔ 每個數字都從 /api/state 的 `real` 來（跟停損監控同一份記憶體狀態）——
+      ⛔ 前端不准自己拿現價減進場價去算浮動點數（後端 `float_pts` 才是正本），
+      ⛔ 也不准自己算停利停損價（後端 `tp`／`sl` 是照這一口自己的點數算的）。
+   ⚠️ 「這一口是不是自動下單開的」用的是**既有的那把尺**：`sl_points` 只有
+      `auto_fire`／`night_fire` 送的那一口才會帶（手動真單不帶）——
+      `pos_sl_points()` 判「用哪一組停損點數」看的就是它。⛔ 不另外發明一個旗子。
+      判不出來就照實寫「手上有一口」，⛔ 不猜是誰開的。 */
+function lvPosHTML(s){
   const R=s.real||{}, P=R.position;
-  if(R.error) return '<div class="n-why"><b>真實下單模組出錯，先不要用</b><br>'+esc(R.error)+'</div>';
-  let h='';
-  if(P){
-    const fl=R.float_pts;
-    // 浮動點數 52px：全頁最大的損益數字不可以是模擬的（舊版真單 34px、練習 44px）
-    h+='<div class="n-pos"><div><div class="big '+sgn(fl)+'">'+(fl==null?'—':pm(fl))+
-       '<span class="u">點</span></div><div class="cash">'+
-       (fl==null?'—':(fl>0?'+':fl<0?'-':'')+'NT$'+Math.abs(Math.round(fl*10)).toLocaleString())+
-       '　浮動</div></div><div>'+
-       '<span class="n-dir '+(P.dir==='long'?'l':P.dir==='short'?'s':'u')+'">'+
-       (P.dir==='long'?'&#9650; 做多':P.dir==='short'?'&#9660; 做空':'? 方向不明')+
-       ' '+(P.qty==null?1:P.qty)+' 口</span>'+
-       '<div class="n-meta">'+(P.entry_time?esc(P.entry_time)+' 進場 ':'進場 ')+f(P.entry)+
-       '</div></div></div>';
-    // 【顏色分工】紅綠只描述錢；系統狀態一律中性灰階＋填滿程度。
-    // ⚠️「已掛在券商」不可以寫死，一定要讀 has_target（QC 退件第 4 條）。
-    /* ⭐⭐ 2026-09-16「開箱」那一口**規則上就不設停利**（P.no_tp）——
-       跟「停利單沒掛上去」（noTp）是**完全不同的兩件事**，⛔ 不可以共用同一句：
-       前者是照規則沒有、後者是出事了要他立刻補掛。 */
-    const planNoTp=!!P.no_tp, noTp=!planNoTp&&!P.has_target, blind=R.stale_sec!=null;
-    h+='<div class="n-guard">'+
-       '<div class="n-g'+((noTp||planNoTp)?' n-att':'')+'"><span class="ic '+
-       ((noTp||planNoTp)?'bad':'solid')+'"></span>'+
-       '<span class="lb">停利 <b>'+(planNoTp?'不設':f(R.tp))+'</b></span><span class="st">'+
-       (planNoTp?'<b>這一口沒有停利</b><br>照「開箱」的規則跑到停損或收盤平倉'
-        :noTp?'<b>沒掛上</b><br>賺的那一邊沒有保護，請自己補掛或平倉'
-            :'<b>已掛在券商</b><br>電腦關機也有效')+'</span></div>'+
-       '<div class="n-g'+(blind?' n-att':'')+'"><span class="ic '+(blind?'bad':'hollow')+'"></span>'+
-       '<span class="lb">停損 <b>'+f(R.sl)+'</b></span><span class="st">'+
-       (blind?'<b>監控不到</b><br>收不到報價'
-             :'<b>由這台電腦監控</b><br>券商端做不到停損')+'</span></div>'+
-       '<div class="n-gfoot">停損靠這台電腦：面板關掉、電腦睡著、網路斷掉都會失效 —— '+
-       '這是 2026-08-28 拍板承擔的風險。</div></div>'+
-       /* ⛔ 這一句是 PM 2026-09-16 指定要寫出來的事實：開箱那一口券商端**一張單都沒有**。 */
-       (planNoTp?'<div class="n-why"><b>開箱：券商端無掛單</b> —— 這一口沒有停利單，'+
-         '永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。面板關掉／電腦睡著就都不會發生。</div>':'');
-    // 【平倉鈕中性底】做空的平倉送出去的是「買進」，09-01 出過送錯邊、變成再加一口空單的事故。
-    // 【不跳確認視窗】要平倉的時候通常是急的，多一個對話框是在最糟的時機加摩擦。
-    h+='<button class="n-close"'+(closing?' disabled':'')+' data-rclose="1">'+
-       (closing?'平倉中…':'立刻平倉')+'<span class="sub">'+
-       (closing?'等券商回報部位真的消失'
-         :(P.dir==='long'?'會送出 賣出 &times;1（賣掉多單）'
-          :P.dir==='short'?'會送出 買進 &times;1（回補空單）'
-          :'方向不明 —— 送出前會再跟券商對帳'))+'</span></button>';
-    if(P.recovered) h+='<div class="n-why">這筆是面板重啟後從券商對帳撿回來的，'+
-      '停利單的下落請自己到大戶投確認。</div>';
-    /* ⭐ 2026-09-15：這一區的標頭寫的是手動真單的 ±RULE_TP，但【自動下單】那一口是 ±0.5%
-       （部位自己帶 sl_points）⇒ 兩套數字同時在畫面上，要講出「這一口是哪一套」。
-       停損價 R.sl 已經是後端用這一口自己的點數算的（pos_sl_points）。 */
-    if(P.sl_points!=null&&P.no_tp)
-      /* ⭐ 「開箱」那一口：停損＝箱子另一端（不是按比例算的），而且沒有停利。 */
-      h+='<div class="n-why">這一口是<b>【自動下單】的開箱</b>開的：<b>沒有停利</b>、'+
-        '停損 <b>'+esc(String(Math.round(P.sl_points)))+' 點</b>（＝箱子的另一端），'+
-        '不是上面寫的 &plusmn;'+RULE_TP+' 點。</div>';
-    else if(P.sl_points!=null)
-      h+='<div class="n-why">這一口是<b>【自動下單】</b>開的：停利停損各 <b>'+esc(String(Math.round(P.sl_points)))+
-        ' 點</b>（自動下單的規則：照 '+esc(RULE_SIGNAL_AT)+' 那一刻的價格按比例算），'+
-        '不是上面寫的 &plusmn;'+RULE_TP+' 點。</div>';
-    if(P.sl_warn)
-      h+='<div class="n-why" style="color:var(--gold)">⚠️ '+esc(P.sl_warn)+'（停損 '+f(R.sl)+'）</div>';
-  } else {
-    const q=quoteState(s), px=livePx(s), ok=R.can_enter&&!firing;
-    h+='<div class="n-px"><div><div class="k">現價</div><div class="n">'+f(px)+
-       (q!=='live'?'<span class="qty" style="margin-left:8px">非即時</span>':'')+
-       '</div></div></div>'+
-       '<div class="n-fire">'+fireBtn('long',px,!ok)+fireBtn('short',px,!ok)+'</div>';
-    h+= firing
-      ? '<div class="n-firing">送出中…<div class="s">等券商回報成交（最多 5 秒）。'+
-        '這段時間再按也不會變成第二張單。</div><div class="bar"><i></i></div></div>'
-      : (R.can_enter?'<div class="n-holdhint">按住 0.65 秒送出　·　中途放開就取消</div>':'');
-    // 擋單原因：會影響他決定的字，最低只能用 --dim（.n-why），不准再用 --faint
-    if(!R.can_enter) h+='<div class="n-why">'+esc(R.why||'現在不能下單')+'</div>';
-    const used=R.entries_today||0, max=R.max_entries||3;
-    let pips='';
-    for(let i=0;i<max;i++) pips+='<i class="'+(i<used?(used>=max?'full':'used'):'')+'"></i>';
-    h+='<div class="n-quota"><div class="pips">'+pips+'</div><span>今天進場 '+used+' / '+max+
-       '</span></div>';
-  }
-  return h;
-}
-/* 真實下單鈕：實心（練習是描邊＋淡底）——形狀在餘光裡最強，這是第四個訊號。
-   【停利停損還沒選方向就不顯示】兩個方向的數字互相干擾（Benson 2026-08-28 要求）。
-   .sub 平常 opacity:0，按住時才浮出來，同時把標籤換成「放開取消」。 */
-function fireBtn(dir,px,dis){
-  const long=dir==='long';
-  const tp=px==null?null:(long?px+RULE_TP:px-RULE_TP), sl=px==null?null:(long?px-RULE_SL:px+RULE_SL);
-  return '<button class="n-fb '+(long?'b':'s')+'"'+(dis?' disabled':'')+
-    ' data-rdir="'+dir+'"><span class="txt">'+
-    '<span class="lb">'+(long?'買進 做多':'賣出 做空')+'</span>'+
-    '<span class="lb2">放開取消</span>'+
-    '<span class="sub">'+(tp==null?'&nbsp;':'停利 '+f(tp)+'　停損 '+f(sl))+'</span>'+
-    '</span><span class="bar"></span></button>';
-}
-/* 版本指紋降到整區最底：純除錯、不影響決定，所以是唯一還准用 --faint 的地方。
-   ⚠️ stale＝硬碟上的程式比跑著的這個新 ⇒ 他以為重開過了，其實沒有。一定要講出來。 */
-function realFoot(R){
-  const c=R.code;
-  if(!c) return '';
-  return (c.stale
-    ? '<span class="stale">面板跑的不是最新的程式　關視窗再開沒有用（會接回同一個舊的），'+
-      '要跑 restart-panel.py 才會真的換掉</span>' : '')+
-    '<span>程式 '+esc(c.broker)+'　啟動 '+esc(c.started)+'</span>';
+  const head='<div class="sec-head"><h2>今天的部位</h2><span class="count">唯讀</span></div>';
+  if(R.error) return head+'<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
+    '<div class="none">'+esc(R.error)+'</div></div>';
+  if(!P)
+    return head+'<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
+      '<div class="none">現在沒有部位。<br>自動下單與你自己下的單都會出現在這裡。</div></div>';
+  const dir=P.dir==='long'?'▲ 做多':(P.dir==='short'?'▼ 做空':'方向不明');
+  const fp=R.float_pts;
+  const who=(P.sl_points!=null)?'自動下單那一口':'手上有一口';
+  return head+
+    '<div class="al-pos live"><div class="hd"><span>'+who+'</span>'+
+      '<span style="color:var(--gold)">'+dir+' '+esc(String(P.qty==null?1:P.qty))+' 口</span></div>'+
+    '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+
+      ' <small style="font-size:13px;font-weight:600;color:var(--faint)">點</small></div>'+
+    '<div class="r"><span>進場</span><b>'+f(P.entry)+
+      (P.entry_time?'（'+esc(String(P.entry_time).slice(0,8))+'）':'')+'</b></div>'+
+    '<div class="r"><span>停損</span><b>'+(R.sl==null?'—':f(R.sl))+'</b></div>'+
+    '<div class="r"><span>停利</span><b>'+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'+
+    (P.no_tp?'<div class="r"><span>券商端</span><b style="color:var(--gold)">無掛單</b></div>':'')+
+    '</div>';
 }
 
-// 今天的真實交易成績單。
-// 【為什麼不放進「練習成績」那一區】那一區會同步到 data/practice.json、推上公開的 repo、
-// 再拉到手機。真實交易不上傳是 Benson 的決定，混進去就等於上傳了。
-// 所以真單只活在這張卡裡，也只活在這台電腦上。
-/* 真實成績：勝率、勝敗、淨點數 —— 版面與「練習成績」一致，他一眼就認得。
-   ⚠️ 勝敗的定義要跟練習那邊同一套（點數 > 0 才算勝，0 算敗），
-      兩邊用不同定義的話，同一批交易會算出兩個勝率。
-
-   【A 版：完全照練習抄】（Benson 2026-09-03 拍板）
-   順序也跟練習一樣：**今天的清單在上、成績區在下**（舊版是反的）。
-   過去的紀錄改由成績區底下那份 `.list` 卡片清單承擔，`realPast()` / `.t-past`
-   / `.n-dayh` 因此整段移除 —— 同一批資料不要用兩種長相各列一次。
-   ⛔ **刻意不放「下載紀錄」那顆鈕**：練習那顆寫著「可匯入 App」，而 App 會同步到
-      公開 repo。真實區放一顆長一樣的鈕，他哪天順手匯進去就把真實紀錄推上公開網路，
-      而且沒有任何一道防線會擋。這是 Benson 拍板的，不要「順手補上」。 */
-function realStats(R){
-  const all=(R&&R.trades_all)||[];
-  const done=all.filter(t=>t.points!=null);
-  // ⛔ 今天的清單一定要掛在 .n-bd 外面（見 realTrades 上面那段註解）——
-  //    包進去會多吃左右 38px，全部從 .n-row 唯一的 1fr（價格欄）身上扣，成交價被截。
-  let h=realTrades((R&&R.trades)||[])+
-    '<div class="n-sep"></div><div class="n-bd n-bd-t">'+
-    '<div class="n-sh">真實成績<span class="c">共 '+all.length+' 筆</span></div>'+
-    // ⛔ 【分段那一段要能單獨重畫】按 .seg 的時候底下的 .list 裡可能正有人在打心得，
-    //    整塊 #realstats 重畫會把 textarea 換掉 ⇒ 重繪守衛只好整塊擋下來 ⇒
-    //    **按了畫面完全不動、關掉編輯器才突然跳**（比不動更像壞掉）。
-    //    把「共用窗口的那幾塊」包成獨立節點，按鈕就能只換這一塊、不碰 .list。
-    '<div id="realscore">'+realScore(all)+'</div>';
-  // 卡片清單：跟練習成績底下那份同一種 .trade 卡（含事後補心得）。
-  // ⛔ 【清單固定是「最近 12 筆」，不跟著分段窗口縮】練習那邊就是這樣
-  //    （statsBox 畫的是 ST.recent，跟 WIN 無關）——分段只換上面的勝率／合計。
-  //    跟著縮的話，預設「近 7 筆」剛好只涵蓋今天，**昨天的紀錄又會從畫面上消失**，
-  //    等於把他 2026-09-03 早上問的那個問題原封不動放回來（只是這次藏在按鈕後面）。
-  // ⚠️ .list 是有 max-height 的 flex 直欄，靠既有的 `.list>*{flex:none}` 才是捲動
-  //    而不是把每張卡壓扁 —— 筆數少的時候看不出來，測試一定要用會捲的筆數。
-  const cards=realSorted(all).slice(0,12);
-  if(cards.length){
-    h+='<div class="list">';
-    cards.forEach(t=>{ h+=realCard(t); });
-    h+='</div>';
-  }
-  // ⛔ 這裡**不放**「下載紀錄」——理由見函式開頭那段。
-  return h+'</div>';
+/* ---------------- ② 帳戶（唯讀小卡）----------------
+   ⛔⛔ **唯讀**：⛔ 沒有任何按鈕。
+   ⛔ 判斷句（夠不夠下一口）**整句都是後端算的**（live_panel.equity_view 的 `enough.msg`）——
+      ⛔ 前端不准自己拿可動用去比保證金。
+   ⛔ 欄位跟【帳戶】那一頁**同一組**（acctHTML）：⛔ 不在這裡另外算一份數字。
+   ⛔ 金額一律標「券商端」——它含手續費、稅與其他部位，⛔ 不是策略績效。 */
+function lvAcctHTML(s){
+  const E=s&&s.equity;
+  const head='<div class="sec-head"><h2>帳戶（券商端）</h2><span class="count">'+
+    esc(E&&E.at?String(E.at).slice(0,5)+' 更新':'唯讀')+'</span></div>';
+  if(!E) return '';                       /* 後端還沒有這一份 ⇒ 整張卡不畫（⛔ 不寫假的） */
+  if(!E.ok)
+    return head+'<div class="al-pos" style="border:0;background:transparent;padding:0">'+
+      '<div class="none">'+esc(E.err||'問不到帳戶餘額')+'</div></div>';
+  const en=E.enough||{};
+  return head+'<div class="al-pos" style="border:0;background:transparent;padding:0">'+
+    '<div class="r" style="margin-top:0"><span>權益總值</span>'+
+      '<b style="font-size:17px;color:var(--text)">'+acctMoney(E.equity)+'</b></div>'+
+    '<div class="r"><span>今日損益</span><b class="'+sgn(E.day_pl)+'" style="font-size:14px">'+
+      acctPM(E.day_pl)+'</b></div>'+
+    '<div class="r"><span>還下得了一口</span><b style="color:var(--text)">'+
+      (en.ok===true?'可以':(en.ok===false?'不夠':'判不出來'))+'</b></div>'+
+    '<div class="n">'+esc(en.msg||'')+'</div></div>';
 }
 
-/* 只跟「選中哪個窗口」有關的那幾塊：.seg／.score／.wlbar／.wlfoot／.n-why。
-   ⛔ 【為什麼要獨立成一個函式＋一個節點】按分段按鈕時，底下的 .list 裡可能正有人
-      在打心得。整塊 #realstats 重畫會把那個 textarea 換掉（中文輸入法會掉字），
-      所以重繪守衛會把整塊擋下來 ⇒ **按了畫面完全不動，關掉編輯器才突然跳**。
-      「按了不動」正是我們當初要避免的那個毛病，延遲跳動又更像壞掉。
-      切開之後，[data-rwin] 的處理只換 #realscore，.list 一個節點都不碰 ——
-      正在打的字活著，數字也立刻變。
-   ⚠️ 心得**不在**這一段裡（心得在 .list 的卡片與上面那份 .n-row 裡），
-      所以這一塊可以隨時重畫。要往這裡加任何帶輸入框的東西之前先想一下這件事。
-   守衛：hold-to-fire.mjs ⑧b7。 */
-function realScore(all){
-  const wins2=realWindows(all);
-  const cur=wins2.find(x=>x.k===RWIN)||wins2[wins2.length-1];
-  let h='';
-  // ⚠️ 算完**去重**，只剩一個窗口就整條不畫 —— 真實筆數少，那四顆常常對到同一批資料，
-  //    按了畫面完全不動比沒有這排按鈕更糟。
-  if(wins2.length>1){
-    h+='<div class="seg">';
-    wins2.forEach(x=>{ h+='<button class="'+(x===cur?'on':'')+'" data-rwin="'+x.k+'">'+
-      x.label+'</button>'; });
-    h+='</div>';
-  }
-  // 勝率／勝敗條算的是**選中那個窗口**（跟練習的 statsBox 同一套），
-  // 而上面「共 N 筆」講的是全部 —— 兩個數字的口徑不一樣，所以窗口的筆數印在勝敗條下面。
-  const win=cur.rows, wdone=win.filter(t=>t.points!=null);
-  if(!wdone.length)
-    return h+'<div class="n-empty">還沒有算得出點數的真實交易。'+
-      '進場、平倉之後這裡就會有勝率。</div>';
-  const wins=wdone.filter(t=>t.points>0).length, losses=wdone.length-wins;
-  const net=Math.round(wdone.reduce((a,t)=>a+t.points,0)*10)/10;
-  const cls=net>0?'up':net<0?'down':'flat';
-  const ntd=Math.round(net*10);          // 微台 1 點 = NT$10
-  h+='<div class="score"><div class="rate"><span class="n">'+
-     Math.round(wins/wdone.length*100)+'</span><span class="p">%</span>'+
-     '<div class="lab">勝率</div></div>'+
-     '<div class="sum"><div><span class="n '+cls+'">'+pm(net)+
-     '</span><span class="u">點</span></div>'+
-     '<div class="cash">'+(ntd<0?'-':'+')+'NT$'+Math.abs(ntd).toLocaleString()+'</div>'+
-     '</div></div>'+
-     '<div class="wlbar"><i class="w" style="flex:'+Math.max(wins,0.001)+'"></i>'+
-     '<i class="l" style="flex:'+Math.max(losses,0.001)+'"></i></div>'+
-     '<div class="wlfoot"><span class="w"><b>'+wins+'</b> 勝</span>'+
-     '<span>'+wdone.length+' 筆</span><span class="l"><b>'+losses+'</b> 敗</span></div>';
-  // 算不出點數的那幾筆不能默默不算進勝率 —— 要講出來（講的是這個窗口裡的）
-  if(win.length>wdone.length)
-    h+='<div class="n-why">另有 '+(win.length-wdone.length)+
-       ' 筆問不到成交價，沒有算進勝率</div>';
-  return h;
-}
-
-/* 分段窗口（近 7／近 10／近 30／全部）。
-   ⛔ **算完要去重**：真實筆數少，四個窗口常常對到同一批資料 ——
-      按了畫面完全不動比沒有這排按鈕更糟（練習那邊 11 筆時「近10」與「近30」就一模一樣）。
-      去重之後只剩一個窗口的話，realStats() 整條 .seg 都不畫。
-   ⚠️ 排序自己來（date + entry_time，新到舊），不要依賴 trades_all 的既有順序 ——
-      那份是「今天那段反過來、再一個檔案一個檔案接上去」，剛好是新到舊但那是實作細節。 */
-/* 平倉理由的中文標籤。**今天那份 .n-row 與成績區的卡片共用這一份**，
-   不要各自帶一份 map —— 同一筆交易在同一個畫面上出現兩次，字不一樣看起來像兩件事。
-   ⛔ 認不得的一律寫「其他」：內部代號（sl_test 之類）不該印到他眼前。
-   ⛔ **每個標籤最多 4 個字，這是量出來的版面硬限制，不是文案偏好。**
-      這個數字是怎麼來的（2026-09-03 實測，字級/字距沒改就一直成立）：
-        · 卡片那一行是 `.tr-date`(42px 固定) ＋ `.dir` ＋ `.tr-px`(flex:1) ＋ `.tr-res`(52px 固定)，
-          扣掉 gap 之後 **`.tr-px` 只剩 157.6px**，而它裡面要塞「價格→價格 ＋ 標籤」。
-        · 量到的需求寬度：2 字標籤 **120.5px**、4 字 **140.5px**（都放得下，餘裕 17.1px）、
-          **6 字 161px ⇒ 超出 157.6px**。
-        · `.tr-px` 沒有 nowrap ⇒ 超出時是**折行**（不是截斷、不會報錯），
-          **那張卡從 65px 變成 80px**，跟練習的卡片就不一樣高了 ——
-          而「形式長的一樣」是老闆對這一版的主要要求。
-      所以 closed_elsewhere 從「不是面板平的」（6 字）縮成「別處平的」（4 字）。
-      ⚠️ 縮寫要保留原本的語氣（這支面板從頭到尾講人話），不要寫成公文腔。
-      ⚠️ 不可以改用 text-overflow:ellipsis 把它藏起來 —— 那是把問題藏起來不是修好，
-         而且筆數少的時候看起來完全正常（09-03 成交價那個 bug 就是這樣活了兩天）。
-      守衛：`hold-to-fire.mjs` ⑧b6（每一種理由各造一張卡，斷言全部不折行）。 */
-/* ⚠️ 2026-09-10 多一個 `eod`（收盤自動平倉，`broker.close("eod")` 寫進去的理由）——
-   【自動下單】那一頁的紀錄卡**共用這一份**，⛔ 不准另外寫第二份 map
-   （兩份就一定有一份會漏掉新的理由，而畫面上只會安靜地寫「其他」）。
-   ⛔ 「收盤」也照樣守 4 字上限。 */
-const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的', eod:'收盤'};
-function rwhy(t){ return RWHY[t&&t.reason]||'其他'; }
-
-/* 新到舊排序。⚠️ 明著照 date + entry_time 排，不要依賴 trades_all 的既有順序 ——
-   那份是「今天那段反過來、再一個檔案一個檔案接上去」，它現在剛好是新到舊，
-   但那是後端的實作細節不是保證。 */
-function realSorted(all){
-  return all.slice().sort((a,b)=>
-    ((b.date||'')+' '+(b.entry_time||'')).localeCompare((a.date||'')+' '+(a.entry_time||'')));
-}
-function realWindows(all){
-  const sorted=realSorted(all);
-  const out=[], seen={};
-  [[7,'近 7 筆'],[10,'近 10 筆'],[30,'近 30 筆'],[0,'全部']].forEach(function(p){
-    const rows=p[0]?sorted.slice(0,p[0]):sorted;
-    if(seen[rows.length]) return;          // 筆數一樣＝同一批資料，不重複給一顆按鈕
-    seen[rows.length]=1;
-    // 這個窗口其實已經涵蓋全部時，標籤就寫「全部」不要寫「近 30 筆」——
-    // 練習那邊的窗口是後端給的（近 7／近 10／全部），從來不會出現「近 30 筆」
-    // 卻剛好等於全部的情況。寫「近 30 筆」會讓人以為還有更早的沒被算進去。
-    const all=rows.length===sorted.length;
-    out.push({k:all?0:p[0], label:all?'全部':p[1], rows:rows});
-  });
-  return out;
-}
-
-/* 一筆真實交易的卡片（成績區底下那份清單）。版面完全照練習的 row(t,'s')。
-   左緣 2px 色條照練習掛 .win / .loss（2026-09-03 Benson 拍板）——
-   兩區並排時，練習是一排紅綠條紋、真實卻是一片灰，那是兩邊看起來最不一樣的地方。
-   勝敗定義跟練習同一套：**點數 > 0 才算勝，0 算敗**（兩邊用不同定義，同一批交易會算出兩個勝率）。
-   ⛔ 但**算不出點數的那一筆維持 --ghost 灰、不掛 .win/.loss** —— 那筆問不到成交價，
-      猜輸贏就是編數字。留白看得出來是缺，猜出來的看不出來。
-   ⛔ `t.exit` 在真實那邊**可能是 null**（問不到成交價時留白）。這裡只印字串所以安全，
-      但凡是把真實資料餵進練習的算式（例如 Math.min(lo, t.entry, t.exit)）都要先問一次
-      「這個欄位在真實那邊會不會是 null」—— null 會被當成 0，把價格軸整個拉到 0。
-   ⚠️ 練習的 row() 對 App 匯入的那幾筆是唯讀的（_source==='app'），
-      真實這邊**每一筆都要可編輯**，那段唯讀邏輯不要抄過來。 */
-function realCard(t){
-  const why=rwhy(t), na=t.points==null;
-  // ⚠️ exit_time 要一起帶：entry 是 null 時 nkey() 拿它當識別，少帶的話
-  //    兩張同日同分鐘的卡會生出同一個 key（見 nkey 的註解）。nattr() 不用它。
-  const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry,
-            exit_time:t.exit_time};
-  // 算得出點數才有輸贏色；算不出的留空 ⇒ .trade::before 保持 --ghost 灰
-  return '<div class="trade'+(na?'':(t.points>0?' win':' loss'))+'"><div class="tr-top">'+
-    '<span class="tr-date">'+esc(t.date?t.date.slice(5):'')+'</span>'+
-    '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
-    '<span class="tr-px">'+f(t.entry)+'<span class="arrow">&rarr;</span>'+
-      (t.exit==null?'—':f(t.exit))+' <span class="tag">'+why+'</span></span>'+
-    '<span class="tr-res '+(na?'na':(t.points>0?'r-win':'r-loss'))+'">'+
-      (na?'—':pm(t.points))+'</span></div>'+
-    // ⛔ 【分區字母是大寫 S，不是 R】同一筆今天的交易會**同時**出現在上面那份
-    //    「今天的真實交易」（.n-row，用 R）與這份卡片清單裡。兩邊用同一個 nkey 的話，
-    //    點一下會展開**兩個** id 都叫 tnote 的 textarea，
-    //    `document.getElementById('tnote')` 只拿得到第一個 ⇒ 在第二個打的字存不進去。
-    //    練習那邊本來就是這樣分的（今天的清單用 't'、成績區的卡片用 's'），
-    //    真實這邊照抄成 R / S。小寫 r／s 已經被回顧與練習佔走，不可以共用。
-    // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（走 /api/note 的 kind:"real"）。
-    noteBox(nkey('S',nt), t.note, nattr(nt)+' data-nkind="real"',
-            '＋ 補寫心得', '現在回頭看，這一筆做對了什麼、做錯了什麼？')+'</div>';
-}
-
-function realTrades(list){
-  if(!list||!list.length)
-    return '<div class="n-trh">今天的真實交易</div>'+
-      '<div class="n-empty">今天還沒有真實交易。進場之後這裡會一筆一筆長出來。</div>';
-  const done=list.filter(t=>t.points!=null);
-  const miss=list.length-done.length;
-  const net=Math.round(done.reduce((a,t)=>a+t.points,0)*10)/10;
-  // 【合計要說清楚算的是哪幾筆】舊版標題寫「N 筆」、旁邊卻只加總算得出點數的那幾筆，
-  // 看起來像 N 筆的總和 —— 有筆數對不起來時等於報了一個錯的成績。
-  let h='<div class="n-trh">今天的真實交易　<span class="c">'+list.length+' 筆'+
-    (miss?'（'+done.length+' 筆算得出點數）':'')+'</span>'+
-    (done.length?'<span class="net '+sgn(net)+'">'+pm(net)+' 點</span>':'')+
-    // t-today 純粹是「這是哪一份清單」的標記（沒有樣式）。A 版之後真實區只剩這一份
-    // .n-trl（.t-past 已隨 realPast() 移除），但標記留著 —— 探針與日後的程式
-    // 一律靠這個 class 認人，不可以靠「第幾個 .n-trl」。
-    '</div><div class="n-trl t-today">';
-  for(let i=list.length-1;i>=0;i--)              // 新的在上面
-    h+=realRow(list[i], '＋ 寫下今天的心得', '今天的盤感、進出場理由、紀律有沒有守…');
-  h+='</div>';
-  // 出場價問不到就留白，不可以拿現價冒充 —— 留白看得出來是缺，編的數字看不出來
-  if(miss)
-    h+='<div class="n-trnote"><b>'+miss+' 筆</b>問不到成交價，算不出點數 —— '+
-      '那幾筆的損益請到大戶投看。'+
-      (done.length?'合計的 '+pm(net)+' 點只含算得出來的 '+done.length+' 筆。':'')+'</div>';
-  return h;
-}
-/* 一筆真實交易那一列（今天與過去共用一份 —— 兩邊長得不一樣的話，
-   同一筆交易過了午夜就換個樣子，看起來像不是同一筆東西）。
-   【結構要跟練習一樣】每一筆是 `.n-item` 包住「一列 ＋ 底下的心得」，
-   心得的樣式掛在 `.n-item .noteline` 上；裸的 .n-row 吃不到那組樣式
-   （他 2026-09-02 要求對齊）。 */
-function realRow(t, hint, ph){
-  const why=rwhy(t);
-  let h='<div class="n-item"><div class="n-row">'+
-    '<span class="d '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'&#9650;':'&#9660;')+'</span>'+
-    '<span class="tm">'+esc(String(t.entry_time||'—').slice(0,5))+'&rarr;'+
-      esc(String(t.exit_time||'—').slice(0,5))+'</span>'+
-    '<span class="px">'+f(t.entry)+'&rarr;'+(t.exit==null?'—':f(t.exit))+'</span>'+
-    '<span class="wy">'+why+'</span>'+
-    '<span class="pt '+(t.points==null?'na':sgn(t.points))+'">'+
-    (t.points==null?'—':pm(t.points))+'</span></div>';
-  // 心得：跟練習同一套（點一下展開輸入框、事後補寫）。
-  // 分區字母用大寫 R —— 小寫 r 已經被回顧分頁佔走，同一個字母會讓
-  // nEditing() 分不出是誰在編輯，兩邊的輸入框會互相打架。
-  // ⚠️ 真實交易的心得只留在這台電腦，**不上傳**（跟成績單一樣）。
-  // ⚠️ exit_time 要一起帶：entry 是 null 時 nkey() 拿它當識別，少帶的話
-  //    兩張同日同分鐘的卡會生出同一個 key（見 nkey 的註解）。nattr() 不用它。
-  const nt={date:t.date, time:String(t.entry_time||'').slice(0,5), entry:t.entry,
-            exit_time:t.exit_time};
-  return h+noteBox(nkey('R',nt), t.note, nattr(nt)+' data-nkind="real"', hint, ph)+'</div>';
-}
-
-/* ⛔ 【realPast() / .t-past / .n-dayh 已於 2026-09-03 的 A 版整段移除】
-   舊版真實區底下另有一份「過去的真實交易」，照日期分組、每天一個 .n-dayh 小計。
-   A 版（Benson 拍板「完全照練習抄」）改成：跨日的紀錄由**成績區底下那份卡片清單**
-   （realCard，取 trades_all 前 12 筆）承擔 —— 同一批資料不要用兩種長相各列一次。
-   **「昨天的紀錄不見了」那個需求仍然被滿足**（他 2026-09-03 早上問的那件事）：
-   卡片上有日期欄（.tr-date），過去幾天的每一筆都列得出來、也都能事後補心得。
-   ⚠️ 跟著移除的還有「今天／過去」的切分，所以這一版**不再需要** R.today ——
-      但 realTrades() 用的 R.trades 仍然是後端按日期切好的今天那份，
-      前端一樣不可以用 new Date() 自己算今天（跨午夜兩邊會不同一天）。 */
-function rrow(k,v){ return '<div class="rrow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>'; }
 
 /* ══════════ 【帳戶總覽】（2026-09-21 Benson 交辦）══════════
    券商端的「帳戶還剩多少錢」。⛔ 這一區**唯讀**：沒有任何按鈕、不碰下單那條路。
@@ -6791,41 +6478,16 @@ function acctHTML(s){
    '</div>';
 }
 
-/* ---------------- 右欄總繪製 ----------------
-   ⛔ 呼叫端一定要用 holdingNow 擋著：長按送單期間含那顆按鈕的節點不准重繪。 */
+/* ---------------- 右欄總繪製（2026-09-23 v3：只剩警報 ＋ 兩張唯讀小卡）----------------
+   ⛔ 三塊各自比對自己的字串（setEl），⛔ 不整塊重建。 */
 function paintRight(s,nf){
   const R=s.real||{};
   // ① 跨分頁警報（骨架與秒數分成兩個節點）
   setEl('xal', xalHTML(R));
   setEl('xalsec', R.stale_sec==null?'':String(R.stale_sec));
-  // ② 頁籤（浮動點數是裡面的獨立節點）
-  setEl('ntabs', tabsHTML(R));
-  paintBadge(R);
-  // ③ 整區：只有切分頁／開關真實下單／演練↔真實 才重建骨架
-  const zone=document.getElementById('zone');
-  if(!zone) return;
-  // 骨架的識別鍵。⚠️ 一定要帶「有沒有部位」——開關關著時 body 的存在與否由部位決定，
-  // 不帶的話，部位出現時骨架不會重建，那口真錢就永遠畫不出來（配合 realZone 那條註解看）。
-  const zk=RTAB+'|'+(RTAB==='real'?(REAL_ON?'on':'off')+'|'+(R.live?'live':'dry')
-                                  +'|'+(R.position?'pos':'flat'):'');
-  if(zone.__zk!==zk){
-    zone.__zk=zk;
-    zone.innerHTML=(RTAB==='real'?realZone(R):simZone());
-  }
-  if(RTAB==='real'){
-    setEl('realbody', realBody(s));
-    // 編輯心得時不重畫這一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
-    // 「展開輸入框」本身也是一次重繪，所以刻意的重繪帶 nf 旗標繞過去（跟練習那邊同一招）。
-    // ⚠️ #realstats 裡有**兩份**清單：今天那份 .n-row 用分區 R、成績區的卡片用 S。
-    //    只擋 R 的話，在卡片上打字會被下一輪重繪洗掉（漏一個字母就等於沒有這道保護）。
-    if(nf||(!nEditing('R')&&!nEditing('S'))) setEl('realstats', realStats(R));
-    setEl('realfoot', realFoot(R));
-  } else {
-    // 編輯心得時不重畫那一區 —— 中文輸入法打到一半整個 textarea 被換掉，字會不見。
-    // 「展開輸入框」本身也是一次重繪，所以刻意的重繪帶 nf 旗標繞過去。
-    if(nf||!nEditing('t')){ setEl('simbody', simBody(s)); setEl('simtr', simTrades(s)); }
-    if(nf||!nEditing('s')) setEl('simstats', statsBox(statsCache));
-  }
+  // ② 今天的部位（唯讀）　③ 帳戶（唯讀）
+  setEl('lvpos', lvPosHTML(s));
+  setEl('lvacct', lvAcctHTML(s));
 }
 
 /* ---------------- 心得：跟手機 App 同一個 note 欄位 ----------------
@@ -6897,11 +6559,9 @@ async function tick(nf){
     ⛔ 少了這一行，重啟之後他的「平倉」鈕會 403 按不動，而畫面上看不出原因。 */
  if(s&&s.token) PTOK=s.token;
  LASTS=s;
- // 成績每 5 秒抓一次就好 —— 它會讀所有紀錄檔，沒必要跟著報價跳
- if(Date.now()-statsAt>5000){
-   statsAt=Date.now();
-   fetch('/api/stats').then(r=>r.json()).then(x=>{statsCache=x;}).catch(()=>{});
- }
+ /* ⚠️ 2026-09-23 v3：練習成績那一區從【即時】拿掉了 ⇒ 每 5 秒一次的 /api/stats 輪詢
+    也跟著拿掉（它會讀所有紀錄檔，留著就是白白在 HTTP 執行緒上做磁碟 I/O）。
+    ⛔ **後端 /api/stats 與 /api/export 一個字都沒拆** —— 手機 App 與下載那條路照舊。 */
  const q=quoteState(s);
  const PH={recording:['記錄中','var(--up)'],live:['顯示中','var(--down)'],off:['夜盤','var(--faint)']};
  const ph=QLAB[q]||PH[s.phase]||PH.off, age=s.age_sec==null?99:s.age_sec;
@@ -6929,11 +6589,9 @@ async function tick(nf){
  // barsCache===null 這一關一定要擋在前面：那是開站的頭 0.3~0.5 秒，一根 K 棒都還沒回來，
  // 骨架留著就好 —— 不然那半秒會先塞一張小卡，圖回來時整個被頂掉，版面跳一下。
  if(!paintChart(s) && barsCache!==null) paintFallback(s,q);
- // 【長按期間不准重繪整個右欄】下單鈕那一區有現價，每次報價變動 innerHTML 就被換掉，
- // 按住的那顆按鈕當場被銷毀 —— 畫面看起來像「按到一半自己取消」。
- // 更糟的是計時器還握著那顆已經不在畫面上的按鈕，時間到照樣送單：
- // 使用者以為取消了，單卻出去了（2026-09-01 Benson 回報）。
- if(!holdingNow) paintRight(s,nf);
+ // ⚠️ 2026-09-23 v3：右欄只剩兩張**唯讀**小卡（沒有長按送單那顆鈕）⇒
+ //    「長按期間不准重繪」那道守衛跟著它一起拿掉了。
+ paintRight(s,nf);
 }
 
 // 只有內容真的變了才動 DOM。否則每 0.5 秒重建一次，
@@ -7515,14 +7173,14 @@ function pagerHTML(T){
               '<span class="sep">·</span>':'')+
      ((!partial&&noS&&noS!==dayS)
        ?'<span>含 '+noS+' 夜盤 15:00 起</span><span class="sep">·</span>':'')+
-     '<span>'+(n
+     /* ⚠️ 2026-09-23 v3 驗收：「練習 N 筆／未練習」拿掉 —— 【即時】已經沒有練習下單，
+        留著只會讓他以為還能練（手機 App 的練習紀錄照舊在 practice_trades/，後端沒動）。
+        ⛔ `n`／`net` 那兩行上面照算不刪（日期索引那條路還在用）。 */
+     (rn?('<span>真單 '+rn+' 筆'+(rnet==null?''
        // 負號用 U+2212 不用 hyphen，等寬字型下跟 + 對得齊（只改這裡，不動全域的 pm()）
-       ? '練習 '+n+' 筆 <b class="'+sgn(net)+'">'+pm(net).replace('-','−')+'</b> 點'
-       : '未練習')+'</span>'+
-     (rn?('<span class="sep">·</span><span>真單 '+rn+' 筆'+(rnet==null?''
-       :(' <b class="'+sgn(rnet)+'">'+pm(rnet).replace('-','−')+'</b> 點'))+'</span>'):'')+
+       :(' <b class="'+sgn(rnet)+'">'+pm(rnet).replace('-','−')+'</b> 點'))+'</span>'+
      // 這個分隔點跟著鍵盤提示一起藏（窄視窗會把提示收掉，只留一個孤零零的「·」很醜）
-     '<span class="sep k">·</span>'+
+       '<span class="sep k">·</span>'):'')+
      '<span class="kbdgrp"><kbd>←</kbd><kbd>→</kbd> 換日</span>';
  const nav=stepTarget(-1), fwd=stepTarget(1);
  return '<div class="pager">'+
@@ -7776,71 +7434,6 @@ function bindChart(){
 }
 function cell(l,v,cls){return '<div class="cell"><div class="l">'+l+'</div><div class="v '+cls+'">'+v+'</div></div>';}
 
-function row(t,ns){
- const rs={tp:'停利',sl:'停損',manual:'手動',close:'收盤'}[t._reason]||'';
- // App 匯入的那幾筆在 my_trades.json，面板不去改它 —— 有心得就顯示，但不給編輯，
- // 不然按下去只會得到「找不到那一筆紀錄」。
- const ro=t._source==='app';
- const nb=!ns?''
-   :ro?(t.note?'<div class="noteline">「'+esc(t.note)+'」</div>':'')
-   :noteBox(nkey(ns,t),t.note,nattr(t),
-       ns==='t'?'＋ 寫下今天的心得':'＋ 補寫心得',
-       ns==='t'?'今天的盤感、進出場理由、紀律有沒有守…'
-               :'現在回頭看，這一筆做對了什麼、做錯了什麼？');
- return '<div class="trade '+(t._net>0?'win':'loss')+'"><div class="tr-top">'+
-  '<span class="tr-date">'+(t.date?t.date.slice(5):'')+'</span>'+
-  '<span class="dir '+(t.dir==='long'?'l':'s')+'">'+(t.dir==='long'?'▲ 多':'▼ 空')+'</span>'+
-  '<span class="tr-px">'+t.entry+'<span class="arrow">→</span>'+t.exit+
-  (rs?' <span class="tag">'+rs+'</span>':'')+(t._source==='app'?' <span class="tag">App</span>':'')+'</span>'+
-  '<span class="tr-res '+(t._net>0?'r-win':'r-loss')+'">'+pm(t._net)+'</span></div>'+nb+'</div>';
-}
-function statsBox(ST){
- if(!ST||!ST.windows||!ST.windows.length) return '';
- let w=ST.windows.find(x=>x.n===WIN)||ST.windows.find(x=>x.label.indexOf(String(WIN))>=0);
- if(!w) w=ST.windows[ST.windows.length-1];
- let seg='<div class="seg">';
- ST.windows.forEach((x,i)=>{
-   const k=parseInt(x.label.replace(/[^0-9]/g,''))||0;
-   seg+='<button class="'+(x===w?'on':'')+'" data-win="'+k+'">'+x.label+'</button>';
- });
- seg+='</div>';
- const cls=w.total>0?'up':w.total<0?'down':'flat';
- // 勝率是「已經發生的統計」，用中性色；金色只留給「即時／現在」一個意思，
- // 紅綠讓給真正的結果（合計點數）。勝敗條讓比例一眼看得出來，不必讀數字。
- let h='<div class="n-sep"></div><div class="n-bd n-bd-t">'+
-  '<div class="n-sh">練習成績<span class="c">共 '+ST.total+' 筆</span></div>'+seg+
-  '<div class="score"><div class="rate"><span class="n">'+w.win_rate.toFixed(0)+
-  '</span><span class="p">%</span><div class="lab">勝率</div></div>'+
-  '<div class="sum"><div><span class="n '+cls+'">'+pm(w.total)+
-  '</span><span class="u">點</span></div>'+
-  '<div class="cash">'+(w.ntd<0?'-':'+')+'NT$'+Math.abs(w.ntd).toLocaleString()+'</div>'+
-  '</div></div>'+
-  '<div class="wlbar"><i class="w" style="flex:'+Math.max(w.wins,0.001)+'"></i>'+
-  '<i class="l" style="flex:'+Math.max(w.losses,0.001)+'"></i></div>'+
-  '<div class="wlfoot"><span class="w"><b>'+w.wins+'</b> 勝</span>'+
-  '<span>'+w.n+' 筆</span><span class="l"><b>'+w.losses+'</b> 敗</span></div>';
- if(ST.recent&&ST.recent.length){
-   h+='<div class="list">';
-   ST.recent.forEach(t=>h+=row(t,'s'));
-   h+='</div><a class="dl" href="/api/export" download>下載練習紀錄（可匯入 App）</a>';
- }
- return h+'</div>';
-}
-// 事件委派：掛在 document 上，就算某一區重繪也不會掉事件
-document.addEventListener('click', function(e){
- if(TAB!=='live') return;          // 回顧分頁有自己的一套 data-act，別互相搶
- const b=e.target.closest('[data-act]');
- if(!b||b.disabled) return;
- const a=b.getAttribute('data-act');
- const url=(a==='long'||a==='short')?'/api/enter':'/api/'+a;
- const body=(a==='long'||a==='short')?JSON.stringify({dir:a}):'{}';
- b.disabled=true;
- pfetch(url,body)
-  .then(r=>r.json())
-  .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); statsAt=0; tick(); })
-  .catch(()=>{})
-  .then(()=>{ b.disabled=false; });
-});
 /* 心得的展開／儲存／取消：即時與回顧兩個分頁共用 */
 document.addEventListener('input', function(e){
  if(e.target&&e.target.id==='tnote') NOTE.text=e.target.value;
@@ -7874,33 +7467,6 @@ document.addEventListener('click', function(e){
  }
  if(e.target.closest('[data-ncancel]')){ NOTE={key:null,text:''}; nrepaint(); return; }
 });
-/* 真實下單：開關與平倉用 click，送單用長按（mousedown/up） */
-document.addEventListener('click', function(e){
- if(TAB!=='live') return;
- // 切分頁：不自動切是老闆拍板的（A 案），所以只有他自己點才會換
- const rtb=e.target.closest('[data-rtab]');
- if(rtb){ setRTab(rtb.getAttribute('data-rtab')); return; }
- // 跨分頁警報上的「去看部位 →」
- if(e.target.closest('[data-rgo]')){ setRTab('real'); return; }
- if(e.target.closest('[data-rt]')){ realToggle(); return; }
- if(e.target.closest('[data-rclose]')){
-   // 【平倉不跳確認】要平倉的時候通常是急的，多一個對話框是在最糟的時機加摩擦。
-   // 而且平倉是「安全方向」——誤按的代價是一點滑價，不是無上限的虧損（跟進場相反）。
-   realClose();
-   return; }
-});
-document.addEventListener('mousedown', function(e){
- // 【只認左鍵】Windows 的右鍵選單是放開才跳出來的，所以按住右鍵 650ms 也會送單
- //（lab-qa 退件第 7 條）。中鍵同理。
- if(e.button!==0) return;
- const b=e.target.closest('[data-rdir]');
- if(b&&!b.disabled) holdStart(b,b.getAttribute('data-rdir'));
-});
-// 切走視窗（Alt+Tab、鎖螢幕）也算放開 —— 手離開鍵鼠了就不該繼續倒數
-window.addEventListener('blur',function(){
- document.querySelectorAll('[data-rdir].holding').forEach(holdEnd);
-});
-
 document.addEventListener('click', function(e){
  if(TAB!=='live') return;
  if(e.target.closest('[data-pick]')){
@@ -7920,26 +7486,11 @@ document.addEventListener('click', function(e){
    if(v===''){ viewDate=''; pickOpen=false; fetchBars(true); tick(); setTimeout(tick,250); }
    else goDay(v);
    return; }
- // 真實成績的分段窗口。⚠️ 用自己的 RWIN，不要跟練習的 WIN 共用（見宣告處註解）。
- // ⛔ 【按下去就要生效，正在打心得時也一樣】只換 #realscore 這一個節點 ——
- //    整塊 #realstats 重畫會把 .list 裡正在編輯的 textarea 換掉，所以重繪守衛會擋，
- //    於是變成「按了畫面完全不動、關掉編輯器才突然跳」（QA 2026-09-03 退件）。
- //    這裡直接就地更新，不必等 tick()；再叫一次 tick() 讓其他區塊跟上。
- const rw=e.target.closest('[data-rwin]');
- if(rw){
-   RWIN=parseInt(rw.getAttribute('data-rwin'))||0; pickOpen=false;
-   const R=(LASTS&&LASTS.real)||{};
-   setEl('realscore', realScore(R.trades_all||[]));
-   tick(); return;
- }
- const b=e.target.closest('[data-win]');
- if(!b){
-   // 月曆現在浮在圖上面（以前掛在圖下面，蓋不到東西）——
-   // 點到圖或其他地方就要收掉，不然它會一直擋著 K 線。點月曆自己（換月）不算。
-   if(pickOpen&&!e.target.closest('.calbox')){ pickOpen=false; tick(); }
-   return; }
- WIN=parseInt(b.getAttribute('data-win'))||0;
- lastStats=''; pickOpen=false; tick();
+ // ⚠️ 2026-09-23 v3：練習成績／真實成績的分段窗口鈕（data-win／data-rwin）跟著那兩區
+ //    一起從【即時】拿掉了 ⇒ 這裡只剩「點別的地方就把月曆收掉」。
+ // 月曆浮在圖上面（以前掛在圖下面，蓋不到東西）——
+ // 點到圖或其他地方就要收掉，不然它會一直擋著 K 線。點月曆自己（換月）不算。
+ if(pickOpen&&!e.target.closest('.calbox')){ pickOpen=false; tick(); }
 });
 /* ============================================================================
    分頁狀態 ＋ 全站共用的小工具
@@ -7973,18 +7524,20 @@ function setTab(t){
  if(t!=='fire'&&AL.timer){ clearTimeout(AL.timer); AL.timer=null; }
  // 離開【模擬】也把 60 秒輪詢停掉（smEnter 的 again 自己也會檢查一次）
  if(t!=='sim'&&SM.timer){ clearTimeout(SM.timer); SM.timer=null; }
+ // 離開【健檢】就把「等市場狀態算完」那條重試停掉（⛔ 它不是輪詢，只是等第一次算完）
+ if(t!=='hc'&&HC.timer){ clearTimeout(HC.timer); HC.timer=null; }
  document.getElementById('tab-live').hidden=(t!=='live');
  document.getElementById('tab-acct').hidden=(t!=='acct');
  document.getElementById('tab-sim').hidden=(t!=='sim');
- document.getElementById('tab-lab').hidden=(t!=='lab');
+ document.getElementById('tab-hc').hidden=(t!=='hc');
  document.getElementById('tab-fire').hidden=(t!=='fire');
  document.querySelectorAll('.tabs button').forEach(b=>
    b.classList.toggle('on',b.getAttribute('data-tab')===t));
  // 【模擬】不掛在 500ms 的 tick 上：切進來問一次，停在這一頁時每 60 秒再問（離開就停）。
  if(t==='sim'){ smEnter(); }
- // 【策略實驗室】不掛在 500ms 的 tick 上：切進來問一次資料範圍，按「回測」才算。
- // 後端的即時報價、持倉監控、自動停利停損全程都在跑，切分頁完全不影響那一條路。
- else if(t==='lab'){ lbEnter(); }
+ // 【健檢】⛔⛔ **一次都不准掛在 500ms／5 秒的輪詢上**：切進來才問一次，後端整天快取。
+ // 只有「市場狀態還在背景算」那一種情況才會隔幾秒再問一次（見 hcEnter）。
+ else if(t==='hc'){ hcEnter(); }
  // 【自動下單】同樣不掛在 500ms 的 tick 上：後端的送單、持倉監控、±100 停利停損
  // 全程都在跑，切不切進這一頁完全不影響。
  else if(t==='fire'){ alEnter(); }
@@ -8345,281 +7898,143 @@ function smEnter(){
   SM.timer=setTimeout(again,60000);
 }
 
-/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測 ══════════════
-
-   照 lab-ux 定案 demo 的版面與文案；差別只有「算」搬到後端（逐筆口徑，/api/lab/run）。
-   ⛔⛔ 只顯示**歷史回測結果**。不預測、不建議、不自動找參數（按一次只算畫面上那一組）。
-   ⛔ 這一段只打 GET /api/lab/meta 與 GET /api/lab/run，一個 POST 都沒有、一顆會送單的鈕都沒有。
-   ⚠️ 資料不掛在 500ms 的 tick 上：切進來問一次 meta，按「回測」才算。
-   ⚠️ 預設值從注入的 RULE_SIGNAL_AT／RULE_TP／RULE_SL 來，⛔ 不寫死。
-*/
-const LBVALID='2026-01-01';          // 顯示用的退路；正本是後端回的 valid_from
-const LBMIN=30, LBPOINT=10;          // 少於 30 天不給勝率（後端也是）；微台 1 點 NT$10
-const LBDIR={bar5:'跟 5 分 K 開盤比',open:'跟 08:45 開盤比',long:'一律做多',short:'一律做空'};
-const LBSKIP={gap:'跳空不夠',night:'夜盤震幅不夠',wd:'跳過的星期',expw:'結算週',nodir:'沒有方向可比',nodata:'那天沒有資料'};
-const LBWHY={tp:'停利',sl:'停損',eod:'收盤平倉'};
-var LB={boot:false,meta:null,busy:false,seq:0,shown:null,last:null,err:'',tried:new Set()};
-
-const lbSec=(h,m,s)=>h*3600+m*60+s;
-const LBTMIN=lbSec(8,46,0), LBTMAX=lbSec(13,0,0);
-function lbHMS(s){ return [s/3600|0,(s%3600)/60|0,s%60].map(x=>String(x).padStart(2,'0')).join(':'); }
-function lbFmt(v,dp){ dp=dp==null?1:dp;
-  return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp}); }
-function lbCls(v){ return v>0?'up':v<0?'down':''; }
-function lbEl(id){ return document.getElementById(id); }
-
-function lbParams(){
-  const m=/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(lbEl('lbt').value.trim());
-  let tsec=null;
-  if(m&&+m[2]<60&&+(m[3]||0)<60){ const s=lbSec(+m[1],+m[2],+(m[3]||0)); if(s>=LBTMIN&&s<=LBTMAX) tsec=s; }
-  const pts=(id,opt)=>{ const v=lbEl(id).value.trim();
-    if(v==='') return opt?0:null;
-    if(!/^\d{1,4}$/.test(v)) return null;
-    const n=+v; if(opt&&n===0) return 0;
-    return (n>=1&&n<=2000)?n:null; };
-  return {tsec, dir:(document.querySelector('#lbdir .on')||{dataset:{lbv:'bar5'}}).dataset.lbv,
-    tp:pts('lbtp',false), sl:pts('lbsl',false), gap:pts('lbgap',true), nr:pts('lbnr',true),
-    skip:[...document.querySelectorAll('#lbwd .on')].map(b=>+b.dataset.lbv),
-    noexp:lbEl('lbexpw').classList.contains('on')?1:0, cost:lbEl('lbcost').classList.contains('on')?1:0};
+/* ══════════════ 迷你圖（【健檢】與【自動下單】共用）══════════════
+   ⛔ 一份就好（兩頁各寫一份 ＝ 兩把尺）。紅上綠下、左舊右新（跟全站的紅漲綠跌一致）。 */
+function sparkBars(vals,h){
+  h=h||54;
+  const n=(vals||[]).length; if(!n) return '';
+  const W=600, bw=W/n; let mx=0;
+  vals.forEach(v=>{ mx=Math.max(mx,Math.abs(Number(v)||0)); }); mx=mx||1;
+  const mid=h/2;
+  let s='<svg viewBox="0 0 '+W+' '+h+'" preserveAspectRatio="none" style="height:'+h+'px">'+
+    '<line x1="0" y1="'+mid+'" x2="'+W+'" y2="'+mid+'" stroke="#242C38" stroke-width="1"/>';
+  vals.forEach((v0,i)=>{
+    const v=Number(v0)||0, hh=Math.abs(v)/mx*(mid-4), col=v>=0?'#EE5A54':'#34B37E';
+    s+='<rect x="'+(i*bw+bw*0.18).toFixed(2)+'" y="'+(v>=0?mid-hh:mid).toFixed(2)+
+       '" width="'+(bw*0.64).toFixed(2)+'" height="'+Math.max(1,hh).toFixed(2)+'" fill="'+col+'" rx="1"/>';
+  });
+  return s+'</svg>';
 }
-function lbSig(P){ return JSON.stringify([P.tsec,P.dir,P.tp,P.sl,P.gap,P.nr,P.skip,P.noexp,P.cost]); }
-function lbOk(P){ return P.tsec!==null&&P.tp!==null&&P.sl!==null&&P.gap!==null&&P.nr!==null; }
-function lbQuery(P){
-  const q=['t='+lbHMS(P.tsec),'dir='+P.dir,'tp='+P.tp,'sl='+P.sl];
-  if(P.gap) q.push('gap='+P.gap);
-  if(P.nr) q.push('nr='+P.nr);
-  if(P.skip.length) q.push('skip='+P.skip.join(','));
-  q.push('noexp='+P.noexp,'cost='+P.cost);
-  return q.join('&');
+function sparkLine(vals,h,col){
+  h=h||46; col=col||'#8D95A3';
+  const n=(vals||[]).length; if(n<2) return '';
+  const W=600, mx=Math.max.apply(null,vals), mn=Math.min.apply(null,vals), rg=(mx-mn)||1;
+  const d=vals.map((v,i)=>(i?'L':'M')+(i/(n-1)*W).toFixed(1)+' '+(h-4-(v-mn)/rg*(h-8)).toFixed(1)).join(' ');
+  return '<svg viewBox="0 0 '+W+' '+h+'" preserveAspectRatio="none" style="height:'+h+'px">'+
+    '<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>';
 }
 
-function lbValidate(){
-  const P=lbParams();
-  lbEl('lbt').classList.toggle('bad',P.tsec===null);
-  lbEl('lbtp').classList.toggle('bad',P.tp===null);
-  lbEl('lbsl').classList.toggle('bad',P.sl===null);
-  lbEl('lbgap').classList.toggle('bad',P.gap===null);
-  lbEl('lbnr').classList.toggle('bad',P.nr===null);
-  const h=lbEl('lbthint');
-  if(P.tsec!==null&&P.dir==='bar5'&&P.tsec%300===0){
-    h.textContent='這一刻剛好是 5 分 K 的開頭，沒有東西可以比'; h.hidden=false;
-  } else h.hidden=true;
-  return P;
-}
-function lbMark(){
-  const P=lbValidate(), b=lbEl('lbrun');
-  const stale=LB.shown!==null&&lbSig(P)!==LB.shown;
-  lbEl('lbresults').classList.toggle('stale',stale);
-  b.classList.toggle('stale',stale&&!LB.busy);
-  b.disabled=LB.busy||!lbOk(P);
-  b.textContent=LB.busy?'回測中…':stale?'條件改了・重新回測':'回測';
-  const a=lbEl('lbapprox');
-  a.classList.toggle('err',!!LB.err);
-  a.textContent=LB.err||'逐筆成交回測：進場用當時的買賣價，停損用碰到的那一筆成交價';
+/* ══════════════ 【健檢】分頁（2026-09-23 加）══════════════
+
+   ⛔⛔ **這一頁不准出現預測、勝率、期望值、訊號強度、買賣建議**（CLAUDE.md 開頭那條鐵律）。
+   ⛔⛔ **只打一次** GET /api/health/state（唯讀）——⛔ 不掛在 500ms 的 tick、
+      ⛔ 也不掛在【自動下單】那條 5 秒輪詢上。後端整天快取（來源檔 mtime 當快取鍵）。
+      唯一的例外：市場狀態那一區第一次要讀兩個大檔（後端背景執行緒在算）⇒
+      `market_ready=false` 時隔 HC_RETRY 再問一次，⛔ 算完就停、⛔ 離開這一頁也停。
+   ⛔ 一顆會動到錢的鈕都沒有：沒有表單、沒有送出鈕、沒有武裝那幾顆的觸發屬性、不打任何 POST。
+   ⛔ 燈號、門檻、百分位**全部由後端決定**（health.py）——前端算一份就是第二把尺。 */
+var HC={data:null, err:'', seq:0, timer:null, tries:0};
+const HC_RETRY=3000, HC_TRIES=20;      /* 最多等 60 秒（⛔ 不無限重試） */
+function hcPts(v){ return v==null?'—':((v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:1})); }
+function hcCls(v){ return v>0?'up':v<0?'down':'flat'; }
+function hcNum(v,dp){ return v==null?'—':Number(v).toFixed(dp==null?2:dp); }
+
+/* 一張策略卡。⛔ 筆數不足 ⇒ **留白**，⛔ 不准用比較少的筆數硬算一個數字。 */
+function hcCard(S){
+  const head='<div class="hc-top"><div class="hc-nm">'+esc(S.name||'')+'<i>'+esc(S.sub||'')+'</i></div>'+
+    '<span class="hc-lamp '+esc(S.lamp||'na')+'"><b></b>'+esc(S.lamp_word||'')+'</span></div>';
+  /* 真單那一半：⛔ 跟模擬**分開寫**，⛔ 不准混成一個數字。 */
+  const R=S.real||null;
+  const real=R
+    ? '<div class="hc-real"><b>真單</b>：'+esc(R.msg||'')+'</div>'
+    : '<div class="hc-real"><b>真單</b>：這一條沒有真單（⛔ 不下單，只做前瞻考試）。</div>';
+  if(!S.ready)
+    return '<div class="hc-card">'+head+
+      '<div class="hc-na">目前只有 <b>'+esc(String(S.n||0))+' 筆</b>，要 <b>'+
+        esc(String(S.need||15))+' 筆</b>才算得出來。<br>'+
+      '在那之前這裡<b>留白</b>，⛔ 不用比較少的筆數硬算一個數字給你看。</div>'+real+'</div>';
+  const half=(S.avg_all==null)?null:S.avg_all/2;
+  return '<div class="hc-card'+(S.lamp!=='ok'?' warn':'')+'">'+head+
+    '<div class="hc-nums">'+
+      '<div class="c"><div class="hc-k">全部平均</div>'+
+        '<div class="hc-v '+hcCls(S.avg_all)+'">'+hcPts(S.avg_all)+'<small>點</small></div>'+
+        '<div class="hc-d">共 '+esc(String(S.n||0))+' 筆</div></div>'+
+      '<div class="c"><div class="hc-k">最近 30 筆</div>'+
+        '<div class="hc-v '+hcCls(S.avg30)+'">'+hcPts(S.avg30)+'<small>點</small></div>'+
+        '<div class="hc-d">每筆平均</div></div>'+
+      '<div class="c"><div class="hc-k">最近 15 筆</div>'+
+        '<div class="hc-v '+hcCls(S.avg15)+'">'+hcPts(S.avg15)+'<small>點</small></div>'+
+        '<div class="hc-d">'+(half==null?'每筆平均':('全部平均的一半＝'+hcPts(half)))+'</div></div>'+
+    '</div>'+
+    '<div class="hc-spark">'+sparkBars(S.recent||[],56)+'</div>'+
+    '<div class="hc-foot"><span>近 30 筆（左舊右新）</span><span class="sep">・</span>'+
+      '<span>'+esc(S.src||'模擬')+'</span><span class="sep">・</span>'+
+      '<span>'+esc(String(S.d0||'—'))+' ~ '+esc(String(S.d1||'—'))+'</span></div>'+
+    real+'</div>';
 }
 
-function lbCard(el,title,range,S,empty,idle){
-  el.classList.toggle('empty',!!empty);
-  if(empty){
-    el.innerHTML='<div class="lb-ph"><span class="t">'+title+'</span><span class="r lb-mono">'+range+'</span><span class="n">—</span></div>'+
-      '<div class="lb-hero"><div><div class="k">勝率</div><div class="v big na">—</div></div>'+
-      '<div><div class="k">每筆平均</div><div class="v mid na">—</div></div>'+
-      '<div><div class="k">總點數</div><div class="v mid na">—</div></div></div>'+
-      (idle?'':'<div class="lb-emptymsg"><b>資料補齊中</b><small>2026 年的資料陸續補進來中</small></div>');
+/* 一張市場狀態小卡。⛔ 只放數字與位置，⛔ 不准寫「偏高／偏低／要小心」這種評語。 */
+function hcMktCard(M){
+  const dp=(M.dp==null?2:M.dp);
+  const band=(M.pct==null)?''
+    : '<div class="hc-band"><i style="left:10%;right:10%"></i>'+
+      '<u style="left:calc('+Math.max(0,Math.min(100,M.pct))+'% - 1px)"></u></div>'+
+      '<div class="hc-scale"><span>'+hcNum(M.lo,dp)+'</span><span>過去一年</span>'+
+        '<span>'+hcNum(M.hi,dp)+'</span></div>'+
+      '<div class="hc-pos">過去一年的第 <b>'+esc(String(M.pct))+'</b> 百分位</div>';
+  const lines=(M.lines||[]).filter(x=>x).map(x=>'<div>'+esc(x)+'</div>').join('');
+  return '<div class="hc-m'+(M.flag?' warn':'')+'">'+
+    '<div class="t">'+esc(M.title||'')+'<i>'+esc(M.note||'')+'</i></div>'+
+    '<div class="v">'+hcNum(M.value,dp)+(M.unit?'<small>'+esc(M.unit)+'</small>':'')+'</div>'+
+    (M.flag?'<div class="hc-pos"><span class="hc-lamp '+esc(M.flag)+'"><b></b>'+
+       esc(M.flag_word||'')+'</span> '+esc(M.flag_note||'')+'</div>':'')+
+    band+
+    (lines?'<div class="hc-lines">'+lines+'</div>':'')+
+    (M.as_of?'<div class="hc-foot"><span>資料到 '+esc(M.as_of)+'</span></div>':'')+
+    ((M.series&&M.series.length>1)?'<div class="hc-spark">'+sparkLine(M.series,42,'#8D95A3')+'</div>':'')+
+    '</div>';
+}
+
+function hcPaint(){
+  const D=HC.data;
+  if(!D){
+    setEl('hcstamp',''); setEl('hcsrc','');
+    setEl('hccards','<div class="hc-na">'+esc(HC.err||'載入中…')+'</div>');
+    setEl('hcleg',''); setEl('hcmkt',''); setEl('hcfoot','');
     return;
   }
-  const few=S.n<LBMIN;
-  const inNoise=S.noise!=null&&S.avg!=null&&Math.abs(S.avg)<=S.noise;
-  const sk=Object.entries(S.skip_by||{}).map(([k,v])=>(LBSKIP[k]||k)+' '+v).join('、');
-  const dep=S.no5!=null&&S.no5<=0&&S.avg>0;
-  let h='<div class="lb-ph"><span class="t">'+title+'</span><span class="r lb-mono">'+range+'</span>'+
-    '<span class="n" title="'+sk+'">做了 <b class="lb-mono">'+S.n+'</b> 天・過濾掉 <b class="lb-mono">'+S.skipped+'</b> 天</span></div>';
-  if(S.n===0){ el.innerHTML=h+'<div class="lb-emptymsg"><b>這組條件一天都沒做到</b><small>'+sk+'</small></div>'; return; }
-  h+='<div class="lb-hero"><div><div class="k">勝率</div>'+
-    (few||S.rate==null?'<div class="v big na">—</div><span class="lb-tag warn">只有 '+S.n+' 天，不算勝率</span>'
-                      :'<div class="v big">'+S.rate.toFixed(1)+'<small>%</small></div>')+'</div>'+
-    '<div><div class="k">每筆平均</div><div class="v mid '+lbCls(S.avg)+'">'+lbFmt(S.avg)+'<small>點</small></div>'+
-      '<div class="cash lb-mono">NT$ '+lbFmt(S.avg*LBPOINT,0)+'</div></div>'+
-    '<div><div class="k">總點數</div><div class="v mid '+lbCls(S.total)+'">'+lbFmt(S.total,0)+'</div>'+
-      '<div class="cash lb-mono">NT$ '+lbFmt(S.total*LBPOINT,0)+'</div></div></div>'+
-    '<div class="lb-exits"><div class="lb-xbar"><i class="tp" style="flex:'+S.tp+'"></i><i class="sl" style="flex:'+S.sl+'"></i><i class="eod" style="flex:'+S.eod+'"></i></div>'+
-    '<div class="lb-xleg"><span>停利<b>'+S.tp+'</b></span><span>停損<b>'+S.sl+'</b></span><span>收盤平倉<b>'+S.eod+'</b></span></div></div>'+
-    '<div class="lb-guard">'+
-      '<span class="gk">天數</span><span class="gv">'+S.n+' 天</span><span class="gs '+(few?'warn':'')+'">'+(few?'太少':'夠')+'</span>'+
-      '<span class="gk">拿掉最賺的 5 天</span><span class="gv '+(S.no5==null?'':lbCls(S.no5))+'">'+(S.no5==null?'—':lbFmt(S.no5)+' 點／筆')+'</span>'+
-        '<span class="gs '+(dep?'warn':'')+'">'+(dep?'靠那 5 天':'')+'</span>'+
-      '<span class="gk">雜訊範圍</span><span class="gv">'+(S.noise==null?'—':'±'+S.noise.toFixed(1)+' 點／筆')+'</span>'+
-        '<span class="gs '+(inNoise?'warn':'')+'">'+(S.noise==null?'':inNoise?'在雜訊裡':'超出雜訊')+'</span>'+
-    '</div>';
-  el.innerHTML=h;
+  setEl('hcstamp', esc(D.as_of||''));
+  /* ⛔⛔ 「這些數字是模擬還是真單」⼀定要寫在最上面（混在一起就是騙自己）。 */
+  setEl('hcsrc','主要的數字來自【模擬】的定論（同一條規則每天事後算一次，回填到 2024-08）——'+
+    '真單的筆數太少，15／30 筆的窗口算不出來。每張卡底下另外標真單的情形。');
+  setEl('hccards',(D.strategies||[]).map(hcCard).join(''));
+  const W=D.lamp_words||{}, N=D.lamp_notes||{};
+  setEl('hcleg',['ok','wn','bd'].map(k=>'<span><em class="hc-lamp '+k+'"><b></b>'+
+    esc(W[k]||'')+'</em>'+esc(N[k]||'')+'</span>').join(''));
+  setEl('hcmkt', D.market_ready
+    ? (D.market||[]).map(hcMktCard).join('')
+    : '<div class="hc-na">'+esc(D.market_note||'還在算…')+'</div>');
+  setEl('hcfoot','數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。'+
+    (D.real_err?'　⚠️ 真單那一半讀不出來：'+esc(D.real_err):''));
 }
-
-function lbCurve(){
-  const svg=lbEl('lbsvg'), R=LB.last&&LB.last.res;
-  const padL=46,padR=10,padT=12,padB=24;
-  const W=Math.round(svg.getBoundingClientRect().width)||1000, H=Math.round(svg.getBoundingClientRect().height)||300;
-  svg.setAttribute('viewBox','0 0 '+W+' '+H);
-  if(!R){ svg.innerHTML=''; svg.onmousemove=null; return; }
-  const dS=R.design.series||[], vS=R.valid.series||[];
-  const x1=padL+(W-padL-padR)*0.7;                          // 驗證期留 30% 寬（demo 定案）
-  const vx0=x1+8, vx1=W-padR;
-  const pts=[];                                              // {x, cum, cum5, row}
-  let c=0,c5=0;
-  const top5d=new Set(R.design.top5||[]), top5v=new Set(R.valid.top5||[]);
-  dS.forEach((r,i)=>{ if(r[1]!=null){ c+=r[1]; if(!top5d.has(r[0])) c5+=r[1]; }
-    pts.push({x:padL+(x1-padL)*(dS.length>1?i/(dS.length-1):0),cum:c,cum5:c5,r,v:false}); });
-  vS.forEach((r,i)=>{ if(r[1]!=null){ c+=r[1]; if(!top5v.has(r[0])) c5+=r[1]; }
-    pts.push({x:vx0+(vx1-vx0)*(vS.length>1?i/(vS.length-1):0),cum:c,cum5:c5,r,v:true}); });
-  const all=pts.flatMap(p=>[p.cum,p.cum5]);
-  let lo=Math.min(0,...all), hi=Math.max(0,...all);
-  if(hi-lo<100){ hi+=50; lo-=50; }
-  const span=hi-lo; hi+=span*.06; lo-=span*.06;
-  const Y=v=>padT+(H-padT-padB)*(1-(v-lo)/(hi-lo));
-  const step=[100,200,500,1000,2000,5000].find(s=>(hi-lo)/s<=5)||10000;
-  let g='';
-  for(let v=Math.ceil(lo/step)*step; v<=hi; v+=step){
-    g+='<line x1="'+padL+'" x2="'+(W-padR)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="'+(v===0?'#39414F':'#1E2530')+'" stroke-width="1"/>';
-    g+='<text x="'+(padL-6)+'" y="'+(Y(v)+3.5)+'" text-anchor="end">'+(v>0?'+':'')+v+'</text>';
-  }
-  let lastM='';
-  pts.forEach((p,i)=>{ const m=p.r[0].slice(0,7);
-    if(m!==lastM&&(+m.slice(5)%3===1||i===0||(p.v&&!pts[i-1].v))){
-      g+='<text x="'+p.x+'" y="'+(H-7)+'" text-anchor="'+(i===0?'start':'middle')+'">'+m.replace('-','/')+'</text>'; }
-    lastM=m; });
-  const path=(arr,key)=>arr.map((p,i)=>(i?'L':'M')+p.x.toFixed(1)+','+Y(p[key]).toFixed(1)).join('');
-  const dp=pts.filter(p=>!p.v), vp=pts.filter(p=>p.v);
-  const vFrom=(R.valid_from||LBVALID).slice(0,4);
-  if(!vp.length){
-    g+='<rect x="'+vx0+'" y="'+padT+'" width="'+(vx1-vx0)+'" height="'+(H-padT-padB)+'" fill="rgba(255,255,255,.015)" stroke="#242C38" stroke-dasharray="4 4"/>';
-    g+='<text x="'+((vx0+vx1)/2)+'" y="'+((H-padB+padT)/2)+'" text-anchor="middle" style="font-family:var(--font-sans);font-size:12px;fill:#5C6472">驗證期 '+vFrom+'・資料補齊中</text>';
-  } else {
-    g+='<line x1="'+(x1+4)+'" x2="'+(x1+4)+'" y1="'+padT+'" y2="'+(H-padB)+'" stroke="#242C38" stroke-dasharray="4 4"/>';
-    g+='<text x="'+(vx0+4)+'" y="'+(padT+11)+'" text-anchor="start" style="font-family:var(--font-sans);font-size:11px;fill:#5C6472">驗證期</text>';
-  }
-  [dp,vp].forEach(seg=>{ if(!seg.length) return;
-    g+='<path d="'+path(seg,'cum5')+'" fill="none" stroke="#8D95A3" stroke-width="1.3" stroke-dasharray="5 4" opacity=".8"/>';
-    g+='<path d="'+path(seg,'cum')+'L'+seg[seg.length-1].x.toFixed(1)+','+Y(0)+'L'+seg[0].x.toFixed(1)+','+Y(0)+'Z" fill="rgba(227,169,81,.07)"/>';
-    g+='<path d="'+path(seg,'cum')+'" fill="none" stroke="#E3A951" stroke-width="2"/>'; });
-  g+='<line id="lbhov" x1="0" x2="0" y1="'+padT+'" y2="'+(H-padB)+'" stroke="#5C6472" stroke-width="1" visibility="hidden"/>';
-  svg.innerHTML=g;
-  svg.onmousemove=ev=>{
-    const rc=svg.getBoundingClientRect(), vx=(ev.clientX-rc.left)/rc.width*W;
-    const tip=lbEl('lbtip'), hov=lbEl('lbhov');
-    if(!pts.length||vx<padL-4||vx>W-padR+4){ tip.style.display='none'; hov.setAttribute('visibility','hidden'); return; }
-    let best=0; pts.forEach((p,i)=>{ if(Math.abs(p.x-vx)<Math.abs(pts[best].x-vx)) best=i; });
-    const p=pts[best], r=p.r;
-    hov.setAttribute('x1',p.x); hov.setAttribute('x2',p.x); hov.setAttribute('visibility','visible');
-    tip.innerHTML=r[0]+'　'+(r[1]==null?'<span>沒做（'+(LBSKIP[r[2]]||r[2])+'）</span>'
-      :'當天 <b class="'+lbCls(r[1])+'">'+lbFmt(r[1])+'</b>・'+(LBWHY[r[2]]||r[2]))+'　累積 <b>'+lbFmt(p.cum,0)+'</b>';
-    tip.style.display='block';
-    const cw=svg.parentNode.getBoundingClientRect();
-    const left=ev.clientX-cw.left+14;
-    tip.style.left=Math.max(4,Math.min(left,cw.width-tip.offsetWidth-4))+'px';
-    tip.style.top=(ev.clientY-cw.top+18)+'px';
-  };
-  svg.onmouseleave=()=>{ lbEl('lbtip').style.display='none'; const h=lbEl('lbhov'); if(h) h.setAttribute('visibility','hidden'); };
+function hcFetch(){
+  const my=++HC.seq;
+  fetch('/api/health/state',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+    if(my!==HC.seq) return;
+    if(!x||!x.ok){ HC.data=null; HC.err=(x&&x.msg)||'讀不到健檢'; hcPaint(); return; }
+    HC.data=x; HC.err=''; hcPaint();
+    /* ⛔ 只有「市場狀態還在背景算」才再問一次，⛔ 而且有次數上限（不無限重試）。 */
+    if(!x.market_ready && x.market_busy && HC.tries<HC_TRIES){
+      HC.tries++;
+      if(HC.timer) clearTimeout(HC.timer);
+      HC.timer=setTimeout(()=>{ HC.timer=null; if(TAB==='hc') hcFetch(); }, HC_RETRY);
+    }
+  }).catch(()=>{ if(my!==HC.seq) return; HC.data=null; HC.err='連不上面板'; hcPaint(); });
 }
-
-function lbPaint(){
-  const M=LB.meta;
-  lbEl('lbto').innerHTML=M&&M.last?'資料到 <b>'+M.last+'</b>・共 '+M.n_days+' 天':(M?'還沒有歷史資料':'');
-  const R=LB.last&&LB.last.res, P=LB.last&&LB.last.P;
-  if(!R){
-    lbCard(lbEl('lbpdesign'),'設計期',M&&M.first?M.first+' ～ '+(M.design_to||''):'',null,true,true);
-    lbCard(lbEl('lbpvalid'),'驗證期',(M&&M.valid_from||LBVALID).slice(0,4),null,true,!(M&&M.n_valid===0));
-    lbCurve(); lbMark(); return;
-  }
-  const D=R.design, V=R.valid;
-  lbCard(lbEl('lbpdesign'),'設計期',D.days?D.from+' ～ '+D.to:'',D,!D.days,false);
-  lbCard(lbEl('lbpvalid'),'驗證期',V.days?V.from+' ～ '+V.to:(R.valid_from||LBVALID).slice(0,4),V,!V.days,false);
-  const vb=lbEl('lbverdict');
-  vb.querySelector('span').innerHTML=!V.days
-    ?'<b>兩段都好才算數</b>　驗證期還沒有資料，這組結果目前只看得到一半'
-    :(D.n&&V.n&&D.avg>0&&V.avg>0)?'<b>兩段都好才算數</b>　兩段每筆平均都是正的'
-    :'<b>兩段都好才算數</b>　兩段結果不一致';
-  vb.classList.toggle('half',!V.days);
-  const sep='<span class="sep">·</span>';
-  lbEl('lbsum').innerHTML=[lbHMS(P.tsec),LBDIR[P.dir],'停利 '+P.tp+'／停損 '+P.sl,
-    P.gap?'跳空 ≥ '+P.gap:'',P.nr?'夜盤 ≥ '+P.nr:'',
-    P.skip.length?'跳過週'+P.skip.map(w=>'一二三四五'[w-1]).join(''):'',P.noexp?'避開結算週':'',
-    P.cost?'含成本':'不含成本'].filter(Boolean).join(sep);
-  const k=LB.tried.size, tr=lbEl('lbtries');
-  tr.hidden=k<2;
-  tr.classList.toggle('warn',k>=10);
-  tr.innerHTML=k>=10?'這次試了 <b>'+k+'</b> 組・試越多組，越容易碰到運氣好的那組':'這次試了 <b>'+k+'</b> 組';
-  lbCurve(); lbMark();
-}
-
-function lbRun(){
-  const P=lbValidate();
-  if(LB.busy||!lbOk(P)) return;
-  const my=++LB.seq;
-  LB.busy=true; LB.err=''; lbMark();
-  fetch('/api/lab/run?'+lbQuery(P),{cache:'no-store'})
-    .then(r=>r.json().catch(()=>({})).then(j=>({s:r.status,j})))
-    .then(({s,j})=>{
-      if(my!==LB.seq) return;
-      LB.busy=false;
-      if(s!==200||!j||!j.ok){
-        LB.err=s===429?'還在算上一組，等一下再按一次':((j&&j.msg)||('回測失敗（'+s+'）'));
-        lbMark(); return; }
-      LB.last={P,res:j}; LB.shown=lbSig(P); LB.tried.add(LB.shown);
-      lbPaint();
-    })
-    .catch(()=>{ if(my!==LB.seq) return; LB.busy=false; LB.err='連不到面板，回測沒有跑'; lbMark(); });
-}
-
-// 「現在真單用的」標籤：唯讀 GET /api/fire/state（⛔ 不帶、也不取 token，⛔ 不打任何會改狀態的端點）。
-// 只有開關開著、method 是 A／B 才標；讀不到、關著、看不懂 ⇒ 兩格都留白。
-function lbFire(){
-  fetch('/api/fire/state',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(x=>{
-    const m=x&&x.armed===true?x.method:null;
-    /* ⚠️ 2026-09-15：自動下單換成「開盤快才做」＋ ±0.5% —— 方向跟這顆同一套，但**不是每天做、停利停損也不是這頁的點數**。
-       標籤只寫「方向同這個」，⛔ 不可以寫成「現在真單用的」（那會讓他以為這頁回測的就是自動下單）。 */
-    /* ⚠️ 2026-09-15 晚上「快攻回馬槍」：回馬槍那一口的方向是 09:15 反轉後的方向，**不一定同這個** ⇒
-       只能說「快攻那一口」方向同這個（⛔ 寫「方向同這個」在反轉的日子是一句假話）。 */
-    const txt=(x&&x.live?'真單':'自動下單')+'快攻那一口的方向同這個（另有開盤快慢與回馬槍）';
-    [['A','lbm-bar5'],['B','lbm-open']].forEach(([k,id])=>{ const e=lbEl(id); if(e) e.innerHTML=(m===k)?esc(txt):'&nbsp;'; });
-  }).catch(()=>{});
-}
-
-function lbEnter(){
-  if(!LB.boot){
-    LB.boot=true;
-    // ⛔ 預設值一律從注入的規則常數來（改規則時不會有第二個地方要記得跟著改）
-    lbEl('lbt').value=RULE_SIGNAL_AT; lbEl('lbtp').value=RULE_TP; lbEl('lbsl').value=RULE_SL;
-    lbBind();
-  }
-  lbPaint();
-  lbFire();
-  fetch('/api/lab/meta',{cache:'no-store'}).then(r=>r.json().catch(()=>({})).then(m=>({s:r.status,m}))).then(({s,m})=>{
-    if(s===503){ LB.err=(m&&m.msg)||'策略實驗室載入失敗'; lbMark(); return; }
-    if(m&&m.n_days!=null){ LB.meta=m; lbPaint(); }
-  }).catch(()=>{});
-}
-
-function lbBind(){
-  document.querySelectorAll('#lbdir button').forEach(b=>b.onclick=()=>{
-    document.querySelectorAll('#lbdir button').forEach(x=>x.classList.toggle('on',x===b)); lbMark(); });
-  document.querySelectorAll('#lbwd button').forEach(b=>b.onclick=()=>{ b.classList.toggle('on'); lbMark(); });
-  ['lbexpw','lbcost'].forEach(id=>lbEl(id).onclick=()=>{
-    const on=lbEl(id).classList.toggle('on'); lbEl(id).setAttribute('aria-checked',on); lbMark(); });
-  document.querySelectorAll('#tab-lab .lb-step').forEach(b=>b.onclick=()=>{
-    const P=lbParams(), r=RULE_SIGNAL_AT.split(':').map(Number);
-    let s=P.tsec===null?lbSec(r[0],r[1],r[2]||0):P.tsec+(+b.dataset.lbdt);
-    s=Math.max(LBTMIN,Math.min(LBTMAX,s)); lbEl('lbt').value=lbHMS(s); lbMark(); });
-  lbEl('lbt').addEventListener('keydown',e=>{
-    if(e.key!=='ArrowUp'&&e.key!=='ArrowDown') return;
-    e.preventDefault();
-    const P=lbParams(); if(P.tsec===null) return;
-    const s=Math.max(LBTMIN,Math.min(LBTMAX,P.tsec+(e.key==='ArrowUp'?1:-1)*(e.shiftKey?1:60)));
-    lbEl('lbt').value=lbHMS(s); lbMark(); });
-  lbEl('lbt').addEventListener('blur',()=>{ const P=lbParams(); if(P.tsec!==null) lbEl('lbt').value=lbHMS(P.tsec); });
-  document.querySelectorAll('#lbform input').forEach(i=>{
-    i.addEventListener('input',lbMark);
-    i.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); lbRun(); } }); });
-  lbEl('lbrun').onclick=lbRun;
-  window.addEventListener('resize',()=>{ if(TAB==='lab'&&LB.last) lbCurve(); });
+function hcEnter(){
+  HC.tries=0;
+  if(HC.timer){ clearTimeout(HC.timer); HC.timer=null; }
+  hcFetch();
 }
 
 /* ══════════════ 【自動下單】分頁：會真的送出委託單的那一頁 ══════════════
@@ -8765,8 +8180,10 @@ function alF(v,d){ const n=alN(v); return n==null?'—':n.toFixed(d==null?1:d); 
 function alSigned(v){ const n=alN(v); return n==null?'—':(n>0?'+':'')+n.toFixed(1); }
 
 function alEnter(){
- /* ⛔ 每次切進這一頁都回到「未確認」（⛔ 不可以留著上次展開到一半的確認條）。 */
+ /* ⛔ 每次切進這一頁都回到「未確認」（⛔ 不可以留著上次展開到一半的確認條）。
+    ⛔ 日盤與夜盤**各自一份**：他剛剛在夜盤按到一半，切走再回來也要回到 idle。 */
  ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';
+ NFON.step='idle'; NFON.mode=null; NFON.busy=false; NFON.err='';
  alFetch(); NF.n=0; nfFetch();
  if(AL.timer) clearTimeout(AL.timer);
  AL.timer=setTimeout(alLoop,5000);
@@ -8775,28 +8192,21 @@ function alLoop(){
  if(TAB!=='fire'){ AL.timer=null; return; }
  alFetch(); nfFetch(); AL.timer=setTimeout(alLoop,5000);
 }
-/* ⭐ 夜盤自動下單的唯讀狀態卡。⛔ 只打 GET、不帶 token、沒有任何按鈕。 */
-const NF={n:0};
-function nfFetch(){
- if((NF.n++)%6) return;                        /* 跟著 alLoop 走，約 30 秒一次就夠 */
- fetch('/api/nightfire/state',{cache:'no-store'}).then(r=>r.json()).then(nfPaint)
-   .catch(()=>{ setEl('nfstate',''); setEl('nfbody','<span class="warn">讀不到夜盤自動下單的狀態</span>'); });
+/* ⭐ 夜盤自動下單的狀態（GET /api/nightfire/state，唯讀、不帶 token）。
+   ⭐⭐ 2026-09-23：夜盤補了畫面上的開關（Benson 交辦）⇒ 這一份狀態除了顯示，
+      還負責決定「開／關那兩顆鈕要不要畫」。⛔ 狀態本身照舊是唯讀的 GET。 */
+const NF={n:0, data:null, err:''};
+/* 夜盤那顆「打開」的兩段式狀態。⛔ 只活在記憶體、⛔ 不寫 localStorage、⛔ 跨分頁不殘留。 */
+var NFON={step:'idle', mode:null, busy:false, err:''};
+function nfFetch(force){
+ if(!force && (NF.n++)%6) return;              /* 跟著 alLoop 走，約 30 秒一次就夠 */
+ fetch('/api/nightfire/state',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+   NF.data=(x&&x.ok)?x:null; NF.err=(x&&x.ok)?'':((x&&x.msg)||'讀不到夜盤自動下單的狀態');
+   nfPaint();
+ }).catch(()=>{ NF.data=null; NF.err='讀不到夜盤自動下單的狀態'; nfPaint(); });
 }
-function nfPaint(x){
- if(!x||!x.ok){ setEl('nfstate',''); setEl('nfbody','<span class="warn">'+esc((x&&x.msg)||'讀不到狀態')+'</span>'); return; }
- setEl('nfstate', x.on ? (x.live?'<span class="al-badge on">開著・真單</span>':'<span class="al-badge">開著・演練</span>')
-                       : '<span class="al-badge">關著</span>');
- const rows=(x.recent||[]).map(o=>'<div>'+esc(o.E||'')+'　'+esc(o.rec==='result'
-      ?((o.dir==='long'?'做多':'做空')+' '+(o.entry==null?'':o.entry)+(o.ok?'':'（沒送成：'+(o.err||'')+'）'))
-      :(o.msg||o.why||''))+'</div>').join('');
- setEl('nfbody',
-   '<div><b>'+esc(x.name||'')+'</b>：'+esc(x.rule||'')+'</div>'
-  +(x.tonight?'<div>今晚 '+esc(x.tonight.look_at)+' 看台積電 ADR 開盤那根 5 分 K</div>':'')
-  +'<div>'+esc(x.msg||'')+(x.on?'':'　'+esc(x.how_on||''))+'</div>'
-  +'<div class="warn">'+esc(x.warn||'')+'</div>'
-  +(rows?'<div class="at-notes">'+rows+'</div>':'')
-  +(x.errors?'<div class="warn">背景出錯 '+x.errors+' 次：'+esc(x.last_err||'')+'</div>':''));
-}
+/* 夜盤的狀態現在畫在 ① 狀態列與 ⑥ 開關區裡（跟日盤同一套版面）⇒ 交給 alPaint 一起畫。 */
+function nfPaint(){ alPaint(); }
 function alFetch(){
  const my=++AL.seq; AL.pending=true;
  return fetch('/api/fire/state').then(r=>r.json()).then(x=>{
@@ -8818,45 +8228,81 @@ function alWhy(x,fallback){
  return T[x]||fallback||x||'';
 }
 
+/* ⭐ ① 狀態列：日盤與夜盤兩顆對稱的藥丸（2026-09-23 v3）。
+   ⛔ 關著＝中性灰、開著＝金色；⛔ 不准用紅綠（這個面板的紅綠只給損益）。
+   ⛔ 「真錢 vs 演練」**從後端來**（日盤 D.live／夜盤 x.live），⛔ 前端不准自己猜。
+   ⛔ 「關閉」鈕就放在這裡：關掉永遠是安全的動作、要好按、⛔ 照舊不跳確認；
+      ⛔ 只有開著才畫（沒東西可關就不該有按鈕）。 */
+/* `on`＝金色（真的會送單）；`canOff`＝**那顆「關閉」鈕要不要畫**。
+   ⛔⛔ 兩件事**刻意分開**：開關檔存在但內容看不懂時 `on` 是 false（畫面不可以說「開著」），
+      但那個檔還在 ⇒ `canOff` 是 true，**他關得掉**。
+      （2026-09-09 lab-qa Q9：顯示條件看 `armed` 的話，壞掉的開關檔他關不掉，
+        而「關」永遠是安全方向。） */
+/* `on`＝金色（真的會送單）；`canOff`＝**那顆「關閉」鈕要不要畫**。
+   ⛔⛔ 兩件事**刻意分開**：開關檔存在但內容看不懂時 `on` 是 false（畫面不可以說「開著」），
+      但那個檔還在 ⇒ `canOff` 是 true，**他關得掉**。
+      （2026-09-09 lab-qa Q9：顯示條件看 `armed` 的話，壞掉的開關檔他關不掉，
+        而「關」永遠是安全方向。）
+   ⚠️ 關著時右邊那顆是「到開關」——**純導覽**，⛔ 一個請求都不送（只捲到最底下那張卡）。 */
+function alPillHTML(lb,nm,on,live,canOff,offAttr,msg){
+ return '<div class="al-pill'+(on?' on':'')+'"><span class="lb">'+esc(lb)+'</span>'+
+   '<span class="nm">'+esc(nm||'—')+'</span>'+
+   '<span class="st">'+esc(on?(live?'開著・真錢':'開著・演練'):(msg||'關著'))+'</span>'+
+   (canOff?('<button class="off" '+offAttr+'>關閉</button>')
+          :'<button class="off" data-aljump="1">到開關</button>')+'</div>';
+}
+/* ⭐ 日盤藥丸上的名字：**那一盤實際在跑的做法**。
+   ⛔ 沒開著的時候寫的是「不去動開關檔就是這一條」那一條（後端 default_method），
+      ⛔ 不准寫死「多方聯軍」—— 帳本那一列叫什麼名字還是走 alRecName()。 */
+function alDayName(D){
+ const k=(D&&D.armed)?D.method:((D&&D.default_method)||'U');
+ const MS=(D&&D.methods)||[];
+ const hit=MS.filter(x=>x.k===k)[0];
+ return (hit&&hit.name)||alName(k)||k;
+}
+function alBarHTML(D){
+ const x=NF.data;
+ /* ⛔⛔ 「關閉」鈕的顯示條件逐字就是 `D.flag_exists`（檔案在不在），⛔ 不准用 armed、
+    ⛔ 不准 ||、⛔ 不准 &&（加料之後「關著的時候整頁 0 顆會動到錢的按鈕」那條鐵律就破了）。 */
+ const dayOff=D.flag_exists;
+ const dayArm=!!(D&&D.armed);
+ /* 「檔在、但內容看不懂」⇒ 拒絕下單：⛔ 不可以畫成「開著」（那是假話），
+    但也不是「關著」（那個檔還在）⇒ 照後端那句話講。 */
+ const dayMsg=dayOff?(dayArm?'':(D.arm_msg||alWhy(D.arm_why)||'拒絕下單')):'關著';
+ let h=alPillHTML('日盤', alDayName(D),
+                  dayArm, !!(D&&D.live), dayOff, 'data-aloff="1"', dayMsg);
+ /* 夜盤同一套規矩：⛔ 開關檔在不在（x.flag_exists）＝ 那顆「關閉」要不要畫，⛔ 不看 on。 */
+ if(x) h+=alPillHTML('夜盤', nfName(x, x.on?x.method:null),
+                     !!x.on, !!x.live, !!x.flag_exists, 'data-nfoff="1"',
+                     x.flag_exists?(x.msg||'拒絕下單'):'關著');
+ else h+='<div class="al-pill"><span class="lb">夜盤</span><span class="nm">—</span>'+
+   '<span class="st">'+esc(NF.err||'載入中…')+'</span></div>';
+ return h;
+}
+/* 夜盤那一條叫什麼名字。⛔ 名字的正本在後端（x.methods／x.name），⛔ 前端不准寫死。 */
+function nfName(x,k){
+ const MS=(x&&x.methods)||[];
+ if(k){ const hit=MS.filter(m=>m.k===k)[0]; if(hit&&hit.name) return hit.name; }
+ return (x&&x.name)||(MS[0]&&MS[0].name)||'—';
+}
+
 function alPaint(){
  const D=AL.data;
  if(!D){
-   setEl('alstate','<span class="al-badge">讀不到狀態</span>');
+   setEl('albar','<div class="al-pill"><span class="lb">日盤</span><span class="nm">—</span>'+
+     '<span class="st">讀不到狀態</span></div>');
    setEl('alsub','<span class="warn">'+esc(AL.err||'載入中…')+'</span>');
-   /* ⛔ 讀不到狀態時那顆「關閉」鈕也要收起來 —— 我們根本不知道開關檔在不在，
-      而那顆鈕的說明寫著「按下去就把 X 改名收起來」，留著就是一句沒把握的話。 */
-   /* ⛔⛔ 讀不到狀態時「打開」那兩顆更不能留：我們連現在是真錢還是演練都不知道。 */
-   setEl('algates',''); setEl('alfast',''); setEl('alrisk',''); setEl('altoday',''); setEl('aloff','');
-   setEl('alon','');
+   /* ⛔⛔ 讀不到狀態時「打開」那幾顆更不能留：我們連現在是真錢還是演練都不知道。
+      ⛔ 「關閉」也一樣收起來 —— 我們不知道開關檔在不在。 */
+   setEl('algates',''); setEl('alfast',''); setEl('alrisk',''); setEl('altoday','');
+   setEl('alswitch',''); setEl('alpos','');
+   setEl('alperf',''); setEl('alsparkbox',''); setEl('alperfn','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
    return;
  }
  const armed=!!D.armed, m=D.method, live=!!D.live;
- /* ── ① 現在是開還是關 ＋ ② 選了哪個做法 ─────────────────────── */
- let st;
- /* ⚠️ 「差 0 點算做多」原本寫在〈怎麼開〉那段（2026-09-10 整段砍掉）。
-    CLAUDE.md 明訂這件事**畫面上要說**（`auto_dirs` 的 `sig >= 0` 是刻意選的那一邊，
-    跟【自動下單（模擬）】同一把尺），而砍掉之後「開著」那個狀態就沒有地方講了
-    ⇒ 併進做法名字底下那一行小字（⛔ 不另外多一行，開關區的行數不變）。 */
- /* 2026-09-14 一件事只講一次（lab-ux 定案 C）：原本副標那兩句（「09:03:00 一到會自己送 1 口真單
-    （你不在也會送）」「13:43:30 會自動平倉（只平自動下單開的那一口）」）併進這一行小字，
-    副標只剩條件式的警告（真單關著／出過錯）。⛔ 時刻一律用後端的 signal_at／eod_at。 */
- /* ⭐ 2026-09-15 規則換成「開盤快才做」：這一行要講出**整條規則**（時刻／快才做／幾口／±0.5%），
-    ⛔ 數字一律從後端來（D.signal_at／D.rule／D.fast.pts／D.pts_est），⛔ 不准寫死 0.5 或 40／70。 */
- if(armed) st='<span class="al-badge on">開啟中</span>'+
-   /* ⛔ 2026-09-17（lab-qa 建議 1）：用 `emb()` —— 後端那句話裡的 `**粗體**`
-      要真的變粗體，⛔ 不是把星號印出來。 */
-   '<span class="al-way">'+esc(alName(m)||m)+'<i>'+emb(alRuleTxt(D))+
-   ' · 差 0 點算做多'+(live?'（你不在也會送）':'')+
-   (D.eod_at?(' · '+esc(D.eod_at)+' 自動平那一口，你自己開的單不會碰'):'')+
-   '</i></span>';
- else if(D.arm_why==='off') st='<span class="al-badge">關閉中</span>'+
-   /* ⛔ 這句話 2026-09-09 跟著改：以前只能自己建檔，現在下面那兩顆就開得起來。
-      舊句子（「要用請自己建 AUTO_ORDERS_ON」）留在畫面上會讓他以為按鈕不算數。 */
-   '<span class="al-way off">按下面那兩顆就可以開始</span>';
- else st='<span class="al-badge">拒絕下單</span>'+
-   '<span class="al-way off">'+esc(D.arm_msg||alWhy(D.arm_why))+'</span>';
- setEl('alstate',st);
+ /* ── ① 狀態列（日盤／夜盤）───────────────────────────────── */
+ setEl('albar', alBarHTML(D));
  /* ⛔ 真單開關要跟自動開關一起講：他關掉真單就等於連自動也關掉，
     但畫面上如果只寫「開啟中」，他會以為單真的會出去。 */
  /* ⛔ 這一行不要複述上面那個名字（上面已經寫了「開盤快才做」＋「09:00 起算」）——
@@ -8873,7 +8319,7 @@ function alPaint(){
    '（<b>把真單關掉就等於連自動也關掉</b>）</span>');
  /* ⚠️ 「開關沒有有效期」那句 2026-09-10 **搬到底下的 `.al-risk`**（風險條）——
     它跟「停損活在這台電腦裡」是同一個等級的事，混在這排小字裡看不見。
-    ⛔ 搬走不是刪掉：關著的時候它掛在那顆「開始」旁邊（見 alOnHTML）。 */
+    ⛔ 搬走不是刪掉：關著的時候它掛在那顆「打開」旁邊（見 alSwDay／alSwNight）。 */
  /* ⛔ 收盤平倉是這一段最會賠錢的地方（沒平就是抱過夜盤），一定要寫在最上面
     —— 2026-09-14 起寫在標題那行小字（st），不在這裡重複。 */
  let sub=subs.join('<span class="sep">·</span>');
@@ -8923,11 +8369,19 @@ function alPaint(){
           而且他**看不出來**（面板關掉的時候沒有任何東西會告訴他）。
        ② 這個開關沒有有效期 —— 他自己的原話是「我用工具那邊關掉之後，才會失效」，
           不寫他會以為「今天開的、今天有效」。
-    ⛔ 只有**開著**的時候畫（關著的時候沒有停損可談；「沒有有效期」那句改掛在
-       他正要按的那顆鈕旁邊，見 alOnHTML）。 */
+    ⛔ 顯示條件（2026-09-23 規格 §2③ 改過，⛔ 句子本身一個字都沒動）：
+       ① 停損活在面板裡 …… **任一盤開著 或 手上還有部位**
+       ② 開關沒有有效期 …… 任一盤開著（關著時照舊掛在「打開」鈕旁邊）
+       ③④ 夜盤自己那兩句 …… 夜盤開著
+    ⚠️⚠️ ① 從「開著才畫」放寬成「開著**或**還有部位」是刻意的：他按了關閉之後，
+       手上那一口的停損**還是靠這台面板**，而舊規則會在那一刻把這句話收走 ——
+       那正是最需要它的一刻。⛔ 這是**加**不是改。 */
  /* ⚠️ 2026-09-14 只降層級、一字不刪（樣式見 .al-risk）：圖示改用純文字 ⚠（&#9888;）而不是 emoji，
     金色才套得上去；整段灰字、關鍵字白。 */
- setEl('alrisk', armed
+ const nfd=NF.data, nOn=!!(nfd&&nfd.on);
+ const holding=!!((LASTS&&LASTS.real&&LASTS.real.position)||null);
+ const anyOn=armed||nOn;
+ setEl('alrisk', (anyOn||holding)
    ? '<div class="al-risk">'+
        '<p><i>&#9888;</i><span>停損活在<b>這台電腦的面板迴圈</b>裡 —— '+
          '面板關掉／當掉／電腦睡著就<b>沒有停損</b>'+
@@ -8937,47 +8391,362 @@ function alPaint(){
           ⛔ 2026-09-17（lab-qa 建議 2）：那句話**寫死了兩候選的舊描述** ——
              多方聯軍是三個候選、而且「夠快但做空要跳過」⇒ 在 U 底下整句是假話。
              ⇒ 改成照現在跑的那個做法（正本在後端 fire_rule_line）。 */
-       '<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
-         '每個交易日都會照「<b>'+esc(alName(m)||m)+'</b>」看一次（'+
-         emb(alRuleFull(D,m))+'），直到你自己按下面那顆關掉。</span></p>'+
+       (armed?('<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
+         '每個交易日都會照「<b>'+esc(alDayName(D))+'</b>」看一次（'+
+         emb(alRuleFull(D,m))+'），直到你自己按上面那顆關掉。</span></p>'):'')+
+       (!armed&&nOn?('<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
+         '每個晚上都會看一次，直到你自己關掉。</span></p>'):'')+
+       /* ③④ 夜盤自己的兩句（CLAUDE.md 2026-09-22 那節）。⛔ 夜盤關著時不畫。 */
+       (nOn?('<p><i>&#9888;</i><span>夜盤那一口的停損<b>一樣活在這台面板裡</b>'+
+               '（永豐沒有停損單）。</span></p>'+
+             '<p><i>&#9888;</i><span>所以有部位的晚上<b>面板要整晚開著</b> —— '+
+               '04:58 才會自動平倉。</span></p>'):'')+
+       /* ⭐ 夜盤那一條「不設停利也不設停損」時的第三重揭露（⛔ 只有那一條在跑時才出現）。 */
+       (nOn&&nfNoSL(nfd)?('<p><i>&#9888;</i><span>夜盤選的是<b>'+esc(nfName(nfd,nfd.method))+
+         '</b> —— 這一條<b>不設停利也不設停損</b>，進場後抱到 04:58 才平。</span></p>'):'')+
      '</div>'
    : '');
 
- /* ── 打開（兩段式）：⛔ 只有開關檔**不在**的時候才畫（開著就只剩「關閉」）─── */
- setEl('alon', alOnHTML(D));
+ /* ── ⑥ 開關（沉到最底）──────────────────────────────────────
+    ⛔ 「打開」兩段式：⛔ 只有開關檔**不在**的時候才畫（開著就只剩「關閉」）。 */
+ setEl('alswitch', alSwDay(D)+alSwNight());
 
- /* ── 關閉鈕：⛔ 只有開關檔存在時才畫（沒東西可關就不該有按鈕）────── */
- /* ⚠️ 說明只留**按下去會怎樣**（2026-09-10 精簡）：「把 X 改名收起來（內容留著）、
-    要再開就自己把檔名改回去」是**實作細節**，而且「要再開」那半已經是假的 ——
-    上面那兩顆鈕就開得起來，叫他去改檔名是把他推回最麻煩的那條路。 */
- setEl('aloff', D.flag_exists
-   ? '<button class="btn flat2" data-aloff="1">關閉自動下單</button>'+
-     '<span class="n">按下去之後<b>不會再送任何單</b>。</span>'+
-     (D.off_msg?'<span class="n">'+esc(D.off_msg)+'</span>':'')
-   : (D.off_msg?'<span class="n">'+esc(D.off_msg)+'</span>':''));
-
- /* ── ③ 今天送了沒／為什麼沒送 ─────────────────────────────── */
+ /* ── ② 今天送了沒／為什麼沒送 ─────────────────────────────── */
  const days=D.days||[], today=D.today||'', row=days.find(r=>r&&r.date===today)||null;
  setEl('alcount',esc(today));
  /* ⛔⛔ 「今天」這一塊吃的是**跟紀錄清單同一份資料**（2026-09-10 一起改）：
     只改清單不改這裡的話，畫面會同時寫著「紀錄：出場 +100」與
     「今天：已送出委託單，13:43:30 會自動平倉」—— 後面那句在那一刻已經是假話。
     ⭐ 2026-09-14 一件事只講一次：今天那一口**已經出場**（真單對到了 real_trades/ 那一趟、
-       而且收盤那一段沒有警示）時，整張「今天」卡收起來，改併進「紀錄」第一列
+       而且收盤那一段沒有警示）時，「今天」那半整塊收起來，改併進「紀錄」第一列
        （金框＋「今天」＋「已出場」標，見 alCard 的 today 版）—— 同一筆點數不再寫兩次。
-    ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／下落不明／持有中／對不到／收盤警示）照舊畫這張卡。 */
+    ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／下落不明／持有中／對不到／收盤警示）照舊畫這裡。 */
  const merged=alTodayMerged(D,row);
- const tcard=document.getElementById('altodaycard');
- if(tcard) tcard.hidden=merged;
- setEl('altoday',merged?'':(alTodayHTML(D,row)+alCandsHTML(D,row)+alEodHTML(D,row)));
+ const tbox=document.getElementById('altodaybox');
+ if(tbox) tbox.hidden=merged;
+ /* ⭐⭐ 2026-09-23（規格 §2.7）：**關掉之後今天那一口還在**這一幕要畫得出來。
+    舊寫法在開關關掉之後會走「今天沒有紀錄／還沒到」那條，跟紀錄清單上的「持有中」
+    自相矛盾 —— 他會以為關掉就把那一口收回來了。
+    ⛔ 判準是「今天真的送出去了 ＋ 開關現在關著」；⛔ 部位卡**不可以跟著清空**（見 alPosHTML）。 */
+ const openedToday=!!(row&&row.rec==='result'&&row.ok);
+ setEl('altoday', merged ? ''
+   : ((openedToday&&!armed)
+      ? ('<div class="t">日盤已經關掉了，但<b style="color:var(--gold)">今天那一口還在</b></div>'+
+         '<div class="d">它照樣走完停損停利與 <b>'+esc(D.eod_at||'')+'</b> 的自動平倉。<br>'+
+         '關掉生效的是<b>之後的日子</b> —— 明天開始不再送單。</div>'
+         + alEodHTML(D,row))
+      : (alTodayHTML(D,row)+alCandsHTML(D,row)+alEodHTML(D,row))));
+ /* 右半：現在的部位（⛔ 唯讀；⛔ 開關關掉了也照樣畫 —— 部位還在就是還在） */
+ setEl('alpos', alPosHTML(D,row));
 
- /* ── 紀錄（要能跟【自動下單（模擬）】那一頁對得起來）───────────── */
- setEl('allogn',days.length?(days.length+' 天'):'');
- setEl('altbl',days.length?alTblHTML(D,days,merged?today:''):'');
- setEl('alempty',days.length?'':
+ /* ── ④ 最近做得如何（⛔ 不放勝率、不放期望值、不放勝敗場數）──────── */
+ alPerfPaint(D,days);
+
+ /* ── ⑤ 紀錄（日盤與夜盤合併在同一份清單，靠 chips 篩）───────────── */
+ const merged_rows=alRows(D,days,merged?today:'');
+ const shown=merged_rows.filter(r=>ALF==='all'||r.kind===ALF);
+ setEl('allogn',shown.length?(shown.length+' 筆'):'');
+ setEl('altbl',shown.map(r=>r.html).join(''));
+ setEl('alempty',merged_rows.length?(shown.length?'':'這個篩選底下沒有紀錄。'):
    '還沒有任何紀錄。開關關著的時候，'+esc(D.signal_at||'')+' 一到只會在這裡記一列「沒送」，'+
    '不會有任何委託單出去。');
  setEl('alnotes',alNotesHTML(D,days));
+ /* chips 由這裡畫（⛔ 這一頁的靜態 HTML 一顆 button 都不准有）。 */
+ setEl('alfilter',[['all','全部'],['day','日盤'],['night','夜盤']].map(
+   x=>'<button class="al-chip'+(ALF===x[0]?' on':'')+'" data-alf="'+x[0]+'">'+x[1]+'</button>').join(''));
+}
+
+/* ⭐ ② 右半「現在的部位」（⛔ 唯讀、⛔ 一顆鈕都沒有）。
+   ⛔ 部位那幾個數字來自 /api/state 的 `real`（跟【即時】那張卡、跟停損監控**同一份**）——
+      ⛔ 這一頁不自己算浮動點數，也不自己算停利停損價。
+   ⛔ 夜盤那一口**另起一行**（它是另一套帳、另一個帳本）。 */
+function alPosHTML(D,row){
+ const s=LASTS||{}, R=s.real||{}, P=R.position;
+ const nfp=NF.data;
+ const nfline='<div class="r"><span>夜盤那一口</span><b>'+
+   esc(nfp?(nfp.on?(nfp.tonight?('今晚 '+(nfp.tonight.look_at||'')+' 才看'):'沒有部位'):'關著'):'—')+
+   '</b></div>';
+ if(!P){
+   /* ⛔ 「現在沒有部位」與「最早幾點會有」是兩句不同的話（後者只有開著才成立）。 */
+   const when=[];
+   if(D&&D.armed&&D.signal_at) when.push('日盤那一口最早 '+D.signal_at);
+   if(nfp&&nfp.on&&nfp.tonight&&nfp.tonight.look_at) when.push('夜盤那一口最早 '+nfp.tonight.look_at);
+   return '<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
+     '<div class="none">現在沒有部位。'+(when.length?('<br>'+esc(when.join('、'))+'。'):'')+'</div></div>';
+ }
+ const fp=R.float_pts;
+ const dir=P.dir==='long'?'▲ 做多':(P.dir==='short'?'▼ 做空':'方向不明');
+ return '<div class="al-pos live"><div class="hd"><span>現在的部位</span>'+
+   '<span style="color:var(--gold)">'+dir+' '+esc(String(P.qty==null?1:P.qty))+' 口</span></div>'+
+   '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+
+     ' <small style="font-size:13px;font-weight:600;color:var(--faint)">點</small></div>'+
+   '<div class="r"><span>進場</span><b>'+f(P.entry)+
+     (P.entry_time?'（'+esc(String(P.entry_time).slice(0,8))+'）':'')+'</b></div>'+
+   '<div class="r"><span>現價</span><b>'+f(livePx(s))+'</b></div>'+
+   '<div class="r"><span>停損 / 停利</span><b>'+(R.sl==null?'—':f(R.sl))+' / '+
+     (P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'+
+   (D&&D.eod_at?'<div class="r"><span>沒平掉就</span><b>'+esc(D.eod_at)+' 自動平</b></div>':'')+
+   nfline+
+   (P.no_tp?'<div class="n" style="color:var(--gold)">開箱：券商端無掛單 —— '+
+     '這一口沒有停利單、永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。</div>':'')+
+   '</div>';
+}
+
+/* ⭐ ④ 「最近做得如何」。
+   ⛔⛔ **不放勝率、不放期望值、不放勝敗場數**（CLAUDE.md 那條鐵律）。
+   ⛔ 資料就是這一頁現有的那一份（帳本列 ＋ D.real 的出場價），⛔ 不新開端點、⛔ 不另寫一套算法。
+   ⛔ 對不到出場的那幾天**不算一筆**（留白跟 0 點是兩回事）。 */
+function alPts(D,days){
+ const R=D.real||{}, out=[];
+ /* days 是新到舊 ⇒ 反過來走，讓迷你柱狀圖左舊右新。 */
+ for(let i=days.length-1;i>=0;i--){
+   const r=days[i]; if(!r||r.rec!=='result'||!r.ok) continue;
+   const X=R[r.date]; if(!X||X.state!=='ok'||!alN(X.points)) continue;
+   out.push({date:r.date, pts:X.points});
+ }
+ return out;
+}
+function alPerfPaint(D,days){
+ const P=alPts(D,days);
+ const avg=n=>{ const a=P.slice(-n); return a.length?a.reduce((x,y)=>x+y.pts,0)/a.length:null; };
+ const mo=(D.today||'').slice(0,7);
+ const moRows=P.filter(x=>String(x.date).slice(0,7)===mo);
+ const moSum=moRows.length?moRows.reduce((x,y)=>x+y.pts,0):null;
+ setEl('alperfn', P.length?(P.length+' 筆算得出點數'):'還沒有算得出點數的紀錄');
+ if(!P.length){
+   setEl('alperf','');
+   setEl('alsparkbox','');
+   return;
+ }
+ const a10=avg(10), a30=avg(30);
+ setEl('alperf',
+   '<div class="c"><div class="k">近 10 筆 每筆平均</div><div class="v '+sgn(a10)+'">'+
+     (a10==null?'—':pm(a10))+'</div><div class="s">點／筆</div></div>'+
+   '<div class="c"><div class="k">近 30 筆 每筆平均</div><div class="v '+sgn(a30)+'">'+
+     (a30==null?'—':pm(a30))+'</div><div class="s">點／筆</div></div>'+
+   '<div class="c"><div class="k">本月合計</div><div class="v '+sgn(moSum)+'">'+
+     (moSum==null?'—':pm(moSum))+'</div><div class="s">'+moRows.length+
+     ' 筆・⛔ 不含手續費與稅</div></div>');
+ setEl('alsparkbox', sparkBars(P.slice(-30).map(x=>x.pts),50));
+}
+
+/* ⭐ ⑤ 紀錄：日盤與夜盤**合併在同一份清單**（2026-09-23 v3）。
+   ⚠️⚠️ 合併只發生在**畫面**上 —— 兩邊是**不同的帳本**（autofire/ vs nightfire/）、
+      不同的端點、不同的 rule 命名空間，⛔ 不准合併檔案、⛔ 不准共用 rule。
+   ⚠️ 夜盤帳本**沒有出場價**（出場在券商端成交，night_fire 那一側看不到）⇒
+      夜盤那幾列的點數與出場價**留白**，⛔ 不猜、⛔ 不拿現價頂。
+   每一列的 `.al-meta` 第一個詞就是規則名，一眼分得出是哪一套。 */
+var ALF='all';
+function nfCard(o){
+ const dir=o.dir==='long'?'▲ 多':(o.dir==='short'?'▼ 空':'');
+ const sent=(o.rec==='result');
+ const tag=sent?(o.ok?'送出了':'沒送成'):(o.rec==='eod'?'收盤':'沒送');
+ const px=sent&&o.entry!=null
+   ? f(o.entry)+'<span class="arrow">&rarr;</span>— <span class="tag">'+esc(tag)+'</span>'
+   : '— <span class="tag">'+esc(tag)+'</span>';
+ const why=String(o.msg||o.why||o.err||'');
+ return '<div class="trade"><div class="tr-top">'+
+   '<span class="tr-date">'+esc(String(o.E||'').slice(5))+'</span>'+
+   (dir?'<span class="dir '+(o.dir==='long'?'l':'s')+'">'+dir+'</span>':'')+
+   '<span class="tr-px">'+px+'</span>'+
+   '<span class="tr-res na">—</span></div>'+
+   '<div class="al-meta">'+esc(nfName(NF.data,o.method||null))+'・04:58 平倉'+
+     (why?' · '+esc(why):'')+'</div></div>';
+}
+function alRows(D,days,todayMerged){
+ const out=[];
+ /* ⛔ 照舊只印前 FIRE_REAL_DAYS（60）天 —— 跟後端 fire_real_pairs() 的天數是同一個數。 */
+ days.slice(0,60).forEach(r=>out.push({kind:'day', date:String(r.date||''),
+   html:alCard(D,r,!!(todayMerged&&r&&r.date===todayMerged))}));
+ const x=NF.data;
+ if(x&&x.recent) x.recent.forEach(o=>out.push({kind:'night', date:String(o.E||''), html:nfCard(o)}));
+ /* 兩份帳本合在一起要重新排序（新到舊）。⛔ 同一天時日盤排前面（它先發生）。 */
+ out.sort((a,b)=>(a.date<b.date?1:(a.date>b.date?-1:(a.kind==='day'?-1:1))));
+ return out;
+}
+
+/* ══ ⑥ 開關（2026-09-23 定案，規格 §2.7）════════════════════════════
+   ⛔⛔ **日盤畫面上不給選做法**：固定送 `D.default_method`（現在是 U 多方聯軍）。
+      後端 `auto_fire.METHODS` 仍然支援 A，⛔ 不要為了配合畫面把它拆掉 ——
+      他哪天自己手改開關檔成 A，帳本那一列的名字照舊走 `alRecName()`。
+   ⛔⛔ **夜盤做法單選**：清單從後端 `x.methods`（正本 night_fire.METHODS），
+      ⛔ 前端不准寫死名字，也⛔ 不准做成 checkbox（兩條同時開＝加倉）。
+   ⛔ 規則那句話的正本一律在後端（日盤 fire_rule_line()／夜盤 night_fire.state().rule）。 */
+
+/* 組標頭：左邊「日盤／夜盤 ＋ 做法名」、右邊狀態藥丸與「關閉」。 */
+function alSelHead(lb,nm,on,live,canOff,offAttr){
+ return '<div class="al-selh'+(on?' on':'')+'"><span class="lb">'+esc(lb)+'</span>'+
+   (nm?('<span class="nm">'+esc(nm)+'</span>'):'')+
+   '<span class="st'+(on?' on':'')+'">'+esc(on?(live?'開著・真錢':'開著・演練'):'關著')+
+   '</span><span class="sp"></span>'+
+   (canOff?('<button class="off" '+offAttr+'>關閉</button>'):'')+'</div>';
+}
+/* ⭐⭐ 關掉之前就要知道的事（規格 §2.7）：**已經開出去那一口不會跟著收回來**。
+   ⛔ 日盤今天已進場／今天還沒進場／夜盤 —— 三句話**分得出來**，⛔ 不准一律印同一句。 */
+function alOffNote(scope,entered,eodT){
+ if(scope==='day'&&entered)
+   return '<div class="n">關掉之後每個交易日就不再送單。'+
+     '<b style="display:block;margin-top:5px;color:var(--gold)">&#9888; 今天已經開出去的那一口不受影響</b>'+
+     '<span style="display:block">它照樣走完停損停利與 <b>'+esc(eodT||'')+
+     '</b> 的自動平倉。關掉的是<b>之後的日子</b>。</span></div>';
+ if(scope==='day')
+   return '<div class="n">關掉之後每個交易日就不再送單。'+
+     '<span style="display:block;margin-top:5px">&#9888; 如果關的時候手上已經有一口，那一口<b>不受影響</b> —— '+
+     '照樣走完停損停利與自動平倉。關掉的是<b>之後的日子</b>。</span></div>';
+ return '<div class="n">關掉之後每個晚上就不再送單。'+
+   '<span style="display:block;margin-top:5px">&#9888; 如果關的時候那一晚已經進場了，那一口<b>不受影響</b> —— '+
+   '照原本的做法抱到 <b>04:58</b>。關掉的是<b>之後的晚上</b>。</span></div>';
+}
+/* ── 日盤那一組：⛔ 沒有做法可以選 ───────────────────────────── */
+function alSwDay(D){
+ const armed=!!D.armed, off=D.flag_exists, live=!!D.live;
+ const k=armed?D.method:((D&&D.default_method)||'U');
+ const C=alConf(D,k);
+ const row=(D.days||[]).find(r=>r&&r.date===(D.today||''))||null;
+ const entered=!!(row&&row.rec==='result'&&row.ok);
+ let h='<div class="al-sel">'+
+   alSelHead('日盤', alDayName(D), armed, live, off, 'data-aloff="1"')+
+   /* 規則那句話：⛔ 正本在後端（fire_rule_line）。開著的時候多接「今天約 N 點」
+      （那是只有今天算得出來的，走 alRuleTxt → D.fast.pts／D.pts_est）。
+      ⛔ 「差 0 點算做多」照舊併在這一行裡（整頁只剩這裡在講方向怎麼判）。 */
+   '<div class="al-selbody"><div class="ds">'+
+     (armed?emb(alRuleTxt(D)):emb(alRuleFull(D,k)||''))+
+     '　差 0 點算做多'+(armed&&live?'（你不在也會送）':'')+'</div></div>'+
+   '<div class="al-selfoot">';
+ if(off) h+=alOffNote('day', entered, D.eod_at);
+ else if(!C)
+   h+='<div class="err">這個面板還不能從畫面上打開（後端沒有回報現在是真實下單還是演練）。'+
+     '要開請自己在 <b>tools/shioaji/'+esc(D.flag||'AUTO_ORDERS_ON')+'</b> 裡寫一個字母。</div>';
+ else if(ALON.step==='confirm')
+   /* 第二段：⛔ 那句話一律從後端 arm_confirm 拿（⛔ 前端不准自己猜真錢／演練）。 */
+   h+='<div class="al-conf'+(C.live?' real':'')+'">'+
+     '<div class="q">'+(C.live?'⚠️ ':'')+emb(C.text)+
+       '<span class="w2">'+emb(alRuleFull(D,k))+'</span>'+
+       '<span class="w2">打開之後<b>每個交易日都會照這條規則看一次，直到你自己關掉</b>。</span></div>'+
+     '<div class="btns2">'+
+       '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
+         (ALON.busy?'打開中…':'確定，打開')+'</button>'+
+       '<button class="btn no" data-alno="1"'+(ALON.busy?' disabled':'')+'>取消</button>'+
+     '</div></div>';
+ else
+   h+='<div class="al-on" style="margin-top:0"><div class="row">'+
+     '<button class="btn" data-alon="'+esc(k)+'">打開日盤自動下單</button></div>'+
+     '<div class="n">這個開關<b>沒有有效期</b> —— 打開之後每個交易日都會照這條規則看一次，'+
+     '直到你自己關掉。<br>按下去會<b>再問你一次</b>。</div></div>';
+ if(ALON.err) h+='<div class="err">'+esc(ALON.err)+'</div>';
+ if(D.off_msg) h+='<div class="n">'+esc(D.off_msg)+'</div>';
+ return h+'</div></div>';
+}
+/* 夜盤那一條有沒有「不設停利停損」（⛔ 由後端標，⛔ 前端不准照代號猜）。 */
+function nfNoSL(x){
+ const MS=(x&&x.methods)||[], k=(x&&x.method)||null;
+ const hit=MS.filter(m=>m.k===k)[0];
+ return !!(hit&&hit.no_sl);
+}
+/* ── 夜盤那一組：做法**單選** ＋ 開關 ───────────────────────── */
+function alSwNight(){
+ const x=NF.data;
+ if(!x) return '<div class="al-sel"><div class="al-selh"><span class="lb">夜盤</span>'+
+   '<span class="st">'+esc(NF.err||'載入中…')+'</span></div></div>';
+ const on=!!x.on, cur=on?x.method:null, MS=x.methods||[];
+ const pend=(NFON.step==='confirm')?NFON.mode:null;
+ let h='<div class="al-sel">'+
+   alSelHead('夜盤', on?nfName(x,cur):'', on, !!x.live, !!x.flag_exists, 'data-nfoff="1"')+
+   '<div class="al-picks">';
+ MS.forEach(m=>{
+   const isCur=(m.k===cur), isPend=(m.k===pend);
+   h+='<button class="al-pick'+(on&&isCur?' on':'')+((isPend&&!(on&&isCur))?' sel':'')+
+     '" data-nfon="'+esc(m.k)+'"><span class="rd"></span><span class="w">'+
+     '<span class="nm">'+esc(m.name||m.k)+
+       (on&&isCur?'<span class="now">目前在跑</span>':'')+
+       (m.beta?('<span class="beta">'+esc(m.beta)+'</span>'):'')+'</span>'+
+     '<span class="ds">'+esc(m.rule||x.rule||'')+'</span></span></button>';
+ });
+ h+='</div><div class="al-selfoot">';
+ const C=x.arm_confirm;
+ if(pend&&C&&typeof C.text==='string'){
+   const R=MS.filter(m=>m.k===pend)[0]||{}, CU=MS.filter(m=>m.k===cur)[0]||{};
+   const swap=(on&&pend!==cur);
+   let q;
+   if(swap)
+     /* ⚠️⚠️ 換做法一定是「**先關再開**」，⛔ 不是覆蓋（後端已經開著再 on 會回 409）。 */
+     q='要把夜盤的做法從<b>'+esc(CU.name||cur)+'</b>換成<b>'+esc(R.name||pend)+'</b>。'+
+       '程式會<b>先關閉、再用新的做法重新開啟</b>（開關檔不覆蓋，只能先關再開）。'+
+       '<span class="w2">已經進場的那一晚<b>不受影響</b> —— 照原本的做法（'+esc(CU.name||cur)+
+       '）抱到 04:58。換的是<b>之後的晚上</b>。</span>';
+   else
+     q=(C.live?'⚠️ ':'')+emb(C.text)+
+       '<span class="w2">要用「<b>'+esc(R.name||pend)+'</b>」開始嗎？</span>';
+   q+='<span class="w2">'+esc(R.rule||x.rule||'')+'</span>';
+   if(R.beta&&R.note) q+='<span class="w2">&#9888; '+esc(R.name||pend)+' <b>'+esc(R.beta)+
+     '</b>：'+esc(R.note)+'</span>';
+   if(R.no_sl) q+='<span class="w2">&#9888; 這一條<b>不設停利也不設停損</b>，進場後抱到 04:58 才平。</span>';
+   h+='<div class="al-conf'+(C.live?' real':'')+'"><div class="q">'+q+'</div>'+
+     '<div class="btns2">'+
+       '<button class="btn go" data-nfyes="1"'+(NFON.busy?' disabled':'')+'>'+
+         (NFON.busy?'處理中…':(swap?('確定，換成'+esc(R.name||pend)):'確定，打開'))+'</button>'+
+       '<button class="btn no" data-nfno="1"'+(NFON.busy?' disabled':'')+'>取消</button>'+
+     '</div></div>';
+ } else if(on){
+   h+=alOffNote('night')+
+     (MS.length>1?'<div class="n" style="margin-top:7px">要換做法就點上面另一條 —— '+
+       '<b>換做法也要按兩段</b>（會先關閉再重新開啟）。⛔ 兩條不能同時開。</div>':'');
+ } else if(!C||typeof C.text!=='string'){
+   h+='<div class="err">夜盤還不能從畫面上打開（後端沒有回報現在是真實下單還是演練）。'+
+     esc(x.how_on||'')+'</div>';
+ } else {
+   h+='<div class="n">點一條做法就會跳出確認。這個開關<b>沒有有效期</b> —— '+
+     '打開之後每個晚上都會看一次，直到你自己關掉。</div>';
+ }
+ if(NFON.err) h+='<div class="err">'+esc(NFON.err)+'</div>';
+ if(x.errors) h+='<div class="err">夜盤背景出錯 '+esc(String(x.errors))+' 次：'+
+   esc(x.last_err||'')+'</div>';
+ if(NF.err) h+='<div class="err">'+esc(NF.err)+'</div>';
+ return h+'</div></div>';
+}
+/* 夜盤第二段真的送出去。⛔ 跟日盤走**同一個出口** pfetch()（自訂標頭＋token 一份就好）。 */
+function nfArm(){
+ if(NFON.busy) return;
+ const m=NFON.mode;
+ if(!m){ NFON.step='idle'; NFON.err='沒有選到做法，請再按一次'; alPaint(); return; }
+ NFON.busy=true; NFON.err=''; alPaint();
+ /* ⚠️⚠️ **換做法一定是「先關再開」，⛔ 不是覆蓋**：後端在開關檔已經存在時
+    `POST /api/nightfire/on` 會回 **409**（`O_CREAT|O_EXCL`，⛔ 結構上不覆蓋）。
+    ⛔ 所以畫面不可以做成「一鍵切換」——那是後端做不到的事。
+    ⚠️ 中間那一瞬間是**真的關著**。`off` 成功但 `on` 失敗 ⇒ 結果是「關著」，
+       ⛔ 不是「維持舊的」⇒ 訊息一定要明講（⛔ 不准只寫「切換失敗」）。
+    ⛔ 而且**不做自動回復**（失敗就把舊做法重新開回去）：自動幫他重新武裝真錢
+       比停在關著更危險（PM Q5 裁示）。 */
+ const x=NF.data, wasOn=!!(x&&x.on), curName=x?nfName(x,x.method):'';
+ const newName=x?nfName(x,m):m;
+ const send=()=>pfetch('/api/nightfire/on',JSON.stringify({mode:m}))
+  .then(r=>r.json()
+    .catch(()=>({ok:false,msg:'面板回了看不懂的東西（HTTP '+r.status+'）'}))
+    .then(j=>Object.assign({},j,{_code:r.status})));
+ const first=wasOn
+   ? pfetch('/api/nightfire/off').then(r=>r.json().catch(()=>({ok:false,msg:'關不掉'})))
+   : Promise.resolve({ok:true});
+ first.then(r0=>{
+   if(!(r0&&r0.ok)){
+     NFON.busy=false; NFON.step='idle'; NFON.mode=null;
+     NFON.err='沒有換成「'+newName+'」：舊的那一條關不掉（'+((r0&&r0.msg)||'')+
+       '），現在還是「'+curName+'」。';
+     return null;
+   }
+   return send();
+ }).then(r=>{
+   if(r===null) return;
+   NFON.busy=false; NFON.step='idle'; NFON.mode=null;
+   if(r&&r.ok){ NFON.err=r.warn||''; return; }
+   NFON.err=wasOn
+     /* ⛔ 這句話是 `esc()` 之後印出去的 ⇒ ⛔ 不准放 HTML／Markdown 星號（會原樣印在他臉上）。 */
+     ? ('⚠️ 已經關閉，但沒有換成「'+newName+'」（'+((r&&r.msg)||'打不開')+
+        '）—— 夜盤現在是關著的。')
+     : ((r&&r.msg)||'打不開');
+ }).catch(()=>{ NFON.busy=false; NFON.step='idle'; NFON.mode=null;
+   NFON.err=wasOn?('⚠️ 連不上面板 —— 夜盤可能已經關閉而且沒有換成「'+newName+
+                   '」，請看上面的狀態。'):'打不開：連不上面板'; })
+  .then(()=>nfFetch(true));
 }
 
 /* ⭐⭐ 「打開自動下單」——**這是這個面板上唯一一顆會武裝真錢的鈕**。
@@ -8997,62 +8766,6 @@ function alConf(D,m){
 }
 /* 這個做法的完整規則那句話（⛔ 正本在後端 fire_rule_line()，前端只負責顯示）。 */
 function alRuleFull(D,m){ const c=alConf(D,m); return c?String(c.rule_line||''):''; }
-function alOnHTML(D){
- if(D.flag_exists) return '';    /* 已經開著 ⇒ 這裡什麼都不畫（要換做法請先關掉） */
- const MS=(D&&D.methods)||[];
- if(!MS.length||!MS.some(x=>alConf(D,x.k)))
-   return '<div class="err">這個面板還不能從畫面上打開（後端沒有回報現在是'+
-     '真實下單還是演練）。要開請自己在 <b>tools/shioaji/'+
-     esc(D.flag||'AUTO_ORDERS_ON')+'</b> 裡寫一個字母。</div>';
- if(ALON.step==='confirm'){
-   const m=ALON.mode, C=alConf(D,m);
-   if(!C){ return '<div class="err">選到的做法後端不認得，請重新按一次。</div>'; }
-   /* ⛔ 這一條要當場講清楚**現在是哪一種**：真錢＝紅底（這個面板唯一的例外，
-      紅綠平常只給損益）、演練＝中性灰。⛔ 兩種絕不可以長一樣。 */
-   return '<div class="al-conf'+(C.live?' real':'')+'">'+
-     /* ⚠️ 「沒有有效期」那句在這裡**再講一次**（2026-09-10）：這是他按下去之前
-        最後一個畫面，而「開一次＝以後每天都送」正是他最容易誤會的一件事。
-        ⛔ 這是**前端加的一行**，⛔ 不准去動後端 `fire_arm_confirm()` 那句正本
-        （那句話的職責是「現在是真錢還是演練」，被 `test_auto_fire.py` ⑬b 綁著）。
-        ⛔ 2026-09-17（lab-qa 建議 1）：用 `emb()` 不是 `esc()` ——
-           後端那句話裡的 `**粗體**` 要真的變粗體，⛔ 不是把星號印在他臉上。 */
-     '<div class="q">'+(C.live?'⚠️ ':'')+emb(C.text)+'<br>要用「<b>'+
-       esc(C.method_name||alName(m))+'</b>」開始嗎？'+
-       /* ⛔ 2026-09-17（lab-qa 建議 2）：這一行以前寫死兩候選的舊描述
-          （「開盤夠快就送、不夠快就等 09:15 看反轉」）——多方聯軍是三個候選、
-          而且「夠快但做空要跳過」⇒ 那句在 U 底下整句是假話。
-          ⇒ 改成照後端那一份規則正本（每個做法各自正確）。 */
-       '<br>'+emb(alRuleFull(D,m))+
-       '<br>打開之後<b>每個交易日都會照這條規則看一次，直到你自己關掉</b>。</div>'+
-     '<div class="btns2">'+
-       '<button class="btn go" data-alyes="1"'+(ALON.busy?' disabled':'')+'>'+
-         (ALON.busy?'打開中…':'確定，打開')+'</button>'+
-       '<button class="btn no" data-alno="1"'+(ALON.busy?' disabled':'')+'>取消</button>'+
-     '</div></div>'+
-     (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
- }
- /* 第一段：⛔ 做法直接寫在鈕上（他不必先去別的地方查哪個是哪個），
-    名字一律從後端 D.methods（⛔ 不准自己發明名字，也不准出現代號）。
-    ⭐⭐ 2026-09-17：**兩顆鈕**（快攻回馬槍／多方聯軍），每一顆底下各自寫自己的規則
-       ——⛔ 兩條規則的候選數、做不做空、有沒有停利都不一樣，共用一段說明就是假話。
-    ⚠️ 預設（他不動開關檔時跑的那一個）要標出來，⛔ 不然他不知道「現在在跑的是哪一條」。 */
- return MS.map(x=>'<div class="row">'+
-     '<button class="btn" data-alon="'+esc(x.k)+'">用「'+esc(x.name||alName(x.k))+
-       '」開始</button>'+
-     /* ⚠️ 這一段只在**關著**的時候畫 ⇒ ⛔ 不可以寫「現在在跑的就是這一條」
-        （那時候什麼都沒在跑，是一句假話）。要講的是「不去動開關檔就是這一條」。 */
-     (x.k===D.default_method?'<span class="n">（<b>預設</b>：開關檔不改內容就是這一條）</span>':'')+
-   '</div>'+
-   '<div class="n"><b>'+esc(x.name||alName(x.k))+'</b>：'+emb(alRuleFull(D,x.k))+
-     '<br>按下去會<b>再問你一次</b>。</div>').join('')+
-   /* ⚠️ 「比它高或持平做多、低做空」這句 ⛔ 不可以砍掉 —— 整頁只剩這裡在講方向怎麼判，
-      而「剛好持平（差 0 點）算做多」是這個工具刻意選的那一邊（跟【模擬】同一把尺）。 */
-   '<div class="n">方向怎麼判：'+esc(D.signal_at||'')+' 的價比 09:00 <b>高或持平＝做多</b>、'+
-     '低＝做空（差 0 點算做多，跟【自動下單（模擬）】同一把尺）。'+
-     '快不快的門檻是過去 '+esc(String((D.rule||{}).window||'—'))+' 個交易日的第 '+
-     esc(String((D.rule||{}).pctl||'—'))+' 百分位。</div>'+
-   (ALON.err?'<div class="err">'+esc(ALON.err)+'</div>':'');
-}
 
 /* ⭐ 第二段真的送出去。⛔ 六道防護裡有兩道是請求要帶的（自訂標頭 ＋ token）——
    ⛔ 少帶一個後端就會擋（403），那是刻意的：**別的網頁帶不出這兩樣**。
@@ -9092,6 +8805,9 @@ function alArm(){
    ・按完立刻重抓狀態 —— 他要看得到結果，不是相信一句 alert。 */
 document.addEventListener('click', function(e){
  if(TAB!=='fire') return;
+ /* 紀錄的日盤／夜盤篩選（⛔ 純畫面，⛔ 一個請求都不送）。 */
+ const ch=e.target.closest('[data-alf]');
+ if(ch){ ALF=ch.getAttribute('data-alf'); alPaint(); return; }
  /* 第一段：⛔ 只換畫面，**一個請求都不送**（fire-tab.mjs ⑪ 在守）。 */
  const on=e.target.closest('[data-alon]');
  if(on){ if(on.disabled) return;
@@ -9103,6 +8819,32 @@ document.addEventListener('click', function(e){
    ALON.step='idle'; ALON.mode=null; ALON.err=''; alPaint(); return; }
  const yes=e.target.closest('[data-alyes]');
  if(yes){ if(yes.disabled) return; alArm(); return; }
+ /* 「到開關」＝**純導覽**：⛔ 一個請求都不送，只把最底下那張卡捲到眼前。 */
+ const jp=e.target.closest('[data-aljump]');
+ if(jp){ const c=document.getElementById('alswitchcard');
+   if(c) c.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+ /* ⭐ 夜盤那幾顆：⛔ 跟日盤同一套規矩（第一段零請求、第二段才 POST、關不跳確認）。
+    ⛔⛔ 開著時點**目前那一條** ⇒ 什麼都不做（⛔ 不跳確認、⛔ 零請求）。 */
+ const non=e.target.closest('[data-nfon]');
+ if(non){ if(non.disabled) return;
+   const k=non.getAttribute('data-nfon'), x=NF.data;
+   if(x&&x.on&&x.method===k){ NFON.step='idle'; NFON.mode=null; NFON.err=''; alPaint(); return; }
+   NFON.step='confirm'; NFON.mode=k; NFON.err='';
+   alPaint(); return; }
+ const nno=e.target.closest('[data-nfno]');
+ if(nno){ if(nno.disabled) return;
+   NFON.step='idle'; NFON.mode=null; NFON.err=''; alPaint(); return; }
+ const nyes=e.target.closest('[data-nfyes]');
+ if(nyes){ if(nyes.disabled) return; nfArm(); return; }
+ const noff=e.target.closest('[data-nfoff]');
+ if(noff){ if(noff.disabled) return;
+   noff.disabled=true;
+   pfetch('/api/nightfire/off')
+    .then(r=>r.json())
+    .then(r=>{ if(!r.ok&&r.msg) alert(r.msg); })
+    .catch(()=>{ alert('關不掉：連不上面板'); })
+    .then(()=>{ noff.disabled=false; nfFetch(true); });
+   return; }
  const b=e.target.closest('[data-aloff]');
  if(!b||b.disabled) return;
  b.disabled=true;
@@ -9376,11 +9118,9 @@ function alCard(D,r,isToday){
      (pts==null?'—':pm(pts))+'</span></div>'+
    '<div class="al-meta">'+meta+'</div></div>';
 }
-function alTblHTML(D,days,todayMerged){
- /* ⛔ 60 天跟後端 `FIRE_REAL_DAYS` 是**同一個數**：後端只對那幾天比對出場，
-    這裡多印一天就會有一張永遠寫「對不起來」的卡（而那是假的）。 */
- return days.slice(0,60).map(r=>alCard(D,r,!!(todayMerged&&r&&r.date===todayMerged))).join('');
-}
+/* ⚠️ 2026-09-23 v3：舊的 alTblHTML() 併進 alRows()（日盤與夜盤合併成同一份清單）。
+   ⛔ `days.slice(0,60)` 那個 60 跟後端 `FIRE_REAL_DAYS` 是**同一個數**：後端只對那幾天
+      比對出場，多印一天就會有一張永遠寫「對不起來」的卡（而那是假的）——現在寫在 alRows()。 */
 
 /* ⛔ 常態統計不畫；**異常**才畫（沿用【模擬】那一頁 atNotesHTML 的規矩）。
    ⛔ 但「異常」一項都不准少 —— 安靜地少是這個專案明令禁止的失敗模式。 */
@@ -9442,10 +9182,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_HEAD(self):
-        # ⛔ 武裝那顆只收 POST。沒有 do_HEAD 的話 BaseHTTPRequestHandler 會回 501
-        #    （語意上也是拒絕），但這一顆要回**明確的 405**。
+        # ⛔ 武裝那兩顆只收 POST。沒有 do_HEAD 的話 BaseHTTPRequestHandler 會回 501
+        #    （語意上也是拒絕），但這兩顆要回**明確的 405**。
         #    其餘路徑維持原本的行為（這支面板從來不服務 HEAD）。
-        if self.path.split("?", 1)[0] == "/api/fire/on":
+        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on"):
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
         self.send_error(501, "Unsupported method ('HEAD')")
 
@@ -9576,6 +9316,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(500, {"ok": False, "msg": "關不掉：" + str(e)[:150]})
             return self._json(200 if ok else 409, {"ok": ok, "msg": msg,
                                                    "armed": auto_fire.arm()["on"]})
+
+        # 【夜盤自動下單】⭐⭐ 2026-09-23 Benson 交辦：夜盤也補一顆畫面上的開關。
+        #   ⛔⛔ 規矩逐條照抄日盤那兩顆（⛔ 兩邊不一樣就是兩把尺）：
+        #     ・開＝**兩段式**（前端）＋這裡的六道防護（入口 `fire_post_guard` 已經過了）
+        #     ・`mode` ⛔ **先驗再寫**；已經開著再按 ⇒ 409（⛔ 不覆蓋、不當成換做法）
+        #     ・關＝一鍵、⛔ 不跳確認（關掉永遠是安全方向）；`disarm()` 是**改名不刪**
+        #   ⛔ 路由是精確比對（`==`），⛔ 不可以 startswith／in。
+        #   ⛔⛔ 建檔只在 `night_arm_on()`：`night_fire.py` 對開關檔只准
+        #      exists／read_bytes／replace／with_name（test_night_fire.py ⑦ 的 AST 在守）。
+        if self.path == "/api/nightfire/on":
+            m = body.get("mode") if isinstance(body, dict) else None
+            code, out = night_arm_on(m, who=self.client_address[0]
+                                     if self.client_address else "?")
+            return self._json(code, out)
+
+        if self.path == "/api/nightfire/off":
+            try:
+                ok, msg = night_fire.disarm()
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": "關不掉：" + str(e)[:150]})
+            return self._json(200 if ok else 409, {"ok": ok, "msg": msg,
+                                                   "armed": night_fire.arm()["on"]})
 
         if self.path == "/api/real/close":
             ok, err = broker.close("manual")
@@ -9865,15 +9627,42 @@ class Handler(BaseHTTPRequestHandler):
         # ⛔⛔ 武裝那顆**只收 POST**：GET／HEAD 一律 405。
         #    網頁上一個 <img src>、一條他點下去的連結、瀏覽器的預抓
         #    都不可以變成「幫他打開自動下單」（GET 連 CORS 那一關都不用過）。
-        if self.path.split("?", 1)[0] == "/api/fire/on":
+        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on"):
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
+        # ⭐ 【健檢】（2026-09-23）：⛔ **唯讀**、⛔ 一個位元組都不寫、⛔ 不碰 _lock／部位。
+        #   ⛔⛔ **不可以掛在高頻輪詢上**：前端只在切進【健檢】那一頁時打一次；
+        #      後端整天快取（來源檔 mtime 當快取鍵），重活跑在 health 自己的背景執行緒上
+        #      ⇒ 這條 HTTP 路徑本身很輕（只讀 sim_lanes 的定論）。
+        #   ⛔ 沒有 token，但有真實的績效數字 ⇒ 跟 /api/state 同一道 GET 守衛。
+        if self.path.split("?", 1)[0] == "/api/health/state":
+            ok, code, msg = fire_get_guard(self.headers)
+            if not ok:
+                return self._json(code, {"ok": False, "msg": msg})
+            if health is None:
+                return self._json(503, {"ok": False, "msg": "【健檢】載入失敗，這一頁暫時不能用"})
+            try:
+                return self._json(200, health.state())
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": "健檢算不出來：%s" % str(e)[:150]})
         if self.path.split("?", 1)[0] == "/api/nightfire/state":
             # 夜盤自動下單的狀態（唯讀：開關、今晚看幾點、最近幾列定論）。⛔ 沒有 token，但有真實價格 ⇒ 同一道 GET 守衛。
             ok, code, msg = fire_get_guard(self.headers)
             if not ok:
                 return self._json(code, {"ok": False, "msg": msg})
             try:
-                return self._json(200, night_fire.state())
+                out = night_fire.state()
+                # ⭐ 2026-09-23：夜盤補了畫面上的開關 ⇒ 確認條那句話的**正本**跟著端出來
+                #   （⛔ 前端不准自己判斷現在是真錢還是演練）。
+                #   ⛔ `live` 用 `state()` 已經算好的那一個，⛔ 不再問第二次 broker.is_live()。
+                # ⭐ 2026-09-23：夜盤的做法清單（畫面上那組**單選**）。
+                #   ⛔⛔ **代號與名字的正本是 `night_fire.METHODS`／`METHOD_NAME`** ——
+                #      畫面上有幾條完全由那一份決定，⛔ 前端不准自己寫一份，
+                #      ⛔ 也**不可以把還沒接好的做法先畫上去**（畫得出來就按得下去）。
+                #   ⚠️ 每一條的附加揭露（規則一句話／beta 旗標／歷史數字／有沒有停損）
+                #      放在 `NIGHT_METHOD_INFO`，⛔ 一樣是後端的一份（見那個常數）。
+                out["methods"] = night_methods(out.get("rule"))
+                out["arm_confirm"] = night_arm_confirm(out.get("live"))
+                return self._json(200, out)
             except Exception as e:
                 return self._json(500, {"ok": False, "msg": "夜盤自動下單狀態讀不出來：%s" % str(e)[:120]})
         if self.path.startswith("/api/fire/state"):
@@ -10686,6 +10475,56 @@ def start_sim_lanes():
         return False
 
 
+def _health_real():
+    """
+    【健檢】那一頁「真單」那一半（⛔ 唯讀）。⇒ {lane_key: {"n", "avg", "msg"}}。
+
+    ⛔⛔ **不另寫一套對帳法**：日盤走既有的 `fire_real_pairs()`（唯讀比對 `real_trades/`，
+       跟【自動下單】那一頁的出場價是**同一把尺**）；夜盤走 `night_fire` 自己的帳本。
+    ⚠️ **夜盤帳本沒有出場價**（出場在券商端成交，`night_fire` 那一側看不到）⇒
+       夜盤只給「送出了幾口」，⛔ 點數留白、⛔ 不猜。
+    ⚠️ 「夜盤跟勢」(trend) 是前瞻考試、⛔ 不下單 ⇒ 沒有這一條（呼叫端會照實寫出來）。
+    ⛔ 這支跑在 HTTP 執行緒上 ⇒ 只讀那 60 天（`FIRE_REAL_DAYS`），⛔ 不掃整個帳本。
+    """
+    out = {}
+    try:
+        st = auto_fire.state()
+        days = st.get("days") or []
+        real = fire_real_pairs(days, today=st.get("today"), now=st.get("now"),
+                               eod_at=st.get("eod_at"))
+        pts = [v["points"] for v in real.values()
+               if isinstance(v, dict) and v.get("state") == "ok"
+               and isinstance(v.get("points"), (int, float))
+               and not isinstance(v.get("points"), bool)]
+        avg = round(sum(pts) / len(pts), 1) if pts else None
+        out["union"] = {"n": len(pts), "avg": avg,
+                        "msg": ("最近 %d 天有 %d 筆算得出點數，每筆平均 %s 點"
+                                % (FIRE_REAL_DAYS, len(pts),
+                                   ("%+.1f" % avg) if avg is not None else "—")
+                                if pts else
+                                "最近 %d 天還沒有算得出點數的真單" % FIRE_REAL_DAYS)}
+    except Exception as e:
+        out["union"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
+    try:
+        n = 0
+        for f in sorted(night_fire.NF_DIR.glob("*.jsonl")) if night_fire.NF_DIR.exists() else []:
+            if not night_fire._MONTH_RE.match(f.name):
+                continue
+            for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    o = json.loads(ln)
+                except Exception:
+                    continue
+                if o.get("rec") == "result" and o.get("ok"):
+                    n += 1
+        out["tsm"] = {"n": n, "avg": None,
+                      "msg": ("送出了 %d 口；⛔ 夜盤帳本沒有出場價（出場在券商端成交），"
+                              "點數留白" % n) if n else "還沒有送出過真單"}
+    except Exception as e:
+        out["tsm"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
+    return out
+
+
 def _nf_quote():
     """夜盤自動下單要的台指報價 ⇒ (價, 幾秒前)。⛔ 只讀屬性（同停損那一個價），拿不到回 (None, None)。"""
     st = CURRENT_STATE.get("today")
@@ -10993,6 +10832,13 @@ def main():
     start_strategy_lab_fetch()
     # 【策略實驗室】最上面那張「模擬（不會下單）」的背景計算。⛔ 起不來只印警告（見 start_sim_lanes）。
     start_sim_lanes()
+    # 【健檢】真單那一半的接線（⛔ 唯讀）。⛔ 只接一次、⛔ 這裡不做任何 I/O；
+    #   ⛔ 失敗只印警告（它是「看的東西」，絕不可以擋住送單與停損那條路）。
+    try:
+        if health is not None:
+            health.configure(real_fn=_health_real)
+    except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
+        print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     last_retry = 0.0

@@ -194,22 +194,28 @@ def strip_html(s):
 
 
 page = SRC[SRC.index("PAGE = r\"\"\""):]
-tab_html = strip_html(page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")])
+# ⚠️⚠️ 2026-09-23 v3：【策略實驗室】(#tab-lab) 的**畫面整頁移除**（Benson 交辦）⇒
+#    這把尺原本量的區間已經不存在。⛔ 不可以留著讓它量到空字串還恆綠（假綠燈）⇒
+#    **改量新的【健檢】(#tab-hc)**：同一條紅線「這一頁一行都不碰下單路徑」。
+#    切片邊界用它自己的「══ 【健檢】到此 ══」那行註解（⛔ 全檔只准出現一次；
+#    改字要一起改 tools/shioaji/test_strategy_lab.py ⑥ 與 test_sim_lanes.py ⑦）。
+say(page.count("<!-- ══ 【健檢】到此 ══") == 1, "  ⛔ 「健檢到此」那行註解全檔只出現一次")
+say('<div id="tab-lab"' not in page and "function lbRun" not in page,
+    "  ⛔ 【策略實驗室】那一頁真的不見了（⛔ 不是被 CSS 藏起來）")
+tab_html = strip_html(page[page.index('<div id="tab-hc"'):page.index("<!-- ══ 【健檢】到此 ══")])
 # ⚠️ 切點要落在那個區塊註解的 `/*` **上**，不然 strip_js 配不成對、
 #    整段開頭的說明會被當成程式碼（第一版就這樣紅的）。
-_js0 = page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測")
-# ⚠️ 2026-09-16：結束標記本來是 `\nrvBind();`（【回顧】那頁的接線），那一頁拿掉了 ⇒
-#    改用下一段的區塊註解開頭（一樣落在 `/*` 上，strip_js 才配得成對）。
+_js0 = page.index("/* ══════════════ 【健檢】分頁")
 js_at = strip_js(page[_js0:page.index("/* ══════════════ 【自動下單】分頁", _js0)])
-say("function lbRun" in js_at and len(tab_html) > 2000, "  切出來的真的是研究頁（不是空字串）")
-# ⚠️ /api/fire/state 允許（唯讀 GET，用來標「現在真單用的」是哪個做法）；會改狀態的 on／off 不准
-fe_hits = [w for w in ["/api/enter", "/api/real/", "/api/fire/on", "/api/fire/off", "data-act=", "data-rdir=",
-                       "REAL_ON", "token"]
+say("function hcPaint" in js_at and len(tab_html) > 400,
+    "  切出來的真的是【健檢】那一頁（不是空字串）", f"html={len(tab_html)} js={len(js_at)}")
+# ⚠️ 這一頁**連唯讀的 /api/fire/state 都不該打**（它只打自己的 /api/health/state）
+fe_hits = [w for w in ["/api/enter", "/api/real/", "/api/fire/", "/api/nightfire/",
+                       "data-act=", "data-alon=", "data-nfon=", "REAL_ON", "token"]
            if w in tab_html or w in js_at]
-chk("前端 #tab-lab ＋ lb* 的 JS 沒有任何下單端點／按鈕", fe_hits, [])
-say("data-rdir" in strip_html(page[:page.index('<div id="tab-lab"')]) or
-    "data-rdir" in strip_js(page[:page.index('<div id="tab-lab"')]),
-    "  負控組：同一把尺在真實下單那半抓得到 data-rdir")
+chk("前端 #tab-hc ＋ hc* 的 JS 沒有任何下單端點／按鈕", fe_hits, [])
+say("data-alon=" in strip_js(page[page.index("/* ══════════════ 【自動下單】分頁"):]),
+    "  負控組：同一把尺在【自動下單】那半抓得到 data-alon=")
 
 # 【尺的自證】同一把尺掃 _real_enter 必須抓得到 broker ⇒ 證明尺是活的
 say(len(scan_ban(FUNCS["_real_enter"][0])) > 0, "負控組：同一把尺掃 _real_enter 抓得到 broker",

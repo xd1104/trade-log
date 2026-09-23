@@ -52,6 +52,7 @@ if _MUT:
 
 import broker                       # noqa: E402
 import auto_fire as AF              # noqa: E402
+import night_fire as NF             # noqa: E402
 import live_panel as LP             # noqa: E402
 
 # ⚠️ 只拿來對「路由名單有沒有列全」——⛔ 這一支的斷言一律是行為面的（真的打進去），
@@ -89,10 +90,14 @@ sys.excepthook = _boom
 # ⛔ 每一個會寫檔／讀開關的地方都導到暫存區。**漏掉一個就是污染他的真實紀錄。**
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="fire-routes-"))
 REAL_ARM = AF.ARM_FLAG
+# ⭐ 2026-09-23：夜盤那兩顆端點也會碰開關檔與帳本 ⇒ **一起導走**
+#    （⛔ 漏掉的話 `/api/nightfire/off` 的尺的自證會去改他真的 NIGHT_ORDERS_ON）。
+REAL_NARM = NF.ARM_FLAG
 REAL_PATHS = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DIR,
               "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
               "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
               "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR,
+              "NF.ARM_FLAG": NF.ARM_FLAG, "NF.NF_DIR": NF.NF_DIR,
               # ⛔ /api/replay 那條路會寫檔（`save_replay`）。2026-09-09 加測那條路時
               #    一起導走 —— 漏掉就是往他真的 replay_log/ 寫進測試垃圾。
               "LP.REPLAY_DIR": LP.REPLAY_DIR}
@@ -101,15 +106,20 @@ broker.TRADE_DIR = TMP / "real_trades"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"
 AF.FIRE_DIR = TMP / "autofire"
+NF.ARM_FLAG = TMP / "NIGHT_ORDERS_ON"
+NF.NF_DIR = TMP / "nightfire"
 LP.AUTO_DIR = TMP / "autotest"
 LP.AUTO_REAL_DIR = TMP / "real_trades"
 LP.REPLAY_DIR = TMP / "replay_log"
 
-# ⛔⛔ 出貨狀態就是「那個檔不存在」。這一支跑之前先確認一次。
+# ⛔⛔ 出貨狀態就是「那兩個檔都不存在」。這一支跑之前先確認一次。
 if REAL_ARM.exists():
     print("  FAIL ⛔ tools/shioaji/AUTO_ORDERS_ON 竟然存在！拒絕往下跑。")
     print("⛔ 有 1 項沒過")
     sys.exit(1)
+# ⚠️ 夜盤那個開關**他自己可能開著**（那是他的真錢開關）⇒ ⛔ 不可以因此拒跑，
+#    但要記下來、收尾時斷言「存在與否跟開跑前一樣」（⛔ 測試不准動它）。
+REAL_NARM_EXISTED = REAL_NARM.exists()
 
 # ⛔ 一被呼叫就記一筆（收尾斷言全程 0 次）。⛔ 不連永豐、不送單。
 SENT = []
@@ -493,7 +503,10 @@ print("\n=== ③c ⛔⛔⛔ 【P0】每一個 POST 都要過守衛 ===")
 #        ⇒ broker.enter('long', 12000.0, 100.0) 真的被呼叫
 #    ⇒ **他上網時任何一個網頁都可以用他的帳戶送單／平倉。**
 # ⛔ 所以這一節的名單要**涵蓋 do_POST 裡每一條路由**，⛔ 不是只有真錢那兩條。
+# ⭐ 2026-09-23 多兩條：夜盤自動下單的開／關（Benson 交辦：夜盤也補一顆畫面上的開關）。
+#   ⛔ 它們跟日盤那兩顆一樣會動到真錢 ⇒ 同一排攻擊全部要擋得住。
 _POSTS = ["/api/real/enter", "/api/real/close", "/api/fire/on", "/api/fire/off",
+          "/api/nightfire/on", "/api/nightfire/off",
           "/api/enter", "/api/close", "/api/note", "/api/replay",
           "/api/sync", "/api/undo"]
 # ⛔ 名單要跟原始碼對得起來 —— 少列一條就等於那條沒被驗到（而它照樣對外開著）。
@@ -573,6 +586,19 @@ chk("      ⛔ 而且那一次是刻意的替身，真正的 SENT 仍然是空�
 #    （守衛只有一份、在 `do_POST` 的入口），⛔ 不可以為了湊一條而真的去同步。
 say(True, "    /api/sync：⛔ 刻意不做尺的自證（它會真的 push 他的紀錄倉庫）")
 # ⛔ /api/replay 的尺自證在 ④b（那一節本來就會寫進暫存區的 replay_log/）
+# ⭐ 2026-09-23 夜盤那兩顆（開／關）。
+#   ⛔⛔ 「開」那一顆的自證**故意送一個不存在的做法** ⇒ 走到路由自己的 mode 檢查（400），
+#      ⛔ 絕對不可以真的把開關檔建出來（⛔ 就算是暫存區的那一個也不建 ——
+#      下面那一條斷言「這一整節結束時暫存區也沒有夜盤開關檔」）。
+c, ct, b = post("/api/nightfire/on", b'{"mode":"ZZ"}')
+say(c == 400 and "做法只認得" in (b or ""),
+    "    /api/nightfire/on：走到路由自己的 mode 檢查（⛔ 不是被守衛擋）", f"{c} {b[:60]}")
+say(not NF.ARM_FLAG.exists(), "      ⛔ 而且**沒有把夜盤開關建出來**（先驗再寫）")
+c, ct, b = post("/api/nightfire/off")
+j = as_json(b) or {}
+say(c == 200 and j.get("ok") is True,
+    "    /api/nightfire/off：真的關得掉（本來就關著也回成功）", f"{c} {b[:60]}")
+say(not NF.ARM_FLAG.exists(), "      ⛔⛔ 這條路結構上只會關，⛔ 不會建出開關檔")
 
 # ── ③d ⛔ Content-Length 的兩個坑（2026-09-09 lab-qa 建議 2）
 print("\n  ── ⛔ Content-Length（⛔ 不可以讓外面決定要讀幾個位元組）")
@@ -776,10 +802,13 @@ for k, real in REAL_PATHS.items():
     now = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DIR,
            "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
            "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
-           "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "LP.REPLAY_DIR": LP.REPLAY_DIR}[k]
+           "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "LP.REPLAY_DIR": LP.REPLAY_DIR,
+           "NF.ARM_FLAG": NF.ARM_FLAG, "NF.NF_DIR": NF.NF_DIR}[k]
     say(now != real and str(TMP) in str(now), f"  {k} 全程都在暫存區", str(now))
 say(not REAL_ARM.exists(),
     "  ⛔⛔ 真的 AUTO_ORDERS_ON **不存在**（測試絕對不可以把它建出來）")
+say(REAL_NARM.exists() == REAL_NARM_EXISTED,
+    "  ⛔⛔ 真的 NIGHT_ORDERS_ON 沒被碰（存在與否跟開跑前一樣）", str(REAL_NARM_EXISTED))
 
 srv.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)

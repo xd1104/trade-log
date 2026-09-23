@@ -411,7 +411,17 @@ def state(now=None):
                 continue
             if o.get("rec") in ("skip", "result", "eod"):
                 recent.append(o)
-    return {"ok": True, "on": a["on"], "msg": a["msg"], "live": broker.is_live(),
+    # ⛔⛔ `flag_exists` ≠ `on`（2026-09-23 補畫面上的開關時加）：開關檔**存在但內容看不懂**
+    #    （UTF-16／打錯字）時 `on` 是 False，但那個檔還在 ⇒ 面板上那顆「關閉」鈕的顯示條件
+    #    要看**這一個**，⛔ 不是 `on` —— 看 `on` 的話壞掉的開關檔他關不掉，
+    #    而「關」永遠是安全方向（日盤 2026-09-09 lab-qa Q9 已經踩過同一個坑）。
+    #    ⚠️ `exists` 是這個模組對開關檔**唯一被允許的四個動作之一**（test_night_fire.py ⑦）。
+    # ⛔ `method`＝現在開關檔裡是哪一條（關著是 None）。v3 驗收（2026-09-23）抓到少了這一欄：
+    #    畫面上「目前在跑」標不出來、點目前那一條會跳出「從（空白）換成…」的確認條、
+    #    而「不設停損」那句揭露（nfNoSL）結構上永遠不會出現。⛔ 前端不准自己照代號猜。
+    return {"ok": True, "on": a["on"], "method": a["method"], "msg": a["msg"],
+            "live": broker.is_live(),
+            "flag_exists": ARM_FLAG.exists(), "flag": ARM_FLAG.name,
             "name": METHOD_NAME["T"],
             "rule": ("美股開盤第一根 5 分 K 台積電 ADR 走幅 ≥ 過去 %d 晚的 %g 成 ⇒ 順勢做台指 1 口；"
                      "停利停損 ＝ 進場價 × 過去 %d 晚振幅平均；04:58 平"

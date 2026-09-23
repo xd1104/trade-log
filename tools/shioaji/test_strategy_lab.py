@@ -523,49 +523,77 @@ except BaseException as e:
 finally:
     SL.time.sleep = _sleep
 
-# ══ ⑥ 前端：沒有下單路徑、沒有建議口吻、預設值走注入常數 ═══════════════════
-print("\n=== ⑥ 新分頁的 HTML／JS ===")
+# ══ ⑥ 前端：【策略實驗室】那一頁**整頁移除**，但後端一行都沒拆 ═══════════════
+#
+# ⚠️⚠️ 2026-09-23 v3（Benson 交辦）：【策略實驗室】的**畫面**整頁拿掉了。
+#    這一節原本量的是「#tab-lab 那個 div ＋ lb* 那段 JS 有沒有碰到下單路徑」——
+#    那一段已經不存在 ⇒ **⛔ 不可以留著讓它量到空字串還恆綠**（假綠燈）。
+#    改成兩件事：
+#      (a) 那一頁是**真的不見了**（HTML／CSS／JS／分頁鈕／setTab 全部零命中），
+#          而且**後端一個字都沒拆**（/api/lab/meta、/api/lab/run、strategy_lab、/api/auto/*）。
+#      (b) 同一條紅線（「這一頁一行都不碰下單路徑」）**改量新的【健檢】分頁**
+#          —— 它是這一版新加的唯讀頁，紅線一模一樣。切片邊界跟
+#          `tools/probe/autotest-backend.py` ①、`test_sim_lanes.py` ⑦ 是**同一組**
+#          （⛔ 改了要三個檔一起改）。
+print("\n=== ⑥ 【策略實驗室】的畫面整頁移除 ＋ 新【健檢】頁的紅線 ===")
 page = LP.PAGE
-html = page[page.index('<div id="tab-lab"'):page.index("<!-- ══ 【策略實驗室】到此 ══")]
-_j0 = page.index("/* ══════════════ 【策略實驗室】分頁：歷史逐筆回測")
-# ⚠️ 2026-09-16：結束標記本來是 `\nrvBind();`（【回顧】那頁的接線），那一頁整個拿掉了 ⇒
-#    改用下一段的區塊註解開頭，跟 autotest-backend.py 同一個錨點（⛔ 三份要一起改）。
-js = page[_j0:page.index("/* ══════════════ 【自動下單】分頁", _j0)]
-say(len(js) > 5000 and "function lbRun" in js and "function tkBind" not in js, "  切出來的確實是 lab 那一段 JS（不多不少）")
-lab = html + js
-# ⚠️ 用字檢查要先剝註解：註解本身就在寫「⛔ 不預測、不建議」，不剝會把紅線說明當成違規。
-#    （下單路徑那組**不剝**，連註解裡都不准出現 —— 更嚴）
+LPSRC = (HERE / "live_panel.py").read_text(encoding="utf-8")
 import re as _re
-lab_code = _re.sub(r"<!--.*?-->", " ", html, flags=_re.S) + \
-    "\n".join(_re.sub(r"//.*$", "", ln) for ln in _re.sub(r"/\*.*?\*/", " ", js, flags=_re.S).splitlines())
-for w in ("broker", "place_order", "/api/enter", "/api/real/", "/api/fire/on", "/api/fire/off", "method:'POST'",
-          'method:"POST"', "pfetch(", "data-act", "data-rdir", "<form", 'type="submit"'):
-    chk(f"  沒有 {w}", w in lab, False)
-say(all(w in page for w in ("/api/fire/on", "/api/real/", "data-rdir")),
-    "  負控組：同一把尺掃整頁找得到 /api/fire/on、/api/real/、data-rdir（尺是活的）")
-fetches = sorted(set(x.split("'")[1].split("?")[0] for x in lab.split("fetch(")[1:]))
-chk("  只打 GET：/api/lab/meta、/api/lab/run、唯讀的 /api/fire/state", fetches,
-    ["/api/fire/state", "/api/lab/meta", "/api/lab/run"])
+
+# ── (a) 那一頁真的不見了（⛔ 不是被 CSS 藏起來）
+for w in ('<div id="tab-lab"', 'data-tab="lab"', "function lbRun", "function lbEnter",
+          ".lb-grid", "#lbsvg", "【策略實驗室】到此"):
+    chk(f"  畫面上已經沒有 {w}", w in page, False)
+chk("  setTab 不再切 #tab-lab", "getElementById('tab-lab')" in page, False)
+# ⛔ 後端一個字都沒拆 —— 這才是「只拆畫面」的證據（前面 ①~⑤ 已經真的跑過那些後端）
+for w in ("/api/lab/meta", "/api/lab/run"):
+    say(w in LPSRC, f"  後端照舊有 {w}（⛔ 只拆畫面）")
+say((HERE / "strategy_lab.py").exists(), "  strategy_lab.py 還在（⛔ 模擬那幾條在用它的逐筆讀取）")
+for w in ("/api/auto/days", "/api/auto/stats", "/api/auto/day"):
+    say(w in LPSRC, f"  後端照舊有 {w}（【自動下單】每一筆的「模擬那邊」在讀它）")
+
+# ── (b) 同一條紅線改量【健檢】：⛔ 這一頁一行都不碰下單路徑
+hc_html = page[page.index('<div id="tab-hc"'):page.index("<!-- ══ 【健檢】到此 ══")]
+_h0 = page.index("/* ══════════════ 【健檢】分頁")
+hc_js = page[_h0:page.index("/* ══════════════ 【自動下單】分頁", _h0)]
+chk("  ⛔ 「健檢到此」那行註解全檔只出現一次（抄第二份切片會變成負的）",
+    page.count("<!-- ══ 【健檢】到此 ══"), 1)
+say(len(hc_html) > 400 and "function hcPaint" in hc_js and "function alPaint" not in hc_js,
+    "  切出來的確實是【健檢】那一段（不多不少）", f"html={len(hc_html)} js={len(hc_js)}")
+hc = hc_html + hc_js
+for w in ("broker", "place_order", "/api/enter", "/api/real/", "/api/fire/on", "/api/fire/off",
+          "/api/nightfire/on", "/api/nightfire/off", "method:'POST'", 'method:"POST"',
+          "pfetch(", "data-act", "data-alon", "data-nfon", "<form", 'type="submit"'):
+    chk(f"  【健檢】沒有 {w}", w in hc, False)
+# ⛔ 負控組：同一把尺掃整頁一定找得到那幾樣（否則上面那一排「沒有」只是因為尺壞了）
+say(all(w in page for w in ("/api/fire/on", "/api/nightfire/on", "/api/real/", "data-alon")),
+    "  負控組：同一把尺掃整頁找得到 /api/fire/on、/api/nightfire/on、/api/real/、data-alon（尺是活的）")
+hc_fetches = sorted(set(x.split("'")[1].split("?")[0] for x in hc.split("fetch(")[1:]))
+chk("  【健檢】只打一個唯讀 GET", hc_fetches, ["/api/health/state"])
+hc_code = _re.sub(r"<!--.*?-->", " ", hc_html, flags=_re.S) + \
+    "\n".join(_re.sub(r"//.*$", "", ln)
+              for ln in _re.sub(r"/\*.*?\*/", " ", hc_js, flags=_re.S).splitlines())
 for w in ("token", "PTOK"):
-    chk(f"  lab 的程式碼沒有 {w}（讀 fire/state 只拿 method，⛔ 不取 token、不送 POST）", w in lab_code, False)
-chk("  「現在真單用的」沒有寫死在 HTML 上", "現在真單用的" in _re.sub(r"<!--.*?-->", " ", html, flags=_re.S), False)
-say("function lbFire" in js and "x.armed===true?x.method:null" in js and "['A','lbm-bar5'],['B','lbm-open']" in js,
-    "  標籤照 /api/fire/state 的 method 標（A＝開盤快才做、方向同 5 分 K 那顆；B 已不支援、永遠不標；沒開就不標）")
-# ⚠️ 2026-09-15（規格改變）：自動下單換成「開盤快才做」＋ ±0.5% ⇒ 這頁的回測**不等於**自動下單，
-#    標籤 ⛔ 不准再寫「現在真單用的」（會讓他以為這頁回測出來的就是自動下單的成績）。
-chk("  ⛔ lab 的程式碼不再寫「現在真單用的」（方向同、規則不同）", "現在真單用的" in lab_code, False)
-# ⚠️ 2026-09-15 晚上（規格改變）：自動下單改「快攻回馬槍」⇒ 回馬槍那一口方向不一定同這顆，只能說「快攻那一口」
-say("快攻那一口的方向同這個" in lab_code and "回馬槍" in lab_code,
-    "  標籤講得出「快攻那一口的方向同這個，另有開盤快慢與回馬槍」")
-chk("  文案不暗示會自動補齊過去的日子", ("自己長出來" in lab_code, "陸續補進來中" in lab_code), (False, True))
-for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度"):
-    chk(f"  畫面文字沒有「{w}」", w in lab_code, False)
-chk("  分頁鈕是「策略實驗室」且舊的「自動下單（模擬）」鈕不在了",
-    ('data-tab="lab">策略實驗室<' in page, 'data-tab="auto"' in page), (True, False))
-chk("  setTab 切的是 #tab-lab", "getElementById('tab-lab').hidden=(t!=='lab')" in page, True)
-say("value=RULE_SIGNAL_AT" in js and "value=RULE_TP" in js and "value=RULE_SL" in js,
-    "  進場時間／停利／停損預設值來自注入的 RULE_*")
-chk("  lab 那一段沒有寫死 130 或 09:03", ("130" in lab, "09:03" in lab, "lbSec(9,3" in lab), (False, False, False))
+    chk(f"  【健檢】的程式碼沒有 {w}（⛔ 不取 token、不送 POST）", w in hc_code, False)
+# ⚠️⚠️ 那兩句**免責**本身含「預測／建議／明天」這三個字（規格 §3.2 指定逐字要有）——
+#    它們講的正是「這一頁不做那件事」，⛔ 不可以因為字面命中就把它們刪掉。
+#    做法：先斷言兩句**逐字都在**，再把它們挖掉之後才跑禁詞掃描（⛔ 不是放寬禁詞）。
+HC_DISCLAIMERS = (
+    "只是把已經發生的數字畫成位置，⛔ 沒有預測、沒有買賣建議。",
+    "數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。",
+)
+for _d in HC_DISCLAIMERS:
+    say(hc_code.count(_d) == 1, "  免責那一句逐字都在（而且只有一份）：" + _d[:18] + "…")
+hc_words = hc_code
+for _d in HC_DISCLAIMERS:
+    hc_words = hc_words.replace(_d, " ")
+for w in ("建議", "推薦", "會賺", "明天", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
+    chk(f"  【健檢】畫面文字沒有「{w}」（免責那兩句除外）", w in hc_words, False)
+# 尺的自證：挖掉免責之後，同一把尺對整頁還是抓得到那幾個字（⛔ 不是因為尺壞了才全綠）
+say(all(w in page for w in ("預測", "建議")), "  負控組：同一把尺掃整頁照樣抓得到「預測」「建議」")
+chk("  分頁鈕是「健檢」且舊的「策略實驗室」鈕不在了",
+    ('data-tab="hc">健檢<' in page, 'data-tab="lab"' in page), (True, False))
+chk("  setTab 切的是 #tab-hc", "getElementById('tab-hc').hidden=(t!=='hc')" in page, True)
 chk("  頁面上沒有未替換的 RULE 佔位", "__RULE_" in page, False)
 
 # 後端：strategy_lab 不 import broker／auto_fire；_lab_get 不碰 broker
@@ -646,7 +674,9 @@ try:
 finally:
     LP.strategy_lab = _saved
     srv2.shutdown()
-say("s===503" in js and "LB.err=" in js, "  ③ 前端 meta 回 503 時把錯誤寫到畫面上（lbMark 顯示 LB.err）")
+# ⚠️ 2026-09-23 v3：原本這裡驗的是「前端 lbMark 把 503 寫到畫面上」——【策略實驗室】
+#    那一頁的畫面整個拿掉了 ⇒ 沒有前端可驗（⛔ 不留一條量到不存在的東西的斷言）。
+#    改驗**還在的那一半**：503 那條退路的訊息本身（上面兩條已經真的打進去驗過了）。
 
 # ══ ⑦ 收尾 ══════════════════════════════════════════════════════════
 print("\n=== ⑦ 收尾 ===")
