@@ -3103,6 +3103,18 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 - 突變 10 組全打紅（停損不保守／成交後不換／掛了停利／30 分鐘前沒扣 1／容忍度改 5／撿回 float(None)／
   R 在 21:35 判斷／歷史太舊不擋／METHODS 拿掉 R／門檻混到今晚）。
 
+### ⭐ 2026-09-23 深夜【模擬】多三條推導線（Benson「三個都放」；⛔ 前瞻考試，不會下單）
+
+研究（tick-research/*_2026-09-23.md）裡最有苗頭、但歷史證明不了的三條改法，放進模擬考前瞻：
+- `hold` **聯軍留倉**：多方聯軍 13:43:30 還沒出場（「收盤」）的那口不平，停損停利價照舊，夜盤 1 分 K 抱到 04:58；
+  結算日不留。成本 ＝ 聯軍的 5 ＋ 夜盤出場價差 1。⚠️ 留倉那晚夜盤跟勢做不了 ⇒ 每列記 `trend_lost`。
+- `tlong` **夜盤跟勢只做多**：讀夜盤跟勢定論，做空那晚改不做（記 `trend_points`）。
+- `nunion` **夜盤聯軍（跟勢優先）**：跟勢有做就照抄；只有台積電快攻有做 ⇒ 21:40 用它的方向與框寬進場、04:58 平。
+- ⛔ 三條一律**讀本尊已落地的定論**（`DERIVED_EVAL`），⛔ 不重算本尊規則；本尊沒定論 ⇒ pending。
+  背景 `_step_derived()` 排在 `_step_trend()` 之後；回填 `backfill_derived.py`（只讀本機 tmf_1min.csv）；探針 `test_derived.py`。
+- `SHOWN_LANES` 變六條：union／tsm／trend／hold／tlong／nunion。
+- 2024-08 以後回填：聯軍 +277 vs 留倉 +436（擋掉的夜盤跟勢 +39）；夜盤跟勢 +536 vs 聯軍 +682 vs 只做多 +242。
+
 ## ⭐⭐ 早盤儀表板 v3（2026-09-23，Benson 交辦「版面整理」）
 
 規格：`test/ux-demo/panel-v3-spec.md`（定案 demo `test/ux-demo/panel-v3.html`）。

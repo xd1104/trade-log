@@ -757,16 +757,18 @@ st_code, body = req("/api/sim/state")
 chk("  GET ⇒ 200", st_code, 200)
 # ⛔ 這裡**寫死** key 與名字：拿 S.LANES／S.LANE_NAME 去比是自己比自己（一起改就永遠綠，
 #    2026-09-16 突變 N15 當場抓到這個假綠燈）。
-LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend"]
-LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢", "台積電快攻", "夜盤跟勢"]
-chk("  ⛔ 後端 LANES 就是這九條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
-chk("  端點端出來的九條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
-chk("  ⛔ 九條的名字就是 Benson 定的那九個（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
+# ⭐ 2026-09-23 深夜 Benson「三個都放」⇒ 多三條推導線（tlong／nunion／hold）。
+LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend", "tlong", "nunion", "hold"]
+LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢", "台積電快攻", "夜盤跟勢",
+              "夜盤跟勢只做多", "夜盤聯軍", "聯軍留倉"]
+chk("  ⛔ 後端 LANES 就是這十二條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
+chk("  端點端出來的十二條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
+chk("  ⛔ 十二條的名字（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
 # ⛔ 寫死：Benson 2026-09-22「模擬就留下多方聯軍跟台積電快攻」
-chk("  ⛔ 真正的畫面端三條：多方聯軍、台積電快攻、夜盤跟勢（寫死）", list(REAL_SHOWN), ["union", "tsm", "trend"])
+chk("  ⛔ 真正的畫面端六條（寫死）", list(REAL_SHOWN), ["union", "tsm", "trend", "hold", "tlong", "nunion"])
 S.SHOWN_LANES = REAL_SHOWN
 _two = S.state(NOW) if "NOW" in globals() else S.state()
-chk("  ⛔ 端點真的只端那三條、順序一樣", list(_two["lanes"]), ["union", "tsm", "trend"])
+chk("  ⛔ 端點真的只端那六條、順序一樣", list(_two["lanes"]), ["union", "tsm", "trend", "hold", "tlong", "nunion"])
 S.SHOWN_LANES = S.LANES
 say(set(REAL_SHOWN) <= set(S.LANES), "  畫面那兩條都還在 LANES 裡（背景照算）")
 chk("  ⛔ 後端端出去的字裡沒有舊名字",
