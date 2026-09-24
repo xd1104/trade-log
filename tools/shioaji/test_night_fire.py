@@ -273,6 +273,10 @@ say(_narm is not None and "night_fire.METHODS" in ast.unparse(_narm),
 _darm = next((n for n in ast.walk(_lptree)
               if isinstance(n, ast.FunctionDef) and n.name == "fire_arm_on"), None)
 _dlines = range(_darm.lineno, (_darm.end_lineno or _darm.lineno) + 1) if _darm else range(0)
+# ⭐ 2026-09-24：第三個具名入口 risk_override_on（風控規則 B 的手動解除，建 RISK_OVERRIDE）。
+_rov = next((n for n in ast.walk(_lptree)
+             if isinstance(n, ast.FunctionDef) and n.name == "risk_override_on"), None)
+_rlines = range(_rov.lineno, (_rov.end_lineno or _rov.lineno) + 1) if _rov else range(0)
 _creators = []
 for _p in sorted(HERE.glob("*.py")):
     if _p.name.startswith("test_"):
@@ -284,15 +288,16 @@ for _p in sorted(HERE.glob("*.py")):
             if _p.name == "live_panel.py":
                 _ln = getattr(_n, "lineno", -1)
                 _where = ("night_arm_on" if _ln in _nlines
-                          else ("fire_arm_on" if _ln in _dlines else "live_panel（別的地方）"))
+                          else ("fire_arm_on" if _ln in _dlines
+                                else ("risk_override_on" if _ln in _rlines else "live_panel（別的地方）")))
             _creators.append(_where)
-chk("  ⛔⛔ 整個 tools/shioaji 建得出開關檔的地方只有那兩支"
-    "（日盤 fire_arm_on／夜盤 night_arm_on）",
-    sorted(set(_creators)), ["fire_arm_on", "night_arm_on"])
+chk("  ⛔⛔ 整個 tools/shioaji 建得出開關檔的地方只有那三支"
+    "（日盤 fire_arm_on／夜盤 night_arm_on／風控解除 risk_override_on）",
+    sorted(set(_creators)), ["fire_arm_on", "night_arm_on", "risk_override_on"])
 # 尺的自證：同一把尺在 live_panel 裡抓得到「日盤那一支」（⇒ 不是因為尺壞了才只有一個）
 say(sum(1 for _n in ast.walk(_lptree)
-        if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n)) == 2,
-    "  負控組：同一把尺在 live_panel 裡剛好抓到兩個建檔點（日盤＋夜盤）")
+        if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n)) == 3,
+    "  負控組：同一把尺在 live_panel 裡剛好抓到三個建檔點（日盤＋夜盤＋風控解除）")
 say('self.path == "/api/nightfire/on"' in lp and 'self.path == "/api/nightfire/off"' in lp,
     "  ⛔ 夜盤有**自己的一組**端點（⛔ 沒有跟日盤共用同一支）")
 say("night_fire.disarm()" in lp, "  ⛔ 關那一條走 night_fire.disarm()（改名不刪）")

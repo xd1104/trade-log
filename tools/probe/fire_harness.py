@@ -67,6 +67,10 @@ broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
 LP.AUTO_DIR = TMP / "autotest"
+# ⭐ 2026-09-24 風控規則 B：解除檔與解除紀錄也導到暫存區（⛔ 絕對不碰他真的 RISK_OVERRIDE）。
+import risk_cap as RC           # noqa: E402
+RC.OVERRIDE_FLAG = TMP / "RISK_OVERRIDE"
+LP.RISK_LOG_DIR = TMP / "riskcap"
 LP.AUTO_REAL_DIR = TMP / "real_trades"
 # ⭐ 2026-09-21：兩份歷史也導到暫存區並餵種子 —— 沒有它們的話「今天的門檻」算不出來，
 #    畫面會變成「歷史不夠」那一種（那是另一個情境，不是這支治具要看的那個）。
@@ -451,6 +455,10 @@ class H(BaseHTTPRequestHandler):
             ok, msg = NF.disarm()
             return self._j(200 if ok else 409,
                            {"ok": ok, "msg": msg, "armed": NF.arm()["on"]})
+        # ⭐ 2026-09-24 風控「手動解除」：走**產品的** `LP.risk_override_on()`（解除檔已導到暫存區）
+        if self.path == "/api/risk/override":
+            code, out = LP.risk_override_on(who="harness")
+            return self._j(code, out)
         # ⛔ 除了上面那幾顆，這一頁不該打到這裡來（探針會攔請求驗證）
         return self._j(404, {"ok": False, "msg": "治具不送單"})
 
@@ -490,6 +498,8 @@ class H(BaseHTTPRequestHandler):
             out["arm_confirm"] = {m: LP.fire_arm_confirm(out.get("live"), _fake_now(), mode=m)
                                   for m in AF.METHODS}
             out["token"] = LP.FIRE_TOKEN
+            # ⭐ 2026-09-24 風控規則 B：走**產品的** `LP.risk_view()`（讀的是暫存區的帳本）
+            out["risk"] = LP.risk_view(force=True)
             # ⭐ 2026-09-21「現在離門檻還差幾點」：走**產品的** `LP.fire_gap()`，
             #    只有報價與時鐘是治具餵的（⛔ 治具自己算一份的話，產品錯了也會全綠）。
             LP.CURRENT_STATE["today"] = _gap_quote()
@@ -577,6 +587,10 @@ class C(BaseHTTPRequestHandler):
             ST["now"] = p.split("/f/now", 1)[1].lstrip("/") or None
             return self._j({"now": ST["now"],
                             "fires_today": LP.fire_fires_today(_fake_now())})
+        if p.startswith("/f/cap"):
+            # ⭐ 風控上限（每口點數）：調小就能在假資料上看到「到上限」與「手動解除」那兩種畫面
+            RC.CAP_PER_LOT = float(p.rsplit("/", 1)[1] or 800)
+            return self._j({"cap": RC.CAP_PER_LOT, "risk": LP.risk_view(force=True)})
         if p.startswith("/f/blocked"):
             return self._j({"blocked": list(BLOCKED)})
         if p.startswith("/f/reset"):

@@ -507,6 +507,8 @@ print("\n=== ③c ⛔⛔⛔ 【P0】每一個 POST 都要過守衛 ===")
 #   ⛔ 它們跟日盤那兩顆一樣會動到真錢 ⇒ 同一排攻擊全部要擋得住。
 _POSTS = ["/api/real/enter", "/api/real/close", "/api/fire/on", "/api/fire/off",
           "/api/nightfire/on", "/api/nightfire/off",
+          # ⭐ 2026-09-24 風控規則 B 的「手動解除」：解除後單就送得出去 ⇒ 同一排攻擊一樣要擋
+          "/api/risk/override",
           "/api/enter", "/api/close", "/api/note", "/api/replay",
           "/api/sync", "/api/undo"]
 # ⛔ 名單要跟原始碼對得起來 —— 少列一條就等於那條沒被驗到（而它照樣對外開著）。

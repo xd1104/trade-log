@@ -133,6 +133,8 @@ def snapshot(port):
         snap["panel"] = dict(_pick(s, ("status", "msg", "quote", "market", "phase", "clock", "age_sec")),
                              conn=_pick(s.get("conn") or {}, ("ok", "retries", "last_error", "contract_name")))
         snap["equity"] = _pick(s.get("equity") or {}, ("ok", "at", "equity", "day_pl", "float_pl"))
+        # ⭐ 2026-09-24：還撐得住幾次停損（保證金提醒）—— 只帶那句話與燈號
+        snap["equity"]["cushion"] = _pick((s.get("equity") or {}).get("cushion") or {}, ("warn", "msg"))
         snap["real"] = dict(_pick(r, ("live", "position", "stale_sec", "entries_today", "can_enter", "why",
                                       "last_error", "ca_ok")),
                             float_pts=r.get("float_pts"), sl=r.get("sl"), tp=r.get("tp"),
@@ -145,6 +147,9 @@ def snapshot(port):
         snap["day"] = dict(_pick(f, ("armed", "method", "live", "flag_exists", "arm_msg", "err", "err_n",
                                      "entries_today", "eod_at", "signal_at", "today", "eod_expiry")),
                            method_name=names.get(f.get("method")),
+                           # ⭐ 2026-09-24 風控規則 B：本月自動單損益／上限
+                           risk=_pick(f.get("risk") or {}, ("month", "pnl", "cap", "hit", "override",
+                                                            "blocked", "msg", "err")),
                            days=[_day(x, (f.get("real") or {}).get(x.get("date"))) for x in (f.get("days") or [])[:5]])
     except Exception as e:
         snap["errs"].append("日盤自動下單讀不到：%s" % str(e)[:120])

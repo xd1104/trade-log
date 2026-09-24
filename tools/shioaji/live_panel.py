@@ -57,6 +57,7 @@ import pandas as pd
 import broker            # 真實下單。預設 dry run，見那個檔開頭的說明
 import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
 import night_fire        # 夜盤自動下單（台積電快攻）。預設**關著**（沒有 NIGHT_ORDERS_ON 就完全不送；跟日盤開關分開）
+import risk_cap          # 風控規則 B（2026-09-24）：本月自動單虧到上限就不送。⛔ 唯讀模組
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 # 【健檢】那一頁（唯讀）。⛔ 不 import broker、不碰任何下單路徑、一個位元組都不寫。
 # ⛔⛔ 一定要包 try（跟 strategy_lab 同一條理由）：它是「看的東西」，載入失敗
@@ -4227,6 +4228,77 @@ def night_arm_on(mode, who="panel"):
                  "msg": a["msg"] if a["on"] else (a["msg"] or "開關建好了")}
 
 
+# ---------------------------------------------------------------- 風控規則 B
+# ⭐ 2026-09-24 Benson 拍板：當月自動單真單虧到 800 點（每口）⇒ 當月日盤、夜盤都不送；
+#    他**可以手動解除**（兩段式），解除只對那個月有效。規則本體在 `risk_cap.py`（唯讀）。
+#    ⛔ 這裡只做兩件事：① 給畫面看的那一份（快取）；② 建解除檔（整個 repo 只有這裡會建）。
+RISK_TTL = 20.0                         # 秒。/api/fire/state 每 5 秒被問一次，⛔ 不要每次都讀帳本
+RISK_LOG_DIR = HERE / "riskcap"         # ⛔ gitignore（解除紀錄）
+_RISK = {"at": 0.0, "v": None}
+
+
+def risk_view(force=False):
+    """⇒ 這個月的風控狀態（`risk_cap.state()`，20 秒快取）。⛔ 算不出來也回一份（帶 err）。"""
+    now = time.time()
+    if not force and _RISK["v"] is not None and now - _RISK["at"] < RISK_TTL:
+        return _RISK["v"]
+    try:
+        v = risk_cap.state(qty=broker.QTY)
+    except Exception as e:
+        v = {"err": "風控算不出來：%s" % str(e)[:120], "blocked": True,
+             "msg": "風控算不出本月損益 —— 不猜，這段時間不送"}
+    _RISK.update(at=now, v=v)
+    return v
+
+
+def risk_override_on(who="panel"):
+    """
+    ⭐⭐ **整個 repo 唯一一個會建立 `RISK_OVERRIDE` 的地方。** ⇒ (http_code, payload)。
+    ⛔ 呼叫端必須先過 `fire_post_guard()`（前端是兩段式）。
+      - ⛔ 只有「這個月真的到了上限」才准解除（沒到上限按了 ⇒ 409，⛔ 不預先解除）。
+      - 內容 ＝ 這個月 `YYYY-MM`（ASCII、不加換行）⇒ 下個月自動失效，不用記得收。
+      - 舊的解除檔（上個月的）先**改名**收起來再建（⛔ 不刪、⛔ 不覆蓋）；
+        寫檔用 `O_CREAT|O_EXCL`（兩個視窗同時按也只有一個會成功）。
+    """
+    s = risk_view(force=True)
+    month = str(date.today())[:7]
+    if s.get("err"):
+        return 409, {"ok": False, "msg": "風控現在算不出本月損益，不能解除：" + str(s["err"])}
+    if not s.get("hit"):
+        return 409, {"ok": False, "msg": "這個月還沒到上限，不需要解除"}
+    if s.get("override"):
+        return 409, {"ok": False, "msg": "這個月已經解除過了"}
+    flag = risk_cap.OVERRIDE_FLAG
+    try:
+        if flag.exists():
+            flag.replace(flag.with_name(flag.name + ".old-" + datetime.now().strftime("%Y%m%d-%H%M%S")))
+        fd = os.open(str(flag), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return 409, {"ok": False, "msg": "剛剛已經有另一個視窗解除了"}
+    except Exception as e:
+        return 500, {"ok": False, "msg": "解除不了：" + str(e)[:150]}
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(month.encode("ascii"))
+            f.flush()
+    except Exception as e:
+        return 500, {"ok": False, "msg": "寫不進去：" + str(e)[:150]}
+    warn = None
+    try:
+        RISK_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with (RISK_LOG_DIR / ("override-" + month + ".jsonl")).open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"rec": "override", "month": month,
+                                "at": datetime.now().isoformat(timespec="seconds"),
+                                "pnl": s.get("pnl"), "cap": s.get("cap"),
+                                "who": str(who)[:60]}, ensure_ascii=False) + "\n")
+    except Exception as e:
+        warn = "解除了，但這一筆沒有記錄下來：" + str(e)[:120]
+    s = risk_view(force=True)
+    print("[風控] %s 手動解除（本月 %s 點、上限 %s）" % (month, s.get("pnl"), s.get("cap")), flush=True)
+    return 200, {"ok": True, "warn": warn, "risk": s,
+                 "msg": "已解除：這個月剩下的日子照常送單，下個月自動恢復規則"}
+
+
 # ---------------------------------------------------------------- 回顧分頁
 
 _VOLREF = {"map": None}
@@ -5691,6 +5763,27 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-conf.real .btn.go{background:var(--up-soft); color:var(--up);
   border-color:var(--up-line)}
 .al-conf .btn.no{background:transparent; color:var(--faint); border-color:var(--line)}
+/* ⭐ 2026-09-24 風控規則 B（#alcap）。⛔ 用金色／中性灰，⛔ 不准用紅綠（紅綠只給損益）。 */
+.al-cap{margin-top:12px}
+.al-cap:empty{display:none}
+.al-cap .cap{border:1px solid var(--line-soft); background:var(--surface-2);
+  border-radius:var(--r-md); padding:10px 14px 11px}
+.al-cap .cap.hit{border-color:var(--gold-line); background:var(--gold-soft)}
+.al-cap .hd{display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap}
+.al-cap .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px}
+.al-cap .v{font-size:13.5px; font-weight:650; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums}
+.al-cap .cap.hit .v,.al-cap .cap.hit .t{color:var(--gold)}
+.al-cap .bar{height:4px; border-radius:2px; background:var(--bg); margin:8px 0 6px; overflow:hidden}
+.al-cap .bar i{display:block; height:100%; border-radius:2px; background:var(--dim)}
+.al-cap .cap.hit .bar i{background:var(--gold)}
+.al-cap .t{font-size:12px; color:var(--dim); line-height:1.7}
+.al-cap .n{font-size:11px; color:var(--faint); line-height:1.7}
+.al-cap .al-conf{margin-top:10px}
+.al-cap .rbtn{margin-top:9px}
+.al-cap .rbtn .btn{padding:8px 14px; font-size:13px; background:transparent;
+  color:var(--gold); border-color:var(--gold-line)}
+.al-cap .err{font-size:12px; color:var(--gold); margin-top:6px}
 .al-conf .btn.no:hover:not(:disabled){color:var(--text); border-color:var(--faint)}
 .al-on .err{font-size:12px; color:var(--gold); line-height:1.7; margin-top:9px;
   font-weight:600}
@@ -6152,6 +6245,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <!-- 條件式的警告（真單關著／送單出過錯／結算日判不出來…）⛔ 一條都不准少 -->
   <div class="at-head"><div class="at-title"><div class="s" id="alsub"></div></div></div>
   <div class="al-gates" id="algates"></div>
+  <!-- ⭐ 2026-09-24 風控規則 B：本月自動單損益／上限（＋到上限時的兩段式「手動解除」）。
+       ⛔ 空容器：按鈕一律由 alPaint 畫進來（這一頁的靜態 HTML 不准有 button）。 -->
+  <div class="al-cap" id="alcap"></div>
   <!-- ⭐ 2026-09-15：今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 /api/fire/state 的 fast 來。 -->
   <div class="al-fast" id="alfast"></div>
 
@@ -6411,7 +6507,10 @@ function lvAcctHTML(s){
       acctPM(E.day_pl)+'</b></div>'+
     '<div class="r"><span>還下得了一口</span><b style="color:var(--text)">'+
       (en.ok===true?'可以':(en.ok===false?'不夠':'判不出來'))+'</b></div>'+
-    '<div class="n">'+esc(en.msg||'')+'</div></div>';
+    '<div class="n">'+esc(en.msg||'')+'</div>'+
+    /* ⭐ 2026-09-24：還撐得住幾次停損（⛔ 整句後端算，warn 才用金色） */
+    ((E.cushion&&E.cushion.msg)?'<div class="n"'+(E.cushion.warn?' style="color:var(--gold)"':'')+'>'+
+      esc(E.cushion.msg)+'</div>':'')+'</div>';
 }
 
 
@@ -6487,6 +6586,8 @@ function acctHTML(s){
      '（未平倉 '+acctPM(E.float_pl)+'／平倉 '+acctPM(E.settle_pl)+
      '／成本 −'+acctMoney(E.cost)+'）</div>'+
    '<div class="line'+(en.ok===false?' warn':'')+'">'+esc(en.msg||'')+'</div>'+
+   /* ⭐ 2026-09-24：還撐得住幾次停損（⛔ 整句後端算） */
+   ((E.cushion&&E.cushion.msg)?'<div class="line'+(E.cushion.warn?' warn':'')+'">'+esc(E.cushion.msg)+'</div>':'')+
    (mo?('<div class="line">本月 '+acctPM(mo.net)+
         '（從 '+esc(mo.from)+' 起記'+(mo.deposit?'，已扣掉出入金 '+acctMoney(mo.deposit):'')+
         '）</div>'):'')+
@@ -8078,6 +8179,54 @@ var AL={data:null,err:'',pending:false,seq:0,timer:null};
    ⛔ 而且**不做逾時自動收回**：他可能中途去看別的分頁再回來（那條路由 alEnter 重設），
       在同一頁上等多久都不該讓畫面自己跳掉。 */
 var ALON={step:'idle',mode:null,busy:false,err:''};
+/* ⭐ 2026-09-24 風控規則 B 的「手動解除」—— 跟打開開關同一套兩段式規矩：
+   第一段只換畫面（⛔ 零請求），第二段按「確定解除」才 POST /api/risk/override。 */
+var RCAP={step:'idle',busy:false,err:'',ok:''};
+/* 本月風控那張卡（#alcap）。⛔ 數字與那句話全部從後端 D.risk 來，前端不自己算。
+   ⛔ 用金色／中性灰，⛔ 不准用紅綠（紅綠只給損益）。 */
+function alCapHTML(R){
+ if(!R||typeof R!=='object') return '';
+ if(R.err) return '<div class="cap hit"><div class="hd"><span class="k">本月風控</span></div>'+
+   '<div class="t">⚠️ '+esc(R.err)+' —— 算不出來的時候<b>不送單</b>（不猜）。</div></div>';
+ const cap=Number(R.cap||0), pnl=Number(R.pnl||0), used=Number(R.used_pct||0);
+ const fmt=v=>(v>0?'+':(v<0?'−':''))+Math.abs(Math.round(v)).toLocaleString();
+ let h='<div class="cap'+(R.hit?' hit':'')+'">'+
+   '<div class="hd"><span class="k">本月風控・自動單真單（'+esc(String(R.month||''))+'）</span>'+
+   '<span class="v">'+fmt(pnl)+' 點　/　上限 −'+Math.round(cap).toLocaleString()+'</span></div>'+
+   '<div class="bar"><i style="width:'+Math.max(0,Math.min(100,used))+'%"></i></div>';
+ if(R.blocked)
+   h+='<div class="t">⚠️ 到了上限：<b>這個月日盤、夜盤都不送</b>，下個月自動恢復。模擬照常記錄。</div>';
+ else if(R.hit&&R.override)
+   h+='<div class="t">超過上限，但你已經<b>手動解除</b> —— 這個月照常送單，下個月恢復規則。</div>';
+ else
+   h+='<div class="n">虧到上限 ⇒ 當月兩條都停、下個月自動恢復。只算自動下的真單；夜盤算開盤那晚的月份。'+
+     (R.open?'　有 '+esc(String(R.open))+' 口還沒平（不算）。':'')+
+     (R.unknown?'　有 '+esc(String(R.unknown))+' 口平了但問不到出場價（不算）。':'')+'</div>';
+ if(R.blocked){
+   if(RCAP.step==='confirm')
+     h+='<div class="al-conf"><div class="q">確定要解除這個月的風控嗎？<br>'+
+       '解除之後，<b>這個月剩下的日子兩條都會照常送真單</b>，直到月底；下個月自動恢復規則。</div>'+
+       '<div class="btns2"><button class="btn go" data-rcyes="1"'+(RCAP.busy?' disabled':'')+'>'+
+       (RCAP.busy?'解除中…':'確定解除')+'</button>'+
+       '<button class="btn no" data-rcno="1"'+(RCAP.busy?' disabled':'')+'>取消</button></div></div>';
+   else
+     h+='<div class="rbtn"><button class="btn" data-rcon="1">手動解除本月風控</button></div>';
+ }
+ if(RCAP.err) h+='<div class="err">'+esc(RCAP.err)+'</div>';
+ if(RCAP.ok) h+='<div class="n">'+esc(RCAP.ok)+'</div>';
+ return h+'</div>';
+}
+function rcArm(){
+ if(RCAP.busy) return;
+ RCAP.busy=true; RCAP.err=''; RCAP.ok=''; alPaint();
+ pfetch('/api/risk/override','{}')
+  .then(r=>r.json().catch(()=>({ok:false,msg:'面板回了看不懂的東西（HTTP '+r.status+'）'})))
+  .then(r=>{ RCAP.busy=false; RCAP.step='idle';
+    if(r&&r.ok){ RCAP.ok=(r.msg||'已解除')+(r.warn?('（'+r.warn+'）'):''); }
+    else RCAP.err=(r&&r.msg)||'解除不了'; })
+  .catch(()=>{ RCAP.busy=false; RCAP.step='idle'; RCAP.err='解除不了：連不上面板'; })
+  .then(()=>alFetch());
+}
 /* ⚠️ 2026-09-15 自動下單只剩 A，名字改成「開盤快才做」（跟後端 auto_fire.METHOD_NAME 同一組字）。
    B 從這張表拿掉 ⇒ 舊紀錄裡 method:"B" 的那幾天，alName() 回空字串、畫面照舊印「—」。 */
 /* ⭐ 2026-09-15 晚上再改成「快攻回馬槍」（慢的日子 09:15 反轉也會做；跟後端 METHOD_NAME 同一組字）。 */
@@ -8200,6 +8349,7 @@ function alEnter(){
     ⛔ 日盤與夜盤**各自一份**：他剛剛在夜盤按到一半，切走再回來也要回到 idle。 */
  ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';
  NFON.step='idle'; NFON.mode=null; NFON.busy=false; NFON.err='';
+ RCAP.step='idle'; RCAP.busy=false; RCAP.err=''; RCAP.ok='';
  alFetch(); NF.n=0; nfFetch();
  if(AL.timer) clearTimeout(AL.timer);
  AL.timer=setTimeout(alLoop,5000);
@@ -8310,7 +8460,7 @@ function alPaint(){
    setEl('alsub','<span class="warn">'+esc(AL.err||'載入中…')+'</span>');
    /* ⛔⛔ 讀不到狀態時「打開」那幾顆更不能留：我們連現在是真錢還是演練都不知道。
       ⛔ 「關閉」也一樣收起來 —— 我們不知道開關檔在不在。 */
-   setEl('algates',''); setEl('alfast',''); setEl('alrisk',''); setEl('altoday','');
+   setEl('algates',''); setEl('alcap',''); setEl('alfast',''); setEl('alrisk',''); setEl('altoday','');
    setEl('alswitch',''); setEl('alpos','');
    setEl('alperf',''); setEl('alsparkbox',''); setEl('alperfn','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
@@ -8372,6 +8522,8 @@ function alPaint(){
    '<div class="c"><div class="k">怎麼送</div>'+
      '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利停損 &plusmn;'+
        esc(alPct(D)==null?'—':String(alPct(D)))+'% · 一天最多 1 次</div></div>');
+ /* ⭐ 2026-09-24 風控規則 B：本月自動單損益／上限（到上限才有「手動解除」）。 */
+ setEl('alcap', alCapHTML(D.risk));
  /* 今天的門檻與判定（快／不快／歷史不夠）—— 掛在開關區，今天那張卡收起來時也看得到。 */
  setEl('alfast',alFastHTML(D));
 
@@ -8835,6 +8987,13 @@ document.addEventListener('click', function(e){
  /* 紀錄的日盤／夜盤篩選（⛔ 純畫面，⛔ 一個請求都不送）。 */
  const ch=e.target.closest('[data-alf]');
  if(ch){ ALF=ch.getAttribute('data-alf'); alPaint(); return; }
+ /* ⭐ 風控「手動解除」：第一段 ⛔ 零請求；第二段才 POST。 */
+ const rc=e.target.closest('[data-rcon]');
+ if(rc){ RCAP.step='confirm'; RCAP.err=''; RCAP.ok=''; alPaint(); return; }
+ const rn=e.target.closest('[data-rcno]');
+ if(rn){ if(rn.disabled) return; RCAP.step='idle'; RCAP.err=''; alPaint(); return; }
+ const ry=e.target.closest('[data-rcyes]');
+ if(ry){ if(ry.disabled) return; rcArm(); return; }
  /* 第一段：⛔ 只換畫面，**一個請求都不送**（fire-tab.mjs ⑪ 在守）。 */
  const on=e.target.closest('[data-alon]');
  if(on){ if(on.disabled) return;
@@ -9212,7 +9371,7 @@ class Handler(BaseHTTPRequestHandler):
         # ⛔ 武裝那兩顆只收 POST。沒有 do_HEAD 的話 BaseHTTPRequestHandler 會回 501
         #    （語意上也是拒絕），但這兩顆要回**明確的 405**。
         #    其餘路徑維持原本的行為（這支面板從來不服務 HEAD）。
-        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on"):
+        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on", "/api/risk/override"):
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
         self.send_error(501, "Unsupported method ('HEAD')")
 
@@ -9356,6 +9515,12 @@ class Handler(BaseHTTPRequestHandler):
             m = body.get("mode") if isinstance(body, dict) else None
             code, out = night_arm_on(m, who=self.client_address[0]
                                      if self.client_address else "?")
+            return self._json(code, out)
+
+        # ⭐ 2026-09-24 風控規則 B 的「手動解除」：⛔ 前端兩段式；⛔ 路由精確比對。
+        if self.path == "/api/risk/override":
+            code, out = risk_override_on(who=self.client_address[0]
+                                         if self.client_address else "?")
             return self._json(code, out)
 
         if self.path == "/api/nightfire/off":
@@ -9654,7 +9819,7 @@ class Handler(BaseHTTPRequestHandler):
         # ⛔⛔ 武裝那顆**只收 POST**：GET／HEAD 一律 405。
         #    網頁上一個 <img src>、一條他點下去的連結、瀏覽器的預抓
         #    都不可以變成「幫他打開自動下單」（GET 連 CORS 那一關都不用過）。
-        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on"):
+        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on", "/api/risk/override"):
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
         # ⭐ 【健檢】（2026-09-23）：⛔ **唯讀**、⛔ 一個位元組都不寫、⛔ 不碰 _lock／部位。
         #   ⛔⛔ **不可以掛在高頻輪詢上**：前端只在切進【健檢】那一頁時打一次；
@@ -9738,6 +9903,11 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as _ge:
                     out["gap"] = None
                     out["gap_err"] = "算不出「還差幾點」：%s" % str(_ge)[:120]
+                # ⭐ 2026-09-24 風控規則 B：本月自動單損益與上限（20 秒快取；⛔ 壞掉不帶掉整份）。
+                try:
+                    out["risk"] = risk_view()
+                except Exception as _re:
+                    out["risk"] = {"err": "風控算不出來：%s" % str(_re)[:120], "blocked": True}
                 # 兩段式確認第二段要帶的 token。跨站讀不到這份 JSON ⇒ 拿不到它。
                 out["token"] = FIRE_TOKEN
                 return self._json(200, out)
@@ -10170,8 +10340,50 @@ def equity_view(now=None):
             "cost": round(fee, 1), "day_pl": pl,
             "risk": m.get("risk_indicator"), "margin_call": m.get("margin_call"),
             "deposit": m.get("deposit_withdrawal"),
-            "enough": enough, "month": _equity_month(rows, m, now),
+            "enough": enough, "cushion": equity_cushion(m.get("equity_amount"), lot1),
+            "month": _equity_month(rows, m, now),
             "hist_n": len(rows)}
+
+
+def equity_cushion(eq, lot1, px=None, day_on=None, night_on=None):
+    """
+    ⭐ 2026-09-24（Benson：不夠就補錢 ⇒ 前提是**不夠的時候他要知道**）。
+    權益離「一口保證金」還剩多少，夠不夠再吃一次停損。⇒ dict（`warn` True 就要亮）。
+      停損距離：開著的那幾條裡最大的那個（夜盤 2%、日盤 0.5%，× 現價）。
+      ⛔ 學不到一口保證金／沒有現價／兩條都關著 ⇒ 照實說判不出來，⛔ 不猜。
+    建議本金 ＝ 保證金 ＋ 風控 B 下的最大回落 × 2 × 每點金額（`risk_cap.DD_PER_LOT`）。
+    """
+    if not isinstance(eq, (int, float)) or not lot1:
+        return {"warn": None, "msg": ""}
+    if px is None:
+        px = getattr(CURRENT_STATE.get("today"), "price", None)
+    try:
+        if day_on is None:
+            day_on = bool(auto_fire.arm().get("on"))
+        if night_on is None:
+            night_on = bool(night_fire.arm().get("on"))
+    except Exception:
+        day_on, night_on = True, True
+    rec = float(lot1) + 2 * risk_cap.DD_PER_LOT * risk_cap.PT_NTD
+    cush = float(eq) - float(lot1)
+    out = {"cushion": round(cush), "pts": int(cush // risk_cap.PT_NTD), "rec": int(round(rec, -3)),
+           "topup": max(0, int(round(rec - float(eq), -3)))}
+    if not isinstance(px, (int, float)) or px <= 0 or not (day_on or night_on):
+        out.update(warn=None, msg="權益比一口保證金多 %s 元（約 %d 點）" % (
+            format(int(round(cush)), ","), out["pts"]))
+        return out
+    stop = round(px * (0.02 if night_on else 0.005))
+    out["stop_pts"] = stop
+    out["warn"] = out["pts"] < stop
+    if out["warn"]:
+        out["msg"] = ("⚠️ 權益只比一口保證金多 %s 元（約 %d 點），比一次停損（約 %d 點）還少 —— "
+                      "再停損一次，下一筆自動單會因為保證金不夠被券商退掉。建議本金每口約 %s 元（還差約 %s 元）"
+                      % (format(int(round(cush)), ","), out["pts"], stop,
+                         format(out["rec"], ","), format(out["topup"], ",")))
+    else:
+        out["msg"] = ("權益比一口保證金多 %s 元（約 %d 點），撐得住一次停損（約 %d 點）"
+                      % (format(int(round(cush)), ","), out["pts"], stop))
+    return out
 
 
 def poll_equity():

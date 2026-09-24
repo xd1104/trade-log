@@ -123,6 +123,10 @@
     if (d) {
       var h = '<h2>日盤自動下單 <span class="pill ' + (d.armed ? 'on' : '') + '">' + esc(modeTxt(d.armed, d.live)) + '</span></h2>' +
         row('做法', esc(d.method_name || d.method || '—')) + row('今天', esc(d.today || ''));
+      // ⭐ 2026-09-24 風控規則 B：本月自動單（日盤＋夜盤）損益／上限
+      var rk0 = d.risk || {};
+      if (rk0.cap) h += row('本月風控', '<span class="num' + (rk0.hit ? ' gold' : '') + '">' + pm(rk0.pnl) + ' / −' + Math.round(rk0.cap).toLocaleString() + ' 點</span>' +
+        (rk0.blocked ? '<span class="gold">　已停</span>' : (rk0.override ? '<span class="gold">　已手動解除</span>' : '')));
       var today = (d.days || [])[0];
       if (today && today.date === d.today) {
         if (today.trade) {
@@ -169,10 +173,17 @@
     $('acct').innerHTML = '<h2>帳戶（券商端）</h2>' +
       row('權益總值', '<span class="num">' + (e.equity != null ? Math.round(e.equity).toLocaleString() + ' 元' : '—') + '</span>') +
       row('今日損益', '<span class="num ' + cls(e.day_pl) + '">' + (e.day_pl != null ? pm(e.day_pl) + ' 元' : '—') + '</span>') +
-      row('查詢時間', esc(e.at || '—'));
+      row('查詢時間', esc(e.at || '—')) +
+      // ⭐ 2026-09-24：保證金還撐得住幾次停損（整句面板算好的）
+      (e.cushion && e.cushion.msg ? '<div class="msg' + (e.cushion.warn ? ' gold' : '') + '">' + esc(e.cushion.msg) + '</div>' : '');
 
     // 警示
     var pn = s.panel || {}, w = errs.slice();
+    // ⭐ 2026-09-24 風控規則 B 與保證金提醒：到了就放進「要注意的事」
+    var rk = (s.day || {}).risk || {};
+    if (rk.blocked) w.push(rk.msg || '本月自動單到了風控上限，這個月不送');
+    if (rk.err) w.push('風控算不出本月損益：' + rk.err);
+    if (e.cushion && e.cushion.warn) w.push(e.cushion.msg);
     if (pn.conn && pn.conn.ok === false) w.push('跟永豐的連線有問題：' + (pn.conn.last_error || ''));
     // ⚠️ 券商的 last_error 沒有時間、而且背景對帳偶發失敗也會寫進來（跟真單無關）⇒ 不當警示，放最底下小字
     $('warn').hidden = !w.length;

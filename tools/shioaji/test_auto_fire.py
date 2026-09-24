@@ -1963,16 +1963,27 @@ def _fn_lines(fn):
 
 _arm_lines = _fn_lines(_arm_fn)
 _narm_lines = _fn_lines(_narm_fn)
+# ⭐ 2026-09-24 第三個具名入口：風控規則 B 的「手動解除」（`risk_override_on` 建 RISK_OVERRIDE）。
+#    ⛔ 它也是「讓單可以送出去」的開關 ⇒ 一樣只准在具名函式裡、一樣 O_EXCL；⛔ 不准有第四個。
+_rov_fn = next((n for n in ast.walk(_lptree)
+                if isinstance(n, ast.FunctionDef) and n.name == "risk_override_on"), None)
+say(_rov_fn is not None, "  live_panel 有 risk_override_on()（風控解除檔的唯一入口）")
+_rov_lines = _fn_lines(_rov_fn)
 _creators = []
 for _n in ast.walk(_lptree):
     if isinstance(_n, ast.Call) and "O_EXCL" in ast.unparse(_n):
         _ln = getattr(_n, "lineno", -1)
         _creators.append((ast.unparse(_n)[:60],
                           "fire_arm_on" if _ln in _arm_lines
-                          else ("night_arm_on" if _ln in _narm_lines else "⛔ 別的地方")))
-say(len(_creators) == 2 and sorted(w for _s, w in _creators) == ["fire_arm_on", "night_arm_on"],
-    "  ⛔⛔ 整支 live_panel 只有兩個地方在建立開關檔（日盤 fire_arm_on／夜盤 night_arm_on）",
+                          else ("night_arm_on" if _ln in _narm_lines
+                                else ("risk_override_on" if _ln in _rov_lines else "⛔ 別的地方"))))
+say(len(_creators) == 3 and sorted(w for _s, w in _creators) == ["fire_arm_on", "night_arm_on",
+                                                                  "risk_override_on"],
+    "  ⛔⛔ 整支 live_panel 只有三個地方在建立開關檔（日盤 fire_arm_on／夜盤 night_arm_on／風控解除 risk_override_on）",
     str(_creators))
+say(_rov_fn is not None and "risk_cap.OVERRIDE_FLAG" in ast.unparse(_rov_fn)
+    and "AUTO_ORDERS_ON" not in ast.unparse(_rov_fn) and "ARM_FLAG" not in ast.unparse(_rov_fn),
+    "  ⛔ 風控解除那一支只碰 RISK_OVERRIDE（⛔ 不准碰 AUTO_ORDERS_ON／NIGHT_ORDERS_ON）")
 say(_narm_fn is not None and "O_EXCL" in ast.unparse(_narm_fn),
     "  ⛔ 夜盤那一顆用的也是 O_CREAT|O_EXCL（已經開著再按 ⇒ 409，⛔ 不覆蓋）")
 say(_arm_fn is not None and "O_EXCL" in ast.unparse(_arm_fn),

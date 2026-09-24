@@ -3263,6 +3263,23 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
   明明拿到了，畫面卻寫「還沒到齊（FetchStatus.Fetched）」。
 - 探針 `tools/shioaji/test_account.py`；治具 `tools/probe/fe_harness.py`（金額全是捏的）。
 
+## ⭐ 風控規則 B：本月自動單虧到上限就停（2026-09-24 Benson 拍板）
+
+研究 `..\tick-research\risk_rules_results_2026-09-24.md`：上限 800 點把最大回落 3,367→2,345、最慘一月
+−1,498→−1,114，幾乎不少賺；「從高點回落就暫停」那類更差（停在谷底），⛔ 別改成那種。
+- 正本 `tools/shioaji/risk_cap.py`（⛔ 唯讀模組：不送單、不建檔）。上限 ＝ `CAP_PER_LOT`（800）× `broker.QTY`。
+- 只算**自動單真單**：autofire／nightfire 帳本 `result ok` × `real_trades`（進場時間＋進場價對得上）。
+  ⛔ 他手動的單不算。夜盤算**開盤那晚 E** 的月份（`real_trades` 檔名是出場日，7/31 晚上那口在 8/1 檔裡）。
+- 擋單點各一處：`auto_fire._send()`（落地 sending 之前，三個候選共用）、`night_fire._decide()`（分 T／R 之前）。
+  算不出來（讀檔炸掉）⇒ **擋**（不猜）；平了但沒出場價 ⇒ 不擋、畫面寫「對不到點數」。
+- **手動解除**：【自動下單】第 ① 區那張卡（#alcap）兩段式 → `POST /api/risk/override` → `live_panel.risk_override_on()`
+  建 `RISK_OVERRIDE`（內容 `YYYY-MM`，只對那個月有效）。⛔ 沒到上限不准解除（409）。
+  整個 repo 建開關檔的地方現在是**三個**（fire_arm_on／night_arm_on／risk_override_on），
+  test_auto_fire／test_night_fire 的 AST 在守；`/api/risk/override` 在 test_fire_routes 的攻擊名單裡。
+- 保證金提醒 `live_panel.equity_cushion()`：權益 − 一口保證金 < 一次停損（夜盤開著 2%、只有日盤 0.5%）⇒ 金色警示＋建議本金
+  （保證金 ＋ `risk_cap.DD_PER_LOT` × 2 × 10 元）。手機監控的「要注意的事」也會出現（風控停單同理）。
+- 探針 `test_risk_cap.py`；治具 `tools/probe/fire_harness.py` 的 `/f/cap/<點>` 可以把上限調小看「到上限／解除」畫面。
+
 ## ⚠️ 已知缺口（2026-09-17 lab-qa 提，PM 裁示「這輪不做」⇒ 寫在這裡留給下一輪）
 
 > ⛔ 這三條**現在沒有守衛**。動到相關的東西時要先回頭看這裡。

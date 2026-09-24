@@ -36,6 +36,7 @@ from pathlib import Path
 import numpy as np
 
 import broker
+import risk_cap          # ⛔ 唯讀：本月自動單虧到上限就不送（2026-09-24 風控規則 B）
 import trend_rule
 import tsm_rule
 import us_feed
@@ -77,7 +78,8 @@ WHY = {"off": "夜盤自動下單是關著的（沒有 NIGHT_ORDERS_ON）",
        "no_hist": "過去的歷史不夠", "not_fast": "不夠快", "no_quote": "台指報價不新鮮或不是夜盤時段",
        "bad_width": "停利停損框寬不合理（資料有問題）", "cannot": "現在不能進場",
        "send_fail": "送單失敗", "unsure": "上一次送到一半就中斷，不確定結果 —— 今晚不再送",
-       "no_ref": "拿不到 30 分鐘前那一分鐘的台指價（面板那時沒收到報價）"}
+       "no_ref": "拿不到 30 分鐘前那一分鐘的台指價（面板那時沒收到報價）",
+       "risk_cap": "本月自動單到了風控上限，這個月不送"}
 
 _CFG = {"quote_fn": None, "session_fn": None, "minute_close_fn": None}
 _ST = {"started": False, "errors": 0, "last_err": None, "last_err_at": None, "eod_try_at": 0.0,
@@ -294,6 +296,15 @@ def _decide(E, now):
     _ST["tried"] = E
     if first_try and lag > LATE_S:
         _skip(E, "late", extra={"lag_s": round(lag), "method": m})
+        return True
+    # ⭐ 2026-09-24 風控規則 B（`risk_cap.py`）：本月自動單真單虧到上限 ⇒ 今晚不送。
+    #    ⛔ 月份照**開盤那晚 E** 算（7/31 晚上那一口算 7 月）。T、R 兩條共用這一道。
+    try:
+        rb, rmsg, _rs = risk_cap.blocked(E, broker.QTY)
+    except Exception as e:                       # ⛔ 風控自己壞掉 ⇒ 不猜，今晚不送
+        rb, rmsg = True, "風控算不出本月損益 —— 不猜，今晚不送（%s）" % str(e)[:80]
+    if rb:
+        _skip(E, "risk_cap", WHY["risk_cap"] + "：" + rmsg, {"method": m})
         return True
     if m == "R":
         return _decide_trend(E, now)

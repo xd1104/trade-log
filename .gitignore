@@ -81,3 +81,6 @@ tools/shioaji/nightfire/
 # 手機監控：從密碼算出來的鑰匙（⛔ 絕不進版控；repo 是公開的）
 tools/shioaji/MONITOR_KEY.json
 tools/shioaji/MONITOR_KEY.json.tmp
+# 【風控規則 B】手動解除檔與解除紀錄（2026-09-24）：只留本機
+tools/shioaji/RISK_OVERRIDE*
+tools/shioaji/riskcap/

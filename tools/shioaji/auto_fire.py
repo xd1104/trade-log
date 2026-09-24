@@ -177,6 +177,7 @@ from datetime import date, datetime
 import numpy as np       # 門檻用 numpy.percentile（跟研究同一個算法，⛔ 不自己寫內插）
 
 import broker            # ⛔ 唯一的下單出口。這個檔不自己組單、不自己送單
+import risk_cap          # ⛔ 唯讀：本月自動單虧到上限就不送（2026-09-24 風控規則 B）
 
 HERE = pathlib.Path(__file__).resolve().parent
 # ⛔ 只有 Benson 自己建、或他在面板上按那顆兩段式的鈕（live_panel.fire_arm_on）；
@@ -418,6 +419,8 @@ WHY = {
     "rev_short": "反轉後的方向是做空 —— 多方聯軍只做多，這個候選今天不用",
     "orb_short": "跌破箱子（做空）—— 多方聯軍只做多，這個候選今天不用",
     "no_long": "今天三個候選都沒有給出做多 —— 照規則今天不做",
+    # ── 2026-09-24 風控規則 B（risk_cap.py）───────────────────────────
+    "risk_cap": "本月自動單到了風控上限，這個月不送",
     "no_cand_rev": "純回馬只有「09:03:30 判定不快」的日子才有 —— 今天沒有這個候選",
     "union_done": "今天已經照另一個候選送出去了 —— 一天最多一口，這個候選不再看",
     # ── 開箱（ORB）自己的每一種不可用 ──────────────────────────────────
@@ -1420,6 +1423,16 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
         return _skip(d, "late", base,
                      head + "（實際晚了 %.1f 秒）" % (late / 1000.0),
                      cand=_cand_of(base))
+
+    # ⭐ 2026-09-24 風控規則 B（`risk_cap.py`）：本月自動單真單虧到上限 ⇒ 不送。
+    #    三個候選共用這一段 ⇒ 只擋這一處（⛔ 不在各候選各寫一份）。⛔ 在「先落地 sending」之前擋，
+    #    這樣帳本那天是一列乾淨的 skip，不會留一列送到一半的 sending。
+    try:
+        rb, rmsg, _rs = risk_cap.blocked(d, broker.QTY)
+    except Exception as e:                       # ⛔ 風控自己壞掉 ⇒ 不猜，這次不送
+        rb, rmsg = True, "風控算不出本月損益 —— 不猜，這次不送（%s）" % str(e)[:80]
+    if rb:
+        return _skip(d, "risk_cap", base, WHY["risk_cap"] + "：" + rmsg, cand=_cand_of(base))
 
     # ⛔⛔ **先落地再送單**。送到一半當掉的話，重啟後 _has() 讀得到這一列
     #     ⇒ 那天不會再送第二張。⛔ 寧可漏記結果，不可以重送。
