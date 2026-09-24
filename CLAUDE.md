@@ -3268,7 +3268,7 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 研究 `..\tick-research\risk_rules_results_2026-09-24.md`：上限 800 點把最大回落 3,367→2,345、最慘一月
 −1,498→−1,114，幾乎不少賺；「從高點回落就暫停」那類更差（停在谷底），⛔ 別改成那種。
 - 正本 `tools/shioaji/risk_cap.py`（⛔ 唯讀模組：不送單、不建檔）。上限 ＝ `CAP_PER_LOT`（800）× `broker.QTY`。
-- 只算**自動單真單**：autofire／nightfire 帳本 `result ok` × `real_trades`（進場時間＋進場價對得上）。
+- 只算**自動單真單**：autofire／nightfire 帳本 `result ok` × `real_trades`（進場時間＋進場價對得上）；**`RULE_START`（2026-09-23）以前的不算**（他：舊做法那幾筆不算）。
   ⛔ 他手動的單不算。夜盤算**開盤那晚 E** 的月份（`real_trades` 檔名是出場日，7/31 晚上那口在 8/1 檔裡）。
 - 擋單點各一處：`auto_fire._send()`（落地 sending 之前，三個候選共用）、`night_fire._decide()`（分 T／R 之前）。
   算不出來（讀檔炸掉）⇒ **擋**（不猜）；平了但沒出場價 ⇒ 不擋、畫面寫「對不到點數」。

@@ -16,6 +16,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import risk_cap as RC  # noqa: E402
 
+_REAL_START = RC.RULE_START
+RC.RULE_START = "2000-01-01"          # 下面的假資料在 2026-07／09；起算日另外在 ⑫ 驗
+
 FAILS = []
 
 
@@ -143,6 +146,14 @@ try:
     chk("…而且在分 T／R 之前（兩條都管到）",
         body.index("risk_cap.blocked(") < body.index("return _decide_trend(E, now)"), True)
     chk("…而且在送單之前", body.index("risk_cap.blocked(") < body.index("broker.enter("), True)
+
+    print("── ⑫ 起算日之前的單不算（Benson：只從 09-23 算）")
+    chk("正本起算日是 2026-09-23", _REAL_START, "2026-09-23")
+    RC.RULE_START = "2026-07-05"
+    s = st("2026-07")
+    chk("7/1 那筆 −300 不算、7/6 −100 與 7/31 夜盤 −450 照算", s["pnl"], -550.0)
+    chk("since 標出起算日", s["since"], "2026-07-05")
+    RC.RULE_START = "2000-01-01"
 
     print("── ⑪ 真的 RISK_OVERRIDE 沒被碰")
     chk("真的 RISK_OVERRIDE 不存在（測試不准建）", (HERE / "RISK_OVERRIDE").exists(), False)

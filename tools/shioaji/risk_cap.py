@@ -35,6 +35,9 @@ CAP_PER_LOT = 800.0                     # 每口每月上限（點）
 # ⛔ 只拿來算「每口建議本金」＝ 保證金 ＋ 這個數 × 2（未來可能比歷史更糟）× 每點金額。
 DD_PER_LOT = 2345.0
 PT_NTD = 10.0                           # 微台 1 點 ＝ 10 元（期交所契約規格）
+# ⭐ 從哪一天開始算（Benson 2026-09-24：「本月風控應該只算 239，從昨天開始就好」）。
+#    那之前的自動單是舊做法（A 快攻回馬槍）下的，⛔ 不算進新規則。比這天早的單一律略過。
+RULE_START = "2026-09-23"
 NIGHT_EXIT_MAX_D = 4                    # 夜盤那一口最晚幾天後平（04:58 隔天平；週五晚上 ⇒ 週六）
 PX_TOL = 0.51                           # 帳本與成績單的進場價對不對得上（兩邊都是券商的成交價）
 
@@ -90,6 +93,7 @@ def auto_entries(month, fire_dir=None, nf_dir=None):
                 and str(o.get("E", ""))[:7] == month:
             out.append({"sess": "night", "d": str(o["E"]),
                         "entry_time": str(o.get("entry_time") or ""), "entry": float(o["entry"])})
+    out = [x for x in out if x["d"] >= RULE_START]          # ⭐ 規則開始那天以前的不算
     out.sort(key=lambda x: (x["d"], x["sess"] == "night"))
     return out
 
@@ -146,6 +150,7 @@ def state(month=None, qty=1, today=None, fire_dir=None, nf_dir=None, trade_dir=N
     month = month or _month_of(today)
     cap = CAP_PER_LOT * max(int(qty or 1), 1)
     base = {"month": month, "cap": cap, "qty": int(qty or 1), "cap_per_lot": CAP_PER_LOT,
+            "since": RULE_START if RULE_START[:7] == month else None,
             "pnl": 0.0, "n": 0, "open": 0, "unknown": 0, "trades": [],
             "hit": False, "override": False, "blocked": False, "err": None}
     try:
