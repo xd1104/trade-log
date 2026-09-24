@@ -4779,6 +4779,10 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .an-rec h3{font-size:14px; margin:0} .an-rec p{font-size:12.5px; color:var(--dim); margin:0; line-height:1.65}
 .an-rec .ask{font-size:12.5px; color:var(--gold); border-top:1px dashed var(--line); padding-top:6px}
 .an-foot{font-size:11px; color:var(--faint); text-align:center; margin-top:16px}
+.an-totop{text-align:center; margin-top:14px}
+.an-totop button{border:1px solid var(--line); background:var(--surface-2); color:var(--dim); border-radius:10px;
+  padding:9px 18px; font-size:13px; cursor:pointer; font-family:var(--font-sans)}
+.an-totop button:hover{color:var(--text)}
 /* L2：一般卡（右欄、回顧的資料卡）。margin-bottom 保留 —— 右欄很多地方靠它疊卡片 */
 .card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg);
   padding:16px 18px; margin-bottom:12px}
@@ -9511,7 +9515,8 @@ function anReport(R){
   anSec('建議','最多 3 條・決定權在你',recs)+'</div>'+
   '<div class="an-stack">'+anSec('策略健康','模擬定論＋真單',st)+anSec('市場狀態','在過去一年的位置',mk)+
   anSec('系統與風控','本週',sys)+anSec('模擬候選','滿 25 筆才判斷',cand)+'</div></div>'+
-  '<div class="an-foot">分析師不預測漲跌、不給進出場方向、不碰下單程式與開關；所有決定由你做。「判讀・未驗證」的只能當研究題目。</div>';
+  '<div class="an-foot">分析師不預測漲跌、不給進出場方向、不碰下單程式與開關；所有決定由你做。「判讀・未驗證」的只能當研究題目。</div>'+
+  '<div class="an-totop"><button data-antop="1">↑ 回到最上面</button></div>';
 }
 function anOpen(id){
  document.getElementById('anpop').hidden=true;
@@ -9531,6 +9536,7 @@ document.addEventListener('click',function(e){
  if(mb){ const p=document.getElementById('anpop'); if(p.hidden){ anList(); anFetch(); } else p.hidden=true; return; }
  const it=e.target.closest('[data-anid]');
  if(it){ anOpen(it.getAttribute('data-anid')); return; }
+ if(e.target.closest('[data-antop]')){ document.getElementById('ansheet').scrollTo({top:0,behavior:'smooth'}); return; }
  if(e.target.closest('[data-anclose]')){ document.getElementById('ansheet').hidden=true; return; }
  if(e.target.closest('[data-anback]')){ document.getElementById('ansheet').hidden=true; anList(); return; }
  if(e.target.id==='ansheet'){ document.getElementById('ansheet').hidden=true; return; }

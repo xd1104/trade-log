@@ -180,7 +180,8 @@
       anSec('st', '策略健康', st) + anSec('mk', '市場狀態', mk) + anSec('sys', '系統與風控', sys) + anSec('cand', '模擬候選（滿 25 筆才判斷）', cand) +
       anSec('rec', '建議（決定權在你）', recs) +
       '<div class="an-sync" id="anSync"></div>' +
-      '<div class="foot dim">分析師不預測漲跌、不給進出場方向、不碰下單；「判讀・未驗證」的只能當研究題目。</div>';
+      '<div class="foot dim">分析師不預測漲跌、不給進出場方向、不碰下單；「判讀・未驗證」的只能當研究題目。</div>' +
+      '<div class="an-totop"><button data-antop="1">↑ 回到最上面</button></div>';
   }
   function anPaintSync() {
     var el = $('anSync'); if (!el) return;
@@ -230,6 +231,7 @@
   document.addEventListener('click', function (e) {
     var t = e.target;
     if (t.closest('#anMail')) { anShow('list'); return; }
+    if (t.closest('[data-antop]')) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     var go = t.closest('[data-an]');
     if (go) { var v = go.getAttribute('data-an');
       if (v === 'home') anShow(null); else if (v === 'list') anShow('list');
