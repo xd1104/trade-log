@@ -111,3 +111,6 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); -web
 [id^="an-s-"]{scroll-margin-top:12px}
 .an-totop{text-align:center; padding:6px 0 24px}
 .an-totop button{border:1px solid var(--line); background:var(--surface); color:var(--dim); border-radius:12px; padding:10px 20px; font-size:14px; font-family:var(--font-sans)}
+/* 2026-09-24 斷線通知 */
+.pushbtn{width:100%; font-size:15px; padding:11px; border-radius:12px; border:0; background:var(--gold); color:#1a1307; font-weight:650; margin-top:8px; font-family:var(--font-sans)}
+.pushbtn:disabled{opacity:.6}

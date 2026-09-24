@@ -1,0 +1,57 @@
+# 【面板看門狗】面板超過 10 分鐘沒回報（關機／斷網／當機）⇒ 推通知到手機；恢復時再響一次。
+# 說明在 .github/watchdog/watchdog.py 檔頭。⛔ 不碰任何交易、不解密快照。
+name: panel-watchdog
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "送一則測試通知到手機"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: panel-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 裝推播套件
+        run: pip install -q pywebpush
+      - name: 讀上一次狀態
+        run: |
+          git fetch -q origin watchdog:refs/remotes/origin/watchdog 2>/dev/null \
+            && git show origin/watchdog:state.json > /tmp/state.json \
+            || echo '{"status":"up"}' > /tmp/state.json
+      - name: 檢查面板
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          TEST: ${{ inputs.test }}
+          STATE_IN: /tmp/state.json
+          STATE_OUT: /tmp/state-new.json
+        run: python .github/watchdog/watchdog.py
+      - name: 狀態有變才存（watchdog 分支永遠只有一份）
+        run: |
+          if ! cmp -s /tmp/state.json /tmp/state-new.json; then
+            git config user.name "panel-watchdog"
+            git config user.email "panel-watchdog@users.noreply.github.com"
+            blob=$(git hash-object -w /tmp/state-new.json)
+            tree=$(printf "100644 blob %s\tstate.json\n" "$blob" | git mktree)
+            commit=$(git commit-tree "$tree" -m "watchdog state")
+            git push -f -q origin "$commit:refs/heads/watchdog"
+          fi

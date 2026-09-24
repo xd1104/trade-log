@@ -228,8 +228,70 @@
       .catch(function (e) { AN.syncMsg = '同步失敗：' + (e && e.message || '連不到 GitHub') + '（下次開週報會再試）'; })
       .then(function () { AN.syncing = false; anPaintSync(); });
   }
+  // ══ 【斷線通知】（2026-09-24）══════════════════════════════════════
+  // 面板超過 10 分鐘沒回報 ⇒ GitHub Actions 的看門狗推通知到這支手機（.github/watchdog/watchdog.py）。
+  // 這裡做兩件事：① 問他允許通知並訂閱 ② 用鑰匙圈金鑰把「訂閱」存進 repo 的 data/push-subs.json（看門狗從那裡讀）。
+  // ⚠️ iPhone：一定要從主畫面打開的 App 才有推播（iOS 16.4 以上）；允許通知一定要在按鈕的點擊裡問。
+  var VAPID_PUBLIC = 'BKQoOkXK8Wpe3mSHL6ZkqTzMm6kKv1cpkCWs9wG1jT9cy7PhVVnpilv2SIM_zEOXl5w5CXw-TNH76JW__iPIqIM';
+  var PUSH_API = 'https://api.github.com/repos/xd1104/trade-log/contents/data/push-subs.json';
+  var PUSH_LS = 'tlmon.push.v1';
+  var PUSH = { busy: false, msg: '' };
+  function pushSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
+  function pushOn() { try { return localStorage.getItem(PUSH_LS) === 'on'; } catch (e) { return false; } }
+  function pushPaint() {
+    var c = $('pushCard'); if (!c) return;
+    if (pushSupported() && pushOn() && Notification.permission === 'granted') { c.hidden = true; return; }
+    c.hidden = false;
+    if (!pushSupported()) {
+      c.innerHTML = '<h2>斷線通知</h2><div class="msg">這樣打開收不到通知：請用 Safari「分享 → 加入主畫面」，之後從主畫面的圖示打開（iOS 16.4 以上）。</div>';
+      return;
+    }
+    c.innerHTML = '<h2>斷線通知</h2><div class="msg">面板超過 10 分鐘沒回報（關機、斷網、當機）時手機會響，恢復時再響一次。</div>' +
+      '<button class="pushbtn" id="pushBtn"' + (PUSH.busy ? ' disabled' : '') + '>' + (PUSH.busy ? '設定中…' : '開啟斷線通知') + '</button>' +
+      (PUSH.msg ? '<div class="err">' + esc(PUSH.msg) + '</div>' : '');
+  }
+  function urlB64(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return b64(s); }
+  function saveSub(sub) {
+    var h = { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + ghToken() };
+    return fetch(PUSH_API + '?ref=main', { headers: h, cache: 'no-store' }).then(function (r) {
+      if (r.status === 404) return null; if (!r.ok) throw new Error('GitHub ' + r.status); return r.json();
+    }).then(function (cur) {
+      var d = { subs: [] };
+      if (cur && cur.content) { try { d = JSON.parse(new TextDecoder().decode(b64(cur.content.replace(/\s/g, '')))) || d; } catch (e) {} }
+      d.subs = (d.subs || []).filter(function (x) { return x && x.endpoint !== sub.endpoint; });
+      d.subs.push({ endpoint: sub.endpoint, keys: sub.keys, at: localIso() });
+      return fetch(PUSH_API, { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, h),
+        body: JSON.stringify({ message: 'chore: 手機開啟斷線通知', branch: 'main', sha: cur ? cur.sha : undefined,
+          content: b64s(JSON.stringify(d, null, 1)) }) }).then(function (r) {
+        if (!r.ok) throw new Error(r.status === 401 ? '金鑰無效或過期，重新解鎖鑰匙圈看看' : 'GitHub ' + r.status);
+      });
+    });
+  }
+  function enablePush() {
+    if (PUSH.busy) return;
+    if (!ghToken()) {
+      if (window.Keyring) { PUSH.msg = '先解鎖鑰匙圈（存通知設定要用），解完再按一次「開啟斷線通知」'; pushPaint(); Keyring.open('開啟斷線通知'); }
+      else { PUSH.msg = '沒有鑰匙圈，存不了通知設定'; pushPaint(); }
+      return;
+    }
+    PUSH.busy = true; PUSH.msg = ''; pushPaint();
+    // ⚠️ requestPermission 一定要在點擊當下叫（iOS 規定），所以放在最前面
+    Notification.requestPermission().then(function (p) {
+      if (p !== 'granted') throw new Error('沒有允許通知（可以到 iPhone「設定 → 通知 → 儀表板監控」打開）');
+      return navigator.serviceWorker.ready;
+    }).then(function (reg) {
+      return reg.pushManager.getSubscription().then(function (s) {
+        return s || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(VAPID_PUBLIC) });
+      });
+    }).then(function (sub) { return saveSub(sub.toJSON()); })
+      .then(function () { try { localStorage.setItem(PUSH_LS, 'on'); } catch (e) {} PUSH.msg = ''; })
+      .catch(function (e) { PUSH.msg = '開不起來：' + (e && e.message || e); })
+      .then(function () { PUSH.busy = false; pushPaint(); });
+  }
+
   document.addEventListener('click', function (e) {
     var t = e.target;
+    if (t.closest('#pushBtn')) { enablePush(); return; }
     if (t.closest('#anMail')) { anShow('list'); return; }
     if (t.closest('[data-antop]')) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     var go = t.closest('[data-an]');
@@ -380,7 +442,7 @@
     $('lockErr').hidden = !msg; $('lockErr').textContent = msg || '';
   }
   // ⚠️ 正在看週報的時候，每 90 秒的更新 ⛔ 不可以把監控主畫面疊回來
-  function showMain() { $('loading').hidden = true; $('lock').hidden = true; $('main').hidden = !!AN.view; }
+  function showMain() { $('loading').hidden = true; $('lock').hidden = true; $('main').hidden = !!AN.view; pushPaint(); }
 
   function refresh() {
     return fetchBox().then(function (box) {
@@ -419,7 +481,7 @@
   if (window.Keyring) {
     try {
       Keyring.init({ appId: 'trade-log', appName: '📈 早盤儀表板', tokenKey: GH_TOKEN_KEY, enabled: true,
-        onChange: function () { anPaintSync(); anSync(); } });
+        onChange: function () { anPaintSync(); anSync(); pushPaint(); } });
     } catch (e) {}
   }
 

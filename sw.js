@@ -1,6 +1,6 @@
 // 微台指交易日誌 — Service Worker
 // 改前端資源後把版本號 +1（tradelog-shell-vN）強制更新快取。
-var CACHE = 'tradelog-shell-v27';
+var CACHE = 'tradelog-shell-v28';
 // ⭐ 2026-09-24 改版成【手機監控】：只剩這幾支。⚠️ 監控資料在 GitHub（跨網域）⇒ 這支 SW 不碰它（下面 origin 不同就放行）。
 var SHELL = [
   './',
@@ -54,4 +54,22 @@ self.addEventListener('fetch', function (e) {
       });
     })
   );
+});
+
+// ⭐ 2026-09-24【斷線通知】GitHub Actions 的看門狗（.github/watchdog/watchdog.py）推過來的通知。
+//   ⛔ 只顯示，不做任何事（這個 App 本來就只看不動）。
+self.addEventListener('push', function (e) {
+  var d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { title: '早盤儀表板', body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || '早盤儀表板', {
+    body: d.body || '', tag: d.tag || 'panel', renotify: true,
+    icon: 'icons/icon-192.png', badge: 'icons/icon-192.png'
+  }));
+});
+self.addEventListener('notificationclick', function (e) {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (ws) {
+    for (var i = 0; i < ws.length; i++) { if ('focus' in ws[i]) return ws[i].focus(); }
+    return clients.openWindow('./');
+  }));
 });
