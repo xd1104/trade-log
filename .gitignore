@@ -84,3 +84,5 @@ tools/shioaji/MONITOR_KEY.json.tmp
 # 【風控規則 B】手動解除檔與解除紀錄（2026-09-24）：只留本機
 tools/shioaji/RISK_OVERRIDE*
 tools/shioaji/riskcap/
+# 【交易分析師】週報與讀過狀態（含真單點數與帳戶狀態，repo 是公開的）
+tools/shioaji/analyst/

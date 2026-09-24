@@ -3280,6 +3280,22 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
   （保證金 ＋ `risk_cap.DD_PER_LOT` × 2 × 10 元）。手機監控的「要注意的事」也會出現（風控停單同理）。
 - 探針 `test_risk_cap.py`；治具 `tools/probe/fire_harness.py` 的 `/f/cap/<點>` 可以把上限調小看「到上限／解除」畫面。
 
+## ⭐ 【交易分析師】每週報告（2026-09-24 Benson 交辦）
+
+每週六 09:00 排程（`~/.claude/scheduled-tasks/trade-analyst-weekly/SKILL.md`）讓 Claude 產一份週報，
+放在面板與手機右上角的**信件**裡；未讀＝金色＋數字，**任一邊讀過兩邊都消失**。
+- ⛔ 面板鐵律的例外（他拍板）：只有分析師能給**經營層面**建議，要附根據；預測漲跌／方向／勝率／期望值仍禁止
+  （`analyst.BANNED` 在擋）。每則消息／建議貼 `data`（有數據）或 `judge`（判讀・未驗證，只能當研究題目）。
+- ⛔ **每則新聞一定附 https 來源**（他交代；`analyst.validate()` 沒來源就不准發佈）。
+- 分工：`analyst_facts.py` 算所有數字（⛔ 不讓 AI 算）；AI 寫 `analyst/ai/<週>.json`（結論、新聞、下週大事、大環境、建議）；
+  `analyst.py publish` 檢查後合成 `analyst/reports/<週>.json`，數字區一律用 facts（AI 塞的會被丟掉）。
+  「過去同類日子的成績」用 `analyst_facts.py perf <lane> 日期...`。候選只數「跟現行真單不一樣」的筆數（diff_n）。
+- 讀過：`analyst/read.json`，**讀的時間 ≥ 週報產生時間**才算讀過（同一週重產會變回未讀）。
+  面板 `POST /api/analyst/read`；手機用鑰匙圈金鑰（`tradelog_gh_pat`）把 `data/analyst-read.json`（只有週次＋時間）
+  寫進 main，面板 `analyst.pull_phone_reads()` 每 3 分鐘併回（執行緒在第一次 `GET /api/analyst/index` 時才起，⛔ 不改 main()）。
+- 手機全文：monitor_push 另推加密的 `analyst.json`（指紋沒變就沿用同一份密文＝同一個 blob）；快照只帶列表。
+- `analyst/` 整個 gitignore（有真單點數）。探針 `test_analyst.py`；治具 fire_harness 有 `/api/analyst/*`。
+
 ## ⚠️ 已知缺口（2026-09-17 lab-qa 提，PM 裁示「這輪不做」⇒ 寫在這裡留給下一輪）
 
 > ⛔ 這三條**現在沒有守衛**。動到相關的東西時要先回頭看這裡。

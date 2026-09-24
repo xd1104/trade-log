@@ -63,6 +63,12 @@ import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕�
 # ⛔⛔ 一定要包 try（跟 strategy_lab 同一條理由）：它是「看的東西」，載入失敗
 #    絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
 #    看門狗無限重開、**停損沒人盯**。失敗時 health=None：/api/health/state 回 503，其他照跑。
+# 【交易分析師】每週報告（2026-09-24）。⛔ 唯讀＋只寫 analyst/read.json（讀過狀態）；包 try 同上理由。
+try:
+    import analyst
+except Exception as _an_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
+    analyst = None
+    print("⚠️ 【分析師】載入失敗（其他功能不受影響）：%s" % _an_err, flush=True)
 try:
     import health
 except Exception as _hc_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
@@ -4691,6 +4697,88 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .clock{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
 .clock .d{font-size:14px; font-weight:600; letter-spacing:.4px}
 .clock .w{font-size:11px; color:var(--faint)}
+/* ══ 2026-09-24【交易分析師】右上角信件（class 一律 an- 前綴）══
+   ⛔ 未讀用金色（跟開關同一個「要注意」語彙）；⛔ 不准用紅綠（紅綠只給損益）。 */
+.an-tr{display:flex; align-items:center; gap:14px}
+.an-mail{position:relative; width:38px; height:38px; border-radius:11px; border:1px solid var(--line);
+  background:var(--surface-2); color:var(--dim); display:grid; place-items:center; cursor:pointer; flex:none; padding:0}
+.an-mail:hover{color:var(--text)}
+.an-mail.has{color:var(--gold); border-color:var(--gold-line)}
+.an-mail svg{width:19px; height:19px}
+.an-mail .bdg{position:absolute; top:-6px; right:-6px; min-width:18px; height:18px; border-radius:9px;
+  background:var(--gold); color:#1a1307; font:700 10.5px var(--font-mono); display:grid; place-items:center;
+  padding:0 5px; box-shadow:0 0 0 3px var(--bg)}
+.an-pop{position:fixed; z-index:60; width:min(400px,calc(100vw - 24px)); max-height:70vh; overflow:auto;
+  background:var(--raise); border:1px solid var(--line); border-radius:16px; padding:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.55)}
+.an-ih{display:flex; justify-content:space-between; align-items:baseline; padding:2px 4px 10px}
+.an-ih b{font-size:14.5px} .an-ih span{font-size:11.5px; color:var(--faint)}
+.an-item{display:flex; gap:10px; width:100%; text-align:left; background:var(--surface); color:var(--text);
+  border:1px solid var(--line-soft); border-radius:12px; padding:10px 12px; cursor:pointer;
+  position:relative; overflow:hidden; font-family:var(--font-sans)}
+.an-item+.an-item{margin-top:7px}
+.an-item .dot{width:8px; height:8px; border-radius:50%; margin-top:6px; flex:none}
+.an-item .bd{flex:1; min-width:0}
+.an-item .r1{display:flex; justify-content:space-between; gap:8px; font-size:13.5px; color:var(--dim)}
+.an-item .r1 small{font-family:var(--font-mono); font-size:11px; color:var(--faint)}
+.an-item .ln{font-size:12px; color:var(--faint); margin-top:3px; line-height:1.55}
+.an-item .ch{display:flex; gap:6px; margin-top:6px; flex-wrap:wrap}
+.an-item.unread{background:linear-gradient(90deg,rgba(227,169,81,.10),var(--surface) 55%); border-color:var(--gold-line)}
+.an-item.unread::before{content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--gold)}
+.an-item.unread .dot{background:var(--gold); box-shadow:0 0 0 3px var(--gold-soft)}
+.an-item.unread .r1{color:var(--text); font-weight:700}
+.an-item.unread .ln{color:var(--dim)}
+.an-new{font-size:10px; font-weight:700; color:#1a1307; background:var(--gold); border-radius:4px; padding:0 5px}
+.an-lamp{display:inline-block; flex:none; white-space:nowrap; font-size:10.5px; font-weight:700; border-radius:99px; padding:1px 9px;
+  color:var(--dim); background:var(--surface-2); border:1px solid var(--line)}
+.an-lamp.wn,.an-lamp.bd{color:var(--gold); background:var(--gold-soft); border-color:var(--gold-line)}
+.an-tag{display:inline-block; font-size:10.5px; font-weight:650; border-radius:5px; padding:0 6px; white-space:nowrap}
+.an-tag.data{color:var(--gold); background:var(--gold-soft); border:1px solid var(--gold-line)}
+.an-tag.judge{color:var(--dim); border:1px dashed var(--faint)}
+.an-empty{font-size:12.5px; color:var(--faint); padding:14px 4px}
+.an-sheet{position:fixed; inset:0; z-index:70; background:rgba(8,10,14,.72); overflow:auto; padding:24px 16px}
+.an-doc{max-width:1240px; margin:0 auto; background:var(--bg); border:1px solid var(--line); border-radius:18px;
+  padding:18px 20px 22px}
+.an-dh{display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px}
+.an-dh .t{font-size:12.5px; color:var(--faint)} .an-dh .t b{font-size:16px; color:var(--text); margin-right:8px}
+.an-dh button{border:1px solid var(--line); background:var(--surface-2); color:var(--dim); border-radius:10px;
+  padding:7px 14px; font-size:13px; cursor:pointer; font-family:var(--font-sans)}
+.an-verdict{display:flex; gap:12px; align-items:flex-start; background:linear-gradient(180deg,var(--raise),#161C24);
+  border:1px solid var(--line); border-radius:16px; padding:14px 16px; margin-bottom:16px}
+.an-verdict p{font-size:16px; font-weight:650; line-height:1.55; margin:0}
+.an-cols{display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:18px; align-items:start}
+@media(max-width:1100px){ .an-cols{grid-template-columns:minmax(0,1fr)} }
+.an-stack{display:flex; flex-direction:column; gap:16px}
+.an-card{background:var(--surface); border:1px solid var(--line-soft); border-radius:16px; padding:14px 16px}
+.an-nw{display:flex; flex-direction:column; gap:5px; padding:11px 0}
+.an-nw:first-child{padding-top:0} .an-nw:last-child{padding-bottom:0}
+.an-nw+.an-nw{border-top:1px solid var(--line-soft)}
+.an-nw .top{display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-family:var(--font-mono); font-size:11.5px; color:var(--faint)}
+.an-nw h3{font-size:14.5px; font-weight:650; line-height:1.45; margin:0}
+.an-nw p{font-size:12.5px; color:var(--dim); margin:0; line-height:1.65}
+.an-imp{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:10px; padding:7px 10px;
+  display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:12px}
+.an-imp b{white-space:nowrap} .an-imp span{color:var(--dim)}
+.an-src{font-size:11.5px; color:var(--faint)} .an-src a{color:var(--dim)}
+.an-rows .r{display:flex; justify-content:space-between; gap:12px; font-size:12.5px; padding:6px 0}
+.an-rows .r+.r{border-top:1px solid var(--line-soft)}
+.an-rows .r .k{color:var(--faint); white-space:nowrap} .an-rows .r .v{text-align:right}
+.an-rows .r .v small{display:block; color:var(--faint); font-size:11px}
+.an-rail{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:6px 0}
+.an-rail .k{font-size:10.5px; color:var(--faint)} .an-rail .v{font-size:14.5px; font-weight:650; font-family:var(--font-mono)}
+.an-st+.an-st{border-top:1px solid var(--line-soft); padding-top:12px; margin-top:12px}
+.an-st .hd{display:flex; justify-content:space-between; align-items:center}
+.an-st .hd b{font-size:14px} .an-note{font-size:11.5px; color:var(--faint); line-height:1.6}
+.an-pos{height:3px; border-radius:2px; background:var(--surface-2); margin:7px 0 3px; position:relative}
+.an-pos i{position:absolute; top:-4px; width:3px; height:11px; border-radius:2px; background:var(--gold)}
+.an-bar{height:5px; border-radius:3px; background:var(--surface-2); overflow:hidden; margin-top:4px}
+.an-bar i{display:block; height:100%; background:var(--gold); opacity:.8}
+.an-rec{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:12px; padding:11px 13px;
+  display:flex; flex-direction:column; gap:6px}
+.an-rec+.an-rec{margin-top:9px}
+.an-rec h3{font-size:14px; margin:0} .an-rec p{font-size:12.5px; color:var(--dim); margin:0; line-height:1.65}
+.an-rec .ask{font-size:12.5px; color:var(--gold); border-top:1px dashed var(--line); padding-top:6px}
+.an-foot{font-size:11px; color:var(--faint); text-align:center; margin-top:16px}
 /* L2：一般卡（右欄、回顧的資料卡）。margin-bottom 保留 —— 右欄很多地方靠它疊卡片 */
 .card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg);
   padding:16px 18px; margin-bottom:12px}
@@ -6110,8 +6198,14 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
     <!-- ⛔⛔ 【自動下單】＝**會真的送出委託單**的那一頁，所以放最右（動線的終點）。 -->
     <button data-tab="fire">自動下單</button>
   </div>
-  <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
+  <div class="an-tr">
+   <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
+   <!-- ⭐ 2026-09-24【交易分析師】每週報告的信件（未讀＝金色＋數字）。⛔ 唯讀：點開只看報告。 -->
+   <button class="an-mail" id="anmail" aria-label="分析師週報" title="分析師週報"></button>
+  </div>
 </div>
+<div class="an-pop" id="anpop" hidden></div>
+<div class="an-sheet" id="ansheet" hidden></div>
 
 <div id="tab-live">
   <div id="warn"></div>
@@ -9344,6 +9438,108 @@ function alNotesHTML(D,days){
  return out.map(t=>'<span>'+esc(t)+'</span>').join('<span class="sep">·</span>');
 }
 
+/* ══════════ 【交易分析師】右上角信件（2026-09-24）══════════
+   ⛔ 唯讀：列表與全文都是後端 analyst.py 給的；前端只負責畫。
+   ⛔ 數字一律來自週報裡的 facts（程式算的），⛔ 前端不自己算。
+   讀過 ⇒ POST /api/analyst/read（面板）；手機讀過會經 GitHub 同步回來（analyst.pull_phone_reads）。 */
+var AN={items:[],unread:0,err:'',rep:null};
+const AN_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 6.5 12 13l8.5-6.5"/></svg>';
+const AN_TAG={data:'有數據',judge:'判讀・未驗證'};
+function anTag(t){ return t?'<span class="an-tag '+(t==='data'?'data':'judge')+'">'+esc(AN_TAG[t]||t)+'</span>':''; }
+function anLamp(l,w){ return '<span class="an-lamp '+esc(l||'')+'">'+esc(w||({ok:'正常',wn:'要注意',bd:'要處理'})[l]||'—')+'</span>'; }
+function anPts(v){ if(v==null||isNaN(v)) return '—'; const x=Math.round(v*10)/10;
+  return '<span class="'+(x>0?'up':(x<0?'down':''))+'">'+(x>0?'+':(x<0?'−':''))+Math.abs(x).toLocaleString()+'</span>'; }
+function anPaintBtn(){
+ const b=document.getElementById('anmail'); if(!b) return;
+ b.innerHTML=AN_SVG+(AN.unread?'<span class="bdg">'+AN.unread+'</span>':'');
+ b.classList.toggle('has',AN.unread>0);
+ b.title=AN.unread?('分析師週報：'+AN.unread+' 份沒讀'):'分析師週報';
+}
+function anFetch(){
+ return fetch('/api/analyst/index',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+   if(x&&x.ok){ AN.items=x.items||[]; AN.unread=x.unread||0; AN.err=''; }
+   else AN.err=(x&&x.msg)||'讀不到週報';
+   anPaintBtn(); if(!document.getElementById('anpop').hidden) anList();
+ }).catch(()=>{ AN.err='連不上面板'; anPaintBtn(); });
+}
+function anList(){
+ const p=document.getElementById('anpop'), b=document.getElementById('anmail');
+ const r=b.getBoundingClientRect();
+ p.style.top=(r.bottom+10)+'px'; p.style.right=Math.max(12,window.innerWidth-r.right)+'px';
+ let h='<div class="an-ih"><b>分析師週報</b><span>'+(AN.unread?AN.unread+' 份沒讀':'全部讀過了')+'</span></div>';
+ if(AN.err) h+='<div class="an-empty">'+esc(AN.err)+'</div>';
+ else if(!AN.items.length) h+='<div class="an-empty">還沒有週報。每週六早上會自動產生第一份。</div>';
+ else h+=AN.items.map(it=>'<button class="an-item'+(it.read?'':' unread')+'" data-anid="'+esc(it.id)+'">'+
+   '<span class="dot"></span><span class="bd"><span class="r1"><span>'+esc(it.id.replace('-W',' 第 '))+' 週　'+esc(it.range||'')+'</span>'+
+   '<small>'+esc(String(it.made_at||'').slice(5,10))+'</small></span>'+
+   '<span class="ln">'+esc(it.line||'')+'</span><span class="ch">'+(it.read?'':'<span class="an-new">未讀</span>')+
+   anLamp(it.lamp,it.lamp_word)+(it.n_recs?'<span class="an-tag judge">'+it.n_recs+' 條建議</span>':'')+'</span></span></button>').join('');
+ p.innerHTML=h; p.hidden=false;
+}
+function anSec(title,sub,body){ return '<div><div class="sec-head"><h2>'+esc(title)+'</h2><span class="count">'+esc(sub||'')+'</span></div><div class="an-card">'+body+'</div></div>'; }
+function anReport(R){
+ const F=R.facts||{};
+ const news=(R.news||[]).map(n=>'<div class="an-nw"><div class="top"><span>'+esc(n.date)+'</span>'+anTag(n.tag)+'</div>'+
+   '<h3>'+esc(n.title)+'</h3><p>'+esc(n.summary)+'</p>'+
+   ((n.impacts||[]).length?'<div class="an-imp">'+n.impacts.map(i=>'<b>'+esc(i.who)+'</b><span>'+esc(i.text)+'</span>').join('')+'</div>':'')+
+   '<div class="an-src">來源：'+(n.sources||[]).map(s=>'<a href="'+esc(s.url)+'" target="_blank" rel="noopener noreferrer">'+esc(s.title)+'</a>').join('、')+'</div></div>').join('');
+ const cal=(R.calendar||[]).length?'<div class="an-rows">'+R.calendar.map(c=>'<div class="r"><span class="k">'+esc(c.when)+'</span><span class="v">'+
+   anTag(c.tag)+' '+esc(c.event)+(c.who?'（'+esc(c.who)+'）':'')+(c.history?'<small>'+esc(c.history)+'</small>':'')+'</span></div>').join('')+'</div>':'<div class="an-empty">這週沒有特別要注意的事。</div>';
+ const env=(R.env||[]).map(e=>'<div class="an-nw"><div class="top">'+anTag(e.tag)+(e.status?'<span class="an-lamp">'+esc(e.status)+'</span>':'')+'</div><h3>'+esc(e.title)+'</h3><p>'+esc(e.text)+'</p></div>').join('');
+ const recs=(R.recs||[]).length?R.recs.map(r=>'<div class="an-rec"><div>'+anTag(r.tag)+'</div><h3>'+esc(r.title)+'</h3><p>'+esc(r.body)+'</p><div class="ask">要你決定：'+esc(r.ask)+'</div></div>').join(''):'<div class="an-empty">這週沒有建議。</div>';
+ const st=(F.strategies||[]).map(s=>'<div class="an-st"><div class="hd"><b>'+esc(s.name)+' <small class="an-note">'+esc(s.sub||'')+'</small></b>'+anLamp(s.lamp==='ok'?'ok':(s.lamp==='na'?'':'wn'),s.lamp_word)+'</div>'+
+   '<div class="an-rail"><div><div class="k">本週模擬</div><div class="v">'+anPts(s.week_sim_pts)+' <small class="an-note">'+s.week_sim_n+' 筆</small></div></div>'+
+   '<div><div class="k">本週真單</div><div class="v">'+anPts(s.week_real_pts)+' <small class="an-note">'+s.week_real_n+' 筆</small></div></div>'+
+   '<div><div class="k">近 15 筆每筆／歷史</div><div class="v">'+anPts(s.avg15)+' / '+anPts(s.avg_all)+'</div></div></div>'+
+   '<div class="an-note">'+((s.pairs||[]).length?'真單 vs 模擬：'+s.pairs.map(p=>esc(p.d.slice(5))+' 差 '+(p.diff>0?'+':'')+p.diff+' 點').join('、'):'本週沒有可以對帳的真單')+'</div></div>').join('');
+ const mk=((F.market||{}).cards||[]).map(c=>'<div class="an-st"><div class="hd"><b>'+esc(c.title)+'</b><span class="num">'+(c.value==null?'—':esc(c.value)+esc(c.unit||''))+'</span></div>'+
+   (c.pct==null?'':'<div class="an-pos"><i style="left:'+Math.max(0,Math.min(100,c.pct))+'%"></i></div><div class="an-note">過去一年第 '+c.pct+' 百分位'+(c.flag_word?'・'+esc(c.flag_word):'')+'</div>')+'</div>').join('')||'<div class="an-empty">'+esc((F.market||{}).err||'沒有市場資料')+'</div>';
+ const S=F.system||{}, K=F.risk||{};
+ const sys='<div class="an-rows">'+
+   '<div class="r"><span class="k">日盤送單</span><span class="v">'+(S.sent_day||0)+' 筆（成交 '+(S.ok_day||0)+'）</span></div>'+
+   '<div class="r"><span class="k">夜盤送單</span><span class="v">'+(S.sent_night||0)+' 筆（成交 '+(S.ok_night||0)+'）</span></div>'+
+   '<div class="r"><span class="k">進場滑價</span><span class="v">'+(S.slip_avg==null?'—':'平均 '+S.slip_avg+' 點（'+S.slip_n+' 筆）')+'</span></div>'+
+   '<div class="r"><span class="k">送出沒撮到</span><span class="v">'+(S.ioc_nofill||0)+' 次</span></div>'+
+   '<div class="r"><span class="k">本月風控</span><span class="v">'+anPts(K.pnl)+' / −'+Math.round(K.cap||0).toLocaleString()+' 點'+(K.blocked?'（已停）':'')+'</span></div>'+
+   (S.problems||[]).map(p=>'<div class="r"><span class="k">⚠️</span><span class="v">'+esc(p.what)+'（'+p.n+' 次）</span></div>').join('')+'</div>';
+ const cand=(F.candidates||[]).map(c=>'<div class="an-st"><div class="hd"><b>'+esc(c.name)+'</b><span class="num">'+c.diff_n+' / '+c.need+'</span></div>'+
+   '<div class="an-bar"><i style="width:'+Math.min(100,Math.round(c.diff_n*100/(c.need||25)))+'%"></i></div>'+
+   '<div class="an-note">只算跟「'+esc(c.base)+'」不一樣的那幾筆'+(c.diff_avg==null?'':'・每筆差 '+(c.diff_avg>0?'+':'')+c.diff_avg)+'（回填期每筆差 '+(c.back_avg==null?'—':(c.back_avg>0?'+':'')+c.back_avg)+'）</div></div>').join('');
+ return '<div class="an-verdict">'+anLamp(R.verdict&&R.verdict.lamp)+'<p>'+esc((R.verdict||{}).line||'')+'</p></div>'+
+  '<div class="an-cols"><div class="an-stack">'+anSec('國際金融消息','本週 '+(R.news||[]).length+' 則・每則附來源',news)+
+  anSec('下週大事','附同類日子的歷史成績',cal)+(env?anSec('大環境觀察','會不會動搖賺錢的前提',env):'')+
+  anSec('建議','最多 3 條・決定權在你',recs)+'</div>'+
+  '<div class="an-stack">'+anSec('策略健康','模擬定論＋真單',st)+anSec('市場狀態','在過去一年的位置',mk)+
+  anSec('系統與風控','本週',sys)+anSec('模擬候選','滿 25 筆才判斷',cand)+'</div></div>'+
+  '<div class="an-foot">分析師不預測漲跌、不給進出場方向、不碰下單程式與開關；所有決定由你做。「判讀・未驗證」的只能當研究題目。</div>';
+}
+function anOpen(id){
+ document.getElementById('anpop').hidden=true;
+ const sh=document.getElementById('ansheet');
+ sh.innerHTML='<div class="an-doc"><div class="an-empty">載入中…</div></div>'; sh.hidden=false;
+ fetch('/api/analyst/report?id='+encodeURIComponent(id),{cache:'no-store'}).then(r=>r.json()).then(x=>{
+   if(!x||!x.ok){ sh.innerHTML='<div class="an-doc"><div class="an-dh"><span class="t">'+esc((x&&x.msg)||'讀不到')+'</span><button data-anclose="1">關閉 ✕</button></div></div>'; return; }
+   const R=x.report;
+   sh.innerHTML='<div class="an-doc"><div class="an-dh"><div class="t"><b>'+esc(R.id.replace('-W',' 第 '))+' 週報告</b>'+esc(R.range||'')+'・'+esc(String(R.made_at||'').slice(0,16).replace('T',' '))+' 產出</div>'+
+     '<div style="display:flex;gap:8px"><button data-anback="1">‹ 回列表</button><button data-anclose="1">關閉 ✕</button></div></div>'+anReport(R)+'</div>';
+   const it=AN.items.find(i=>i.id===id);
+   if(it&&!it.read) pfetch('/api/analyst/read',JSON.stringify({id:id})).then(()=>anFetch()).catch(()=>{});
+ }).catch(()=>{ sh.innerHTML='<div class="an-doc"><div class="an-dh"><span class="t">連不上面板</span><button data-anclose="1">關閉 ✕</button></div></div>'; });
+}
+document.addEventListener('click',function(e){
+ const mb=e.target.closest('#anmail');
+ if(mb){ const p=document.getElementById('anpop'); if(p.hidden){ anList(); anFetch(); } else p.hidden=true; return; }
+ const it=e.target.closest('[data-anid]');
+ if(it){ anOpen(it.getAttribute('data-anid')); return; }
+ if(e.target.closest('[data-anclose]')){ document.getElementById('ansheet').hidden=true; return; }
+ if(e.target.closest('[data-anback]')){ document.getElementById('ansheet').hidden=true; anList(); return; }
+ if(e.target.id==='ansheet'){ document.getElementById('ansheet').hidden=true; return; }
+ const p=document.getElementById('anpop');
+ if(!p.hidden&&!e.target.closest('#anpop')) p.hidden=true;
+});
+document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ document.getElementById('ansheet').hidden=true; document.getElementById('anpop').hidden=true; } });
+anPaintBtn(); anFetch(); setInterval(anFetch,60000);
+
 tick(); setInterval(tick,500);
 </script></body></html>"""
 
@@ -9517,6 +9713,17 @@ class Handler(BaseHTTPRequestHandler):
             code, out = night_arm_on(m, who=self.client_address[0]
                                      if self.client_address else "?")
             return self._json(code, out)
+
+        # ⭐ 2026-09-24【交易分析師】在面板上讀過那一週 ⇒ 記成讀過（⛔ 只會變成讀過）。
+        if self.path == "/api/analyst/read":
+            if analyst is None:
+                return self._json(503, {"ok": False, "msg": "分析師載入失敗"})
+            rid = body.get("id") if isinstance(body, dict) else None
+            try:
+                changed = analyst.mark_read(rid, via="pc")
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": "記不起來：" + str(e)[:150]})
+            return self._json(200, {"ok": True, "changed": changed})
 
         # ⭐ 2026-09-24 風控規則 B 的「手動解除」：⛔ 前端兩段式；⛔ 路由精確比對。
         if self.path == "/api/risk/override":
@@ -9827,6 +10034,28 @@ class Handler(BaseHTTPRequestHandler):
         #      後端整天快取（來源檔 mtime 當快取鍵），重活跑在 health 自己的背景執行緒上
         #      ⇒ 這條 HTTP 路徑本身很輕（只讀 sim_lanes 的定論）。
         #   ⛔ 沒有 token，但有真實的績效數字 ⇒ 跟 /api/state 同一道 GET 守衛。
+        # ⭐ 2026-09-24【交易分析師】右上角信件：列表／全文（唯讀；跟 /api/state 同一道 GET 守衛）。
+        #   ⚠️ 「手機讀過」的抓取執行緒在**第一次問列表時**才起（⛔ 不改 main()：那段有守衛在比對）。
+        if self.path.split("?", 1)[0] in ("/api/analyst/index", "/api/analyst/report"):
+            ok, code, msg = fire_get_guard(self.headers)
+            if not ok:
+                return self._json(code, {"ok": False, "msg": msg})
+            if analyst is None:
+                return self._json(503, {"ok": False, "msg": "分析師載入失敗"})
+            try:
+                if self.path.startswith("/api/analyst/index"):
+                    analyst.start()
+                    items = analyst.index()
+                    return self._json(200, {"ok": True, "items": items,
+                                            "unread": sum(1 for x in items if not x["read"]),
+                                            "hash": analyst.bundle()["hash"]})
+                q = parse_qs(urlsplit(self.path).query)
+                rep = analyst.load((q.get("id") or [""])[0])
+                if rep is None:
+                    return self._json(404, {"ok": False, "msg": "找不到這一週的報告"})
+                return self._json(200, {"ok": True, "report": rep})
+            except Exception as e:
+                return self._json(500, {"ok": False, "msg": "分析師讀不到：%s" % str(e)[:150]})
         if self.path.split("?", 1)[0] == "/api/health/state":
             ok, code, msg = fire_get_guard(self.headers)
             if not ok:

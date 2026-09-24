@@ -109,7 +109,9 @@ tree = ast.parse(src)
 push_fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "push")
 cmds = [c.args[0].value for c in ast.walk(push_fn) if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "_git"
         and c.args and isinstance(c.args[0], ast.Constant)]
-say(cmds == ["hash-object", "mktree", "commit-tree", "push"], "  push() 只呼叫 hash-object／mktree／commit-tree／push", cmds)
+# ⭐ 2026-09-24：多推一個 analyst.json（分析師週報，加密）⇒ hash-object 會出現兩次；⛔ 種類仍然只准這四種
+say(set(cmds) == {"hash-object", "mktree", "commit-tree", "push"} and cmds.count("push") == 1,
+    "  push() 只呼叫 hash-object／mktree／commit-tree／push（push 只有一次）", cmds)
 say(not any(w in src for w in ('"checkout"', '"add"', '"reset"', '"stash"')), "  ⛔ 沒有 checkout／add／reset／stash")
 gi = (HERE.parent.parent / ".gitignore").read_text(encoding="utf-8")
 say("tools/shioaji/MONITOR_KEY.json" in gi, "  ⛔ 金鑰檔在 .gitignore 裡")

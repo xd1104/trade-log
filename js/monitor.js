@@ -89,6 +89,159 @@
   function dirTxt(d) { return d === 'long' ? '做多' : d === 'short' ? '做空' : (d || ''); }
   function modeTxt(on, live) { return on ? (live ? '開著・真錢' : '開著・演練') : '關著'; }
 
+  // ══ 【交易分析師】週報信件（2026-09-24）══════════════════════════════
+  // 列表跟著快照來（s.analyst：週次、結論、讀過沒）；全文在 monitor 分支的 analyst.json（加密，點開才抓）。
+  // 讀過：先記在這台手機（立刻消失），再用鑰匙圈的金鑰把 data/analyst-read.json 寫進 repo ⇒ 電腦面板 3 分鐘內同步。
+  // ⛔ 寫進 repo 的只有「週次＋時間」，沒有任何內容（repo 是公開的）。
+  var AN_API = 'https://api.github.com/repos/xd1104/trade-log/contents/analyst.json?ref=monitor';
+  var AN_RAW = 'https://raw.githubusercontent.com/xd1104/trade-log/monitor/analyst.json';
+  var AN_READ_API = 'https://api.github.com/repos/xd1104/trade-log/contents/data/analyst-read.json';
+  var AN_LS = 'tlmon.anread.v1', GH_TOKEN_KEY = 'tradelog_gh_pat';
+  var AN = { snap: null, box: null, reports: null, view: null, cur: null, syncing: false, syncMsg: '' };
+  var AN_TAG = { data: '有數據', judge: '判讀・未驗證' };
+  var AN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 6.5 12 13l8.5-6.5"/></svg>';
+
+  function anLocal() { try { return JSON.parse(localStorage.getItem(AN_LS) || '{}') || {}; } catch (e) { return {}; } }
+  function anSaveLocal(m) { try { localStorage.setItem(AN_LS, JSON.stringify(m)); } catch (e) {} }
+  // ⭐ 讀的時間 ≥ 週報產生時間才算讀過（同一週重新產生過 ⇒ 會再變回未讀）。時間一律手機本地（台灣）ISO。
+  function localIso() { var d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19); }
+  function anIsRead(it) { var at = anLocal()[it.id]; return !!(it.read || (typeof at === 'string' && at >= String(it.made_at || '').slice(0, 19))); }
+  function anItems() { return ((AN.snap || {}).items) || []; }
+  function anTag(t) { return t ? '<span class="an-tag ' + (t === 'data' ? 'data' : 'judge') + '">' + esc(AN_TAG[t] || t) + '</span>' : ''; }
+  function anLamp(l, w) { return '<span class="an-lamp ' + esc(l || '') + '">' + esc(w || ({ ok: '正常', wn: '要注意', bd: '要處理' })[l] || '—') + '</span>'; }
+  function anWeek(id) { return String(id || '').replace('-W', ' 第 ') + ' 週'; }
+  function ghToken() { try { return localStorage.getItem(GH_TOKEN_KEY) || ''; } catch (e) { return ''; } }
+
+  function anPaintBtn() {
+    var b = $('anMail'); if (!b) return;
+    var items = anItems(), n = items.filter(function (x) { return !anIsRead(x); }).length;
+    b.hidden = !AN.snap;
+    b.innerHTML = AN_SVG + (n ? '<span class="bdg">' + n + '</span>' : '');
+    b.className = 'mailbtn' + (n ? ' has' : '');
+  }
+  function anShow(view) {
+    AN.view = view;
+    $('main').hidden = !!view; $('anView').hidden = !view;
+    if (view === 'list') anPaintList(); else if (view) anPaintReport();
+    window.scrollTo(0, 0);
+  }
+  function anPaintList() {
+    var items = anItems(), n = items.filter(function (x) { return !anIsRead(x); }).length;
+    var h = '<div class="an-back"><button data-an="home">‹ 返回監控</button><span>' + (n ? n + ' 份沒讀' : '全部讀過了') + '</span></div>';
+    if (!items.length) h += '<div class="card"><div class="msg">還沒有週報。每週六早上會自動產生。</div></div>';
+    h += items.map(function (it) {
+      var r = anIsRead(it);
+      return '<button class="an-item' + (r ? '' : ' unread') + '" data-anid="' + esc(it.id) + '"><span class="dot"></span><span class="bd">' +
+        '<span class="r1"><span>' + esc(anWeek(it.id)) + '　' + esc(it.range || '') + '</span><small>' + esc(String(it.made_at || '').slice(5, 10)) + '</small></span>' +
+        '<span class="ln">' + esc(it.line || '') + '</span><span class="ch">' + (r ? '' : '<span class="an-new">未讀</span>') +
+        anLamp(it.lamp, it.lamp_word) + (it.n_recs ? '<span class="an-tag judge">' + it.n_recs + ' 條建議</span>' : '') + '</span></span></button>';
+    }).join('');
+    $('anView').innerHTML = h;
+  }
+  function anFetchReports() {
+    var want = (AN.snap || {}).hash;
+    if (AN.reports && AN.box && AN.box.hash === want) return Promise.resolve(AN.reports);
+    return fetch(AN_API, { headers: { 'Accept': 'application/vnd.github.raw' }, cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error('api ' + r.status); return r.json();
+    }).catch(function () {
+      return fetch(AN_RAW + '?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error('raw ' + r.status); return r.json(); });
+    }).then(function (box) {
+      return open(box, keys).then(function (o) { AN.box = box; AN.reports = o.reports || []; return AN.reports; });
+    });
+  }
+  function anSec(id, title, body) { return '<section class="card" id="an-s-' + id + '"><h2>' + esc(title) + '</h2>' + body + '</section>'; }
+  function anReportHTML(R) {
+    var F = R.facts || {};
+    var news = (R.news || []).map(function (n) {
+      return '<div class="an-nw"><div class="tp">' + esc(n.date) + ' ' + anTag(n.tag) + '</div><h3>' + esc(n.title) + '</h3><p>' + esc(n.summary) + '</p>' +
+        (n.impacts || []).map(function (i) { return '<div class="imp"><b>' + esc(i.who) + '</b>　' + esc(i.text) + '</div>'; }).join('') +
+        '<div class="src">來源：' + (n.sources || []).map(function (s) { return '<a href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer">' + esc(s.title) + '</a>'; }).join('、') + '</div></div>';
+    }).join('');
+    var cal = (R.calendar || []).map(function (c) { return row(c.when, anTag(c.tag) + ' ' + esc(c.event) + (c.history ? '<div class="faint" style="font-size:12px">' + esc(c.history) + '</div>' : '')); }).join('') || '<div class="msg">這週沒有特別要注意的事。</div>';
+    var env = (R.env || []).map(function (e) { return '<div class="an-nw"><div class="tp">' + anTag(e.tag) + (e.status ? ' ' + anLamp('', e.status) : '') + '</div><h3>' + esc(e.title) + '</h3><p>' + esc(e.text) + '</p></div>'; }).join('');
+    var st = (F.strategies || []).map(function (s) {
+      return '<div class="an-nw"><div class="tp">' + anLamp(s.lamp === 'ok' ? 'ok' : 'wn', s.lamp_word) + '</div><h3>' + esc(s.name) + '</h3>' +
+        row('本週模擬', '<span class="num ' + cls(s.week_sim_pts) + '">' + pm(s.week_sim_pts) + '</span>（' + s.week_sim_n + ' 筆）') +
+        row('本週真單', '<span class="num ' + cls(s.week_real_pts) + '">' + pm(s.week_real_pts) + '</span>（' + s.week_real_n + ' 筆）') +
+        row('近 15 筆每筆／歷史', '<span class="num">' + pm(s.avg15) + ' / ' + pm(s.avg_all) + '</span>') + '</div>';
+    }).join('');
+    var mk = (((F.market || {}).cards) || []).map(function (c) { return row(c.title, '<span class="num">' + (c.value == null ? '—' : esc(c.value) + esc(c.unit || '')) + '</span>' + (c.pct == null ? '' : '<div class="faint" style="font-size:11.5px">過去一年第 ' + c.pct + ' 百分位</div>')); }).join('');
+    var S = F.system || {}, K = F.risk || {};
+    var sys = row('日盤送單', (S.sent_day || 0) + ' 筆（成交 ' + (S.ok_day || 0) + '）') + row('夜盤送單', (S.sent_night || 0) + ' 筆（成交 ' + (S.ok_night || 0) + '）') +
+      row('進場滑價', S.slip_avg == null ? '—' : '平均 ' + S.slip_avg + ' 點') + row('送出沒撮到', (S.ioc_nofill || 0) + ' 次') +
+      row('本月風控', '<span class="num ' + cls(K.pnl) + '">' + pm(K.pnl) + '</span> / −' + Math.round(K.cap || 0).toLocaleString() + ' 點' + (K.blocked ? '（已停）' : '')) +
+      (S.problems || []).map(function (p) { return '<div class="err">⚠️ ' + esc(p.what) + '（' + p.n + ' 次）</div>'; }).join('');
+    var cand = (F.candidates || []).map(function (c) { return row(c.name, '<span class="num">' + c.diff_n + ' / ' + c.need + '</span><div class="faint" style="font-size:11.5px">只算跟「' + esc(c.base) + '」不一樣的</div>'); }).join('');
+    var recs = (R.recs || []).map(function (r) { return '<div class="an-nw an-rec"><div class="tp">' + anTag(r.tag) + '</div><h3>' + esc(r.title) + '</h3><p>' + esc(r.body) + '</p><div class="ask">要你決定：' + esc(r.ask) + '</div></div>'; }).join('') || '<div class="msg">這週沒有建議。</div>';
+    var segs = [['news', '國際消息'], ['cal', '下週大事'], ['env', '大環境'], ['st', '策略'], ['mk', '市場'], ['sys', '系統'], ['cand', '候選'], ['rec', '建議']];
+    return '<div class="an-seg">' + segs.map(function (x, i) { return '<button data-anjump="' + x[0] + '"' + (i ? '' : ' class="on"') + '>' + x[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="card"><div class="an-verdict">' + anLamp(R.verdict && R.verdict.lamp) + '<p>' + esc((R.verdict || {}).line || '') + '</p></div></div>' +
+      anSec('news', '國際金融消息（每則附來源）', news) + anSec('cal', '下週大事', cal) + (env ? anSec('env', '大環境觀察', env) : '') +
+      anSec('st', '策略健康', st) + anSec('mk', '市場狀態', mk) + anSec('sys', '系統與風控', sys) + anSec('cand', '模擬候選（滿 25 筆才判斷）', cand) +
+      anSec('rec', '建議（決定權在你）', recs) +
+      '<div class="an-sync" id="anSync"></div>' +
+      '<div class="foot dim">分析師不預測漲跌、不給進出場方向、不碰下單；「判讀・未驗證」的只能當研究題目。</div>';
+  }
+  function anPaintSync() {
+    var el = $('anSync'); if (!el) return;
+    el.innerHTML = ghToken() ? esc(AN.syncMsg || '讀過的紀錄會同步到電腦面板')
+      : '讀過的紀錄只記在這台手機 —— <button data-an="unlock">解鎖鑰匙圈</button>就能同步到電腦面板';
+  }
+  function anPaintReport() {
+    var id = AN.cur;
+    $('anView').innerHTML = '<div class="an-back"><button data-an="list">‹ 週報列表</button><span>' + esc(anWeek(id)) + '</span></div><div class="card"><div class="msg">載入中…</div></div>';
+    anFetchReports().then(function (reps) {
+      var R = null; for (var i = 0; i < reps.length; i++) if (reps[i].id === id) R = reps[i];
+      if (!R) throw new Error('找不到這一週（面板可能還沒推上來，等 2 分鐘再試）');
+      $('anView').innerHTML = '<div class="an-back"><button data-an="list">‹ 週報列表</button><span>' + esc(anWeek(id)) + '・' + esc(R.range || '') + '</span></div>' + anReportHTML(R);
+      var m = anLocal(); m[id] = localIso(); anSaveLocal(m);
+      anPaintBtn(); anPaintSync(); anSync();
+      if (!ghToken() && window.Keyring && !anLocal()._asked) { var mm = anLocal(); mm._asked = 1; anSaveLocal(mm); Keyring.open('把讀過的週報同步到電腦面板'); }
+    }).catch(function (e) {
+      $('anView').innerHTML = '<div class="an-back"><button data-an="list">‹ 週報列表</button></div><div class="card"><div class="err">讀不到週報：' + esc(e && e.message || e) + '</div></div>';
+    });
+  }
+  function b64s(str) { var b = new TextEncoder().encode(str), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); }
+  function anSync() {
+    var tok = ghToken(); if (!tok || AN.syncing) return;
+    var mine = anLocal(); delete mine._asked;
+    if (!Object.keys(mine).length) return;
+    AN.syncing = true;
+    var h = { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + tok };
+    fetch(AN_READ_API + '?ref=main', { headers: h, cache: 'no-store' }).then(function (r) {
+      if (r.status === 404) return null; if (!r.ok) throw new Error('GitHub ' + r.status); return r.json();
+    }).then(function (cur) {
+      var remote = { read: {} };
+      if (cur && cur.content) { try { remote = JSON.parse(new TextDecoder().decode(b64(cur.content.replace(/\s/g, '')))) || remote; } catch (e) {} }
+      remote.read = remote.read || {};
+      var changed = false;
+      Object.keys(mine).forEach(function (k) { if (/^\d{4}-W\d{2}$/.test(k) && typeof mine[k] === 'string' && !(remote.read[k] >= mine[k])) { remote.read[k] = mine[k]; changed = true; } });
+      if (!changed) return 'same';
+      return fetch(AN_READ_API, { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, h),
+        body: JSON.stringify({ message: 'chore: 手機讀過分析師週報', branch: 'main', sha: cur ? cur.sha : undefined,
+          content: b64s(JSON.stringify(remote, null, 1)) }) }).then(function (r) {
+        if (r.ok) return 'ok';
+        throw new Error(r.status === 401 ? '金鑰無效或過期，重新解鎖看看' : r.status === 409 ? '剛好有別的裝置在寫，等一下再試' : 'GitHub ' + r.status);
+      });
+    }).then(function (how) { AN.syncMsg = how === 'same' ? '讀過的紀錄已經同步到電腦面板' : '已同步到電腦面板（最慢 3 分鐘看到）✓'; })
+      .catch(function (e) { AN.syncMsg = '同步失敗：' + (e && e.message || '連不到 GitHub') + '（下次開週報會再試）'; })
+      .then(function () { AN.syncing = false; anPaintSync(); });
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.closest('#anMail')) { anShow('list'); return; }
+    var go = t.closest('[data-an]');
+    if (go) { var v = go.getAttribute('data-an');
+      if (v === 'home') anShow(null); else if (v === 'list') anShow('list');
+      else if (v === 'unlock' && window.Keyring) Keyring.open('把讀過的週報同步到電腦面板');
+      return; }
+    var it = t.closest('[data-anid]');
+    if (it) { AN.cur = it.getAttribute('data-anid'); anShow('report'); return; }
+    var j = t.closest('[data-anjump]');
+    if (j) { var bs = document.querySelectorAll('.an-seg button'); for (var i = 0; i < bs.length; i++) bs[i].className = bs[i] === j ? 'on' : '';
+      var sec = $('an-s-' + j.getAttribute('data-anjump')); if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  });
+
   function render(box, s) {
     var age = Date.now() / 1000 - box.t;
     var dead = age > DEAD_S, slow = age > SLOW_S;
@@ -198,6 +351,10 @@
     if (e.cushion && e.cushion.warn) w.push(e.cushion.msg);
     if (pn.conn && pn.conn.ok === false) w.push('跟永豐的連線有問題：' + (pn.conn.last_error || ''));
     // ⚠️ 券商的 last_error 沒有時間、而且背景對帳偶發失敗也會寫進來（跟真單無關）⇒ 不當警示，放最底下小字
+    // ⭐ 分析師信件：列表跟著快照更新（打開中的全文不重畫，免得他看到一半跳掉）
+    AN.snap = s.analyst || null;
+    anPaintBtn();
+    if (AN.view === 'list') anPaintList();
     $('warn').hidden = !w.length;
     $('warn').innerHTML = '<h2>要注意的事</h2>' + w.map(function (x) { return '<div class="item">⚠️ ' + esc(x) + '</div>'; }).join('');
 
@@ -220,7 +377,8 @@
     $('loading').hidden = true; $('main').hidden = true; $('lock').hidden = false;
     $('lockErr').hidden = !msg; $('lockErr').textContent = msg || '';
   }
-  function showMain() { $('loading').hidden = true; $('lock').hidden = true; $('main').hidden = false; }
+  // ⚠️ 正在看週報的時候，每 90 秒的更新 ⛔ 不可以把監控主畫面疊回來
+  function showMain() { $('loading').hidden = true; $('lock').hidden = true; $('main').hidden = !!AN.view; }
 
   function refresh() {
     return fetchBox().then(function (box) {
@@ -254,6 +412,14 @@
   });
 
   $('logout').addEventListener('click', function () { keys = null; clearKeys(); showLock(); });
+
+  // 鑰匙圈：只為了「讀過的週報同步回電腦」。⛔ 不跳開場介紹（這頁不是日誌 App）；解鎖後補送一次。
+  if (window.Keyring) {
+    try {
+      Keyring.init({ appId: 'trade-log', appName: '📈 早盤儀表板', tokenKey: GH_TOKEN_KEY, enabled: true,
+        onChange: function () { anPaintSync(); anSync(); } });
+    } catch (e) {}
+  }
 
   keys = loadKeys();
   refresh();

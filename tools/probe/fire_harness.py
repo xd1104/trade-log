@@ -71,6 +71,10 @@ LP.AUTO_DIR = TMP / "autotest"
 import risk_cap as RC           # noqa: E402
 RC.OVERRIDE_FLAG = TMP / "RISK_OVERRIDE"
 LP.RISK_LOG_DIR = TMP / "riskcap"
+# ⭐ 2026-09-24【交易分析師】讀過狀態導到暫存區（⛔ 不碰真的 analyst/read.json）；週報本身唯讀照讀。
+import analyst as ANL           # noqa: E402
+ANL.READ_FILE = TMP / "analyst-read.json"
+ANL.start = lambda: None        # ⛔ 治具不去 GitHub 抓手機讀過的紀錄
 LP.AUTO_REAL_DIR = TMP / "real_trades"
 # ⭐ 2026-09-21：兩份歷史也導到暫存區並餵種子 —— 沒有它們的話「今天的門檻」算不出來，
 #    畫面會變成「歷史不夠」那一種（那是另一個情境，不是這支治具要看的那個）。
@@ -455,6 +459,12 @@ class H(BaseHTTPRequestHandler):
             ok, msg = NF.disarm()
             return self._j(200 if ok else 409,
                            {"ok": ok, "msg": msg, "armed": NF.arm()["on"]})
+        if self.path == "/api/analyst/read":
+            try:
+                body = json.loads(raw or b"{}")
+            except Exception:
+                body = {}
+            return self._j(200, {"ok": True, "changed": ANL.mark_read(body.get("id"), via="pc")})
         # ⭐ 2026-09-24 風控「手動解除」：走**產品的** `LP.risk_override_on()`（解除檔已導到暫存區）
         if self.path == "/api/risk/override":
             code, out = LP.risk_override_on(who="harness")
@@ -481,6 +491,14 @@ class H(BaseHTTPRequestHandler):
             if LP.health is None:
                 return self._j(503, {"ok": False, "msg": "【健檢】載入失敗"})
             return self._j(200, LP.health.state())
+        if p.startswith("/api/analyst/index"):
+            items = ANL.index()
+            return self._j(200, {"ok": True, "items": items, "unread": sum(1 for x in items if not x["read"]),
+                                 "hash": ANL.bundle()["hash"]})
+        if p.startswith("/api/analyst/report"):
+            from urllib.parse import parse_qs, urlsplit
+            rep = ANL.load((parse_qs(urlsplit(p).query).get("id") or [""])[0])
+            return self._j(200 if rep else 404, {"ok": bool(rep), "report": rep, "msg": "找不到"})
         if p.startswith("/api/fire/state"):
             out = AF.state()
             out["sim"] = LP.fire_sim_pairs(out.get("days") or [])

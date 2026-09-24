@@ -20,8 +20,13 @@
   <div class="app">
     <header class="top">
       <div class="brand"><span class="mark">📈</span><div><h1>早盤儀表板</h1><div class="sub">手機監控・只看不動</div></div></div>
-      <div class="upd" id="upd"></div>
+      <div class="tr"><div class="upd" id="upd"></div>
+        <!-- ⭐ 2026-09-24【交易分析師】週報信件（未讀＝金色＋數字）。⛔ 只看，不動交易。 -->
+        <button class="mailbtn" id="anMail" hidden aria-label="分析師週報"></button></div>
     </header>
+
+    <!-- 【交易分析師】列表／全文（打開時蓋掉主畫面；返回就回到監控） -->
+    <section id="anView" hidden></section>
 
     <!-- 解鎖 -->
     <section id="lock" class="card lock" hidden>
@@ -52,6 +57,8 @@
 
     <div id="loading" class="dim center">載入中…</div>
   </div>
+  <!-- 鑰匙圈：只用來「把手機讀過的週報同步回電腦」（寫 data/analyst-read.json，只有週次與時間）。 -->
+  <script src="js/keyring-unlock.js"></script>
   <script src="js/monitor.js"></script>
 </body>
 </html>

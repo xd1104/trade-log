@@ -509,6 +509,8 @@ _POSTS = ["/api/real/enter", "/api/real/close", "/api/fire/on", "/api/fire/off",
           "/api/nightfire/on", "/api/nightfire/off",
           # ⭐ 2026-09-24 風控規則 B 的「手動解除」：解除後單就送得出去 ⇒ 同一排攻擊一樣要擋
           "/api/risk/override",
+          # ⭐ 2026-09-24【交易分析師】面板上讀過（只寫讀過狀態，但一樣要過六道防護）
+          "/api/analyst/read",
           "/api/enter", "/api/close", "/api/note", "/api/replay",
           "/api/sync", "/api/undo"]
 # ⛔ 名單要跟原始碼對得起來 —— 少列一條就等於那條沒被驗到（而它照樣對外開著）。

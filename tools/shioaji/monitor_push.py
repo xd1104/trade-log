@@ -40,12 +40,14 @@ REPO = HERE.parent.parent
 KEY_FILE = HERE / "MONITOR_KEY.json"
 BRANCH = "monitor"
 FILE = "monitor.json"
-EVERY_S = 120                 # 每 2 分鐘一張（手機超過 6 分鐘沒更新就亮紅燈）
+AN_FILE = "analyst.json"      # ⭐ 2026-09-24【交易分析師】週報全文（加密）；內容沒變就沿用同一份密文（同一個 blob，不重傳）
+EVERY_S = 120                # 每 2 分鐘一張（手機超過 6 分鐘沒更新就亮紅燈）
 HTTP_TIMEOUT = 10
 MAGIC = b"tlmon1"
 KDF_ITER = 600000
 
 STATE = {"on": False, "msg": "還沒啟動", "last_ok": None, "last_err": None, "pushes": 0, "fails": 0}
+_AN = {"hash": None, "box": None}
 
 
 # ── 加密 ──────────────────────────────────────────────────────────────
@@ -163,6 +165,14 @@ def snapshot(port):
                                      for x in (n.get("recent") or [])[:6]])
     except Exception as e:
         snap["errs"].append("夜盤自動下單讀不到：%s" % str(e)[:120])
+    try:
+        a = _get(port, "/api/analyst/index")
+        # ⭐ 只帶列表（週次、結論一句、讀過沒）＋全文的指紋；全文在 analyst.json（手機點開才抓）
+        snap["analyst"] = {"hash": a.get("hash"), "unread": a.get("unread"),
+                           "items": [_pick(x, ("id", "range", "made_at", "lamp", "lamp_word", "line",
+                                                "n_news", "n_recs", "read")) for x in (a.get("items") or [])]}
+    except Exception:
+        snap["analyst"] = None
     return snap
 
 
@@ -175,9 +185,27 @@ def _git(*args, inp=None):
     return r.stdout.decode("utf-8", "replace").strip()
 
 
-def push(data_bytes):
+def _analyst_box(key):
+    """週報全文 ⇒ 加密；指紋沒變就回上一次那份密文（⛔ 不重新加密 ⇒ blob 一樣 ⇒ push 不重傳）。"""
+    try:
+        import analyst
+        b = analyst.bundle()
+    except Exception:
+        return None
+    if _AN["hash"] != b["hash"] or _AN["box"] is None:
+        _AN["box"] = json.dumps(dict(seal({"reports": b["reports"]}, key), hash=b["hash"]),
+                                separators=(",", ":")).encode("utf-8")
+        _AN["hash"] = b["hash"]
+    return _AN["box"]
+
+
+def push(data_bytes, extra=None):
     blob = _git("hash-object", "-w", "--stdin", inp=data_bytes)
-    tree = _git("mktree", inp=("100644 blob %s\t%s\n" % (blob, FILE)).encode())
+    lines = "100644 blob %s\t%s\n" % (blob, FILE)
+    for name, data in sorted((extra or {}).items()):
+        if data:
+            lines += "100644 blob %s\t%s\n" % (_git("hash-object", "-w", "--stdin", inp=data), name)
+    tree = _git("mktree", inp=lines.encode())
     commit = _git("commit-tree", tree, "-m", "monitor")
     _git("push", "-f", "-q", "origin", "%s:refs/heads/%s" % (commit, BRANCH))
     return commit
@@ -185,7 +213,7 @@ def push(data_bytes):
 
 def once(port, key):
     box = seal(snapshot(port), key)
-    push(json.dumps(box, separators=(",", ":")).encode("utf-8"))
+    push(json.dumps(box, separators=(",", ":")).encode("utf-8"), {AN_FILE: _analyst_box(key)})
     STATE["pushes"] += 1
     STATE["last_ok"] = datetime.now().isoformat(timespec="seconds")
 
