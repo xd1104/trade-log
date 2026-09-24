@@ -3115,6 +3115,21 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 - `SHOWN_LANES` 變六條：union／tsm／trend／hold／tlong／nunion。
 - 2024-08 以後回填：聯軍 +277 vs 留倉 +436（擋掉的夜盤跟勢 +39）；夜盤跟勢 +536 vs 聯軍 +682 vs 只做多 +242。
 
+### ⭐ 2026-09-24【手機監控】（Benson：晚上不在電腦前，用手機看面板活著沒、有沒有自動下單；要密碼）
+
+- `tools/shioaji/monitor_push.py`：面板 main() 起一條 daemon（包 try），每 120 秒 GET 面板**自己的**
+  `/api/state`、`/api/fire/state`、`/api/nightfire/state` ⇒ 瘦身成快照（⛔ 不帶 token、帳號）⇒ 加密 ⇒
+  git plumbing（hash-object／mktree／commit-tree／push -f）推到 `refs/heads/monitor`（⛔ 不 checkout、不動工作目錄）。
+  面板 HTTP 卡住 ⇒ 快照照樣送出、errs 寫「面板沒回應」。
+- 加密：PBKDF2-SHA256(密碼, salt, 600000) ⇒ k_enc‖k_mac；HMAC-SHA256 金鑰流 XOR ＋ HMAC tag（含時間戳）。
+  只用標準庫（這台沒有 cryptography 套件、刻意不裝）。密碼只在 `monitor_setup.py` 由 Benson 自己輸入，
+  只存算出來的鑰匙到 `MONITOR_KEY.json`（gitignore）。⛔ 沒有這個檔 ⇒ 不推（⛔ 絕不推明文到公開 repo）。
+- 手機端：repo 根目錄的 `index.html`／`js/monitor.js`（原本的交易日誌畫面已拿掉）。讀 GitHub API
+  （不帶 token、ETag 304 不算次數、90 秒一次），被限流才退到 raw（快取 5 分鐘）。
+  5 分鐘沒回報 ⇒ 金點；8 分鐘 ⇒ 整張金色「面板沒有回報了」。面板沒回應時部位寫「不知道」（⛔ 不寫沒有部位）。
+- ⚠️ 鑰匙圈後台不在這台電腦 ⇒ 這一版是**獨立密碼**；之後可接進鑰匙圈（替交易日誌加一個欄位放 monitor 鑰匙）。
+- 探針 `test_monitor.py`（加解密／竄改／錯密碼／快照沒有 token 與帳號／沒鑰匙不啟動／只用 plumbing／main 包 try）。
+
 ## ⭐⭐ 早盤儀表板 v3（2026-09-23，Benson 交辦「版面整理」）
 
 規格：`test/ux-demo/panel-v3-spec.md`（定案 demo `test/ux-demo/panel-v3.html`）。
