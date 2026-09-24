@@ -110,9 +110,10 @@
         row('進場', '<span class="num">' + esc(p.entry) + '</span>' + (p.entry_time ? '（' + esc(String(p.entry_time).slice(0, 8)) + '）' : '')) +
         row('停損 / 停利', '<span class="num">' + esc(r.sl == null ? '—' : r.sl) + ' / ' + (p.no_tp ? '不設停利' : esc(r.tp == null ? '—' : r.tp)) + '</span>') +
         (r.stale_sec != null ? '<div class="err">⚠️ 報價已中斷 ' + esc(r.stale_sec) + ' 秒 —— 停損現在沒人在看</div>' : '');
-    } else if (!s.real) {
-      // ⛔ 面板沒回應 ≠ 沒有部位：不知道就講不知道
-      $('pos').innerHTML = '<h2>現在的部位</h2><div class="big gold" style="font-size:20px">不知道</div><div class="msg">這一次面板沒回應，讀不到部位。</div>';
+    } else if (!s.real || !('position' in r)) {
+      // ⛔ 面板沒回應、或剛啟動還沒問到券商 ≠ 沒有部位：不知道就講不知道
+      $('pos').innerHTML = '<h2>現在的部位</h2><div class="big gold" style="font-size:20px">還不知道</div><div class="msg">' +
+        (s.real ? '面板剛啟動，還在跟券商確認部位（下一次回報就會有）。' : '這一次面板沒回應，讀不到部位。') + '</div>';
     } else {
       $('pos').innerHTML = '<h2>現在的部位</h2><div class="big dim" style="font-size:20px">沒有部位</div>';
     }
