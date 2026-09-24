@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 STALE_MIN = 10
 TW = timezone(timedelta(hours=8))
 REPO = os.environ.get("GITHUB_REPOSITORY", "xd1104/trade-log")
-SUB_CLAIM = "https://xd1104.github.io/trade-log/"
+SUB_CLAIM = "https://xd1104.github.io"          # ⚠️ 只能是網域、不能帶路徑（py_vapid 會當成沒填）
 
 
 def gh(path):
@@ -66,7 +66,7 @@ def subs():
 
 
 def send(msg):
-    from pywebpush import webpush, WebPushException
+    from pywebpush import webpush
     key = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
     if not key:
         print("⛔ 沒有 VAPID_PRIVATE_KEY（Actions secret 還沒設）⇒ 送不出去")
@@ -78,7 +78,7 @@ def send(msg):
                     data=json.dumps(msg, ensure_ascii=False), vapid_private_key=key,
                     vapid_claims={"sub": SUB_CLAIM}, ttl=3600)
             ok += 1
-        except WebPushException as e:
+        except Exception as e:          # ⛔ 一支手機送不出去不可以讓整個看門狗掛掉（WebPushException 也在這裡）
             print("送不出去（%s…）：%s" % (s["endpoint"][:40], str(e)[:160]))
     print("通知「%s」送出 %d／%d 支手機" % (msg["title"], ok, len(subs())))
     return ok
