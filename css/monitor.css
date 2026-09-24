@@ -1,0 +1,62 @@
+/* 早盤儀表板・手機監控（2026-09-24）。色票沿用原本交易日誌：紅＝賺、綠＝賠（台股慣例）；金色＝注意。 */
+:root{
+  --bg:#0F1218; --surface:#171C25; --surface-2:#1F2530; --line:#262D39;
+  --text:#E7E9ED; --dim:#8B92A0; --faint:#5A616E;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14);
+  --win:#EE5A54; --loss:#34B37E;
+  --radius:16px;
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#F3F5F8; --surface:#FFFFFF; --surface-2:#EEF1F5; --line:#E1E5EB;
+    --text:#191D25; --dim:#5B636F; --faint:#98A0AD;
+    --gold:#B77A22; --gold-soft:rgba(183,122,34,.12);
+    --win:#D6352E; --loss:#158060;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); -webkit-font-smoothing:antialiased; line-height:1.5}
+.app{max-width:480px; margin:0 auto; padding:0 16px calc(40px + var(--safe-b)); min-height:100vh}
+.top{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:calc(16px + var(--safe-t)) 2px 14px}
+.brand{display:flex; align-items:center; gap:10px}
+.brand .mark{width:36px; height:36px; border-radius:10px; display:grid; place-items:center; background:var(--gold-soft); font-size:18px}
+.brand h1{font-size:17px; margin:0; font-weight:650; letter-spacing:.3px}
+.brand .sub{font-size:12px; color:var(--dim)}
+.upd{font-size:12px; color:var(--dim); text-align:right; font-variant-numeric:tabular-nums}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin:0 0 12px}
+.card h2{font-size:14px; margin:0 0 8px; color:var(--dim); font-weight:600; letter-spacing:.3px}
+.dim{color:var(--dim)} .faint{color:var(--faint)} .center{text-align:center; padding:40px 0}
+.num{font-family:var(--font-mono); font-variant-numeric:tabular-nums}
+.win{color:var(--win)} .loss{color:var(--loss)} .gold{color:var(--gold)}
+.row{display:flex; justify-content:space-between; gap:10px; padding:5px 0; font-size:14px}
+.row + .row{border-top:1px solid var(--line)}
+.row .k{color:var(--dim); flex:none}
+.row .v{text-align:right}
+.pill{display:inline-block; font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--dim)}
+.pill.on{border-color:var(--gold); color:var(--gold); background:var(--gold-soft)}
+.alive{display:flex; align-items:center; gap:14px}
+.alive .dot{width:16px; height:16px; border-radius:50%; flex:none; background:var(--faint)}
+.alive.ok .dot{background:var(--dim)}
+.alive.slow .dot{background:var(--gold)}
+.alive.dead{border-color:var(--gold); background:var(--gold-soft)}
+.alive.dead .dot{background:var(--gold); box-shadow:0 0 0 4px var(--gold-soft)}
+.alive .t{font-size:17px; font-weight:650}
+.alive .s{font-size:13px; color:var(--dim)}
+.big{font-size:28px; font-weight:700; margin:2px 0 6px}
+.msg{font-size:13px; color:var(--dim); padding:4px 0}
+.msg + .msg{border-top:1px dashed var(--line)}
+.hist{margin-top:8px; font-size:13px}
+.hist .row{font-size:13px}
+.warn{border-color:var(--gold)}
+.warn .item{font-size:13px; padding:4px 0}
+.err{color:var(--gold); font-size:13px; margin-top:8px}
+.lock input[type=password]{width:100%; font-size:16px; padding:12px 14px; border-radius:12px; border:1px solid var(--line); background:var(--surface-2); color:var(--text)}
+.lock .rem{display:flex; align-items:center; gap:8px; font-size:14px; color:var(--dim); margin:12px 0}
+.lock button{width:100%; font-size:16px; padding:12px; border-radius:12px; border:0; background:var(--gold); color:#1a1307; font-weight:650}
+.lock button:disabled{opacity:.6}
+.foot{text-align:center; font-size:12px; margin-top:18px}
+.link{background:none; border:0; color:var(--faint); font-size:12px; text-decoration:underline; margin-top:8px; padding:8px}

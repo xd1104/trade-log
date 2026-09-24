@@ -10886,6 +10886,13 @@ def main():
             health.configure(real_fn=_health_real)
     except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
         print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])
+    # 【手機監控】（2026-09-24）每 2 分鐘把加密快照推到 GitHub 的 monitor 分支。⛔ 唯讀、自己的執行緒、
+    #   只讀面板自己的端點；⛔ 沒有金鑰檔就不啟動；⛔ 起不來只印警告（絕不擋住送單與停損那條路）。
+    try:
+        import monitor_push
+        monitor_push.start(PORT)
+    except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
+        print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     last_retry = 0.0

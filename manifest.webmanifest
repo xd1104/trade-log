@@ -1,7 +1,7 @@
 {
-  "name": "微台指交易日誌",
-  "short_name": "交易日誌",
-  "description": "微台指模擬交易的每日進出場、勝率與心得紀錄",
+  "name": "早盤儀表板監控",
+  "short_name": "儀表板監控",
+  "description": "用手機看早盤儀表板還活著沒、有沒有自動下單（只看不動）",
   "lang": "zh-Hant",
   "start_url": "./",
   "scope": "./",

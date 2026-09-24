@@ -1698,6 +1698,16 @@ AUTH_PATCH = [
      '        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session)\n',
      '        night_fire.configure(quote_fn=_nf_quote, session_fn=market_session,\n'
      '                             minute_close_fn=_nf_minute_close)\n'),
+    # ⭐ 2026-09-24 **有授權的例外**（Benson 交辦：晚上用手機遠端監控）：main() 多一段起【手機監控】
+    #   的執行緒（⛔ 唯讀、只讀面板自己的端點、⛔ 包 try ⇒ 起不來只印警告）。
+    ("【手機監控】main() 起一條唯讀的推送執行緒（包 try）",
+     '        print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])\n',
+     '        print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])\n'
+     '    try:\n'
+     '        import monitor_push\n'
+     '        monitor_push.start(PORT)\n'
+     '    except Exception as e:\n'
+     '        print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")

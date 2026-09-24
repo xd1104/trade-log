@@ -77,3 +77,7 @@ tools/shioaji/usml_ctx.json.*
 # ⛔⛔ 【夜盤自動下單】開關與帳本（2026-09-22）：開關只有 Benson 能建；帳本含真實價格
 tools/shioaji/NIGHT_ORDERS_ON*
 tools/shioaji/nightfire/
+
+# 手機監控：從密碼算出來的鑰匙（⛔ 絕不進版控；repo 是公開的）
+tools/shioaji/MONITOR_KEY.json
+tools/shioaji/MONITOR_KEY.json.tmp
