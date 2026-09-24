@@ -60,3 +60,6 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); -web
 .lock button:disabled{opacity:.6}
 .foot{text-align:center; font-size:12px; margin-top:18px}
 .link{background:none; border:0; color:var(--faint); font-size:12px; text-decoration:underline; margin-top:8px; padding:8px}
+/* 2026-09-24 本月風控的進度條（金色＝注意；⛔ 不用紅綠，紅綠只給損益） */
+.bar{height:5px; border-radius:3px; background:var(--surface-2); margin:8px 0 4px; overflow:hidden}
+.bar i{display:block; height:100%; border-radius:3px; background:var(--gold)}

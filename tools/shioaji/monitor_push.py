@@ -147,10 +147,10 @@ def snapshot(port):
         snap["day"] = dict(_pick(f, ("armed", "method", "live", "flag_exists", "arm_msg", "err", "err_n",
                                      "entries_today", "eod_at", "signal_at", "today", "eod_expiry")),
                            method_name=names.get(f.get("method")),
-                           # ⭐ 2026-09-24 風控規則 B：本月自動單損益／上限
-                           risk=_pick(f.get("risk") or {}, ("month", "pnl", "cap", "hit", "override",
-                                                            "blocked", "msg", "err")),
                            days=[_day(x, (f.get("real") or {}).get(x.get("date"))) for x in (f.get("days") or [])[:5]])
+        # ⭐ 2026-09-24 風控規則 B：**日盤＋夜盤共用**的本月額度 ⇒ 自己一塊（⛔ 不塞在 day 裡）
+        snap["risk"] = _pick(f.get("risk") or {}, ("month", "since", "pnl", "cap", "hit", "override",
+                                                   "blocked", "msg", "err"))
     except Exception as e:
         snap["errs"].append("日盤自動下單讀不到：%s" % str(e)[:120])
     try:

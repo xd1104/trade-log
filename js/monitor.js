@@ -118,15 +118,27 @@
       $('pos').innerHTML = '<h2>現在的部位</h2><div class="big dim" style="font-size:20px">沒有部位</div>';
     }
 
+    // ⭐ 2026-09-24 風控規則 B：日盤＋夜盤**共用**的本月額度 ⇒ 自己一張卡（⛔ 不放在日盤或夜盤裡）
+    var rk0 = s.risk || {};
+    $('risk').hidden = !(rk0.cap || rk0.err);
+    if (rk0.err) {
+      $('risk').innerHTML = '<h2>本月風控（日盤＋夜盤共用）</h2><div class="err">⚠️ 算不出本月損益：' + esc(rk0.err) + '（算不出來時不送單）</div>';
+    } else if (rk0.cap) {
+      var used = rk0.pnl < 0 ? Math.min(100, Math.round(-rk0.pnl * 100 / rk0.cap)) : 0;
+      $('risk').innerHTML = '<h2>本月風控（日盤＋夜盤共用）' + (rk0.blocked ? ' <span class="pill on">已停單</span>' : (rk0.override ? ' <span class="pill on">已手動解除</span>' : '')) + '</h2>' +
+        row('本月自動單', '<span class="num ' + (rk0.hit ? 'gold' : cls(rk0.pnl)) + '">' + pm(rk0.pnl) + ' 點</span>') +
+        row('上限', '<span class="num">−' + Math.round(rk0.cap).toLocaleString() + ' 點</span>') +
+        '<div class="bar"><i style="width:' + used + '%"></i></div>' +
+        '<div class="msg">' + (rk0.blocked ? '到了上限：這個月日盤、夜盤都不送，下個月自動恢復。' :
+          (rk0.override ? '超過上限，但你已經手動解除，這個月照常送。' : '虧到上限 ⇒ 這個月日盤、夜盤都停，下個月自動恢復。')) +
+          (rk0.since ? '（' + esc(String(rk0.since).slice(5)) + ' 起算）' : '') + '</div>';
+    }
+
     // 日盤
     var d = s.day;
     if (d) {
       var h = '<h2>日盤自動下單 <span class="pill ' + (d.armed ? 'on' : '') + '">' + esc(modeTxt(d.armed, d.live)) + '</span></h2>' +
         row('做法', esc(d.method_name || d.method || '—')) + row('今天', esc(d.today || ''));
-      // ⭐ 2026-09-24 風控規則 B：本月自動單（日盤＋夜盤）損益／上限
-      var rk0 = d.risk || {};
-      if (rk0.cap) h += row('本月風控', '<span class="num' + (rk0.hit ? ' gold' : '') + '">' + pm(rk0.pnl) + ' / −' + Math.round(rk0.cap).toLocaleString() + ' 點</span>' +
-        (rk0.blocked ? '<span class="gold">　已停</span>' : (rk0.override ? '<span class="gold">　已手動解除</span>' : '')));
       var today = (d.days || [])[0];
       if (today && today.date === d.today) {
         if (today.trade) {
@@ -180,7 +192,7 @@
     // 警示
     var pn = s.panel || {}, w = errs.slice();
     // ⭐ 2026-09-24 風控規則 B 與保證金提醒：到了就放進「要注意的事」
-    var rk = (s.day || {}).risk || {};
+    var rk = s.risk || {};
     if (rk.blocked) w.push(rk.msg || '本月自動單到了風控上限，這個月不送');
     if (rk.err) w.push('風控算不出本月損益：' + rk.err);
     if (e.cushion && e.cushion.warn) w.push(e.cushion.msg);

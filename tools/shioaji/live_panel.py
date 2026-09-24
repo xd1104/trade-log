@@ -8191,7 +8191,7 @@ function alCapHTML(R){
  const cap=Number(R.cap||0), pnl=Number(R.pnl||0), used=Number(R.used_pct||0);
  const fmt=v=>(v>0?'+':(v<0?'−':''))+Math.abs(Math.round(v)).toLocaleString();
  let h='<div class="cap'+(R.hit?' hit':'')+'">'+
-   '<div class="hd"><span class="k">本月風控・自動單真單（'+esc(String(R.month||''))+
+   '<div class="hd"><span class="k">本月風控・日盤＋夜盤共用（'+esc(String(R.month||''))+
      (R.since?'，'+esc(String(R.since).slice(5))+' 起算':'')+'）</span>'+
    '<span class="v">'+fmt(pnl)+' 點　/　上限 −'+Math.round(cap).toLocaleString()+'</span></div>'+
    '<div class="bar"><i style="width:'+Math.max(0,Math.min(100,used))+'%"></i></div>';
