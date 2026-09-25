@@ -6686,6 +6686,8 @@ function acctHTML(s){
    '<div class="line'+(en.ok===false?' warn':'')+'">'+esc(en.msg||'')+'</div>'+
    /* ⭐ 2026-09-24：還撐得住幾次停損（⛔ 整句後端算） */
    ((E.cushion&&E.cushion.msg)?'<div class="line'+(E.cushion.warn?' warn':'')+'">'+esc(E.cushion.msg)+'</div>':'')+
+   /* ⭐ 2026-09-26 券商每日流量（整句後端算） */
+   ((E.usage&&E.usage.msg)?'<div class="line">'+esc(E.usage.msg)+'</div>':'')+
    (mo?('<div class="line">本月 '+acctPM(mo.net)+
         '（從 '+esc(mo.from)+' 起記'+(mo.deposit?'，已扣掉出入金 '+acctMoney(mo.deposit):'')+
         '）</div>'):'')+
@@ -10577,8 +10579,51 @@ def equity_view(now=None):
             "risk": m.get("risk_indicator"), "margin_call": m.get("margin_call"),
             "deposit": m.get("deposit_withdrawal"),
             "enough": enough, "cushion": equity_cushion(m.get("equity_amount"), lot1),
+            "usage": usage_view(),
             "month": _equity_month(rows, m, now),
             "hist_n": len(rows)}
+
+
+USAGE_DIR = HERE / "usage"             # ⛔ gitignore
+USAGE_EVERY = 600.0
+USAGE = {"at_ts": 0.0, "bytes": None, "limit": None, "conn": None, "at": None, "err": None}
+
+
+def _usage_poll(now):
+    """
+    ⭐ 2026-09-26（Benson：要開始自己收集資料，**先確認券商流量上限**）。
+    `api.usage()` ⇒ 今天用了多少、上限多少。⚠️ **唯讀**、10 分鐘一次、在 poll_equity 那條執行緒裡
+    （已經避開送單那幾刻）。每次落地一列到 `usage/YYYY-MM.jsonl`，量一兩天就知道「現在的訂閱一天吃多少」，
+    才決定能不能多錄五檔／現貨／其他期貨。
+    """
+    if time.time() - USAGE["at_ts"] < USAGE_EVERY:
+        return
+    USAGE["at_ts"] = time.time()
+    api = SESSION_REF.get("api")
+    if api is None:
+        return
+    try:
+        u = api.usage(timeout=5000)
+        b = float(getattr(u, "bytes", 0) or 0)
+        lim = float(getattr(u, "limit_bytes", 0) or 0)
+        conn = getattr(u, "connections", None)
+        USAGE.update(bytes=b, limit=lim, conn=conn, at=now.strftime("%H:%M"), err=None)
+        USAGE_DIR.mkdir(parents=True, exist_ok=True)
+        with (USAGE_DIR / (now.strftime("%Y-%m") + ".jsonl")).open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": now.isoformat(timespec="seconds"), "bytes": b, "limit": lim,
+                                "conn": conn}, ensure_ascii=False) + "\n")
+    except Exception as e:
+        USAGE["err"] = "問不到流量：%s" % str(e)[:100]
+
+
+def usage_view():
+    if USAGE.get("bytes") is None:
+        return {"ok": False, "msg": USAGE.get("err") or "還沒問到券商流量（10 分鐘問一次）"}
+    b, lim = USAGE["bytes"], USAGE["limit"] or 0
+    return {"ok": True, "mb": round(b / 1e6, 1), "limit_mb": round(lim / 1e6), "at": USAGE["at"],
+            "pct": round(b / lim * 100, 1) if lim else None,
+            "msg": "券商流量：今天 %.0f MB／上限 %s MB（%s 更新）" % (
+                b / 1e6, format(int(round(lim / 1e6)), ",") if lim else "?", USAGE["at"])}
 
 
 def equity_cushion(eq, lot1, px=None, day_on=None, night_on=None):
@@ -10639,6 +10684,11 @@ def poll_equity():
                                    "at": now.strftime("%H:%M:%S")})
                     _equity_lot1(m)
                     _equity_write_day(m, now)
+                # ⭐ 2026-09-26 券商每日流量（加錄資料之前先量基準）。⛔ 唯讀；自己 10 分鐘一次；壞了不影響帳戶查詢
+                try:
+                    _usage_poll(now)
+                except Exception:
+                    pass
                 else:
                     # ⛔ 問不到就把數字清掉：畫面寧可寫「問不到」，
                     #    ⛔ 也不可以繼續顯示一個看起來是現在、其實是十分鐘前的金額。
