@@ -59,6 +59,7 @@ import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_
 import night_fire        # 夜盤自動下單（台積電快攻）。預設**關著**（沒有 NIGHT_ORDERS_ON 就完全不送；跟日盤開關分開）
 import risk_cap          # 風控規則 B（2026-09-24）：本月自動單虧到上限就不送。⛔ 唯讀模組
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
+import depth_writer      # 研究用全天五檔落地（同一條鐵律：on_bidask 只 append）
 # 【健檢】那一頁（唯讀）。⛔ 不 import broker、不碰任何下單路徑、一個位元組都不寫。
 # ⛔⛔ 一定要包 try（跟 strategy_lab 同一條理由）：它是「看的東西」，載入失敗
 #    絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
@@ -147,6 +148,99 @@ NIGHT_TAIL = pd.Timestamp("05:01").time()
 TICK_DIR = HERE / "tick_logs"
 TICKS = tick_writer.TickWriter(TICK_DIR,
                                win_start=SESSION_OPEN, win_end=WATCH_END)
+
+# ⭐ 2026-09-26 研究用：**全天**五檔（微台＋大台近月＋選擇權價平上下 5 檔）落地到 depth_logs/。
+#    券商不給過去的五檔，錯過就補不回來。⛔ 同一條鐵律：on_bidask 只 append（depth_writer.push）。
+#    ⛔⛔ 大台／選擇權的報價**絕對不可以**進 Today（停損看的價）—— on_bidask 用代碼開頭擋（見 _is_main_code）。
+DEPTH_DIR = HERE / "depth_logs"        # ⛔ gitignore；備份只帶壓好的 .gz
+DEPTH = depth_writer.DepthWriter(DEPTH_DIR)
+DEPTH_OPT_STRIKES = 10                 # 價平附近幾個履約價（× 買權／賣權 ＝ 20 個合約）
+DEPTH_MAX_PCT = 70.0                   # 券商流量超過這個 % ⇒ 當天退訂大台與選擇權（微台照舊，下單不受影響）
+DEPTH_SUBS = {"contracts": [], "codes": [], "paused_day": None, "err": None, "at": None}
+
+
+def _is_main_code(code):
+    """這筆報價是不是真單那個商品（微台）的？代碼讀不到 ⇒ 當成是（跟加這段之前一模一樣）。"""
+    return not code or str(code).startswith(PRODUCT)
+
+
+def depth_subscribe(api, main_contract, today=None, px=None):
+    """
+    訂大台近月＋選擇權近月價平上下 5 檔的五檔（只訂 BidAsk，不訂成交 —— 成交事後抓得到）。
+    ⛔ 任何錯只記下來、不往外丟：connect() 不可以因為研究用的東西失敗。
+    """
+    today = today or date.today()
+    if DEPTH_SUBS["paused_day"] == str(today):
+        return []
+    import shioaji as sj
+    subs, exp = [], None
+    try:
+        txf = [c for c in api.Contracts.Futures.TXF
+               if not c.code.startswith("TXFR") and getattr(c, "delivery_month", "")]
+        txf.sort(key=lambda c: c.delivery_month)
+        same = [c for c in txf if c.delivery_month == getattr(main_contract, "delivery_month", None)]
+        fut = (same or txf)[0]
+        subs.append(fut)
+        if px is None:
+            try:
+                px = float(api.snapshots([fut])[0].close)
+            except Exception:
+                px = None
+        if px:
+            opts = [c for c in api.Contracts.Options.TXO if getattr(c, "delivery_date", None)
+                    and c.delivery_date > today]
+            if opts:
+                exp = min(c.delivery_date for c in opts)
+                near = [c for c in opts if c.delivery_date == exp]
+                ks = sorted(set(c.strike_price for c in near), key=lambda k: (abs(k - px), k))[:DEPTH_OPT_STRIKES]
+                subs += sorted([c for c in near if c.strike_price in ks],
+                               key=lambda c: (c.strike_price, str(c.option_right)))
+        DEPTH_SUBS.update(contracts=subs, codes=[c.code for c in subs])
+        for c in subs:
+            api.quote.subscribe(c, quote_type=sj.constant.QuoteType.BidAsk,
+                                version=sj.constant.QuoteVersion.v1)
+        DEPTH_SUBS.update(err=None, at=datetime.now().strftime("%m-%d %H:%M"))
+        print("【五檔錄製】已訂 %s＋選擇權 %d 個（價平 %s 附近，%s 到期）" % (
+            fut.code, len(subs) - 1, int(px) if px else "?", exp or "—"), flush=True)
+    except Exception as e:
+        DEPTH_SUBS["err"] = "訂閱失敗：%s" % str(e)[:120]
+        print("⚠️ 【五檔錄製】" + DEPTH_SUBS["err"] + "（真單與停損不受影響）", flush=True)
+    return subs
+
+
+def depth_pause(api, why):
+    """流量太高 ⇒ 今天退訂大台與選擇權。微台是真單合約，⛔ 不碰。"""
+    import shioaji as sj
+    DEPTH_SUBS["paused_day"] = str(date.today())
+    for c in DEPTH_SUBS["contracts"]:
+        try:
+            api.quote.unsubscribe(c, quote_type=sj.constant.QuoteType.BidAsk,
+                                  version=sj.constant.QuoteVersion.v1)
+        except Exception:
+            pass
+    DEPTH_SUBS.update(contracts=[], codes=[])
+    print("⚠️ 【五檔錄製】%s ⇒ 今天先停錄大台與選擇權（微台照錄、下單不受影響）" % why, flush=True)
+
+
+def depth_view():
+    s = DEPTH.stats()
+    bc = s.get("by_code") or {}
+    n_tmf = sum(v for k, v in bc.items() if str(k).startswith(PRODUCT))
+    n_txf = sum(v for k, v in bc.items() if str(k).startswith("TXF"))
+    n_opt = sum(v for k, v in bc.items() if str(k).startswith("TXO"))
+    lost = s["dropped"] + s["lost_io"]
+    if DEPTH_SUBS["paused_day"] == str(date.today()):
+        head, warn = "五檔錄製：流量偏高，今天只錄微台", True
+    elif DEPTH_SUBS["err"]:
+        head, warn = "五檔錄製：" + DEPTH_SUBS["err"], True
+    else:
+        head, warn = "五檔錄製：訂了 %d 個合約" % (len(DEPTH_SUBS["codes"]) + 1), False
+    msg = "%s（%s 已錄 大台 %s／微台 %s／選擇權 %s 筆）" % (
+        head, (s.get("day") or "今天")[5:], format(n_txf, ","), format(n_tmf, ","), format(n_opt, ","))
+    if lost:
+        msg += "　⚠️ 掉了 %s 筆" % format(lost, ",")
+        warn = True
+    return {"warn": warn, "msg": msg, "n": s["written"], "lost": lost}
 
 
 def market_session(now=None):
@@ -6688,6 +6782,8 @@ function acctHTML(s){
    ((E.cushion&&E.cushion.msg)?'<div class="line'+(E.cushion.warn?' warn':'')+'">'+esc(E.cushion.msg)+'</div>':'')+
    /* ⭐ 2026-09-26 券商每日流量（整句後端算） */
    ((E.usage&&E.usage.msg)?'<div class="line">'+esc(E.usage.msg)+'</div>':'')+
+   /* ⭐ 2026-09-26 研究用五檔全天錄製（整句後端算） */
+   ((E.depth&&E.depth.msg)?'<div class="line'+(E.depth.warn?' warn':'')+'">'+esc(E.depth.msg)+'</div>':'')+
    /* ⭐ 2026-09-26 資料備份（整句後端算；失敗或超過 2 天才用警示色） */
    ((E.backup&&E.backup.msg)?'<div class="line'+(E.backup.warn?' warn':'')+'">'+esc(E.backup.msg)+'</div>':'')+
    (mo?('<div class="line">本月 '+acctPM(mo.net)+
@@ -10581,7 +10677,7 @@ def equity_view(now=None):
             "risk": m.get("risk_indicator"), "margin_call": m.get("margin_call"),
             "deposit": m.get("deposit_withdrawal"),
             "enough": enough, "cushion": equity_cushion(m.get("equity_amount"), lot1),
-            "usage": usage_view(), "backup": backup_view(now),
+            "usage": usage_view(), "depth": depth_view(), "backup": backup_view(now),
             "month": _equity_month(rows, m, now),
             "hist_n": len(rows)}
 
@@ -10614,6 +10710,9 @@ def _usage_poll(now):
         with (USAGE_DIR / (now.strftime("%Y-%m") + ".jsonl")).open("a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": now.isoformat(timespec="seconds"), "bytes": b, "limit": lim,
                                 "conn": conn}, ensure_ascii=False) + "\n")
+        # ⭐ 研究用五檔吃太多流量 ⇒ 今天先退訂大台與選擇權（微台是真單合約，不碰）
+        if lim and b / lim * 100 > DEPTH_MAX_PCT and DEPTH_SUBS["contracts"]:
+            depth_pause(api, "券商流量已用 %.0f%%" % (b / lim * 100))
     except Exception as e:
         USAGE["err"] = "問不到流量：%s" % str(e)[:100]
 
@@ -11203,6 +11302,9 @@ def main():
     #     塞住的時候塞住的是他的停損。TICKS.tick()／TICKS.bidask() 只 append 進
     #     記憶體佇列（實測單筆 < 0.15ms，400 筆合計 0.7ms），寫檔在另一條執行緒。
     def on_tick(exchange: Exchange, tick: TickFOPv1):
+        # ⛔ 只收真單那個商品的成交（研究用只訂五檔、不訂別的成交；這一行是多一道保險）
+        if not _is_main_code(getattr(tick, "code", None)):
+            return
         ts = tick.datetime
         price, vol = float(tick.close), int(tick.volume)
         st = session["state"]
@@ -11213,6 +11315,10 @@ def main():
         TICKS.tick(ts, price, vol)      # 只 append，不碰磁碟
 
     def on_bidask(exchange: Exchange, ba: BidAskFOPv1):
+        DEPTH.push(ba)                  # 研究用全天五檔：只 append、自己吞錯
+        # ⛔⛔ 大台／選擇權的五檔到這裡就停 —— 絕對不可以進 Today（停損看的價、報價新不新鮮）
+        if not _is_main_code(getattr(ba, "code", None)):
+            return
         try:
             # 原本就有的防線：五檔偶爾是空的／型別對不上，吞掉不要把 SDK 的執行緒打死
             bid, ask = float(ba.bid_price[0]), float(ba.ask_price[0])
@@ -11285,6 +11391,8 @@ def main():
                      "contract_name": getattr(contract, "name", "")})
         print(f"訂閱合約：{contract.code} {getattr(contract,'name','')}"
               f"（交割月 {contract.delivery_month}）")
+        # ⭐ 研究用五檔（大台＋選擇權）。排在真單合約訂好、狀態都設好之後；⛔ 它自己吞錯，不會讓連線失敗
+        depth_subscribe(api, contract)
         return api, contract
 
     def try_reconnect(reason):
@@ -11357,6 +11465,7 @@ def main():
     # 逐筆落地的寫檔執行緒要在 connect() 之前起來 —— start_day() 裡面就會訂閱報價了。
     # （就算晚起也不會掉資料，佇列會先接著；但沒必要讓它先積一段。）
     TICKS.start()
+    DEPTH.start()
 
     # 【程式下單】的寫檔執行緒。⛔ 主迴圈只 put，一行 I/O 都不做（見 _auto_tick）。
     #    ⚠️ AUTO["started"] 要在這裡才打開：--replay 與測試治具不會走到這裡，

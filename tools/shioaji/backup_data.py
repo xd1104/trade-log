@@ -161,6 +161,10 @@ def collect():
             n += mirror_tree(p, DEST / "panel" / item, PANEL_SKIP_DIRS)
         else:
             n += mirror_file(p, DEST / "panel" / item)
+    # ⭐ 研究用全天五檔：只帶**壓好的 .gz**（寫完的那幾天）；還在寫的 .jsonl 不帶（一天會長很大、隔天就壓好了）
+    dl = HERE / "depth_logs"
+    if dl.exists():
+        n += mirror_tree(dl, DEST / "panel" / "depth_logs", PANEL_SKIP_DIRS, skip_ext={".jsonl", ".tmp"})
     if RESEARCH.exists():
         n += mirror_tree(RESEARCH, DEST / "research", RESEARCH_SKIP_DIRS, RESEARCH_SKIP_EXT)
     return n
