@@ -413,6 +413,7 @@
     if (rk.blocked) w.push(rk.msg || '本月自動單到了風控上限，這個月不送');
     if (rk.err) w.push('風控算不出本月損益：' + rk.err);
     if (e.cushion && e.cushion.warn) w.push(e.cushion.msg);
+    if (e.backup && e.backup.warn) w.push(e.backup.msg);
     if (pn.conn && pn.conn.ok === false) w.push('跟永豐的連線有問題：' + (pn.conn.last_error || ''));
     // ⚠️ 券商的 last_error 沒有時間、而且背景對帳偶發失敗也會寫進來（跟真單無關）⇒ 不當警示，放最底下小字
     // ⭐ 分析師信件：列表跟著快照更新（打開中的全文不重畫，免得他看到一半跳掉）

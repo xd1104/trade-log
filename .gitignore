@@ -90,3 +90,5 @@ tools/shioaji/analyst/
 tools/shioaji/VAPID_PRIVATE.txt
 # 【券商流量】每 10 分鐘的用量紀錄（2026-09-26）
 tools/shioaji/usage/
+# 【資料備份】狀態與執行記錄（2026-09-26）
+tools/shioaji/backup/

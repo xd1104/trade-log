@@ -6688,6 +6688,8 @@ function acctHTML(s){
    ((E.cushion&&E.cushion.msg)?'<div class="line'+(E.cushion.warn?' warn':'')+'">'+esc(E.cushion.msg)+'</div>':'')+
    /* ⭐ 2026-09-26 券商每日流量（整句後端算） */
    ((E.usage&&E.usage.msg)?'<div class="line">'+esc(E.usage.msg)+'</div>':'')+
+   /* ⭐ 2026-09-26 資料備份（整句後端算；失敗或超過 2 天才用警示色） */
+   ((E.backup&&E.backup.msg)?'<div class="line'+(E.backup.warn?' warn':'')+'">'+esc(E.backup.msg)+'</div>':'')+
    (mo?('<div class="line">本月 '+acctPM(mo.net)+
         '（從 '+esc(mo.from)+' 起記'+(mo.deposit?'，已扣掉出入金 '+acctMoney(mo.deposit):'')+
         '）</div>'):'')+
@@ -10579,7 +10581,7 @@ def equity_view(now=None):
             "risk": m.get("risk_indicator"), "margin_call": m.get("margin_call"),
             "deposit": m.get("deposit_withdrawal"),
             "enough": enough, "cushion": equity_cushion(m.get("equity_amount"), lot1),
-            "usage": usage_view(),
+            "usage": usage_view(), "backup": backup_view(now),
             "month": _equity_month(rows, m, now),
             "hist_n": len(rows)}
 
@@ -10614,6 +10616,64 @@ def _usage_poll(now):
                                 "conn": conn}, ensure_ascii=False) + "\n")
     except Exception as e:
         USAGE["err"] = "問不到流量：%s" % str(e)[:100]
+
+
+BACKUP_STATUS = HERE / "backup" / "status.json"      # ⛔ gitignore；backup_data.py 寫、這裡只讀
+BACKUP_FROM = dtime(5, 30)                          # 夜盤 04:58 已平、日盤 08:45 才開 ⇒ 一定沒有部位、網路空著
+BACKUP_UNTIL = dtime(8, 0)
+_BK = {"spawned": None}
+
+
+def _backup_read():
+    try:
+        return json.loads(BACKUP_STATUS.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _backup_tick(now):
+    """
+    ⭐ 2026-09-26（Benson：研究資料與歷史資料要自動備份到私人 repo trade-data）。
+    每天 05:30~08:00 之間，今天還沒跑過 ⇒ **另開** `backup_data.py`（最低優先權、沒有視窗）。
+    ⛔ 面板不等它、不讀它的輸出、不做任何上傳（停損迴圈不可以被拖住）。
+    """
+    if not (BACKUP_FROM <= now.time() < BACKUP_UNTIL):
+        return
+    today = str(now.date())
+    if _BK["spawned"] == today:
+        return
+    st = _backup_read()
+    if str(st.get("started") or "")[:10] == today:
+        _BK["spawned"] = today
+        return
+    _BK["spawned"] = today
+    import subprocess                      # ⛔ 模組最上面沒有 import（sync_to_cloud 也是在函式裡 import）
+    (HERE / "backup").mkdir(exist_ok=True)
+    logf = open(HERE / "backup" / "last-run.log", "w", encoding="utf-8")
+    flags = 0x08000000 | 0x00004000 if os.name == "nt" else 0      # CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+    subprocess.Popen([sys.executable, str(HERE / "backup_data.py")], cwd=str(HERE),
+                     stdout=logf, stderr=subprocess.STDOUT, creationflags=flags,
+                     env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    print("[備份] %s 已另開備份程式（最低優先權）" % now.strftime("%H:%M"), flush=True)
+
+
+def backup_view(now=None):
+    """給【帳戶總覽】與手機監控：最後一次備份的結果。超過 2 天沒成功 ⇒ warn。"""
+    now = now or datetime.now()
+    st = _backup_read()
+    if not st:
+        return {"ok": None, "warn": False, "msg": "資料備份：還沒跑過（每天 05:30 自動跑）"}
+    at = str(st.get("at") or st.get("started") or "")
+    if st.get("running"):
+        return {"ok": None, "warn": False, "msg": "資料備份：正在跑（%s 開始）" % at[5:16].replace("T", " ")}
+    try:
+        age_d = (now - datetime.fromisoformat(at)).total_seconds() / 86400
+    except Exception:
+        age_d = 99
+    if st.get("ok"):
+        return {"ok": True, "warn": age_d > 2, "msg": "資料備份：%s 成功（推上 %s 個檔）%s" % (
+            at[5:16].replace("T", " "), st.get("pushed_files", 0), "　⚠️ 已經超過 2 天沒有新的備份" if age_d > 2 else "")}
+    return {"ok": False, "warn": True, "msg": "⚠️ 資料備份失敗（%s）：%s" % (at[5:16].replace("T", " "), str(st.get("err") or "")[:80])}
 
 
 def usage_view():
@@ -10676,6 +10736,11 @@ def poll_equity():
     while True:
         t0 = time.time()
         now = datetime.now()
+        # ⭐ 2026-09-26 每天 05:30 觸發資料備份（另開行程、最低優先權；⛔ 面板自己不上傳）。壞了不影響任何事
+        try:
+            _backup_tick(now)
+        except Exception:
+            pass
         try:
             if SESSION_REF.get("api") is not None and not _eq_quiet(now):
                 m, err = broker.account_margin()
