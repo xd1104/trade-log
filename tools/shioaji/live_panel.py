@@ -236,7 +236,8 @@ def depth_view():
         head, warn = "五檔錄製：" + DEPTH_SUBS["err"], True
     else:
         head, warn = "五檔錄製：訂了 %d 個合約" % (len(DEPTH_SUBS["codes"]) + 1), False
-    msg = "%s（%s 已錄 大台 %s／微台 %s／選擇權 %s 筆）" % (
+    # ⚠️ 計數只算「面板這次開啟之後」（重啟就歸零；檔案本身是接著寫、不會少）⇒ 句子要講清楚，別讓人以為只錄了幾百筆
+    msg = "%s（%s 這次開啟後已錄 大台 %s／微台 %s／選擇權 %s 筆）" % (
         head, (s.get("day") or "今天")[5:], format(n_txf, ","), format(n_tmf, ","), format(n_opt, ","))
     if lost:
         msg += "　⚠️ 掉了 %s 筆" % format(lost, ",")
