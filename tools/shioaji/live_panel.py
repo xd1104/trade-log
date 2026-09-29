@@ -50,6 +50,7 @@ from datetime import time as dtime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+import urllib.request
 
 import numpy as np
 import pandas as pd
@@ -10512,8 +10513,60 @@ EQUITY_QUIET_S = 10                     # 送單那幾刻前後幾秒不問
 EQUITY_WRITE_AFTER = 14 * 3600          # 每天幾點之後才把當天那一列落地（日盤收完）
 EQUITY_HIST_MAX = 120                   # 曲線最多畫幾天
 EQUITY = {"at": None, "m": None, "err": "還在問券商…（每分鐘更新一次）",
-          "lot1": None, "lot1_at": None}
+          "lot1": None, "lot1_at": None,
+          "tfx": None, "tfx_at": None, "tfx_day": None, "tfx_try": 0.0, "tfx_err": None}
 _EQ_HIST = {"key": None, "rows": []}
+
+# ⭐ 2026-09-29（Benson：「下不下得了一口為甚麼判斷不出來？」）
+#    「從自己帳戶學一口保證金」上線以來**一次都沒學到**（equity/ 每一列 lot1 都是 null）⇒ 畫面永遠「判不出來」。
+#    改成先問**期交所公告的原始保證金**（官方一覽表，一天問一次、⛔ 不寫死數字）；問不到才退回學到的那個。
+TAIFEX_MARGIN_URL = "https://www.taifex.com.tw/cht/5/indexMarging"
+TAIFEX_NAME = {"TMF": "微型臺指期貨", "MXF": "小型臺指期貨", "TXF": "臺股期貨"}
+
+
+def parse_taifex_margin(html, product):
+    """期交所保證金一覽表 ⇒ (原始保證金, 維持保證金, 更新日期字串)；找不到 ⇒ None。⛔ 數字不合理也當找不到。"""
+    import re
+    name = TAIFEX_NAME.get(product)
+    if not name:
+        return None
+    m = re.search(r"<td>\s*%s\s*</td>\s*<td[^>]*>\s*([\d,]+)\s*</td>\s*<td[^>]*>\s*([\d,]+)\s*</td>"
+                  r"\s*<td[^>]*>\s*([\d,]+)\s*</td>" % re.escape(name), html)
+    if not m:
+        return None
+    keep, init = float(m.group(2).replace(",", "")), float(m.group(3).replace(",", ""))
+    if not (1000 <= keep <= init <= 5_000_000):
+        return None
+    d = re.search(r"更新日期：\s*(\d{4}/\d{2}/\d{2})", html)
+    return init, keep, (d.group(1) if d else None)
+
+
+def _taifex_lot1_tick(now):
+    """一天問一次期交所（失敗 1 小時後再試）。⚠️ 在 poll_equity 那條執行緒；⛔ 壞了只記錯、不影響任何事。"""
+    today = str(now.date())
+    if EQUITY["tfx_day"] == today or time.time() - EQUITY["tfx_try"] < 3600:
+        return
+    EQUITY["tfx_try"] = time.time()
+    try:
+        req = urllib.request.Request(TAIFEX_MARGIN_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            html = r.read().decode("utf-8", "replace")
+        got = parse_taifex_margin(html, PRODUCT)
+        if not got:
+            EQUITY["tfx_err"] = "期交所的表格看不懂（找不到%s）" % TAIFEX_NAME.get(PRODUCT, PRODUCT)
+            return
+        EQUITY.update(tfx=got[0], tfx_keep=got[1], tfx_at=got[2], tfx_day=today, tfx_err=None)
+    except Exception as e:
+        EQUITY["tfx_err"] = "問不到期交所：%s" % str(e)[:80]
+
+
+def _lot1():
+    """一口要多少原始保證金 ⇒ (金額, 從哪來的一句話)；都不知道 ⇒ (None, None)。期交所公告優先。"""
+    if EQUITY.get("tfx"):
+        return EQUITY["tfx"], "期交所公告" + ("（%s 起）" % EQUITY["tfx_at"][5:] if EQUITY.get("tfx_at") else "")
+    if EQUITY.get("lot1"):
+        return EQUITY["lot1"], "從帳戶學到（%s）" % (EQUITY.get("lot1_at") or "?")
+    return None, None
 
 
 def _eq_quiet(now):
@@ -10577,7 +10630,7 @@ def _equity_write_day(m, now):
            "settle_pl": m.get("future_settle_profitloss"),
            "float_pl": m.get("future_open_position"),
            "fee": m.get("fee"), "tax": m.get("tax"),
-           "lot1": EQUITY.get("lot1")}
+           "lot1": EQUITY.get("lot1"), "lot1_tfx": EQUITY.get("tfx")}
     try:
         EQUITY_DIR.mkdir(parents=True, exist_ok=True)
         with (EQUITY_DIR / (today[:4] + ".jsonl")).open("a", encoding="utf-8") as f:
@@ -10649,20 +10702,21 @@ def equity_view(now=None):
     if not m:
         return {"ok": False, "err": err or "還沒問到帳戶餘額", "at": EQUITY.get("at")}
     rows = equity_hist_read()
-    lot1, avail = EQUITY.get("lot1"), m.get("available_margin")
-    # 「錢夠不夠明天那一口」⛔ 學不到一口要多少 ⇒ 照實說不知道（⛔ 不猜一個數字）
+    lot1, lot1_src = _lot1()
+    avail = m.get("available_margin")
+    # 「錢夠不夠下一口」⛔ 不知道一口要多少 ⇒ 照實說不知道（⛔ 不猜一個數字）
     if not isinstance(avail, (int, float)):
         enough = {"ok": None, "why": "no_avail", "msg": "券商沒給可動用保證金 —— 判不出夠不夠"}
     elif not lot1:
         enough = {"ok": None, "why": "no_lot1",
-                  "msg": "還不知道一口要壓多少保證金（等下一次有部位時就學起來）"}
+                  "msg": "還不知道一口要壓多少保證金（%s）" % (EQUITY.get("tfx_err") or "還在問期交所")}
     else:
         ok = avail >= lot1
         enough = {"ok": ok, "why": None, "need": lot1, "avail": float(avail),
-                  "since": EQUITY.get("lot1_at"),
-                  "msg": ("可動用 %s／一口約 %s —— %s"
-                          % (format(int(round(avail)), ","), format(int(round(lot1)), ","),
-                             "夠下一口" if ok else "⚠️ 不夠，明天那一口會送失敗"))}
+                  "since": EQUITY.get("tfx_at") or EQUITY.get("lot1_at"), "src": lot1_src,
+                  "msg": ("可動用 %s／一口要 %s（%s）—— %s"
+                          % (format(int(round(avail)), ","), format(int(round(lot1)), ","), lot1_src,
+                             "夠下一口" if ok else "⚠️ 不夠，下一口會被券商退單"))}
     fee = float(m.get("fee") or 0) + float(m.get("tax") or 0)
     pl = None
     if isinstance(m.get("future_open_position"), (int, float)) \
@@ -10838,6 +10892,12 @@ def poll_equity():
         # ⭐ 2026-09-26 每天 05:30 觸發資料備份（另開行程、最低優先權；⛔ 面板自己不上傳）。壞了不影響任何事
         try:
             _backup_tick(now)
+        except Exception:
+            pass
+        # ⭐ 2026-09-29 期交所公告的一口原始保證金（一天一次；壞了只記錯）
+        try:
+            if not _eq_quiet(now):
+                _taifex_lot1_tick(now)
         except Exception:
             pass
         try:

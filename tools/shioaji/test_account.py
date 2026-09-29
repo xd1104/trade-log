@@ -120,7 +120,8 @@ def wire(api):
 
 
 def reset_eq():
-    LP.EQUITY.update({"at": None, "m": None, "err": "還在問", "lot1": None, "lot1_at": None})
+    LP.EQUITY.update({"at": None, "m": None, "err": "還在問", "lot1": None, "lot1_at": None,
+                      "tfx": None, "tfx_at": None, "tfx_day": None, "tfx_err": None})
     LP._EQ_HIST["key"] = None
 
 
@@ -305,6 +306,30 @@ _ifm = [n for n in _ast.walk(_pe) if isinstance(n, _ast.If) and isinstance(n.tes
 say(len(_ifm) == 1 and _clears(_ifm[0].orelse), "  「問不到才清掉」掛在 `if m:` 的 else 底下")
 _bad = [n for n in _ast.walk(_pe) if isinstance(n, _ast.Try) and _clears(n.orelse)]
 say(not _bad, "  ⛔ 沒有任何 try 的 else 會把餘額清掉（成功也清＝畫面永遠問不到）")
+
+print("\n=== ⑬ 一口保證金先看期交所公告（2026-09-29：從帳戶學一次都沒學到過）===")
+_html = ('<tr><td>小型臺指期貨</td><td align="center">103,800</td><td align="center">107,600</td>'
+         '<td align="center">140,200</td></tr><tr>\n\t<td>微型臺指期貨</td>\n<td align="center">25,950</td>'
+         '<td align="center">26,900</td>\n<td align="center">35,050</td></tr>'
+         '<span class="red">更新日期：2026/08/12</span>')
+chk("  讀得出微台：原始／維持／日期", LP.parse_taifex_margin(_html, "TMF"), (35050.0, 26900.0, "2026/08/12"))
+chk("  ⛔ 不會讀到小台那一列", LP.parse_taifex_margin(_html, "MXF")[0], 140200.0)
+chk("  表格改版讀不到 ⇒ None（⛔ 不猜）", LP.parse_taifex_margin("<td>別的</td>", "TMF"), None)
+chk("  數字不合理（維持 > 原始）⇒ None", LP.parse_taifex_margin(
+    '<td>微型臺指期貨</td><td>1</td><td>50,000</td><td>35,050</td>', "TMF"), None)
+reset_eq()
+LP.EQUITY.update({"lot1": 13000.0, "lot1_at": "2026-09-01", "tfx": 35050.0, "tfx_at": "2026/08/12"})
+chk("  期交所有 ⇒ 用期交所的", LP._lot1()[0], 35050.0)
+LP.EQUITY["tfx"] = None
+chk("  期交所沒有 ⇒ 退回學到的", LP._lot1()[0], 13000.0)
+LP.EQUITY.update({"tfx": 35050.0, "m": dict(FakeMargin(available_margin=37560.0).__dict__), "err": None})
+LP.EQUITY["m"].pop("status", None)
+v = LP.equity_view(datetime(2026, 9, 29, 11, 0))
+say(v["enough"]["ok"] is True and "期交所公告" in v["enough"]["msg"], "  37,560 ≥ 35,050 ⇒ 夠，而且講得出數字從哪來",
+    v["enough"]["msg"])
+LP.EQUITY["m"]["available_margin"] = 34000.0
+v = LP.equity_view(datetime(2026, 9, 29, 11, 0))
+say(v["enough"]["ok"] is False, "  34,000 ⇒ 不夠", v["enough"]["msg"])
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))
