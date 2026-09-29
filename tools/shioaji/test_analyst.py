@@ -109,6 +109,17 @@ try:
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
 
+print("── ⑧ 盤整期那一行（2026-09-29）：照研究的固定界線，點數照抄")
+import analyst_facts as AF  # noqa: E402
+chk("1.02% ⇒ 低", AF.regime(1.02)["level"], "低")
+chk("1.03% ⇒ 中（界線本身算中）", AF.regime(1.03)["level"], "中")
+chk("1.23% ⇒ 高", AF.regime(1.23)["level"], "高")
+chk("低波動那句帶 +141 點", "+141 點" in AF.regime(0.9)["line"], True)
+chk("高波動那句提醒別當常態", "別把這種月份當常態" in AF.regime(1.5)["line"], True)
+chk("算不出來 ⇒ 照實說、不判斷", AF.regime(None)["level"], None)
+chk("⛔ 句子不能被 analyst.check 的禁字擋（預測／勝率之類）",
+    [ln for ln in (AF.regime(v)["line"] for v in (0.9, 1.1, 1.5)) if any(rx.search(ln) for rx, _w in A.BANNED)], [])
+
 print()
 print("全部通過 ✅" if not FAILS else "⛔ %d 項失敗" % len(FAILS))
 sys.exit(1 if FAILS else 0)

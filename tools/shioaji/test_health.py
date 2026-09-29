@@ -279,8 +279,9 @@ for _ in range(60):
         break
 say(s2["market_ready"] and not s2["market_err"], "  背景算完之後 market_ready=True",
     str(s2.get("market_err")))
-chk("  三張市場狀態小卡", [c["key"] for c in s2["market"]],
-    ["night_vol", "day_night", "us_sox"])
+chk("  四張市場狀態小卡（2026-09-29 加日盤波動度）", [c["key"] for c in s2["market"]],
+    ["night_vol", "day_vol", "day_night", "us_sox"])
+chk("  ⛔ 健檢這一頁不帶盤整期判斷（判斷只在週報）", "regime" in s2, False)
 say(all(c.get("as_of") for c in s2["market"][:2]),
     "  ⛔ 每張卡都標得出「資料到哪一天」（⛔ 不可以讓他以為是今天的）")
 t0 = time.time()

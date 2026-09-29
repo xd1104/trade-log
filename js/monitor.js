@@ -166,6 +166,9 @@
         row('近 15 筆每筆／歷史', '<span class="num">' + pm(s.avg15) + ' / ' + pm(s.avg_all) + '</span>') + '</div>';
     }).join('');
     var mk = (((F.market || {}).cards) || []).map(function (c) { return row(c.title, '<span class="num">' + (c.value == null ? '—' : esc(c.value) + esc(c.unit || '')) + '</span>' + (c.pct == null ? '' : '<div class="faint" style="font-size:11.5px">過去一年第 ' + c.pct + ' 百分位</div>')); }).join('');
+    // ⭐ 2026-09-29 盤整期那一行：面板算好的整句，放在市場狀態最上面（⛔ 手機不自己判斷）
+    var rg = (F.market || {}).regime;
+    if (rg && rg.line) mk = '<div class="an-nw"><div class="tp">' + (rg.level ? anLamp(rg.level === '低' ? 'wn' : 'ok', rg.level + '波動') : '') + '</div><h3>現在是不是盤整期</h3><p>' + esc(rg.line) + '</p></div>' + mk;
     var S = F.system || {}, K = F.risk || {};
     var sys = row('日盤送單', (S.sent_day || 0) + ' 筆（成交 ' + (S.ok_day || 0) + '）') + row('夜盤送單', (S.sent_night || 0) + ' 筆（成交 ' + (S.ok_night || 0) + '）') +
       row('進場滑價', S.slip_avg == null ? '—' : '平均 ' + S.slip_avg + ' 點') + row('送出沒撮到', (S.ioc_nofill || 0) + ' 次') +

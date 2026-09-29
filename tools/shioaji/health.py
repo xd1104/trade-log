@@ -228,9 +228,11 @@ def _sessions(px):
 
     d = px.loc[dm].copy()
     d["D"] = t.loc[dm].dt.date
-    gd = d.groupby("D").agg(o=("Open", "first"), c=("Close", "last"), k=("ts", "count"))
+    gd = d.groupby("D").agg(o=("Open", "first"), h=("High", "max"), l=("Low", "min"),
+                            c=("Close", "last"), k=("ts", "count"))
     gd = gd[gd["k"] >= DAY_MIN_BARS]
     gd["ret"] = (gd["c"] - gd["o"]) / gd["o"] * 100.0
+    gd["amp"] = (gd["h"] - gd["l"]) / gd["o"] * 100.0
     return g, gd
 
 
@@ -330,6 +332,18 @@ def market():
         lines=(["過去 %d 晚的中位數 %.2f%%" % (VOL_REF, ref)] if ref is not None else []),
         as_of=str(g.index[-1]) if len(g) else None))
 
+    # ── ①b 日盤波動度：最近 20 天的日盤振幅% 平均（多方聯軍靠的是日盤的波動）
+    damp = gd["amp"].to_numpy(dtype=float)
+    droll = _roll_mean(damp, VOL_WIN)
+    dcur = float(droll[-1]) if len(droll) else None
+    dref = float(np.median(damp[-VOL_REF:])) if len(damp) else None
+    cards.append(_card(
+        "day_vol", "日盤波動度",
+        "最近 %d 天的日盤振幅%%（最高−最低 ÷ 開盤）平均" % VOL_WIN,
+        dcur, "%", droll, dp=2,
+        lines=(["過去 %d 天的中位數 %.2f%%" % (VOL_REF, dref)] if dref is not None else []),
+        as_of=str(gd.index[-1]) if len(gd) else None))
+
     # ── ② 日盤／夜盤 漲幅：最近 60 天各自的合計漲幅%
     #    ⚠️ 兩條各自對齊自己的最後 N 個交易日（⛔ 不硬把夜盤跟日盤配成一天 ——
     #       那需要一張國定假日表，這裡沒有）。位置條看的是「夜盤合計 − 日盤合計」。
@@ -395,6 +409,7 @@ def market():
                        if low_run else None)))
     return {"market": cards,
             "market_note": "數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。"}
+
 
 
 # ══ 快取（⛔ 重活只在背景執行緒，HTTP 執行緒只拿算好的）══════════════

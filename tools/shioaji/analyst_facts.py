@@ -12,6 +12,7 @@
 """
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -120,15 +121,45 @@ def strategies(mon, fri, sim):
     return out
 
 
+# ⭐ 2026-09-29（Benson：盤整期週報要固定講）⛔ 界線與每月點數是研究的數字，照抄、不另算：
+#    tick-research/regime_results_2026-09-26.md —— 2020-08~2026-07 每月「日盤平均日振幅%」三等分。
+#    ⛔ 放在這裡、不放 health.py：【健檢】那一頁規定只給數字、不下判斷；判斷只出現在週報。
+REGIME_LO, REGIME_HI = 1.03, 1.23          # 低於 1.03% ＝ 低波動；1.23% 以上 ＝ 高波動
+REGIME_PTS = {"低": 141, "中": 330, "高": 1362}   # 那種月份兩條真單合計每月平均（1 口、點）
+VOL_WIN = 20                                # ＝ health.VOL_WIN（日盤波動度那張卡的天數）
+
+
+def regime(day20, as_of=None):
+    """
+    ⭐ 週報固定那一行：現在算不算低波動（盤整）期、這種月份過去兩條合計每月賺多少。
+    ⛔ 用研究的固定界線（REGIME_LO／HI），⛔ 不用滾動百分位 —— 每月點數是照那把尺分出來的，換尺就對不上。
+    ⛔ 只描述過去，不預測接下來。
+    """
+    if day20 is None or not math.isfinite(day20):
+        return {"level": None, "line": "日盤波動度算不出來（資料不足），這週不判斷是不是盤整期。"}
+    lv = "低" if day20 < REGIME_LO else ("高" if day20 >= REGIME_HI else "中")
+    head = "目前日盤是%s波動期（近 %d 天平均日振幅 %.2f%%；研究的界線：低於 %.2f%% 算低、%.2f%% 以上算高）。" % (
+        lv, VOL_WIN, day20, REGIME_LO, REGIME_HI)
+    tail = {"低": "這種月份過去兩條真單合計平均每月約 +%s 點（1 口），比平常少，屬正常，不代表策略壞掉。",
+            "中": "這種月份過去兩條真單合計平均每月約 +%s 點（1 口），屬正常水準。",
+            "高": "這種月份過去兩條真單合計平均每月約 +%s 點（1 口）；⚠️ 高波動不會一直持續，別把這種月份當常態。"}[lv]
+    return {"level": lv, "day20": round(float(day20), 2), "pts": REGIME_PTS[lv], "as_of": as_of,
+            "line": head + tail % format(REGIME_PTS[lv], ",")}
+
+
 def market():
     try:
         import health
-        cards = health.market()["market"]
+        hm = health.market()
+        cards = hm["market"]
     except Exception as e:
-        return {"err": "市場狀態算不出來：%s" % str(e)[:120], "cards": []}
+        return {"err": "市場狀態算不出來：%s" % str(e)[:120], "cards": [], "regime": None}
     keep = ("key", "title", "note", "value", "unit", "pct", "lo", "hi", "n_pool", "lines", "as_of",
             "flag_word", "flag_note")
-    return {"err": None, "cards": [{k: c.get(k) for k in keep} for c in cards]}
+    # ⭐ 2026-09-29：「現在是不是盤整期、這種月份通常賺多少」—— 程式算好的一句，週報固定顯示（⛔ 不靠 AI 決定寫不寫）
+    dv = next((c for c in cards if c.get("key") == "day_vol"), {})
+    return {"err": None, "cards": [{k: c.get(k) for k in keep} for c in cards],
+            "regime": regime(dv.get("value"), as_of=dv.get("as_of"))}
 
 
 def _jsonl(p):

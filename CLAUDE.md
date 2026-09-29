@@ -3305,6 +3305,9 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
   寫進 main，面板 `analyst.pull_phone_reads()` 每 3 分鐘併回（執行緒在第一次 `GET /api/analyst/index` 時才起，⛔ 不改 main()）。
 - 手機全文：monitor_push 另推加密的 `analyst.json`（指紋沒變就沿用同一份密文＝同一個 blob）；快照只帶列表。
 - `analyst/` 整個 gitignore（有真單點數）。探針 `test_analyst.py`；治具 fire_harness 有 `/api/analyst/*`。
+- ⭐ 2026-09-29 市場狀態固定一行「現在是不是盤整期」：`analyst_facts.regime()` 用研究的固定界線（日盤 20 天平均日振幅 1.03%／1.23%）
+  與每月點數（低 +141／中 +330／高 +1,362，`tick-research/regime_results_2026-09-26.md`）；⛔ 放週報、不放【健檢】（那頁只給數字）。
+  健檢多一張「日盤波動度」卡（`health.market()` 的 `day_vol`）。
 
 ## ⭐ 研究用全天五檔錄製（2026-09-26，Benson：「只要我們錄的資料夠之後研究就好」）
 - 只錄**事後補不回來**的：微台＋大台近月＋台指選擇權近月（到期日 > 今天）價平上下 10 個履約價 × 買賣權的**五檔（含口數）**，日夜盤全天。
