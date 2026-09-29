@@ -173,7 +173,8 @@ def publish(facts, ai, reports_dir=None):
            "trial": bool(ai.get("trial")),
            "verdict": ai["verdict"], "news": ai["news"], "calendar": ai.get("calendar") or [],
            "env": ai.get("env") or [], "recs": ai.get("recs") or [],
-           "facts": {k: facts.get(k) for k in ("strategies", "market", "system", "risk", "candidates", "week")}}
+           "facts": {k: facts.get(k) for k in ("strategies", "market", "system", "risk", "candidates", "week",
+                                                "retire")}}
     p = (reports_dir or REPORTS_DIR) / (facts["id"] + ".json")
     _write_json(p, rep)
     return True, str(p)

@@ -267,14 +267,98 @@ def perf(lane, dates, sim=None):
             "rows": rows}
 
 
+# ⭐ 2026-09-29 退休標準（Benson 看過草案說「接進週報」）。⛔ 門檻是研究算的，照抄、不在這裡另算：
+#    tick-research/risk_trades.csv 六年回測 —— 多方聯軍最大回落 2,018、18 個月合計從沒負過；
+#    夜盤跟勢最大回落 4,711（而且 2022 底~2024-05 連 18 個月合計 −3,399 之後大賺 ⇒ ⛔ 不能用「虧很久」判它）。
+#    降級門檻＝歷史最壞 × 1.5。一律 1 口的點數（模擬本來就是 1 口）；口數變多時照口數放大。
+#    ⛔ 只描述「現在在哪一級」，⛔ 不動任何開關 —— 降級／升回都是 Benson 自己按。
+RETIRE = {
+    "union": {"dd": 3000, "roll18": True, "hist_dd": 2018},
+    "trend": {"dd": 7000, "roll18": False, "hist_dd": 4711},
+}
+RETIRE_WORD = {"ok": "正常", "watch": "觀察", "down": "降級", "retire": "退休", "back": "可升回"}
+RETIRE_AFTER = 50          # 降級後模擬再跑幾筆才判退休／升回
+
+
+def _months_back(d, n):
+    y, m = int(d[:4]), int(d[5:7]) - n
+    while m <= 0:
+        y, m = y - 1, m + 12
+    return "%04d-%02d-%s" % (y, m, d[8:10])
+
+
+def retire(sim, regime_level=None):
+    """每條真單現在在退休標準的哪一級 ⇒ [{key, name, level, word, why[], ...}]。資料＝模擬定論（2024-08 起、1 口）。"""
+    out = []
+    for lane, _sess, name, _sub in REAL_LANES:
+        R = RETIRE.get(lane)
+        pts = [(r["date"], p) for r in sim.get(lane, []) for p in [_trade_pts(r)] if p is not None]
+        if not R or len(pts) < 30:
+            out.append({"key": lane, "name": name, "level": None, "word": "資料不足",
+                        "why": ["模擬定論不到 30 筆，先不判斷"]})
+            continue
+        # ⚠️ 「降級」一旦發生就一直算數，直到**創新高**為止 —— ⛔ 不可以因為回落又縮回門檻以內就顯示「正常」
+        #    （那樣他會在模擬還沒跑滿 50 筆前就把真單開回去）。
+        eq, peak, peak_d, dd, ep_start = 0.0, 0.0, pts[0][0], 0.0, None
+        for i, (d, p) in enumerate(pts):
+            eq += p
+            if eq > peak:
+                peak, peak_d, ep_start = eq, d, None
+            dd = peak - eq
+            if dd > R["dd"] and ep_start is None:
+                ep_start = i                        # 這一段「回落超過門檻」從第幾筆開始
+        last = pts[-1][0]
+        r18 = sum(p for d, p in pts if d > _months_back(last, 18))
+        span_ok = pts[0][0] <= _months_back(last, 18)
+        avg_all = sum(p for _d, p in pts) / len(pts)
+        avg30 = sum(p for _d, p in pts[-30:]) / 30
+        why, level = [], "ok"
+        red18 = R["roll18"] and span_ok and r18 < 0
+        if ep_start is not None or red18:
+            level = "down"
+            if ep_start is not None:
+                why.append("%s 從最高點回落超過降級門檻 %s 點（歷史最壞 %s 的 1.5 倍）；現在回落 %s 點，還沒創新高" % (
+                    pts[ep_start][0][5:].replace("-", "/"), format(R["dd"], ","), format(R["hist_dd"], ","),
+                    format(int(round(dd)), ",")))
+            if red18:
+                why.append("近 18 個月合計 %+.0f 點（六年回測從沒負過）" % r18)
+            if ep_start is not None:
+                after = [p for _d, p in pts[ep_start + 1:]]
+                if len(after) >= RETIRE_AFTER:
+                    a = sum(after) / len(after)
+                    if a < 0:
+                        level = "retire"
+                        why.append("降級後模擬又跑了 %d 筆，平均 %+.1f 點，還是負的" % (len(after), a))
+                    elif a >= avg_all / 2:
+                        level = "back"
+                        why.append("降級後模擬 %d 筆平均 %+.1f 點，回到歷史平均（%+.1f）的一半以上" % (len(after), a, avg_all))
+                else:
+                    why.append("降級後模擬已跑 %d／%d 筆，滿了才判斷退休或升回" % (len(after), RETIRE_AFTER))
+        elif avg30 < 0:
+            if regime_level == "低":
+                why.append("近 30 筆平均 %+.1f 點，但現在是低波動期，賺得少屬正常，不列入觀察" % avg30)
+            else:
+                level = "watch"
+                why.append("近 30 筆平均 %+.1f 點，變負了（先看，不動）" % avg30)
+        if level == "ok" and not why:
+            why.append("從最高點回落 %s 點（降級門檻 %s）；近 30 筆平均 %+.1f 點" % (
+                format(int(round(dd)), ","), format(R["dd"], ","), avg30))
+        out.append({"key": lane, "name": name, "level": level, "word": RETIRE_WORD[level], "why": why,
+                    "dd": round(dd), "dd_thr": R["dd"], "peak_date": peak_d, "roll18": round(r18),
+                    "avg30": round(avg30, 1), "avg_all": round(avg_all, 1), "n": len(pts), "as_of": last})
+    return out
+
+
 def build(d):
     mon, fri = target_week(d)
     sim = _sim_rows()
+    mk = market()
     facts = {"id": analyst.week_id(mon), "range": "%s～%s" % (mon.strftime("%m/%d"), fri.strftime("%m/%d")),
              "week": {"mon": str(mon), "fri": str(fri)},
              "made_at": datetime.now().isoformat(timespec="seconds"),
-             "strategies": strategies(mon, fri, sim), "market": market(), "system": system(mon, fri),
-             "risk": risk_cap.state(qty=1), "candidates": candidates(sim), "next_week": next_week(fri)}
+             "strategies": strategies(mon, fri, sim), "market": mk, "system": system(mon, fri),
+             "risk": risk_cap.state(qty=1), "candidates": candidates(sim), "next_week": next_week(fri),
+             "retire": retire(sim, ((mk.get("regime") or {}).get("level")))}
     return facts
 
 

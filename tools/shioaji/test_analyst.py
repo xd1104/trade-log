@@ -120,6 +120,48 @@ chk("算不出來 ⇒ 照實說、不判斷", AF.regime(None)["level"], None)
 chk("⛔ 句子不能被 analyst.check 的禁字擋（預測／勝率之類）",
     [ln for ln in (AF.regime(v)["line"] for v in (0.9, 1.1, 1.5)) if any(rx.search(ln) for rx, _w in A.BANNED)], [])
 
+print("── ⑨ 退休標準（2026-09-29）：每一級都走一遍（假的模擬定論）")
+from datetime import date as _date, timedelta as _td  # noqa: E402
+
+
+def _sim(lane, pts, start=_date(2024, 8, 1)):
+    return {lane: [{"date": str(start + _td(days=i * 3)), "decision": "做多", "points": p, "entry": 1.0}
+                   for i, p in enumerate(pts)]}
+
+
+def _lv(lane, pts, reg=None):
+    r = [x for x in AF.retire(_sim(lane, pts), reg) if x["key"] == lane][0]
+    return r["level"], r["why"]
+
+
+chk("穩穩賺 ⇒ 正常", _lv("union", [50] * 60)[0], "ok")
+chk("不到 30 筆 ⇒ 不判斷", _lv("union", [50] * 10)[0], None)
+chk("聯軍回落 3,100（> 3,000）⇒ 降級", _lv("union", [100] * 40 + [-310] * 10)[0], "down")
+chk("夜盤跟勢同樣回落 3,100 ⇒ 還不到它的 7,000（不會降級）", _lv("trend", [100] * 40 + [-310] * 10)[0] != "down", True)
+lv, why = _lv("union", [100] * 40 + [-310] * 10 + [-5] * 50)
+chk("降級後又 50 筆平均負 ⇒ 退休", lv, "retire")
+lv, why = _lv("union", [100] * 40 + [-310] * 10 + [40] * 50)
+chk("降級後 50 筆平均 +40 ≥ 歷史平均一半 ⇒ 可升回", lv, "back")
+lv, why = _lv("union", [100] * 40 + [-310] * 10 + [40] * 20)
+chk("降級後還沒滿 50 筆 ⇒ 維持降級、講出進度", (lv, any("20／50" in w for w in why)), ("down", True))
+chk("近 30 筆變負 ⇒ 觀察", _lv("union", [60] * 40 + [-10] * 30)[0], "watch")
+lv, why = _lv("union", [60] * 40 + [-10] * 30, reg="低")
+chk("低波動期近 30 筆變負 ⇒ 不列入觀察（還是正常）", (lv, any("低波動期" in w for w in why)), ("ok", True))
+# 聯軍 18 個月合計變負：前面大賺、後面 18 個月以上慢慢虧（回落沒到 3,000）
+lv, why = _lv("union", [200] * 20 + [-8] * 250)
+chk("聯軍近 18 個月合計變負 ⇒ 降級（回落沒到 3,000 也算）", (lv, any("18 個月" in w for w in why)), ("down", True))
+lv, _w = _lv("trend", [200] * 20 + [-8] * 250)
+chk("⛔ 夜盤跟勢不用 18 個月那條（它 2022~24 就那樣過、後來大賺）", lv != "down", True)
+_T2 = pathlib.Path(tempfile.mkdtemp(prefix="analyst-ret-"))
+try:
+    _f = {"id": "2026-W40", "range": "x", "retire": AF.retire(_sim("union", [50] * 60))}
+    A.publish(_f, good_ai(), reports_dir=_T2)
+    chk("發佈後週報裡真的帶著退休標準（第一版被白名單吃掉過）", bool((A.load("2026-W40", _T2) or {}).get("facts", {}).get("retire")), True)
+finally:
+    shutil.rmtree(_T2, ignore_errors=True)
+chk("⛔ 退休標準的句子不碰禁字", [w for r in AF.retire(_sim("union", [100] * 40 + [-310] * 10 + [-5] * 50))
+                           for w in r["why"] if any(rx.search(w) for rx, _x in A.BANNED)], [])
+
 print()
 print("全部通過 ✅" if not FAILS else "⛔ %d 項失敗" % len(FAILS))
 sys.exit(1 if FAILS else 0)

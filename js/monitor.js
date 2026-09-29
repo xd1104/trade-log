@@ -169,6 +169,12 @@
     // ⭐ 2026-09-29 盤整期那一行：面板算好的整句，放在市場狀態最上面（⛔ 手機不自己判斷）
     var rg = (F.market || {}).regime;
     if (rg && rg.line) mk = '<div class="an-nw"><div class="tp">' + (rg.level ? anLamp(rg.level === '低' ? 'wn' : 'ok', rg.level + '波動') : '') + '</div><h3>現在是不是盤整期</h3><p>' + esc(rg.line) + '</p></div>' + mk;
+    // ⭐ 2026-09-29 退休標準（面板算好的整句；⛔ 手機不自己判斷）
+    var RL = { ok: 'ok', back: 'ok', watch: 'wn', down: 'bd', retire: 'bd' };
+    var ret = (F.retire || []).map(function (r) {
+      return '<div class="an-nw"><div class="tp">' + anLamp(RL[r.level] || '', r.word || '—') + '</div><h3>' + esc(r.name) + '</h3>' +
+        (r.why || []).map(function (w) { return '<p>' + esc(w) + '</p>'; }).join('') + '</div>';
+    }).join('');
     var S = F.system || {}, K = F.risk || {};
     var sys = row('日盤送單', (S.sent_day || 0) + ' 筆（成交 ' + (S.ok_day || 0) + '）') + row('夜盤送單', (S.sent_night || 0) + ' 筆（成交 ' + (S.ok_night || 0) + '）') +
       row('進場滑價', S.slip_avg == null ? '—' : '平均 ' + S.slip_avg + ' 點') + row('送出沒撮到', (S.ioc_nofill || 0) + ' 次') +
@@ -176,11 +182,11 @@
       (S.problems || []).map(function (p) { return '<div class="err">⚠️ ' + esc(p.what) + '（' + p.n + ' 次）</div>'; }).join('');
     var cand = (F.candidates || []).map(function (c) { return row(c.name, '<span class="num">' + c.diff_n + ' / ' + c.need + '</span><div class="faint" style="font-size:11.5px">只算跟「' + esc(c.base) + '」不一樣的</div>'); }).join('');
     var recs = (R.recs || []).map(function (r) { return '<div class="an-nw an-rec"><div class="tp">' + anTag(r.tag) + '</div><h3>' + esc(r.title) + '</h3><p>' + esc(r.body) + '</p><div class="ask">要你決定：' + esc(r.ask) + '</div></div>'; }).join('') || '<div class="msg">這週沒有建議。</div>';
-    var segs = [['news', '國際消息'], ['cal', '下週大事'], ['env', '大環境'], ['st', '策略'], ['mk', '市場'], ['sys', '系統'], ['cand', '候選'], ['rec', '建議']];
+    var segs = [['news', '國際消息'], ['cal', '下週大事'], ['env', '大環境'], ['st', '策略'], ['ret', '退休標準'], ['mk', '市場'], ['sys', '系統'], ['cand', '候選'], ['rec', '建議']];
     return '<div class="an-seg">' + segs.map(function (x, i) { return '<button data-anjump="' + x[0] + '"' + (i ? '' : ' class="on"') + '>' + x[1] + '</button>'; }).join('') + '</div>' +
       '<div class="card"><div class="an-verdict">' + anLamp(R.verdict && R.verdict.lamp) + '<p>' + esc((R.verdict || {}).line || '') + '</p></div></div>' +
       anSec('news', '國際金融消息（每則附來源）', news) + anSec('cal', '下週大事', cal) + (env ? anSec('env', '大環境觀察', env) : '') +
-      anSec('st', '策略健康', st) + anSec('mk', '市場狀態', mk) + anSec('sys', '系統與風控', sys) + anSec('cand', '模擬候選（滿 25 筆才判斷）', cand) +
+      anSec('st', '策略健康', st) + (ret ? anSec('ret', '退休標準（開關由你按）', ret) : '') + anSec('mk', '市場狀態', mk) + anSec('sys', '系統與風控', sys) + anSec('cand', '模擬候選（滿 25 筆才判斷）', cand) +
       anSec('rec', '建議（決定權在你）', recs) +
       '<div class="an-sync" id="anSync"></div>' +
       '<div class="foot dim">分析師不預測漲跌、不給進出場方向、不碰下單；「判讀・未驗證」的只能當研究題目。</div>' +

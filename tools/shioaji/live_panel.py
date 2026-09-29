@@ -9604,6 +9604,11 @@ function anReport(R){
  const rg=(F.market||{}).regime;
  const mkr=(rg&&rg.line?'<div class="an-nw"><div class="top">'+
    (rg.level?'<span class="an-lamp '+(rg.level==='低'?'wn':'ok')+'">'+esc(rg.level)+'波動</span>':'')+'</div><h3>現在是不是盤整期</h3><p>'+esc(rg.line)+'</p></div>':'')+mk;
+ /* ⭐ 2026-09-29 退休標準：每條在哪一級（程式算好的整句；⛔ 前端不自己判斷、⛔ 不碰開關） */
+ const RL={ok:'ok',back:'ok',watch:'wn',down:'bd',retire:'bd'};
+ const ret=(F.retire||[]).map(r=>'<div class="an-st"><div class="hd"><b>'+esc(r.name)+'</b>'+
+   (r.level?'<span class="an-lamp '+(RL[r.level]||'')+'">'+esc(r.word)+'</span>':'<span class="an-lamp">'+esc(r.word||'—')+'</span>')+'</div>'+
+   (r.why||[]).map(w=>'<div class="an-note">'+esc(w)+'</div>').join('')+'</div>').join('');
  const S=F.system||{}, K=F.risk||{};
  const sys='<div class="an-rows">'+
    '<div class="r"><span class="k">日盤送單</span><span class="v">'+(S.sent_day||0)+' 筆（成交 '+(S.ok_day||0)+'）</span></div>'+
@@ -9619,7 +9624,8 @@ function anReport(R){
   '<div class="an-cols"><div class="an-stack">'+anSec('國際金融消息','本週 '+(R.news||[]).length+' 則・每則附來源',news)+
   anSec('下週大事','附同類日子的歷史成績',cal)+(env?anSec('大環境觀察','會不會動搖賺錢的前提',env):'')+
   anSec('建議','最多 3 條・決定權在你',recs)+'</div>'+
-  '<div class="an-stack">'+anSec('策略健康','模擬定論＋真單',st)+anSec('市場狀態','在過去一年的位置',mkr)+
+  '<div class="an-stack">'+anSec('策略健康','模擬定論＋真單',st)+
+  (ret?anSec('退休標準','正常／觀察／降級／退休・開關由你按',ret):'')+anSec('市場狀態','在過去一年的位置',mkr)+
   anSec('系統與風控','本週',sys)+anSec('模擬候選','滿 25 筆才判斷',cand)+'</div></div>'+
   '<div class="an-foot">分析師不預測漲跌、不給進出場方向、不碰下單程式與開關；所有決定由你做。「判讀・未驗證」的只能當研究題目。</div>'+
   '<div class="an-totop"><button data-antop="1">↑ 回到最上面</button></div>';
