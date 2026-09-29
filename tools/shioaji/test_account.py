@@ -281,6 +281,31 @@ say(SRC.count('id="acct"') == 1, "  ⛔ 那張卡只有一個地方畫（⛔ 不
 say("if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); }" in SRC,
     "  在 500ms 的 tick 裡畫（⛔ 不另開一條輪詢問同一份資料）")
 
+print("\n=== ⑫ 問到的餘額不會被清掉（2026-09-29 真的發生過）===")
+# 09-26 加流量紀錄時把 try 插在 `if m:` 跟它的 else 中間 ⇒ else 變成 try 的 else，
+# 流量一問成功就把剛問到的餘額清掉，畫面整天「問不到帳戶餘額」。
+import ast as _ast
+_pe = next(n for n in _ast.walk(_ast.parse(SRC)) if isinstance(n, _ast.FunctionDef) and n.name == "poll_equity")
+
+
+def _clears(nodes):
+    """這幾個敘述裡有沒有 EQUITY.update({... "m": None ...})"""
+    for st in nodes:
+        for n in _ast.walk(st):
+            if (isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute) and n.func.attr == "update"
+                    and isinstance(n.func.value, _ast.Name) and n.func.value.id == "EQUITY" and n.args
+                    and isinstance(n.args[0], _ast.Dict)
+                    and any(isinstance(k, _ast.Constant) and k.value == "m" and isinstance(v, _ast.Constant)
+                            and v.value is None for k, v in zip(n.args[0].keys, n.args[0].values))):
+                return True
+    return False
+
+
+_ifm = [n for n in _ast.walk(_pe) if isinstance(n, _ast.If) and isinstance(n.test, _ast.Name) and n.test.id == "m"]
+say(len(_ifm) == 1 and _clears(_ifm[0].orelse), "  「問不到才清掉」掛在 `if m:` 的 else 底下")
+_bad = [n for n in _ast.walk(_pe) if isinstance(n, _ast.Try) and _clears(n.orelse)]
+say(not _bad, "  ⛔ 沒有任何 try 的 else 會把餘額清掉（成功也清＝畫面永遠問不到）")
+
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))
 sys.exit(1 if FAIL else 0)

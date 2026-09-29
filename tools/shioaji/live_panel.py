@@ -10848,15 +10848,17 @@ def poll_equity():
                                    "at": now.strftime("%H:%M:%S")})
                     _equity_lot1(m)
                     _equity_write_day(m, now)
-                # ⭐ 2026-09-26 券商每日流量（加錄資料之前先量基準）。⛔ 唯讀；自己 10 分鐘一次；壞了不影響帳戶查詢
-                try:
-                    _usage_poll(now)
-                except Exception:
-                    pass
                 else:
                     # ⛔ 問不到就把數字清掉：畫面寧可寫「問不到」，
                     #    ⛔ 也不可以繼續顯示一個看起來是現在、其實是十分鐘前的金額。
                     EQUITY.update({"m": None, "err": err or "問不到帳戶餘額"})
+                # ⭐ 2026-09-26 券商每日流量（加錄資料之前先量基準）。⛔ 唯讀；自己 10 分鐘一次；壞了不影響帳戶查詢
+                # ⚠️ 2026-09-29 修：第一版把這個 try 插在 `if m:` 跟它的 `else:` 中間 ⇒ else 變成 try 的 else，
+                #    流量一問成功就把剛問到的餘額清掉，畫面永遠「問不到帳戶餘額」。守衛：test_account ⑫
+                try:
+                    _usage_poll(now)
+                except Exception:
+                    pass
                 # ⛔⛔ **先算完再進鎖**：`equity_view()` 會讀 equity/（磁碟），
                 #    而 `state_lock` 是 4Hz 主迴圈（＝他的停損）每一圈都要拿的鎖。
                 #    ⛔ 不可以把任何 I/O 留在鎖裡面。
