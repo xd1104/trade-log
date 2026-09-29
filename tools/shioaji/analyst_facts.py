@@ -35,7 +35,7 @@ REAL_LANES = (("union", "day", "多方聯軍", "日盤・1 口"), ("trend", "nig
 # ⭐ 真正要判斷的是「跟現行真單**不一樣**的那幾筆」（一個月約 2 筆），⛔ 不是候選自己出手的總筆數
 #    ⇒ 每條都記「對照的現行那條」，滿 25 筆看的是 diff_n。
 CANDS = (("tlong", "夜盤跟勢・只做多", "2026-09-23", "trend"), ("hold", "聯軍留倉到夜盤", "2026-09-24", "union"),
-         ("nunion", "夜盤聯軍", "2026-09-23", "trend"))
+         ("nunion", "夜盤聯軍", "2026-09-23", "trend"), ("tvol", "夜盤跟勢・只做大波動晚", "2026-09-30", "trend"))
 CAND_NEED = 25
 ERR_DAY = {"cant_enter", "order_failed", "late", "quote_stale", "no_quote", "unsure", "not_wired"}
 ERR_NIGHT = {"cannot", "send_fail", "unsure", "late", "no_quote"}

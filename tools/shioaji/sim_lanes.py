@@ -66,7 +66,7 @@ FAST_HIST = HERE / "fast_hist.jsonl"  # ⛔ 唯讀（真單在用的那一份，
 MIN1_CSV = HERE / "tmf_1min.csv"      # ⛔ 唯讀（夜盤 1 分 K 先看本機，缺的才跟永豐要）
 
 LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend",
-         "tlong", "nunion", "hold")
+         "tlong", "nunion", "hold", "tvol")
 # ⛔ 已下架的線：檔案裡的舊列**照樣讀得進來**（不算壞資料、不做資料遷移），但畫面不顯示、⛔ 也不准再寫。
 #    usml（美股開盤模型）2026-09-22 晚下架：SPY 時間標記偷看未來 5 分鐘，策略不成立
 #    （tick-research/night_ml_CORRECTION_2026-09-22.md）。
@@ -79,8 +79,10 @@ RETIRED_LANES = ("usml",)
 #    ⭐ 2026-09-23 深夜 Benson「三個都放」：研究裡最有苗頭、但歷史證明不了的三條改法，放進來考前瞻
 #       （tick-research/optimize_results／night_union_results／scale_results_2026-09-23.md）。
 #       ⛔ 三條都是**從現有的線推導**（夜盤跟勢、台積電快攻、多方聯軍的定論＋夜盤 1 分 K），不另外抓資料。
-SHOWN_LANES = ("union", "tsm", "trend", "hold", "tlong", "nunion")
-DERIVED_LANES = ("tlong", "nunion", "hold")
+#    ⭐ 2026-09-30 Benson「加進去模擬讓我看一下」：夜盤跟勢只在「預測會大波動」的晚上做（tvol）。
+#       研究 tick-research/quiet_skip_results_2026-09-30.md（⚠️ 事後題目 ⇒ 靠前瞻證明）。
+SHOWN_LANES = ("union", "tsm", "trend", "hold", "tlong", "nunion", "tvol")
+DERIVED_LANES = ("tlong", "nunion", "hold", "tvol")
 # 逐筆那六條：同一天只讀一次 tick_hist、也只算一次 day_pack（⛔ 不要一條算一次）
 TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
 # ⛔ 2026-09-16 Benson 定名：**面板文字一律用這些名字**。
@@ -88,11 +90,12 @@ TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
 LANE_NAME = {"fast": "快攻", "fast11": "早收", "hmq": "回馬槍", "rev": "純回馬",
              "orb": "開箱", "union": "多方聯軍", "night": "夜盤順勢",
              "tsm": "台積電快攻", "trend": "夜盤跟勢",
-             "tlong": "夜盤跟勢只做多", "nunion": "夜盤聯軍", "hold": "聯軍留倉"}
+             "tlong": "夜盤跟勢只做多", "nunion": "夜盤聯軍", "hold": "聯軍留倉",
+             "tvol": "跟勢大波動晚"}
 SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐筆",
             "orb": "逐筆", "union": "逐筆", "night": "1 分 K", "tsm": "1 分 K ＋ 台積電 ADR",
             "trend": "1 分 K", "tlong": "1 分 K", "nunion": "1 分 K ＋ 台積電 ADR",
-            "hold": "逐筆 ＋ 夜盤 1 分 K"}
+            "hold": "逐筆 ＋ 夜盤 1 分 K", "tvol": "1 分 K"}
 HOLD_SPREAD = 1.0          # 聯軍留倉：夜盤那段用 1 分 K 收盤出場 ⇒ 多扣 1 點價差（日盤那段逐筆已經含買賣價）
 
 # ── 台積電快攻（2026-09-22 晚加；**前瞻考試**用，⛔ 不是可以上真單的結論）
@@ -1111,6 +1114,61 @@ def tlong_eval(E, trend_row):
     return _none_row("tlong", E, "trend_none", "夜盤跟勢這晚不做：%s" % (trend_row.get("reason") or ""))
 
 
+# ── tvol 跟勢大波動晚（2026-09-30）：夜盤跟勢那晚有做、而且「預測夜盤波動」≥ 門檻才照抄；安靜的晚上不做。
+#    近期振幅 ＝（前 1 晚＋前 5 晚平均＋前 22 晚平均 的夜盤振幅%）÷ 3（HAR 最簡版，⛔ 不配適參數）。
+#    ⛔ 畫面文字不准出現「預測」（面板鐵律）⇒ 一律叫「近期夜盤振幅」。
+#    ⛔ 只用 E 以前的晚上（今晚的振幅不准給今晚自己用）。門檻 ⛔ 固定：tick-research 設計期（2020-08~2023-12）第 67 百分位。
+TVOL_THR = 1.03
+TVOL_MIN_BARS = 200
+_NR = {"key": None, "r": {}}
+
+
+def night_ranges():
+    """本機 1 分 K 每一晚（開盤那天 E）的夜盤振幅%（最高−最低 ÷ 開盤）。⛔ 唯讀；依 mtime 快取。"""
+    f = MIN1_CSV
+    if not f.exists():
+        return {}
+    st_ = f.stat()
+    key = (st_.st_mtime_ns, st_.st_size)
+    if _NR["key"] == key:
+        return _NR["r"]
+    px = pd.read_csv(f, usecols=["ts", "Open", "High", "Low"])
+    ts = pd.to_datetime(px["ts"])
+    mi = ts.dt.hour * 60 + ts.dt.minute
+    m = (mi >= 15 * 60 + 1) | (mi <= 5 * 60)
+    g = px[m].assign(E=(ts[m] - pd.Timedelta(hours=6)).dt.date)
+    a = g.groupby("E").agg(o=("Open", "first"), h=("High", "max"), l=("Low", "min"), n=("Open", "size"))
+    a = a[(a["n"] >= TVOL_MIN_BARS) & (a["o"] > 0)]
+    _NR.update(key=key, r={E: float((r.h - r.l) / r.o * 100) for E, r in a.iterrows()})
+    return _NR["r"]
+
+
+def tvol_forecast(E, ranges=None):
+    r = night_ranges() if ranges is None else ranges
+    prev = sorted(d for d in r if d < E)[-22:]
+    if len(prev) < 22:
+        return None
+    v = [r[d] for d in prev]
+    return (v[-1] + float(np.mean(v[-5:])) + float(np.mean(v))) / 3.0
+
+
+def tvol_eval(E, trend_row, ranges=None):
+    if trend_row is None:
+        return _pending("wait_trend", "夜盤跟勢那一晚還沒有定論")
+    if trend_row["decision"] == "不做":
+        return _none_row("tvol", E, "trend_none", "夜盤跟勢這晚不做：%s" % (trend_row.get("reason") or ""))
+    f = tvol_forecast(E, ranges)
+    if f is None:
+        return _none_row("tvol", E, "no_hist", "前面不到 22 晚的夜盤資料，判不出安靜不安靜 ⇒ 不做",
+                         {"trend_points": trend_row.get("points")})
+    if f >= TVOL_THR:
+        row = _derive_copy("tvol", trend_row, "近期夜盤振幅 %.2f%% ≥ %.2f%%（大波動晚）⇒ 照做" % (f, TVOL_THR))
+        row["vol_fc"] = round(f, 2)
+        return row
+    return _none_row("tvol", E, "quiet_skip", "近期夜盤振幅 %.2f%% < %.2f%%（安靜的晚上）⇒ 不做" % (f, TVOL_THR),
+                     {"trend_points": trend_row.get("points"), "vol_fc": round(f, 2)})
+
+
 def _walk_bracket(mm, H, L, C, i0, d, entry, w, exit_min=None):
     """從第 i0 根之後走 1 分 K：停利停損同寬 w（w=None ⇒ 不設）；同一根兩邊都碰 ⇒ 停損（保守）。
     ⇒ (出場價, 原因, 出場那根的標籤分鐘) 或 None（進場後沒有 K 棒）。"""
@@ -1219,7 +1277,8 @@ DERIVED_EVAL = {"tlong": lambda E, bars, rows: tlong_eval(E, rows.get(("trend", 
                 "nunion": lambda E, bars, rows: nunion_eval(E, bars, rows.get(("trend", str(E))),
                                                             rows.get(("tsm", str(E)))),
                 "hold": lambda E, bars, rows: hold_eval(E, bars, rows.get(("union", str(E))),
-                                                        rows.get(("trend", str(E))))}
+                                                        rows.get(("trend", str(E)))),
+                "tvol": lambda E, bars, rows: tvol_eval(E, rows.get(("trend", str(E))))}
 
 
 # ══ 落地 ══════════════════════════════════════════════════════════════
@@ -1865,6 +1924,10 @@ def _rule_text(lane):
     if lane == "tlong":
         return ("跟「夜盤跟勢」一樣，但**只做多**：它做空的晚上改成不做。"
                 "目的是少掉做空那半的大虧（歷史最大連續虧損約少四分之三），代價是每月少一些。⛔ 前瞻考試中，不會下單")
+    if lane == "tvol":
+        return ("跟「夜盤跟勢」一樣，但**只在大波動的晚上做**：前 1 晚、前 5 晚、前 22 晚的夜盤振幅平均 ≥ %.2f%% 才照做，"
+                "安靜的晚上不做。回測（事後題）每月差不多、交易少一半、最大回落從約 4,700 降到約 2,000 點。⛔ 前瞻考試中，不會下單"
+                % TVOL_THR)
     if lane == "nunion":
         return ("「夜盤跟勢」有做就照它；它不做、但「台積電快攻」有做的晚上，"
                 "晚 5 分鐘（美股開盤 +%d 分）照台積電快攻的方向與停利停損做 1 口，04:58 平。⛔ 前瞻考試中，不會下單"
@@ -1954,6 +2017,17 @@ def _rule_detail(lane):
                           {"k": "想看的事", "v": "歷史上做空那半一直比較弱；只做多每月少約 65 點，"
                                              "但最大連續虧損從約 4,700 點降到約 1,300 點"},
                           {"k": "為什麼在這裡", "v": _why},
+                          {"k": "成本", "v": _fee_txt(TREND_FEE + TREND_SPREAD,
+                                                   "（手續費 %g ＋ 買賣價差 %g）" % (TREND_FEE, TREND_SPREAD))}]}
+    if lane == "tvol":
+        return {"plain": "跟夜盤跟勢一樣，但安靜的晚上不做，只做最近夜盤振幅大的晚上。",
+                "steps": [{"k": "怎麼來的", "v": "直接讀「夜盤跟勢」那一晚的定論（⛔ 不重算）"},
+                          {"k": "近期夜盤振幅", "v": "前 1 晚＋前 5 晚平均＋前 22 晚平均的夜盤振幅（最高−最低÷開盤）÷3，只用今晚以前"},
+                          {"k": "大波動晚（≥ %.2f%%）" % TVOL_THR, "v": "照抄夜盤跟勢（進場、出場、點數都一樣）"},
+                          {"k": "安靜的晚上", "v": "不做"},
+                          {"k": "想看的事", "v": "回測六年：安靜的晚上合計幾乎是 0；拿掉它們每月 +296 vs +279、"
+                                             "最大回落約 4,700 → 約 2,000 點"},
+                          {"k": "為什麼在這裡", "v": "⚠️ 這是看過結果才提的題目（同一份資料回測一定好看）⇒ **用從現在起的新資料考**。⛔ 這一條不會下單"},
                           {"k": "成本", "v": _fee_txt(TREND_FEE + TREND_SPREAD,
                                                    "（手續費 %g ＋ 買賣價差 %g）" % (TREND_FEE, TREND_SPREAD))}]}
     if lane == "nunion":
@@ -2312,13 +2386,13 @@ def day_chart(key, day, rows=None):
     r = rows.get((key, day))
     out = {"ok": True, "key": key, "name": LANE_NAME[key], "date": day,
            # ⭐ 台積電快攻也是夜盤（⛔ 不可以畫成日盤那張圖）
-           "session": ("night" if key in ("night", "tsm", "trend", "tlong", "nunion") else "day"),
+           "session": ("night" if key in ("night", "tsm", "trend", "tlong", "nunion", "tvol") else "day"),
            "bars": [], "marks": [], "lines": [], "zones": [], "notes": []}
     if r is None:
         out["notes"].append("這一天沒有這一條的定論")
         return out
     out.update({k: r.get(k) for k in ("decision", "reason", "points", "exit_reason", "calc")})
-    if key in ("night", "tsm", "trend", "tlong", "nunion"):
+    if key in ("night", "tsm", "trend", "tlong", "nunion", "tvol"):
         return _night_chart(out, r, lane=key)
     # ⭐ 聯軍留倉：有留倉的那天畫**夜盤**那一段（進場在日盤、圖上標不到 ⇒ 講出來）；沒留倉的照聯軍日盤圖
     if key == "hold" and r.get("held"):

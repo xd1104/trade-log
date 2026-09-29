@@ -83,6 +83,23 @@ chk("  做空 ⇒ 不做、記下它的點數", (r["decision"], r["why"], r["tre
 chk("  跟勢不做 ⇒ 不做", S.tlong_eval(E, trend("不做"))["decision"], "不做")
 say(S.tlong_eval(E, None).get("pending"), "  跟勢沒定論 ⇒ pending（⛔ 不猜）")
 
+print("\n=== ①b 跟勢大波動晚（tvol，2026-09-30）===")
+_d0 = E - timedelta(days=60)
+_calm = {_d0 + timedelta(days=i): 0.8 for i in range(40)}         # 前面都很安靜
+_loud = {_d0 + timedelta(days=i): 1.5 for i in range(40)}         # 前面都很吵
+chk("  預測值＝(前1＋前5平均＋前22平均)÷3", round(S.tvol_forecast(E, _loud), 4), 1.5)
+r = S.tvol_eval(E, trend("做空", -60.0), _loud)
+chk("  大波動晚 ⇒ 照抄夜盤跟勢", (r["lane"], r["decision"], r["points"], r["vol_fc"]), ("tvol", "做空", -60.0, 1.5))
+r = S.tvol_eval(E, trend("做多", 80.0), _calm)
+chk("  安靜的晚上 ⇒ 不做、記下它原本的點數", (r["decision"], r["why"], r["trend_points"]), ("不做", "quiet_skip", 80.0))
+chk("  跟勢不做 ⇒ 不做", S.tvol_eval(E, trend("不做"), _loud)["decision"], "不做")
+say(S.tvol_eval(E, None, _loud).get("pending"), "  跟勢沒定論 ⇒ pending（⛔ 不猜）")
+_few = {_d0 + timedelta(days=i): 1.5 for i in range(10)}
+chk("  前面不到 22 晚 ⇒ 不做（判不出來）", S.tvol_eval(E, trend("做多", 5.0), _few)["why"], "no_hist")
+_leak = dict(_calm); _leak[E] = 9.9; _leak[E + timedelta(days=1)] = 9.9
+chk("  ⛔ 今晚與之後的振幅不准用（偷看未來）", round(S.tvol_forecast(E, _leak), 4), 0.8)
+chk("  門檻固定 1.03%", S.TVOL_THR, 1.03)
+
 print("\n=== ② 夜盤聯軍 ===")
 r = S.nunion_eval(E, FLAT, trend("做空", 77.0), tsm("做多"))
 chk("  跟勢有做 ⇒ 照跟勢（⛔ 不管台積電）", (r["decision"], r["points"], r["from"]), ("做空", 77.0, "trend"))
