@@ -777,7 +777,8 @@ chk("  ⛔ 後端端出去的字裡沒有舊名字",
 say(all(body["lanes"][ln]["rule"] and "沒有接上" not in body["lanes"][ln]["rule"] for ln in S.LANES),
     "  八條都有規則句（後端給的）")
 L = body.get("lanes", {}).get("fast", {})
-say(len(L.get("months", [])) == 6 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 6 個月、第一個標「本月」")
+# ⚠️ 2026-09-30 Benson：「本月加前三個月就好，6 個月太多」⇒ 4 個月（⛔ 寫死 4，不拿 S.MONTHS_SHOWN 比自己）
+say(len(L.get("months", [])) == 4 and L["months"][0]["this"] and L["months"][0]["label"] == "本月", "  月合計 4 個月（本月＋前三個月）、第一個標「本月」")
 say(all(k in L for k in ("recent", "today", "pending", "rule", "fetch")) and "errors" in body and "file" in body,
     "  有最近清單、今天狀態、資料缺原因、錯誤計數、檔案計數")
 chk("  note 寫「成本已扣；夜盤用 1 分 K 近似」", body.get("note"), "成本已扣；夜盤用 1 分 K 近似")
@@ -1034,6 +1035,38 @@ say(_re.search(r"try\{[^}]*localStorage\.getItem\('sm_sess'\)", sjs_code) is not
     and _re.search(r"try\{[^}]*localStorage\.setItem\('sm_sess'", sjs_code) is not None,
     "  記住上次看哪一盤：localStorage 的讀寫都包 try（被擋也照常畫）")
 say("SM.keys=SM.sess+':'" in sjs_code, "  換盤一定重建骨架（骨架鍵含 sess，否則切過去還是舊的那幾條）")
+
+
+# ══ ⑦e 卡上三個數字：月均／最大連輸／單筆最大輸（2026-09-30 Benson 交辦）══════════════
+print("\n=== ⑦e 卡上三個數字 ===")
+# ⛔ 答案是手算的（寫在這裡），⛔ 不准拿 _stats 自己再算一次來比。NOW＝2026-10-23 ⇒ 本月＝10 月、不算進月均。
+#    8 月：+10、−5、（不做）、−7 ⇒ −2；9 月：0、−3、−2、−1、+4 ⇒ −2；10 月：−20（本月）
+#    連輸：[−5,−7]（中間「不做」不打斷）2 筆；[−3,−2,−1] 3 筆 −6（0 點那筆打斷前一段）；[−20] 1 筆 ⇒ 最長 3 筆、−6
+_sf = [{"date": "2026-08-03", "decision": "做多", "points": 10.0},
+       {"date": "2026-08-04", "decision": "做空", "points": -5.0},
+       {"date": "2026-08-05", "decision": "不做", "points": None},
+       {"date": "2026-08-06", "decision": "做多", "points": -7.0},
+       {"date": "2026-09-01", "decision": "做多", "points": 0.0},
+       {"date": "2026-09-02", "decision": "做多", "points": -3.0},
+       {"date": "2026-09-03", "decision": "做空", "points": -2.0},
+       {"date": "2026-09-04", "decision": "做多", "points": -1.0},
+       {"date": "2026-09-05", "decision": "做多", "points": 4.0},
+       {"date": "2026-10-01", "decision": "做多", "points": -20.0}]
+chk("  手算的一組（亂序餵進去也一樣）", S._stats(list(reversed(_sf)), NOW),
+    {"trades": 9, "months": 2, "since": "2026-08", "until": "2026-09", "avg_month": -2.0,
+     "streak_n": 3, "streak_pts": -6.0, "streak_end": "2026-09-04", "worst": -20.0, "worst_date": "2026-10-01"})
+_tie = [{"date": "2026-08-0%d" % (i + 1), "decision": "做多", "points": p} for i, p in enumerate((-1.0, -1.0, 1.0, -5.0, -5.0))]
+chk("  一樣長的兩段連輸 ⇒ 取賠比較多的那段", (S._stats(_tie, NOW)["streak_n"], S._stats(_tie, NOW)["streak_pts"]), (2, -10.0))
+chk("  沒有任何紀錄 ⇒ 全部是「沒有」，⛔ 不是 0", S._stats([], NOW),
+    {"trades": 0, "months": 0, "since": None, "until": None, "avg_month": None,
+     "streak_n": 0, "streak_pts": 0.0, "streak_end": None, "worst": None, "worst_date": None})
+chk("  只有本月的紀錄 ⇒ 月均是「還沒有」（⛔ 不拿沒過完的月份平均）",
+    S._stats([{"date": "2026-10-02", "decision": "做多", "points": 5.0}], NOW)["avg_month"], None)
+chk("  壞列（點數不是數字）不算進去、也不讓端點掛掉",
+    S._stats([{"date": "2026-09-02", "decision": "做多", "points": "x"}, {"date": "2026-09-03", "decision": "做多", "points": True},
+              {"date": "2026-09-04", "decision": "做多", "points": -3.0}], NOW)["trades"], 1)
+chk("  /api/sim/state 每條都帶 stats", [k for k, v in S.state(NOW)["lanes"].items() if "avg_month" not in v.get("stats", {})], [])
+say("function smStats" in sjs_code and "smStats(L.stats)" in sjs_code, "  卡上畫的是後端給的 stats（⛔ 前端不自己加總）")
 
 
 # ══ ⑪ 新的四條（2026-09-16）═══════════════════════════════════════════
@@ -1442,7 +1475,7 @@ say(len(_ctxn) >= 1 and len(_orbn) >= 1, "  自證：兩個計數器真的有量
 say(len([d for d in set(_hits) if d == FD]) == 1 and len(_hits) >= 1,
     "  自證：真的有量到 load_day 被呼叫", "共 %d 次" % len(_hits))
 _st2 = S.state(NOW)
-chk("  端點端得出七條、每條都有月合計", [ln for ln in _st2["lanes"] if len(_st2["lanes"][ln]["months"]) == 6], LANE_KEYS)
+chk("  端點端得出七條、每條都有月合計（本月＋前三個月）", [ln for ln in _st2["lanes"] if len(_st2["lanes"][ln]["months"]) == 4], LANE_KEYS)
 
 # ⛔ 一條壞掉只停那一條，其他四條照算（⛔ 不是整天停擺）
 S.SIM_DIR = TMP / "sim_lanes3"

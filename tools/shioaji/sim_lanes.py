@@ -186,7 +186,7 @@ WINDOW_N = 10                             # 最近 10 個交易日／晚上
 QUIET_FROM, QUIET_TO = dtime(8, 30), dtime(13, 50)
 RETRY_S = 600                             # 失敗隔 10 分鐘
 LOOP_EVERY = 60.0
-MONTHS_SHOWN = 6
+MONTHS_SHOWN = 4          # 卡上＝本月＋前三個月（2026-09-30 Benson：「6 個月太多」；點進去的內頁照舊給全部）
 RECENT_N = 15
 
 _MONTH_RE = re.compile(r"^\d{4}-\d{2}\.jsonl$")
@@ -2221,6 +2221,39 @@ def _months_all(lane_rows, now):
     return out
 
 
+def _stats(lane_rows, now):
+    """
+    ⭐ 卡上的三個數字（2026-09-30 Benson：「每個策略寫出月均獲利、最大連輸、單筆最大輸」）。
+    ⛔ 只描述**已經有的定論**（回填＋即時），⛔ 不是預估。跟 `_months()` 同一種算法：只算有做、點數是數字的那幾筆。
+    - 月均：**不含本月**（還沒過完的月份會把平均拉低）；分母＝有定論的月份數（⛔ 中間沒算過的月份不當 0 點，
+      跟 `_months_all` 同一個原則）。一個完整的月都還沒有 ⇒ None。
+    - 最大連輸：照日期順序、**連續賠錢筆數最多**的那一段（一樣長取賠比較多的），附那一段合計點數。
+      「不做」的日子不算一筆 ⇒ 不會打斷連輸；0 點算沒賠 ⇒ 會打斷。
+    - 單筆最大輸：點數最低的那一筆（沒賠過 ⇒ None）。
+    """
+    cur = "%04d-%02d" % (now.year, now.month)
+    rows = sorted(lane_rows, key=lambda r: r["date"])
+    tr = [r for r in rows if r["decision"] != "不做"
+          and not isinstance(r.get("points"), bool) and isinstance(r.get("points"), (int, float))]
+    done = sorted({r["date"][:7] for r in rows if r["date"][:7] < cur})
+    tot = sum(r["points"] for r in tr if r["date"][:7] < cur)
+    best_n, best_sum, best_end, n, s = 0, 0.0, None, 0, 0.0
+    for r in tr:
+        if r["points"] < 0:
+            n, s = n + 1, s + r["points"]
+            if n > best_n or (n == best_n and s < best_sum):
+                best_n, best_sum, best_end = n, s, r["date"]
+        else:
+            n, s = 0, 0.0
+    worst = min(tr, key=lambda r: r["points"]) if tr else None
+    lost = worst is not None and worst["points"] < 0
+    return {"trades": len(tr), "months": len(done),
+            "since": done[0] if done else None, "until": done[-1] if done else None,
+            "avg_month": round(tot / len(done), 1) if done else None,
+            "streak_n": best_n, "streak_pts": round(best_sum, 1), "streak_end": best_end,
+            "worst": round(worst["points"], 1) if lost else None, "worst_date": worst["date"] if lost else None}
+
+
 def _slim(r):
     # ⭐ `calc` 是**怎麼算出來的**（2026-09-17 加）：`"backfill"`＝`backfill_sim.py` 事後重算的、
     #    **沒有這個欄位**＝面板當天即時算的。⛔ 不做資料遷移（舊列本來就沒有 ⇒ 就是即時）。
@@ -2265,7 +2298,7 @@ def state(now=None):
         lr = sorted((r for (ln, _d), r in rows.items() if ln == lane), key=lambda r: r["date"], reverse=True)
         pend = STATE["pending"][lane]
         lanes[lane] = {"name": LANE_NAME[lane], "sess": LANE_SESS[lane], "rule": _rule_text(lane), "src": SRC_NAME[lane],
-                       "months": _months(now, lr), "recent": [_slim(r) for r in lr[:RECENT_N]],
+                       "months": _months(now, lr), "stats": _stats(lr, now), "recent": [_slim(r) for r in lr[:RECENT_N]],
                        "n_rows": len(lr), "today": _today(lane, now, rows),
                        "pending": [{"date": d, "why": p["why"], "msg": p["msg"]}
                                    for d, p in sorted(pend.items(), reverse=True)],

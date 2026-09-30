@@ -6016,6 +6016,13 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .sm-lt b{font-size:14px; color:var(--text); font-weight:650; line-height:1.3; overflow-wrap:anywhere}
 .sm-lt small{font-size:10.5px; color:var(--faint)}
 .sm-mh,.sm-lh{font-size:10.5px; color:var(--faint); letter-spacing:1px; margin:9px 0 4px}
+/* ⭐ 2026-09-30 卡上三個數字：月均／最大連輸／單筆最大輸（Benson 要的；後端 stats，⛔ 前端不算） */
+.sm-stats{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin:9px 0 1px}
+.sm-stats>div{background:var(--surface-2); border-radius:var(--r-sm); padding:6px 8px; display:flex; flex-direction:column; gap:1px; min-width:0}
+.sm-stats span{font-size:10.5px; color:var(--faint); letter-spacing:.5px}
+.sm-stats b{font-size:14px; font-weight:650; color:var(--text)}
+.sm-stats b.up{color:var(--up)} .sm-stats b.down{color:var(--down)}   /* ⚠️ 上一行比 .up／.down 權重高，不補這行紅漲綠跌會被蓋成白色（第一版就這樣） */
+.sm-stats i{font-style:normal; font-size:10px; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .sm-months{display:flex; flex-direction:column; gap:2px}
 .sm-months>*{flex:none}
 .sm-m{display:flex; justify-content:space-between; gap:6px; font-size:12px; padding:3px 5px; border-radius:var(--r-sm)}
@@ -7949,12 +7956,27 @@ function smMonths(ms,all){
   });
   return h+'</div>';
 }
+// ⭐ 2026-09-30 卡上三個數字（後端 `_stats` 算好給；⛔ 前端不自己加總）。
+//    月均不含本月（還沒過完）⇒ 底下小字寫出是哪幾個月；還沒有完整的月 ⇒ 寫出來，⛔ 不顯示 0。
+function smStats(s){
+  if(!s||!s.trades) return '<div class="sm-stats"><div><span>月均</span><b>—</b><i>還沒有做過的紀錄</i></div></div>';
+  const cell=(lab,val,cls,sub)=>'<div><span>'+lab+'</span><b class="lb-mono '+(cls||'')+'">'+val+'</b><i>'+sub+'</i></div>';
+  return '<div class="sm-stats">'
+    +cell('月均',s.avg_month==null?'—':smPts(s.avg_month),smCls(s.avg_month),
+        s.months?esc(s.since)+'～'+esc(s.until)+'・'+s.months+' 個月':'還沒有過完的月')
+    +cell('最大連輸',s.streak_n?s.streak_n+' 筆':'—','',
+        s.streak_n?'合計 '+smPts(s.streak_pts)+' 點':'沒有連續賠過')
+    +cell('單筆最大輸',s.worst==null?'—':smPts(s.worst),s.worst==null?'':'down',
+        s.worst_date?smDayY(s.worst_date):'沒有賠過')
+    +'</div>';
+}
 function smLane(L){
   if(!L) return '<div class="sm-empty">讀不到</div>';
   const t=L.today||{};
-  // ⭐ 由上而下：名字 → 每月累計點數（他最在意的，放第一個）→ 今天 → 點進去的提示
-  // ⭐ 2026-09-17：「最近一筆」與規則句搬進內頁（Benson 要的）—— 卡上只留他天天在看的那三塊。
+  // ⭐ 由上而下：名字 → 三個數字（月均／最大連輸／單筆最大輸）→ 每月累計點數（本月＋前三個月）→ 今天 → 點進去的提示
+  // ⭐ 2026-09-17：「最近一筆」與規則句搬進內頁（Benson 要的）—— 卡上只留他天天在看的那幾塊。
   let h='<div class="sm-lt"><b>'+esc(L.name)+'</b><small>資料：'+esc(L.src)+'</small></div>'
+    +smStats(L.stats)
     +'<div class="sm-mh">每月累計點數</div>'+smMonths(L.months,false);
   h+='<div class="sm-lh">今天</div><div class="sm-today">'+(t.date?'<em>'+smDay(t.date)+'</em>':'')
     +(t.row?(esc(t.row.decision)+(t.row.points!=null?'　<span class="'+smCls(t.row.points)+'">'+smPts(t.row.points)+' 點</span>':'')):esc(t.msg||''))+'</div>';
