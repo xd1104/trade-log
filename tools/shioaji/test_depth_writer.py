@@ -148,6 +148,7 @@ try:
     chk("  微台 ⇒ 是", im("TMFJ6"), True)
     chk("  大台 ⇒ 不是", im("TXFJ6"), False)
     chk("  選擇權 ⇒ 不是", im("TXO33900J6"), False)
+    chk("  小台 ⇒ 不是（2026-09-30 加錄）", im("MXFJ6"), False)
     chk("  代碼讀不到 ⇒ 當成是（跟以前一樣）", (im(None), im("")), (True, True))
     chk("  connect() 有呼叫 depth_subscribe", "depth_subscribe(api, contract)" in
         ast.get_source_segment(src, fns["connect"]), True)
@@ -185,8 +186,10 @@ try:
         def unsubscribe(self, c, **kw):
             subd.remove(c.code)
 
+    mxfs = [C("MXFR1", delivery_month="202610"), C("MXFK6", delivery_month="202611"),
+            C("MXFJ6", delivery_month="202610")]
     api = types.SimpleNamespace(
-        Contracts=types.SimpleNamespace(Futures=types.SimpleNamespace(TXF=futs),
+        Contracts=types.SimpleNamespace(Futures=types.SimpleNamespace(TXF=futs, MXF=mxfs),
                                         Options=types.SimpleNamespace(TXO=opts)),
         quote=Quote(), snapshots=lambda cs: [types.SimpleNamespace(close=34567.0)])
     fake_sj = types.ModuleType("shioaji")
@@ -203,11 +206,23 @@ try:
     got = ds(api, C("TMFJ6", delivery_month="202610"), today=dt.date(2026, 9, 29))
     codes = [c.code for c in got]
     chk("  第一個是同交割月的大台（不是 R1）", codes[0], "TXFJ6")
-    chk("  20 個選擇權", len(codes) - 1, 20)
-    chk("  到期日 > 今天（當天到期的不要）", {c.delivery_date for c in got[1:]}, {dt.date(2026, 10, 21)})
-    chk("  履約價是 34567 附近 10 個", sorted({c.strike_price for c in got[1:]}),
+    chk("  第二個是同交割月的小台（不是 R1）", codes[1], "MXFJ6")
+    op_ = [c for c in got if c.code.startswith("TXO")]
+    chk("  20 個選擇權", len(op_), 20)
+    chk("  到期日 > 今天（當天到期的不要）", {c.delivery_date for c in op_}, {dt.date(2026, 10, 21)})
+    chk("  履約價是 34567 附近 10 個", sorted({c.strike_price for c in op_}),
         [float(k) for k in range(34100, 35001, 100)])
-    chk("  真的有訂", len(subd), 21)
+    chk("  真的有訂（大台＋小台＋20 個選擇權）", len(subd), 22)
+    ns["DEPTH_SUBS"].update(paused_day=None, contracts=[], codes=[])
+    subd.clear()
+    api_nomxf = types.SimpleNamespace(
+        Contracts=types.SimpleNamespace(Futures=types.SimpleNamespace(TXF=futs),
+                                        Options=types.SimpleNamespace(TXO=opts)),
+        quote=Quote(), snapshots=lambda cs: [types.SimpleNamespace(close=34567.0)])
+    chk("  ⛔ 小台找不到 ⇒ 只少錄它、大台與選擇權照訂", len(ds(api_nomxf, C("TMFJ6", delivery_month="202610"),
+                                                     today=dt.date(2026, 9, 29))), 21)
+    subd.clear()
+    got = ds(api, C("TMFJ6", delivery_month="202610"), today=dt.date(2026, 9, 29))
     ns["depth_pause"](api, "測試")
     chk("  流量太高 ⇒ 退訂全部研究用合約", subd, [])
     chk("  同一天不再訂", ds(api, C("TMFJ6", delivery_month="202610")), [])

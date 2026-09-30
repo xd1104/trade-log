@@ -150,7 +150,7 @@ TICK_DIR = HERE / "tick_logs"
 TICKS = tick_writer.TickWriter(TICK_DIR,
                                win_start=SESSION_OPEN, win_end=WATCH_END)
 
-# ⭐ 2026-09-26 研究用：**全天**五檔（微台＋大台近月＋選擇權價平上下 5 檔）落地到 depth_logs/。
+# ⭐ 2026-09-26 研究用：**全天**五檔（微台＋大台近月＋選擇權價平上下 5 檔；2026-09-30 加小台）落地到 depth_logs/。
 #    券商不給過去的五檔，錯過就補不回來。⛔ 同一條鐵律：on_bidask 只 append（depth_writer.push）。
 #    ⛔⛔ 大台／選擇權的報價**絕對不可以**進 Today（停損看的價）—— on_bidask 用代碼開頭擋（見 _is_main_code）。
 DEPTH_DIR = HERE / "depth_logs"        # ⛔ gitignore；備份只帶壓好的 .gz
@@ -182,6 +182,17 @@ def depth_subscribe(api, main_contract, today=None, px=None):
         same = [c for c in txf if c.delivery_month == getattr(main_contract, "delivery_month", None)]
         fut = (same or txf)[0]
         subs.append(fut)
+        # ⭐ 2026-09-30 加小台（Benson：口數多了要換小台，先錄一年的價差／掛單量再決定）。
+        #    ⛔ 自己包 try：小台找不到只少錄它，大台與選擇權照訂。
+        try:
+            mxf = [c for c in api.Contracts.Futures.MXF
+                   if not c.code.startswith("MXFR") and getattr(c, "delivery_month", "")]
+            mxf.sort(key=lambda c: c.delivery_month)
+            ms = [c for c in mxf if c.delivery_month == getattr(main_contract, "delivery_month", None)]
+            if ms or mxf:
+                subs.append((ms or mxf)[0])
+        except Exception as e:
+            print("⚠️ 【五檔錄製】小台找不到（其他照錄）：%s" % str(e)[:80], flush=True)
         if px is None:
             try:
                 px = float(api.snapshots([fut])[0].close)
@@ -201,8 +212,10 @@ def depth_subscribe(api, main_contract, today=None, px=None):
             api.quote.subscribe(c, quote_type=sj.constant.QuoteType.BidAsk,
                                 version=sj.constant.QuoteVersion.v1)
         DEPTH_SUBS.update(err=None, at=datetime.now().strftime("%m-%d %H:%M"))
+        n_opt = sum(1 for c in subs if str(c.code).startswith("TXO"))
         print("【五檔錄製】已訂 %s＋選擇權 %d 個（價平 %s 附近，%s 到期）" % (
-            fut.code, len(subs) - 1, int(px) if px else "?", exp or "—"), flush=True)
+            "、".join(c.code for c in subs if not str(c.code).startswith("TXO")), n_opt,
+            int(px) if px else "?", exp or "—"), flush=True)
     except Exception as e:
         DEPTH_SUBS["err"] = "訂閱失敗：%s" % str(e)[:120]
         print("⚠️ 【五檔錄製】" + DEPTH_SUBS["err"] + "（真單與停損不受影響）", flush=True)
@@ -228,6 +241,7 @@ def depth_view():
     bc = s.get("by_code") or {}
     n_tmf = sum(v for k, v in bc.items() if str(k).startswith(PRODUCT))
     n_txf = sum(v for k, v in bc.items() if str(k).startswith("TXF"))
+    n_mxf = sum(v for k, v in bc.items() if str(k).startswith("MXF"))
     n_opt = sum(v for k, v in bc.items() if str(k).startswith("TXO"))
     lost = s["dropped"] + s["lost_io"]
     if DEPTH_SUBS["paused_day"] == str(date.today()):
@@ -237,8 +251,9 @@ def depth_view():
     else:
         head, warn = "五檔錄製：訂了 %d 個合約" % (len(DEPTH_SUBS["codes"]) + 1), False
     # ⚠️ 計數只算「面板這次開啟之後」（重啟就歸零；檔案本身是接著寫、不會少）⇒ 句子要講清楚，別讓人以為只錄了幾百筆
-    msg = "%s（%s 這次開啟後已錄 大台 %s／微台 %s／選擇權 %s 筆）" % (
-        head, (s.get("day") or "今天")[5:], format(n_txf, ","), format(n_tmf, ","), format(n_opt, ","))
+    msg = "%s（%s 這次開啟後已錄 大台 %s／小台 %s／微台 %s／選擇權 %s 筆）" % (
+        head, (s.get("day") or "今天")[5:], format(n_txf, ","), format(n_mxf, ","), format(n_tmf, ","),
+        format(n_opt, ","))
     if lost:
         msg += "　⚠️ 掉了 %s 筆" % format(lost, ",")
         warn = True
