@@ -458,7 +458,8 @@ class H(BaseHTTPRequestHandler):
             rows = LP.equity_hist_read()[-LP.EQUITY_HIST_MAX:]
             return self._send(200, json.dumps({"ok": True, "rows": [
                 {"date": r.get("date"), "equity": r.get("equity"),
-                 "deposit": r.get("deposit")} for r in rows]}, ensure_ascii=False))
+                 "deposit": r.get("deposit")} for r in rows],
+                "goal": LP.goal_view()}, ensure_ascii=False))   # ⭐ 2026-09-30 目標卡（走產品那一支）
         if self.path.startswith("/api/state"):
             return self._send(200, json.dumps(state(), ensure_ascii=False))
         if self.path.startswith("/api/bars"):

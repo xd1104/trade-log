@@ -76,6 +76,12 @@ try:
 except Exception as _hc_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
     health = None
     print("⚠️ 【健檢】載入失敗（其他功能不受影響）：%s" % _hc_err, flush=True)
+# 【帳戶】的目標卡（2026-09-30）。⛔ 純計算、不讀不寫檔；包 try 同上理由。
+try:
+    import goal
+except Exception as _gl_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
+    goal = None
+    print("⚠️ 【目標】載入失敗（其他功能不受影響）：%s" % _gl_err, flush=True)
 # 【策略實驗室】歷史逐筆回測（唯讀）。⛔ 不 import broker、不碰任何下單路徑。
 # ⛔⛔ 一定要包 try（2026-09-14 lab-qa 退件 R1）：這是研究功能，它載入失敗（少一個套件、
 #    檔案壞掉）絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
@@ -5243,6 +5249,30 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .ac .spark{margin-top:9px}
 .ac .spark svg{display:block; width:100%; height:42px}
 .ac .spark .cap{font-size:10.5px; color:var(--faint); margin-top:3px}
+/* ⭐ 2026-09-30 目標卡 */
+.ac.gl{margin-top:12px}
+.gl-pos{font-size:14px; font-weight:650; color:var(--text); line-height:1.6; margin-top:7px}
+.gl-bar{height:8px; border-radius:4px; background:var(--line-soft); margin-top:9px; overflow:hidden}
+.gl-bar i{display:block; height:100%; background:var(--gold); border-radius:4px}
+.gl-scale{display:flex; justify-content:space-between; font-size:10.5px; color:var(--faint); margin-top:3px;
+  font-family:var(--font-mono)}
+.gl-chart{margin-top:10px}
+.gl-chart svg{display:block; width:100%; height:auto}
+.gl-key{display:flex; flex-wrap:wrap; gap:14px; font-size:10.5px; color:var(--faint); margin-top:4px}
+.gl-key i{display:inline-block; width:16px; height:0; vertical-align:middle; margin-right:5px}
+.gl-key .k-t{border-top:2px solid var(--gold)} .gl-key .k-s{border-top:2px dashed var(--dim)}
+.gl-key .k-a{border-top:2px solid var(--text)}
+.gl-h{font-size:12px; font-weight:650; color:var(--text); margin-top:14px}
+.gl-tw{overflow-x:auto; margin-top:6px}
+.gl-t{width:100%; border-collapse:collapse; font-size:11.5px; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; white-space:nowrap}
+.gl-t th{font-weight:600; color:var(--faint); text-align:right; padding:4px 8px; border-bottom:1px solid var(--line-soft)}
+.gl-t td{color:var(--dim); text-align:right; padding:4px 8px; border-bottom:1px solid var(--line-soft)}
+.gl-t th:first-child,.gl-t td:first-child{text-align:left}
+.gl-t tr.done td{color:var(--faint)}
+.gl-t tr.now td{color:var(--text); font-weight:650}
+.gl-t .up{color:var(--up)} .gl-t .down{color:var(--down)}
+.gl-notes{font-size:10.5px; color:var(--faint); line-height:1.7; margin-top:10px}
 
 /* ── ① 跨分頁警報：站在練習分頁也看得到 ───────────────────────── */
 .n-x{border-radius:var(--r-md); padding:12px 14px; font-size:13px; font-weight:700;
@@ -6384,6 +6414,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         曲線另外拿 /api/account/hist（一天才多一個點，10 分鐘拿一次）。 -->
 <div id="tab-acct" hidden>
   <div id="acct"></div>
+  <!-- ⭐ 2026-09-30 目標卡：整份從 /api/account/hist 的 `goal` 來（goal.py 算），⛔ 前端不自己算 -->
+  <div id="acctgoal"></div>
 </div>
 
 <!-- ══════════ 【模擬】：七條策略每天事後照規則算一次（⛔ 不會下單）══════════
@@ -6758,6 +6790,7 @@ function acctPoll(){
  fetch('/api/account/hist',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(x=>{
    ACCT.pending=false;
    ACCT.hist=(x&&x.ok&&Array.isArray(x.rows))?x.rows:[];
+   ACCT.goal=(x&&x.goal)?x.goal:null;
    ACCT.err=(x&&!x.ok&&x.msg)?String(x.msg):'';
  }).catch(()=>{ ACCT.pending=false; ACCT.hist=ACCT.hist||[]; });
 }
@@ -6826,6 +6859,63 @@ function acctHTML(s){
         '）</div>'):'')+
    acctSpark(ACCT.hist)+
    '</div>';
+}
+
+/* ══════════ 【帳戶】目標卡（2026-09-30 Benson：「讓我有一個目標可以看」）══════════
+   ⛔ 句子、日期、口數、每月數字**全部後端算**（goal.py）；前端只負責畫。
+   ⛔ 兩條是「計畫線」不是猜測：保守線＝只存錢、目標線＝存錢＋打折後獲利（他 09-30 選兩條都畫）。 */
+function goalWan(v){ return (Math.round(v/1000)/10)+' 萬'; }
+function goalChart(G){
+ const L=(G.line||[]).filter(p=>p&&p.s!=null); if(L.length<2) return '';
+ const A=G.actual||[];
+ const t0=Date.parse(L[0].d), t1=Date.parse(L[L.length-1].d), tr=(t1-t0)||1;
+ const steps=G.steps||[];
+ const hi=Math.max(steps.length?steps[steps.length-1].eq:0, ...L.map(p=>p.s))*1.04, lo=0;
+ const W=640,H=230,pl=46,pr=10,pt=10,pb=22;
+ const X=d=>pl+(W-pl-pr)*((Date.parse(d)-t0)/tr), Y=v=>pt+(H-pt-pb)*(1-(v-lo)/(hi-lo));
+ const path=(pts,k)=>pts.filter(p=>p[k]!=null).map((p,i)=>(i?'L':'M')+X(p.d).toFixed(1)+' '+Y(p[k]).toFixed(1)).join(' ');
+ let g='';
+ steps.forEach(st=>{ const y=Y(st.eq);
+   g+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y.toFixed(1)+'" y2="'+y.toFixed(1)+'" stroke="var(--line-soft)" stroke-width="1"></line>'+
+      '<text x="'+(pl-5)+'" y="'+(y+3.5).toFixed(1)+'" text-anchor="end" font-size="10" fill="var(--faint)">'+(st.eq/10000)+'萬</text>'; });
+ let yr='';
+ for(let y=new Date(t0).getFullYear()+1; Date.parse(y+'-01-01')<=t1; y++){
+   const x=X(y+'-01-01').toFixed(1);
+   yr+='<line x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--line-soft)" stroke-dasharray="2 3"></line>'+
+       '<text x="'+x+'" y="'+(H-6)+'" text-anchor="middle" font-size="10" fill="var(--faint)">'+y+'</text>'; }
+ const act=A.length?('<path d="'+path(A,'e')+'" fill="none" stroke="var(--text)" stroke-width="2"></path>'+
+   '<circle cx="'+X(A[A.length-1].d).toFixed(1)+'" cy="'+Y(A[A.length-1].e).toFixed(1)+'" r="4" fill="var(--text)"></circle>'):'';
+ return '<div class="gl-chart"><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="目標線、保守線與實際權益">'+g+yr+
+   '<path d="'+path(L,'s')+'" fill="none" stroke="var(--dim)" stroke-width="1.6" stroke-dasharray="5 4"></path>'+
+   '<path d="'+path(L,'t')+'" fill="none" stroke="var(--gold)" stroke-width="2"></path>'+act+'</svg>'+
+   '<div class="gl-key"><span><i class="k-t"></i>目標線（存錢＋獲利）</span><span><i class="k-s"></i>保守線（只存錢）</span>'+
+   '<span><i class="k-a"></i>實際權益</span></div></div>';
+}
+function goalHTML(G){
+ if(!G) return '';
+ if(!G.ok) return '<div class="ac gl"><div class="hd"><span class="t">目標</span></div><div class="miss">'+esc(G.msg||'')+'</div></div>';
+ const pr=(G.next?Math.max(0,Math.min(100,(G.eq-G.prev)/(G.next-G.prev)*100)):100);
+ const bar='<div class="gl-bar"><i style="width:'+pr.toFixed(1)+'%"></i></div>'+
+   '<div class="gl-scale"><span>'+(G.prev?goalWan(G.prev):'0')+'</span><span>'+
+   (G.next?('下一級 '+goalWan(G.next)):'已到最後一級')+'</span></div>';
+ const rows=(G.steps||[]).map(st=>'<tr class="'+(st.done?'done':'')+(st.now?' now':'')+'">'+
+   '<td>'+(st.done?'✓ ':'')+goalWan(st.eq)+'</td><td>'+esc(st.lots)+'</td>'+
+   '<td>+'+acctMoney(st.monthly)+'</td><td>'+st.topup+'%</td><td>−'+acctMoney(st.worst)+'</td>'+
+   '<td>'+esc(st.done?('已到 '+st.done.slice(5).replace('-','/')):(st.safe_at||'—'))+'</td>'+
+   '<td>'+esc(st.done?'':(st.target_at||'—'))+'</td></tr>').join('');
+ const mon=(G.months||[]).map(m=>'<tr><td>'+esc(m.ym)+(m.live?'（到現在）':'')+'</td>'+
+   '<td>'+acctMoney(m.dep)+'</td><td>'+acctPM(m.net)+'</td><td>+'+acctMoney(m.goal)+'</td></tr>').join('');
+ return '<div class="ac gl"><div class="hd"><span class="t">'+esc(G.title||'目標')+'</span>'+
+   '<span class="at">從 '+esc(String(G.start||'').slice(5).replace('-','/'))+' 起算</span></div>'+
+   '<div class="gl-pos">'+esc(G.pos||'')+'</div>'+bar+
+   '<div class="line">'+esc(G.vs||'')+(G.since?'<br>'+esc(G.since):'')+'</div>'+
+   goalChart(G)+
+   '<div class="gl-h">每一級：要多少錢、做幾口、大概幾月到</div>'+
+   '<div class="gl-tw"><table class="gl-t"><thead><tr><th>權益</th><th>聯軍＋跟勢</th><th>目標每月</th>'+
+   '<th>一年內要補錢</th><th>停損失靈最壞一次</th><th>保守線到</th><th>目標線到</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+   (mon?'<div class="gl-h">每月實際（券商端、已扣掉存入）</div><div class="gl-tw"><table class="gl-t">'+
+     '<thead><tr><th>月份</th><th>存入</th><th>交易賺賠</th><th>目標</th></tr></thead><tbody>'+mon+'</tbody></table></div>':'')+
+   '<div class="gl-notes">'+(G.notes||[]).map(n=>'<div>・'+esc(n)+'</div>').join('')+'</div></div>';
 }
 
 /* ---------------- 右欄總繪製（2026-09-23 v3：只剩警報 ＋ 兩張唯讀小卡）----------------
@@ -6925,7 +7015,7 @@ async function tick(nf){
 
  // 【帳戶】這一頁的數字就在這份 s 裡（後端每分鐘換一次）⇒ 在這裡畫，
  // ⛔ 不另開一條輪詢（那會變成同一份資料問兩次）。
- if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); }
+ if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); setEl('acctgoal', goalHTML(ACCT.goal)); }
 
  // 【回顧】分頁時只更新頂列的時鐘／連線燈；即時分頁的 DOM 一律不動。
  // 後端的報價、持倉監控、±100 自動停利停損跑在 shioaji 回呼裡，完全不受影響。
@@ -7893,7 +7983,7 @@ function setTab(t){
  else if(t==='fire'){ alEnter(); }
  // 【帳戶】唯讀：數字跟著 500ms 的 tick 走（後端每分鐘才真的問券商），
  // 切進來先畫一次，順便把曲線拿回來（⛔ 不要等 0.5 秒才有東西，那會閃一下空白）。
- else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); }
+ else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); setEl('acctgoal', goalHTML(ACCT.goal)); }
  // 切回即時時立刻呼叫一次 tick()（後端的報價、持倉監控、±100 自動停利停損
  // 全程都在跑，切分頁完全不影響那一條路）
  else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); }
@@ -10152,7 +10242,7 @@ class Handler(BaseHTTPRequestHandler):
                                         "msg": "讀不出權益紀錄：%s" % str(e)[:120]})
             return self._json(200, {"ok": True, "rows": [
                 {"date": r.get("date"), "equity": r.get("equity"),
-                 "deposit": r.get("deposit")} for r in rows]})
+                 "deposit": r.get("deposit")} for r in rows], "goal": goal_view()})
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:
@@ -10832,6 +10922,23 @@ def equity_view(now=None):
             "usage": usage_view(), "depth": depth_view(), "backup": backup_view(now),
             "month": _equity_month(rows, m, now),
             "hist_n": len(rows)}
+
+
+def goal_view(now=None):
+    """
+    ⭐ 2026-09-30【帳戶】的目標卡（Benson：「多少錢幾口、每月獲利、我現在在哪、大概幾月到哪」）。
+    ⛔ 唯讀：全部計算在 goal.py（純函式）；這裡只把權益紀錄＋券商現在的權益遞過去。
+    ⛔ 壞了只回一句話，⛔ 不可以把 /api/account/hist 整支帶掉。
+    """
+    if goal is None:
+        return {"ok": False, "msg": "目標模組沒有載入"}
+    try:
+        m = EQUITY.get("m") or {}
+        eq = m.get("equity_amount")
+        dep = m.get("deposit_withdrawal") if isinstance(m.get("deposit_withdrawal"), (int, float)) else 0.0
+        return goal.view(equity_hist_read(), eq if isinstance(eq, (int, float)) else None, dep, now)
+    except Exception as e:                 # noqa: BLE001
+        return {"ok": False, "msg": "目標算不出來：%s" % str(e)[:100]}
 
 
 USAGE_DIR = HERE / "usage"             # ⛔ gitignore
