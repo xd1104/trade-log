@@ -191,6 +191,29 @@ say(st.get("real_err") and len(st["strategies"]) == 3,
     "  ⛔ 真單那半丟例外 ⇒ 整頁不會跟著掛（照樣端出三條＋一句錯誤）", str(st.get("real_err")))
 H.REAL_FN = None
 
+print("\n=== ③b 只顯示現在開著的真單（2026-09-30 Benson）===")
+sim_write(lane_rows("hmq", [5.0] * 20))
+H.ARMED_FN = lambda: ["union", "trend"]
+st = H.strategies()
+chk("  日盤開 U、夜盤開 R ⇒ 只有多方聯軍、夜盤跟勢", [x["key"] for x in st["strategies"]], ["union", "trend"])
+say("多方聯軍" in (st.get("armed_note") or "") and "台積電" not in (st.get("armed_note") or ""),
+    "  上面那句講得出開著哪幾條", st.get("armed_note"))
+H.ARMED_FN = lambda: ["hmq", "tsm"]
+chk("  日盤開 A、夜盤開 T ⇒ 快攻回馬槍、台積電快攻", [x["key"] for x in H.strategies()["strategies"]], ["hmq", "tsm"])
+H.ARMED_FN = lambda: []
+st = H.strategies()
+chk("  兩個開關都關 ⇒ 一條都不顯示", st["strategies"], [])
+say("沒有開著" in (st.get("armed_note") or ""), "  ⇒ 講出「目前沒有開著的自動真單」", st.get("armed_note"))
+H.ARMED_FN = lambda: (_ for _ in ()).throw(RuntimeError("開關讀不到"))
+st = H.strategies()
+chk("  ⛔ 讀不到開關 ⇒ 照舊三條（不猜）", [x["key"] for x in st["strategies"]], ["union", "tsm", "trend"])
+say("讀不到" in (st.get("armed_note") or ""), "  ⇒ 而且講出來", st.get("armed_note"))
+H.ARMED_FN = None
+chk("  ⛔ 沒注入（週報、測試）⇒ 照舊三條", [x["key"] for x in H.strategies()["strategies"]], ["union", "tsm", "trend"])
+_lp = (HERE / "live_panel.py").read_text(encoding="utf-8")
+say("health.configure(real_fn=_health_real, armed_fn=_health_armed)" in _lp, "  面板真的有接上開關")
+say('NIGHT_LANE = {"T": "tsm", "R": "trend"}' in _lp, "  夜盤代號對應：T＝台積電快攻、R＝夜盤跟勢")
+
 # ══ ④ 市場狀態：三個數字的算式（⛔ 自己造的資料，算得出來）═══════════
 print("\n=== ④ 市場狀態的算式 ===")
 

@@ -54,6 +54,8 @@ NEED = 15               # 少於這麼多筆 ⇒ ⛔ 留白，不用比較少的
 W15, W30 = 15, 30
 STRATS = (
     {"key": "union", "sub": "日盤・每天 09:03:30・1 口", "real": "day"},
+    # ⭐ 2026-09-30：日盤開關寫 A 時跑的是快攻回馬槍 ⇒ 開著才出現（真單那一半跟多方聯軍讀同一本日盤帳）
+    {"key": "hmq", "sub": "日盤・09:03:30／09:15・1 口", "real": "day"},
     {"key": "tsm", "sub": "夜盤・美股開盤後・1 口", "real": "night"},
     # ⚠️ 2026-09-23 起夜盤跟勢可以在【自動下單】選來下真單（跟台積電快攻擇一）⇒ 真單欄照實接上。
     {"key": "trend", "sub": "夜盤・美股開盤後 10 分鐘・1 口（夜盤選它才下單）", "real": "night"},
@@ -81,14 +83,19 @@ CSV_CHUNK = 200_000     # 讀 csv 每批幾列（每批之間讓出 GIL）
 
 # ⛔ 真單那一半由 live_panel 注入（⛔ 這裡不自己對帳）。
 REAL_FN = None
+# ⭐ 2026-09-30（Benson：「健檢應該只要出現我現在有開策略的真單就好」）⇒ live_panel 注入「現在開著的真單是哪幾條」。
+#    ⛔ 沒注入（週報、測試）⇒ 照舊三條（DEFAULT_KEYS）；讀開關失敗 ⇒ 也照舊三條並講出來（⛔ 不猜）。
+ARMED_FN = None
+DEFAULT_KEYS = ("union", "tsm", "trend")
 _MKT = {"key": None, "data": None, "busy": False, "err": None, "at": None}
 _LOCK = threading.Lock()
 
 
-def configure(real_fn=None):
+def configure(real_fn=None, armed_fn=None):
     """live_panel 啟動時接線。⛔ 只接一次、⛔ 不在這裡做任何 I/O。"""
-    global REAL_FN
+    global REAL_FN, ARMED_FN
     REAL_FN = real_fn
+    ARMED_FN = armed_fn
 
 
 # ══ 小工具 ══════════════════════════════════════════════════════════
@@ -162,9 +169,20 @@ def strategies(now=None):
             real = REAL_FN() or {}
         except Exception as e:                      # ⛔ 真單那半壞掉不可以把整頁帶掉
             real = {"_err": str(e)[:120]}
+    keys, armed_note = list(DEFAULT_KEYS), None
+    if ARMED_FN is not None:
+        try:
+            got = [k for k in (ARMED_FN() or []) if k]
+            keys = [S["key"] for S in STRATS if S["key"] in got]
+            names = "、".join(sim_lanes.LANE_NAME.get(k, k) for k in keys)
+            armed_note = ("只顯示現在開著的自動真單：" + names) if keys else "目前沒有開著的自動真單"
+        except Exception as e:                      # ⛔ 讀不到開關 ⇒ 照舊三條、講出來
+            armed_note = "讀不到自動下單開關（%s），先照舊顯示三條" % str(e)[:60]
     out = []
     for S in STRATS:
         k = S["key"]
+        if k not in keys:
+            continue
         pts = _lane_points(rows, k)
         vals = [p for _d, p in pts]
         lamp, a_all, a30, a15 = _lamp(vals)
@@ -185,7 +203,7 @@ def strategies(now=None):
             "d1": pts[-1][0] if pts else None,
             "real": R,
         })
-    return {"strategies": out, "file": dict(fst),
+    return {"strategies": out, "armed_note": armed_note, "file": dict(fst),
             "real_err": real.get("_err") if isinstance(real, dict) else None,
             "as_of": now.strftime("%Y-%m-%d")}
 

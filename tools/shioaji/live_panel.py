@@ -8403,8 +8403,10 @@ function hcPaint(){
   setEl('hcstamp', esc(D.as_of||''));
   /* ⛔⛔ 「這些數字是模擬還是真單」⼀定要寫在最上面（混在一起就是騙自己）。 */
   setEl('hcsrc','主要的數字來自【模擬】的定論（同一條規則每天事後算一次，回填到 2024-08）——'+
-    '真單的筆數太少，15／30 筆的窗口算不出來。每張卡底下另外標真單的情形。');
-  setEl('hccards',(D.strategies||[]).map(hcCard).join(''));
+    '真單的筆數太少，15／30 筆的窗口算不出來。每張卡底下另外標真單的情形。'+
+    (D.armed_note?'　⭐ '+D.armed_note+'（切換開關後這裡會跟著變）':''));
+  setEl('hccards',(D.strategies||[]).length?(D.strategies||[]).map(hcCard).join(''):
+    '<div class="hc-na">'+esc(D.armed_note||'目前沒有開著的自動真單')+'</div>');
   const W=D.lamp_words||{}, N=D.lamp_notes||{};
   setEl('hcleg',['ok','wn','bd'].map(k=>'<span><em class="hc-lamp '+k+'"><b></b>'+
     esc(W[k]||'')+'</em>'+esc(N[k]||'')+'</span>').join(''));
@@ -11350,6 +11352,7 @@ def _health_real():
                                 "最近 %d 天還沒有算得出點數的真單" % FIRE_REAL_DAYS)}
     except Exception as e:
         out["union"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
+    out["hmq"] = out.get("union")          # ⭐ 快攻回馬槍跟多方聯軍讀同一本日盤帳
     # ⭐ 2026-09-23 夜盤有兩條了（T 台積電快攻／R 夜盤跟勢）⇒ 依帳本那一列的 `method` 分開數；
     #    ⚠️ 2026-09-23 以前的列沒有 `method`，那時只有 T ⇒ 算 T。⛔ 不可以兩條混成一張卡。
     try:
@@ -11372,6 +11375,22 @@ def _health_real():
     except Exception as e:
         out["tsm"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
     return out
+
+
+NIGHT_LANE = {"T": "tsm", "R": "trend"}
+
+
+def _health_armed():
+    """【健檢】要顯示哪幾條：現在**開著**的自動真單（日盤 AUTO_ORDERS_ON、夜盤 NIGHT_ORDERS_ON）⇒ 模擬那邊的 lane key。
+    ⛔ 唯讀（arm() 只讀開關檔）。⚠️ 開著但 REAL_ORDERS_ON 關著時是「演練」，一樣算開著（畫面那一條會講）。"""
+    keys = []
+    a = auto_fire.arm()
+    if a.get("on"):
+        keys.append(auto_fire.RULE_ID.get(a.get("method")))
+    n = night_fire.arm()
+    if n.get("on"):
+        keys.append(NIGHT_LANE.get(n.get("method")))
+    return [k for k in keys if k]
 
 
 def _nf_quote():
@@ -11708,7 +11727,7 @@ def main():
     #   ⛔ 失敗只印警告（它是「看的東西」，絕不可以擋住送單與停損那條路）。
     try:
         if health is not None:
-            health.configure(real_fn=_health_real)
+            health.configure(real_fn=_health_real, armed_fn=_health_armed)
     except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
         print("⚠️ 【健檢】真單那一半接不上（其他功能不受影響）：%s" % str(e)[:160])
     # 【手機監控】（2026-09-24）每 2 分鐘把加密快照推到 GitHub 的 monitor 分支。⛔ 唯讀、自己的執行緒、
