@@ -3145,6 +3145,14 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 - 探針跟著改：test_sim_lanes（十二條、畫面六條、⑦d 預期、新增「已下架」寫死檢查）、test_trend／test_tsm（畫面清單）、
   test_derived ④（改驗「背景不會再算、不會再寫 hold」）。
 
+### ⛔ 2026-09-30【模擬】夜盤跟勢只做多（tlong）下架、台積電快攻（tsm）從畫面拿掉（Benson：「從模擬畫面拿掉」）
+- 依據 `tick-research/night_review_2026-09-30.md`：夜盤跟勢的做空那半扣掉過去同方向平均還有 +53／筆（t 1.78）⇒ 只做多＝賭多頭；
+  台積電快攻跟夜盤跟勢同一個機制、單獨只有一半、做空 ≈ 0。
+- `tlong`：照 hold／usml 前例進 `RETIRED_LANES`（舊列照讀、⛔ 不再算不再寫）；週報候選 `analyst_facts.CANDS` 也拿掉。
+- `tsm`：**只從 `SHOWN_LANES` 拿掉、⛔ 還在 `LANES` 背景照算** —— 夜盤聯軍（nunion）讀它的定論；【健檢】與【自動下單】的夜盤做法選項也還認得它（這次都沒動）。
+- 畫面剩四條：日盤＝多方聯軍；夜盤＝夜盤跟勢、夜盤聯軍、跟勢大波動晚。
+- 探針：test_sim_lanes（十一條、畫面四條、「已下架」兩條＋「tsm 只是不顯示」寫死）、test_trend／test_tsm（畫面清單；tsm 的「今天」改直接叫 `_today`）、test_derived ④（tlong 不再算不再寫）。
+
 ### ⭐ 2026-09-24【手機監控】（Benson：晚上不在電腦前，用手機看面板活著沒、有沒有自動下單；要密碼）
 
 - `tools/shioaji/monitor_push.py`：面板 main() 起一條 daemon（包 try），每 120 秒 GET 面板**自己的**

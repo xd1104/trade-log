@@ -164,6 +164,8 @@ chk("  三條都落地", sorted(k for k, v in got.items() if v), sorted(S.DERIVE
 chk("  跟直接叫正本一樣（夜盤聯軍）", got["nunion"]["points"], S.nunion_eval(E, up, trend("不做"), tsm("做多"))["points"])
 # ⭐ 2026-09-30 聯軍留倉下架（＝抱多過夜的大盤漂移）⇒ 背景不再算、不再寫（hold_eval 本身的單元測試 ③ 照舊）。
 chk("  ⛔ 聯軍留倉已下架：背景一輪不會算出它、也不會寫它", (("hold", str(E)) in rows, "hold" in got), (False, False))
+# ⭐ 2026-09-30 夜盤跟勢只做多也下架（做空那半有真本事，只做多＝賭多頭）⇒ 同樣不再算、不再寫（tlong_eval 的 ① 照舊）。
+chk("  ⛔ 夜盤跟勢只做多已下架：背景一輪不會算出它、也不會寫它", (("tlong", str(E)) in rows, "tlong" in got), (False, False))
 back, _ = S.read_rows()
 chk("  真的寫進（暫存的）sim_lanes/", sorted(k for (k, d) in back if d == str(E)), sorted(S.DERIVED_LANES))
 say(all(S.STATE["pending"][k] == {} for k in S.DERIVED_LANES), "  沒有殘留 pending")

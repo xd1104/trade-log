@@ -35,8 +35,8 @@ REAL_LANES = (("union", "day", "多方聯軍", "日盤・1 口"), ("trend", "nig
 # ⭐ 真正要判斷的是「跟現行真單**不一樣**的那幾筆」（一個月約 2 筆），⛔ 不是候選自己出手的總筆數
 #    ⇒ 每條都記「對照的現行那條」，滿 25 筆看的是 diff_n。
 # ⭐ 2026-09-30 聯軍留倉下架（＝抱多過夜的大盤漂移，tick-research/day_bracket_results_2026-09-30.md）⇒ 不再是候選。
-CANDS = (("tlong", "夜盤跟勢・只做多", "2026-09-23", "trend"),
-         ("nunion", "夜盤聯軍", "2026-09-23", "trend"), ("tvol", "夜盤跟勢・只做大波動晚", "2026-09-30", "trend"))
+# ⭐ 2026-09-30 夜盤跟勢只做多下架（做空那半有真本事，只做多＝賭多頭，tick-research/night_review_2026-09-30.md）⇒ 不再是候選。
+CANDS = (("nunion", "夜盤聯軍", "2026-09-23", "trend"), ("tvol", "夜盤跟勢・只做大波動晚", "2026-09-30", "trend"))
 CAND_NEED = 25
 ERR_DAY = {"cant_enter", "order_failed", "late", "quote_stale", "no_quote", "unsure", "not_wired"}
 ERR_NIGHT = {"cannot", "send_fail", "unsure", "late", "no_quote"}

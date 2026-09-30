@@ -189,9 +189,11 @@ try:
 except ValueError:
     say(True, "  ⛔ 已下架的 usml 寫不進去")
 st = S.state(now=datetime(2026, 6, 11, 3, 0))      # 05:10 前 ⇒ 講的是昨晚那一場
-chk("  畫面是多方聯軍／台積電快攻／夜盤跟勢＋三條推導、沒有 usml", list(st["lanes"]), ["union", "tsm", "trend", "tlong", "nunion", "tvol"])
-chk("  今天那一格讀的是自己的列（⛔ 不是夜盤順勢那條）", st["lanes"]["tsm"]["today"].get("row", {}).get("points"),
-    r["points"])
+# ⭐ 2026-09-30 台積電快攻只從畫面拿掉、背景照算（夜盤聯軍要讀它）⇒ 畫面四條、沒有 usml／tsm
+chk("  畫面是多方聯軍／夜盤跟勢／夜盤聯軍／跟勢大波動晚、沒有 usml 也沒有 tsm", list(st["lanes"]), ["union", "trend", "nunion", "tvol"])
+_rows_now, _ = S.read_rows()
+chk("  今天那一格讀的是自己的列（⛔ 不是夜盤順勢那條；畫面不顯示也照算）",
+    S._today("tsm", datetime(2026, 6, 11, 3, 0), _rows_now).get("row", {}).get("points"), r["points"])
 
 print("\n=== ⑥ 內頁那張圖 ===")
 S.MIN1_CSV = TMP / "bars.csv"
