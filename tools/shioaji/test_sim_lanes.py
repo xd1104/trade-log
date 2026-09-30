@@ -1010,6 +1010,31 @@ chk("  同價位的線併成一條「箱底＝停損」、顏色用停損的",
     [{"price": 100.0, "label": "箱底＝停損", "style": "sl"}])
 
 
+# ══ ⑦d 日盤／夜盤兩頁（2026-09-30 Benson：「模擬分頁分成日盤跟夜盤兩頁，我想分開看」）══════════
+print("\n=== ⑦d 日盤／夜盤兩頁 ===")
+# ⛔ 預期寫死在這裡（⛔ 不准拿 S.LANE_SESS 跟自己比）。以進場那一盤算：聯軍留倉日盤進場 ⇒ 日盤。
+#    值用中文：用 "night" 會跟 lane key「夜盤順勢」撞名（⑦「前端不寫死 lane key」第一版就這樣紅）。
+_SESS_WANT = {"fast": "日盤", "fast11": "日盤", "hmq": "日盤", "rev": "日盤", "orb": "日盤", "union": "日盤",
+              "hold": "日盤", "night": "夜盤", "tsm": "夜盤", "trend": "夜盤", "tlong": "夜盤", "nunion": "夜盤",
+              "tvol": "夜盤"}
+_st_lanes = S.state(NOW)["lanes"]
+chk("  /api/sim/state 每條都帶 sess、而且跟寫死的預期一樣（聯軍留倉＝日盤）",
+    {k: v.get("sess") for k, v in _st_lanes.items()}, {k: _SESS_WANT.get(k, "（預期表沒有這條）") for k in _st_lanes})
+chk("  LANE_SESS 蓋到全部 LANES（背景在算、沒上畫面的也要有）", sorted(S.LANE_SESS) == sorted(S.LANES), True)
+chk("  LANE_SESS 跟寫死的預期逐條一樣", S.LANE_SESS, _SESS_WANT)
+say('id="smseg"' in card and card.index('id="smseg"') < card.index('id="smlanes"'),
+    "  卡的標題列有「日盤／夜盤」切換（在八條容器之前）")
+say(_re.search(r'<span class="sm-segb" data-sess="日盤" role="tab" tabindex="0">日盤</span>', card) is not None
+    and _re.search(r'<span class="sm-segb" data-sess="夜盤" role="tab" tabindex="0">夜盤</span>', card) is not None,
+    "  切換是 span＋role＝tab（⛔ 這一頁不准有 <button>，⑦ 另外在掃）")
+say(".sess===SM.sess" in sjs_code and "Object.keys(x.lanes)" in sjs_code,
+    "  只畫選到的那一盤：看的是後端的 sess（⛔ 前端不寫死 lane）")
+say("!x.lanes[k].sess||" in sjs_code, "  後端沒給 sess 的條兩頁都畫（⛔ 少一個欄位不准讓它消失）")
+say(_re.search(r"try\{[^}]*localStorage\.getItem\('sm_sess'\)", sjs_code) is not None
+    and _re.search(r"try\{[^}]*localStorage\.setItem\('sm_sess'", sjs_code) is not None,
+    "  記住上次看哪一盤：localStorage 的讀寫都包 try（被擋也照常畫）")
+say("SM.keys=SM.sess+':'" in sjs_code, "  換盤一定重建骨架（骨架鍵含 sess，否則切過去還是舊的那幾條）")
+
 
 # ══ ⑪ 新的四條（2026-09-16）═══════════════════════════════════════════
 print("\n=== ⑪ hmq／rev／fast11：回馬槍／純回馬／早收 ===")

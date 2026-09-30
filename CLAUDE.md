@@ -3115,6 +3115,17 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 - `SHOWN_LANES` 變六條：union／tsm／trend／hold／tlong／nunion。
 - 2024-08 以後回填：聯軍 +277 vs 留倉 +436（擋掉的夜盤跟勢 +39）；夜盤跟勢 +536 vs 聯軍 +682 vs 只做多 +242。
 
+### ⭐ 2026-09-30【模擬】分成「日盤／夜盤」兩頁（Benson：「我想分開看」）
+- 卡的標題列多一個切換（`#smseg`，兩個 `span role="tab"`；⛔ 這一頁照舊一顆 `<button>` 都沒有）。
+- **哪條屬於哪一盤由後端決定**：`sim_lanes.LANE_SESS`，`/api/sim/state` 每條帶 `sess`；以**進場**那一盤算 ⇒ 聯軍留倉＝日盤。
+  現在畫面：日盤＝多方聯軍、聯軍留倉；夜盤＝台積電快攻、夜盤跟勢、只做多、夜盤聯軍、跟勢大波動晚。
+  ⚠️ 值用中文「日盤／夜盤」：用 `"night"` 會跟 lane key「夜盤順勢」撞名，踩到 ⑦「前端不寫死 lane key」（第一版就踩到）。
+- 前端只畫 `sess` 等於選到那一盤的條；後端沒給 `sess` 的條兩頁都畫（⛔ 少一個欄位不准讓它消失）。骨架鍵含 sess ⇒ 換盤一定重建。
+- 記住上次看哪一盤：`localStorage['sm_sess']`（讀寫全包 try）；沒記錄 ⇒ 05:00~15:00 日盤、其餘夜盤。
+- 探針 `test_sim_lanes.py` ⑦d（9 項；預期表寫死，突變「拿掉過濾＋留倉改夜盤」4 項轉紅）。
+  ⚠️ 他真單開著時 `AUTO_ORDERS_ON` 存在 ⇒ 探針拒跑，照舊複製 `*.py` 到暫存區、`SIM_BASELINE_LIVE_PANEL` 餵 a71087e 跑；
+  該次 ⑧ 主迴圈比對 2 項（on_tick、main）改動前就紅（之後有授權的改動），不是這次造成的。
+
 ### ⭐ 2026-09-24【手機監控】（Benson：晚上不在電腦前，用手機看面板活著沒、有沒有自動下單；要密碼）
 
 - `tools/shioaji/monitor_push.py`：面板 main() 起一條 daemon（包 try），每 120 秒 GET 面板**自己的**

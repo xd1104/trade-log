@@ -6001,6 +6001,14 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    ⛔ 條數是後端決定的 ⇒ 這裡用 repeat(N) 寫死欄數只是**版面**，不是條數；加減條不必改 JS。 */
 #tab-sim .sm-card{padding:14px 16px 12px}
 .sm-note{font-size:11.5px; color:var(--faint); margin:-2px 2px 10px}
+/* ⭐ 2026-09-30「日盤／夜盤」兩頁（Benson：「我想分開看」）。⛔ 不用 <button>：這一頁刻意一顆按鈕都沒有，
+   這只是切換看哪一盤、不動任何資料（跟 .sm-lane 一樣用 role＋tabindex）。哪條屬於哪一盤由後端 sess 決定。 */
+.sm-hl{display:flex; align-items:center; gap:12px; min-width:0}
+.sm-seg{display:inline-flex; flex:none; gap:2px; padding:2px; border:1px solid var(--line-soft); border-radius:var(--r-md)}
+.sm-segb{font-size:12px; padding:3px 14px; border-radius:var(--r-sm); color:var(--dim); cursor:pointer; user-select:none; white-space:nowrap}
+.sm-segb:hover{color:var(--text)}
+.sm-segb.on{background:var(--surface-2); color:var(--gold); font-weight:650}
+.sm-segb:focus-visible{outline:2px solid var(--gold-line); outline-offset:1px}
 .sm-lanes{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px}   /* 2026-09-22 起畫面只剩兩條（sim_lanes.SHOWN_LANES） */
 @media(max-width:640px){ .sm-lanes{grid-template-columns:minmax(0,1fr)} }
 .sm-lane{border:1px solid var(--line-soft); border-radius:var(--r-md); padding:10px 11px 9px; min-width:0}
@@ -6370,7 +6378,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         ⚠️ 兩張卡**同時只有一張看得見**：開內頁時 #smcard hidden、關掉時反過來。 -->
 <div id="tab-sim" hidden>
  <div class="card sm-card" id="smcard">
-  <div class="sec-head"><h2>模擬（不會下單）</h2><span class="count" id="smcount"></span></div>
+  <div class="sec-head"><div class="sm-hl"><h2>模擬（不會下單）</h2>
+   <div class="sm-seg" id="smseg" role="tablist" aria-label="日盤或夜盤"><span class="sm-segb" data-sess="日盤" role="tab" tabindex="0">日盤</span><span class="sm-segb" data-sess="夜盤" role="tab" tabindex="0">夜盤</span></div>
+  </div><span class="count" id="smcount"></span></div>
   <div class="sm-note" id="smnote"></div>
   <div class="sm-lanes" id="smlanes"></div>
   <div class="sm-foot" id="smfoot"></div>
@@ -7890,8 +7900,29 @@ document.addEventListener('keydown',function(e){
    ⚠️ 「沒變就別動 DOM」用節點上快取的字串比（⛔ 不讀回 innerHTML 比，見 CLAUDE.md）。
    ⚠️ 請求帶流水號，只認最後一次的回應。
 */
-var SM={seq:0,dseq:0,timer:null,err:'',keys:'',det:'',bound:false};
+var SM={seq:0,dseq:0,timer:null,err:'',keys:'',det:'',bound:false,sess:'',x:null};
 const SMWD=['日','一','二','三','四','五','六'];
+/* ⭐ 2026-09-30 日盤／夜盤兩頁。記住上次看哪一盤（⚠️ localStorage 可能被擋 ⇒ 全包 try，讀不到就照時段：
+   白天看日盤、下午收盤後到清晨看夜盤）。⛔ 哪條屬於哪一盤只看後端的 sess，前端不寫死 lane。 */
+function smSessInit(){
+  if(SM.sess) return;
+  try{ const v=localStorage.getItem('sm_sess'); if(v==='日盤'||v==='夜盤'){ SM.sess=v; return; } }catch(e){}
+  const h=new Date().getHours();
+  SM.sess=(h>=5&&h<15)?'日盤':'夜盤';
+}
+function smSegPaint(){
+  document.querySelectorAll('#smseg .sm-segb').forEach(b=>{
+    const on=b.getAttribute('data-sess')===SM.sess;
+    b.classList.toggle('on',on); b.setAttribute('aria-selected',on?'true':'false');
+  });
+}
+function smSessSet(s){
+  if((s!=='日盤'&&s!=='夜盤')||s===SM.sess) return;
+  SM.sess=s;
+  try{ localStorage.setItem('sm_sess',s); }catch(e){}
+  smSegPaint();
+  if(SM.x) smPaint(SM.x);
+}
 function smSet(id,html){ const e=document.getElementById(id); if(!e) return; if(e._smh!==html){ e._smh=html; e.innerHTML=html; } }
 function smPts(v){ if(v==null) return '—'; return (v>0?'+':v<0?'−':'')+Math.abs(v).toLocaleString('en-US',{maximumFractionDigits:1}); }
 function smCls(v){ return v>0?'up':v<0?'down':''; }
@@ -8134,6 +8165,12 @@ function smBind(){
   if(SM.bound) return;
   SM.bound=true;
   const el=document.getElementById('smlanes'), dt=document.getElementById('smdet');
+  const sg=document.getElementById('smseg');
+  if(sg){
+    sg.addEventListener('click',ev=>{ const b=ev.target.closest('.sm-segb'); if(b) smSessSet(b.getAttribute('data-sess')); });
+    sg.addEventListener('keydown',ev=>{ if(ev.key!=='Enter'&&ev.key!==' ') return;
+      const b=ev.target.closest('.sm-segb'); if(b){ ev.preventDefault(); smSessSet(b.getAttribute('data-sess')); } });
+  }
   // ⛔ 用委派：七條的骨架會被重建，直接掛在每一條上的事件會跟著不見
   // ⛔ lane 的 key 從節點 id 取（id＝"sm-"＋key），⛔ 前端不寫死任何一條的名字
   const open=n=>{ if(n&&n.id&&n.id.indexOf('sm-')===0) smDetOpen(n.id.slice(3)); };
@@ -8175,16 +8212,21 @@ function smBind(){
 }
 function smPaint(x){
   if(!x||!x.lanes){ smSet('smlanes',''); SM.keys=''; smSet('smfoot','<span>'+esc(SM.err||'讀取中…')+'</span>'); return; }
+  SM.x=x;
+  smSessInit(); smSegPaint();
   smSet('smnote',esc(x.note||''));
   // 條數／順序由後端決定。⚠️ 骨架只在「有哪幾條」變動時重建，平常每條各自比自己的字串
   //    —— 每分鐘把整塊 innerHTML 換掉會把捲動位置與剛畫好的內容一起丟掉。
-  const keys=Object.keys(x.lanes).filter(k=>/^[a-z0-9_]+$/.test(k));
-  if(SM.keys!==keys.join('|')){
-    SM.keys=keys.join('|');
+  // ⭐ 只畫選到的那一盤（後端的 sess）；後端沒給 sess 的條 ⇒ 兩頁都畫（⛔ 不能因為少一個欄位就讓它消失）
+  const keys=Object.keys(x.lanes).filter(k=>/^[a-z0-9_]+$/.test(k))
+    .filter(k=>!x.lanes[k].sess||x.lanes[k].sess===SM.sess);
+  if(SM.keys!==SM.sess+':'+keys.join('|')){
+    SM.keys=SM.sess+':'+keys.join('|');
     const el=document.getElementById('smlanes');
     // role/tabindex：整張卡是一個可以點、也可以用鍵盤打開的東西（⛔ 不用 <button>：
     //    這一頁刻意一顆按鈕都沒有，而這只是導覽、不會動到任何資料）
-    if(el){ el.innerHTML=keys.map(k=>'<div class="sm-lane" id="sm-'+k+'" role="button" tabindex="0"></div>').join(''); el._smh=null; }
+    if(el){ el.innerHTML=keys.length?keys.map(k=>'<div class="sm-lane" id="sm-'+k+'" role="button" tabindex="0"></div>').join('')
+      :'<div class="sm-empty">這一盤目前沒有模擬的策略</div>'; el._smh=null; }
   }
   keys.forEach(k=>smSet('sm-'+k,smLane(x.lanes[k])));
   const f=x.file||{};
@@ -8209,6 +8251,7 @@ function smLoad(){
 }
 function smEnter(){
   smBind();
+  smSessInit(); smSegPaint();
   smLoad();
   if(SM.timer) clearTimeout(SM.timer);
   const again=()=>{ SM.timer=null; if(TAB!=='sim') return; smLoad(); SM.timer=setTimeout(again,60000); };

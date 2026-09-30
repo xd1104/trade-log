@@ -96,6 +96,14 @@ SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐�
             "orb": "逐筆", "union": "逐筆", "night": "1 分 K", "tsm": "1 分 K ＋ 台積電 ADR",
             "trend": "1 分 K", "tlong": "1 分 K", "nunion": "1 分 K ＋ 台積電 ADR",
             "hold": "逐筆 ＋ 夜盤 1 分 K", "tvol": "1 分 K"}
+# ⭐ 2026-09-30 Benson：「模擬分頁分成日盤跟夜盤兩頁，我想分開看」⇒ 每條線屬於哪一盤由**後端**決定
+#    （跟條數、順序一樣，⛔ 前端不寫死 lane）。以**進場**那一盤算：聯軍留倉是日盤進場、抱進夜盤 ⇒ 算日盤。
+#    ⚠️ 值刻意用中文「日盤／夜盤」：用 "night" 會跟 lane key「夜盤順勢」撞名，
+#       前端一寫 'night' 就踩到「前端不寫死 lane key」那道守衛（test_sim_lanes ⑦，第一版就踩到）。
+LANE_SESS = {"fast": "日盤", "fast11": "日盤", "hmq": "日盤", "rev": "日盤", "orb": "日盤", "union": "日盤",
+             "hold": "日盤",
+             "night": "夜盤", "tsm": "夜盤", "trend": "夜盤", "tlong": "夜盤", "nunion": "夜盤",
+             "tvol": "夜盤"}
 HOLD_SPREAD = 1.0          # 聯軍留倉：夜盤那段用 1 分 K 收盤出場 ⇒ 多扣 1 點價差（日盤那段逐筆已經含買賣價）
 
 # ── 台積電快攻（2026-09-22 晚加；**前瞻考試**用，⛔ 不是可以上真單的結論）
@@ -2256,7 +2264,7 @@ def state(now=None):
     for lane in SHOWN_LANES:
         lr = sorted((r for (ln, _d), r in rows.items() if ln == lane), key=lambda r: r["date"], reverse=True)
         pend = STATE["pending"][lane]
-        lanes[lane] = {"name": LANE_NAME[lane], "rule": _rule_text(lane), "src": SRC_NAME[lane],
+        lanes[lane] = {"name": LANE_NAME[lane], "sess": LANE_SESS[lane], "rule": _rule_text(lane), "src": SRC_NAME[lane],
                        "months": _months(now, lr), "recent": [_slim(r) for r in lr[:RECENT_N]],
                        "n_rows": len(lr), "today": _today(lane, now, rows),
                        "pending": [{"date": d, "why": p["why"], "msg": p["msg"]}
