@@ -6287,6 +6287,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   font-family:var(--font-mono); margin-top:6px}
 .hc-pos{font-size:11.5px; color:var(--dim); margin-top:8px; font-family:var(--font-mono); font-variant-numeric:tabular-nums}
 .hc-pos b{color:var(--text); font-weight:700}
+.hc-now{font-size:13px; font-weight:600; color:var(--text); margin-top:6px; line-height:1.6}
 .hc-lines{font-size:11.5px; color:var(--dim); margin-top:7px; line-height:1.7; font-family:var(--font-mono)}
 .hc-legend{display:flex; gap:18px; flex-wrap:wrap; font-size:11px; color:var(--faint); margin:13px 2px 0}
 .hc-legend span{display:inline-flex; align-items:center; gap:7px}
@@ -8370,7 +8371,7 @@ function hcCard(S){
     real+'</div>';
 }
 
-/* 一張市場狀態小卡。⛔ 只放數字與位置，⛔ 不准寫「偏高／偏低／要小心」這種評語。 */
+/* 一張市場狀態小卡。⛔ 只放數字與位置；白話那一句（M.now）整句後端給，⛔ 前端不自己寫評語。 */
 function hcMktCard(M){
   const dp=(M.dp==null?2:M.dp);
   const band=(M.pct==null)?''
@@ -8378,11 +8379,13 @@ function hcMktCard(M){
       '<u style="left:calc('+Math.max(0,Math.min(100,M.pct))+'% - 1px)"></u></div>'+
       '<div class="hc-scale"><span>'+hcNum(M.lo,dp)+'</span><span>過去一年</span>'+
         '<span>'+hcNum(M.hi,dp)+'</span></div>'+
-      '<div class="hc-pos">過去一年的第 <b>'+esc(String(M.pct))+'</b> 百分位</div>';
+      '<div class="hc-pos">在過去一年排第 <b>'+esc(String(M.pct))+'</b> 百分位（0＝最低、100＝最高）</div>';
   const lines=(M.lines||[]).filter(x=>x).map(x=>'<div>'+esc(x)+'</div>').join('');
   return '<div class="hc-m'+(M.flag?' warn':'')+'">'+
     '<div class="t">'+esc(M.title||'')+'<i>'+esc(M.note||'')+'</i></div>'+
     '<div class="v">'+hcNum(M.value,dp)+(M.unit?'<small>'+esc(M.unit)+'</small>':'')+'</div>'+
+    /* ⭐ 2026-09-30 一眼看懂的那一句（Benson：「敘述再白話一點」） */
+    (M.now?'<div class="hc-now">'+esc(M.now)+'</div>':'')+
     (M.flag?'<div class="hc-pos"><span class="hc-lamp '+esc(M.flag)+'"><b></b>'+
        esc(M.flag_word||'')+'</span> '+esc(M.flag_note||'')+'</div>':'')+
     band+

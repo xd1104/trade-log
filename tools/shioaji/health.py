@@ -15,7 +15,9 @@
      ⛔ 模擬的點數**直接讀 sim_lanes 的定論**（`sim_lanes.read_rows()`），
         ⛔ 不在這裡重算規則 —— 那就是第二把尺。
   ② 市場狀態：三個數字 ＋ 各自在過去一年的百分位。
-     ⛔ 一律只講「現在落在哪裡」，⛔ 不准寫「偏高／偏低／要小心」這種評語。
+     ⛔ 一律只講「現在落在哪裡」。
+     ⭐ 2026-09-30 Benson 要「一眼看出是甚麼狀況」⇒ 每張卡多一句白話（`_now_line`）：
+        只把百分位／正負翻成「比平常安靜、漲的都在夜盤」這種描述；⛔ 仍然不准預測、不准建議。
 
 ⚠️⚠️ **效能**（CLAUDE.md「重活跑在 HTTP 執行緒上會拖慢主迴圈」那一條）：
    市場狀態那一區要讀 `tmf_1min.csv`（約 39 MB）與 `soxx_5m_alpaca.csv`（約 12 MB）⇒
@@ -259,15 +261,66 @@ def _sessions(px):
 
 # ⭐ 2026-09-30（Benson：「這四個我看了也不知道代表甚麼」）⇒ 每張卡一句「跟我們兩條真單的關係」。
 #    ⛔ 只寫研究量到的關係（附數字與出處），⛔ 不寫現在偏高偏低、⛔ 不給建議（這一頁的鐵律）。
+# ⭐ 同日下午（Benson：「希望敘述再白話一點，一眼就看出是甚麼狀況」）⇒ 改短、改口語。
 CARD_WHY = {
-    "night_vol": "跟我們的關係：夜盤跟勢的錢幾乎都來自波動大的晚上（研究：大波動晚每筆約 +121 點、最安靜的晚上是小賠）。"
-                 "模擬裡的「跟勢大波動晚」就是看這一類數字（界線 1.03%）。",
-    "day_vol": "跟我們的關係：多方聯軍當天實際波動越大越賺；週報的「現在是不是盤整期」看的就是這個數字"
-               "（研究界線：1.03% 以下算低、1.23% 以上算高）。",
-    "day_night": "跟我們的關係：多方聯軍只在日盤做多 ⇒ 日盤合計是負的時候它比較難賺；漲幅集中在夜盤時，是夜盤跟勢的主場。",
-    "us_sox": "跟我們的關係：夜盤跟勢的前提是「美股開盤帶動台指夜盤」；這個數字長期很低代表那個前提在變弱"
-              "（連續 60 個交易日都低於 0.05 會亮「要注意」）。",
+    "night_vol": "為什麼要看：夜盤跟勢靠「晃很大的晚上」賺錢（那種晚上每筆約 +121 點），安靜的晚上它多半小賠。",
+    "day_vol": "為什麼要看：多方聯軍是日盤策略，日盤晃越大它越好賺。研究的分界：1.03% 以下算安靜、1.23% 以上算熱鬧。",
+    "day_night": "為什麼要看：多方聯軍只在日盤做多，日盤一直跌它就難賺；漲幅都跑到夜盤時，對夜盤跟勢比較有利。",
+    "us_sox": "為什麼要看：夜盤跟勢的前提是「美股開盤會帶著台指夜盤走」。這個數字 1＝完全同步、0＝各走各的；"
+              "連續 60 個交易日都低於 0.05 會亮「要注意」。",
 }
+
+
+def _now_line(c):
+    """
+    每張卡最上面那一句「現在怎樣」—— ⛔ 只把卡上已經有的數字翻成白話（位置、正負、有沒有連動），
+    ⛔ 不寫預測、⛔ 不給建議、⛔ 不下「盤整期」判斷（那個只在週報）。
+    """
+    k, v, p = c.get("key"), c.get("value"), c.get("pct")
+    if v is None:
+        return None
+    if k in ("night_vol", "day_vol"):
+        who = "夜盤" if k == "night_vol" else "日盤"
+        unit = "晚上" if k == "night_vol" else "日子"
+        if p is None:
+            return None
+        if p <= 20:
+            head = "%s最近很安靜" % who
+        elif p <= 40:
+            head = "%s最近比平常安靜" % who
+        elif p < 60:
+            head = "%s最近晃動普通" % who
+        elif p < 80:
+            head = "%s最近比平常熱鬧" % who
+        else:
+            head = "%s最近很熱鬧" % who
+        return "%s：過去一年有 %d%% 的%s晃得比現在大。" % (head, 100 - p, unit)
+    if k == "day_night":
+        n, d = c.get("n_sum"), c.get("d_sum")
+        if n is None or d is None:
+            return None
+        if n >= 0 and d < 0:
+            head = "最近 60 天漲的都在夜盤、日盤反而在跌"
+        elif n < 0 and d >= 0:
+            head = "最近 60 天漲的都在日盤、夜盤反而在跌"
+        elif n >= 0 and d >= 0:
+            head = "最近 60 天日盤、夜盤都在漲，%s漲比較多" % ("夜盤" if n >= d else "日盤")
+        else:
+            head = "最近 60 天日盤、夜盤都在跌，%s跌比較多" % ("日盤" if d <= n else "夜盤")
+        return "%s（夜盤 %s、日盤 %s）。" % (head, _fmt_pct(n, 1), _fmt_pct(d, 1))
+    if k == "us_sox":
+        if v < 0.05:
+            head = "美股開盤和台指夜盤最近幾乎沒在連動，各走各的"
+        elif v < 0.2:
+            head = "美股開盤和台指夜盤最近只有一點點連動"
+        elif v < 0.4:
+            head = "美股開盤和台指夜盤最近有一些連動"
+        else:
+            head = "美股開盤和台指夜盤最近連動明顯"
+        run = c.get("low_days") or 0
+        tail = ("；已經連續 %d 個交易日低於 0.05（滿 %d 會亮「要注意」）" % (run, COR_LOW_RUN)) if run else ""
+        return head + tail + "。"
+    return None
 
 
 def _soxx_panel_files():
@@ -388,9 +441,9 @@ def market():
     ref = float(np.median(amp[-VOL_REF:])) if len(amp) else None
     cards.append(_card(
         "night_vol", "夜盤波動度",
-        "最近 %d 晚的夜盤振幅%%（最高−最低 ÷ 開盤）平均" % VOL_WIN,
+        "每晚夜盤從最低到最高差幾 %%，取最近 %d 晚平均" % VOL_WIN,
         cur, "%", roll, dp=2,
-        lines=(["過去 %d 晚的中位數 %.2f%%" % (VOL_REF, ref)] if ref is not None else []),
+        lines=(["平常（過去 %d 晚的中位數）是 %.2f%%" % (VOL_REF, ref)] if ref is not None else []),
         as_of=str(g.index[-1]) if len(g) else None))
 
     # ── ①b 日盤波動度：最近 20 天的日盤振幅% 平均（多方聯軍靠的是日盤的波動）
@@ -400,9 +453,9 @@ def market():
     dref = float(np.median(damp[-VOL_REF:])) if len(damp) else None
     cards.append(_card(
         "day_vol", "日盤波動度",
-        "最近 %d 天的日盤振幅%%（最高−最低 ÷ 開盤）平均" % VOL_WIN,
+        "每天日盤從最低到最高差幾 %%，取最近 %d 天平均" % VOL_WIN,
         dcur, "%", droll, dp=2,
-        lines=(["過去 %d 天的中位數 %.2f%%" % (VOL_REF, dref)] if dref is not None else []),
+        lines=(["平常（過去 %d 天的中位數）是 %.2f%%" % (VOL_REF, dref)] if dref is not None else []),
         as_of=str(gd.index[-1]) if len(gd) else None))
 
     # ── ② 日盤／夜盤 漲幅：最近 60 天各自的合計漲幅%
@@ -418,12 +471,13 @@ def market():
     d_sum = float(ds[-1]) if len(ds) else None
     cards.append(_card(
         "day_night", "日盤／夜盤 漲幅",
-        "最近 %d 天，夜盤與日盤各自的合計漲幅%%（位置條看的是兩者相減）" % RET_WIN,
+        "最近 %d 天夜盤、日盤各自加起來漲跌多少；大數字＝夜盤減日盤" % RET_WIN,
         (n_sum - d_sum) if (n_sum is not None and d_sum is not None) else None,
         "%點", diff, dp=1,
         lines=([("夜盤合計 " + _fmt_pct(n_sum)) if n_sum is not None else "",
                 ("日盤合計 " + _fmt_pct(d_sum)) if d_sum is not None else ""]),
         as_of=str(max(g.index[-1], gd.index[-1])) if (len(g) and len(gd)) else None))
+    cards[-1]["n_sum"], cards[-1]["d_sum"] = n_sum, d_sum
 
     # ── ③ 美股半導體 vs 台指夜盤：滾動 60 晚相關係數
     #    SOXX 美東 9:30 那根 5 分 K 的走幅 vs 那一晚台指夜盤（開→收）的走幅。
@@ -460,7 +514,7 @@ def market():
                        and np.all(tail < COR_LOW))
         cards.append(_card(
             "us_sox", "美股半導體 vs 台指夜盤",
-            "SOXX 美東 9:30 那根 5 分 K 的走幅，對上同一晚台指夜盤（開→收）的走幅；滾動 %d 晚" % COR_WIN,
+            "美股半導體（SOXX）開盤頭 5 分鐘的漲跌，跟當晚台指夜盤漲跌有多同步；看最近 %d 晚" % COR_WIN,
             cur, "", cor, dp=2,
             lines=["配得起來的晚上 %d 場" % len(xs)],
             as_of=str(ds2[-1]) if ds2 else None,
@@ -468,8 +522,15 @@ def market():
             flag_word=("要注意" if low_run else None),
             flag_note=("連續 %d 個交易日的滾動相關係數都低於 %.2f" % (COR_LOW_RUN, COR_LOW)
                        if low_run else None)))
+        run = 0
+        for x in cor[::-1]:
+            if not (math.isfinite(x) and x < COR_LOW):
+                break
+            run += 1
+        cards[-1]["low_days"] = run
     for c in cards:
         c["why"] = CARD_WHY.get(c.get("key"))
+        c["now"] = _now_line(c)
     return {"market": cards,
             "market_note": "數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。"}
 

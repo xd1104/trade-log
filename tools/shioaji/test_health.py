@@ -307,8 +307,17 @@ say(s2["market_ready"] and not s2["market_err"], "  背景算完之後 market_re
 chk("  四張市場狀態小卡（2026-09-29 加日盤波動度）", [c["key"] for c in s2["market"]],
     ["night_vol", "day_vol", "day_night", "us_sox"])
 chk("  ⛔ 健檢這一頁不帶盤整期判斷（判斷只在週報）", "regime" in s2, False)
-say(all((c.get("why") or "").startswith("跟我們的關係：") for c in s2["market"]),
-    "  ⭐ 每張卡都有一句「跟我們的關係」（2026-09-30；⑦ 那段會連它一起掃禁字）")
+say(all((c.get("why") or "").startswith("為什麼要看：") for c in s2["market"]),
+    "  ⭐ 每張卡都有一句「為什麼要看」（2026-09-30；⑦ 那段會連它一起掃禁字）")
+say(all(c.get("now") for c in s2["market"] if c.get("value") is not None),
+    "  ⭐ 有數字的卡都有一句白話「現在怎樣」（2026-09-30 下午）")
+say("M.now?" in LP.PAGE, "  前端真的把白話那一句畫出來")
+chk("  白話句：波動第 30 百分位", H._now_line({"key": "night_vol", "value": 1.25, "pct": 30}),
+    "夜盤最近比平常安靜：過去一年有 70% 的晚上晃得比現在大。")
+chk("  白話句：夜盤漲日盤跌", H._now_line({"key": "day_night", "value": 12.2, "n_sum": 6.62, "d_sum": -5.57}),
+    "最近 60 天漲的都在夜盤、日盤反而在跌（夜盤 +6.6%、日盤 -5.6%）。")
+chk("  白話句：連動 ≈ 0 ＋ 連續天數", H._now_line({"key": "us_sox", "value": -0.01, "low_days": 12}),
+    "美股開盤和台指夜盤最近幾乎沒在連動，各走各的；已經連續 12 個交易日低於 0.05（滿 60 會亮「要注意」）。")
 say("M.why?" in LP.PAGE, "  前端真的把那一句畫出來")
 say(all(c.get("as_of") for c in s2["market"][:2]),
     "  ⛔ 每張卡都標得出「資料到哪一天」（⛔ 不可以讓他以為是今天的）")
