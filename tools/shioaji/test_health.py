@@ -77,11 +77,13 @@ sys.excepthook = _boom
 # ⛔ 每一個會讀他真實資料的路徑都導到暫存區。**漏掉一個就是拿他的真帳本當測資**
 #    （那樣算出來的數字明天就變了，測試會隨機翻紅）。
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="health-test-"))
-REAL = {"SL.SIM_DIR": SL.SIM_DIR, "H.MIN1_CSV": H.MIN1_CSV, "H.SOXX_CSV": H.SOXX_CSV}
+REAL = {"SL.SIM_DIR": SL.SIM_DIR, "H.MIN1_CSV": H.MIN1_CSV, "H.SOXX_CSV": H.SOXX_CSV,
+        "H.SOXX_PANEL_DIR": H.SOXX_PANEL_DIR}
 SL.SIM_DIR = TMP / "sim_lanes"
 SL.SIM_DIR.mkdir(parents=True, exist_ok=True)
 H.MIN1_CSV = TMP / "tmf_1min.csv"
 H.SOXX_CSV = TMP / "soxx_5m_alpaca.csv"
+H.SOXX_PANEL_DIR = TMP / "us_bars"          # ⭐ 2026-09-30：面板補抓的 SOXX 月檔也導到暫存區
 H.REAL_FN = None
 H._MKT.update(key=None, data=None, busy=False, err=None, at=None)
 
@@ -305,6 +307,9 @@ say(s2["market_ready"] and not s2["market_err"], "  背景算完之後 market_re
 chk("  四張市場狀態小卡（2026-09-29 加日盤波動度）", [c["key"] for c in s2["market"]],
     ["night_vol", "day_vol", "day_night", "us_sox"])
 chk("  ⛔ 健檢這一頁不帶盤整期判斷（判斷只在週報）", "regime" in s2, False)
+say(all((c.get("why") or "").startswith("跟我們的關係：") for c in s2["market"]),
+    "  ⭐ 每張卡都有一句「跟我們的關係」（2026-09-30；⑦ 那段會連它一起掃禁字）")
+say("M.why?" in LP.PAGE, "  前端真的把那一句畫出來")
 say(all(c.get("as_of") for c in s2["market"][:2]),
     "  ⛔ 每張卡都標得出「資料到哪一天」（⛔ 不可以讓他以為是今天的）")
 t0 = time.time()
@@ -315,6 +320,19 @@ say(H._MKT["key"] == H._mkt_key(), "  快取鍵 ＝ 來源檔的 (mtime_ns, size
 _k0 = H._mkt_key()
 H.MIN1_CSV.touch()
 say(H._mkt_key() != _k0, "  ⛔ 檔案被動過 ⇒ 快取鍵跟著變（⛔ 不會端出過期的數字）")
+
+# ⭐ 2026-09-30：面板每天補抓的 SOXX 月檔（start_utc，…Z）要跟研究那份（ts_utc）接起來
+H.SOXX_PANEL_DIR.mkdir(parents=True, exist_ok=True)
+_k1 = H._mkt_key()
+_pf = H.SOXX_PANEL_DIR / "SOXX-sip-2099-01.csv"
+_pf.write_text("start_utc,open,close\n2099-01-05T14:30:00Z,100,101\n2099-01-05T14:35:00Z,101,102\n",
+               encoding="utf-8")
+chk("  面板月檔找得到", [p.name for p in H._soxx_panel_files()], ["SOXX-sip-2099-01.csv"])
+_fr = H._soxx_frame(H.SOXX_CSV, H._soxx_panel_files())
+say(_fr is not None and str(_fr["ts_utc"].iloc[-1]) == "2099-01-05 14:35:00",
+    "  合併後最後一根是面板月檔那根（時區換成 UTC 無時區）", "" if _fr is None else str(_fr["ts_utc"].iloc[-1]))
+say(H._mkt_key() != _k1, "  面板月檔也算進快取鍵（⛔ 新抓的資料不會被舊快取擋住）")
+_pf.unlink()
 
 # ══ ⑥ 前端：⛔ 不掛在高頻輪詢上 ═══════════════════════════════════
 print("\n=== ⑥ ⛔⛔ 前端沒有把它掛在輪詢上 ===")
@@ -417,6 +435,7 @@ say(str(TMP) in str(SL.SIM_DIR) and str(TMP) in str(H.MIN1_CSV),
 say(REAL["SL.SIM_DIR"].exists() is REAL["SL.SIM_DIR"].exists(),
     "  ⛔ 真的 sim_lanes/ 一個位元組都沒被動過（全程沒指過去）")
 SL.SIM_DIR, H.MIN1_CSV, H.SOXX_CSV = REAL["SL.SIM_DIR"], REAL["H.MIN1_CSV"], REAL["H.SOXX_CSV"]
+H.SOXX_PANEL_DIR = REAL["H.SOXX_PANEL_DIR"]
 srv.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))

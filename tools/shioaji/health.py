@@ -47,6 +47,9 @@ REPO = HERE.parent.parent                       # trade-log/ 根目錄
 MIN1_CSV = HERE / "tmf_1min.csv"                # ⛔ 唯讀
 # ⛔⛔ 這個檔在**另一個 repo**（tick-research）⇒ **唯讀，一個位元組都不准寫**。
 SOXX_CSV = REPO.parent / "tick-research" / "us" / "soxx_5m_alpaca.csv"
+# ⭐ 2026-09-30：上面那份是研究時一次下載的（停在 09-15）⇒ 面板每天早上用 us_feed 補抓 SOXX 月檔到 us_bars/，
+#    這裡**只讀**、跟上面那份合併（同一根以面板那份為準）。⛔ 這支照舊一個位元組都不寫。
+SOXX_PANEL_DIR = HERE / "us_bars"
 
 # ── 策略健檢 ─────────────────────────────────────────────────────────
 # ⛔ 名字一律從 sim_lanes.LANE_NAME（⛔ 不准在這裡寫第二份）。
@@ -254,13 +257,53 @@ def _sessions(px):
     return g, gd
 
 
-def _us_open_bars(path):
+# ⭐ 2026-09-30（Benson：「這四個我看了也不知道代表甚麼」）⇒ 每張卡一句「跟我們兩條真單的關係」。
+#    ⛔ 只寫研究量到的關係（附數字與出處），⛔ 不寫現在偏高偏低、⛔ 不給建議（這一頁的鐵律）。
+CARD_WHY = {
+    "night_vol": "跟我們的關係：夜盤跟勢的錢幾乎都來自波動大的晚上（研究：大波動晚每筆約 +121 點、最安靜的晚上是小賠）。"
+                 "模擬裡的「跟勢大波動晚」就是看這一類數字（界線 1.03%）。",
+    "day_vol": "跟我們的關係：多方聯軍當天實際波動越大越賺；週報的「現在是不是盤整期」看的就是這個數字"
+               "（研究界線：1.03% 以下算低、1.23% 以上算高）。",
+    "day_night": "跟我們的關係：多方聯軍只在日盤做多 ⇒ 日盤合計是負的時候它比較難賺；漲幅集中在夜盤時，是夜盤跟勢的主場。",
+    "us_sox": "跟我們的關係：夜盤跟勢的前提是「美股開盤帶動台指夜盤」；這個數字長期很低代表那個前提在變弱"
+              "（連續 60 個交易日都低於 0.05 會亮「要注意」）。",
+}
+
+
+def _soxx_panel_files():
+    try:
+        return sorted(SOXX_PANEL_DIR.glob("SOXX-sip-*.csv"))
+    except Exception:
+        return []
+
+
+def _soxx_frame(path, extra=()):
+    """研究那份（ts_utc）＋面板月檔（start_utc，…Z）合併 ⇒ DataFrame(ts_utc, open, close)；都讀不到 ⇒ None。"""
+    parts = []
+    if path is not None and Path(path).exists():
+        s = _read_csv_chunked(path, parse_dates=["ts_utc"])
+        if s is not None and len(s):
+            parts.append(s[["ts_utc", "open", "close"]])
+    for f in extra:
+        try:
+            m = pd.read_csv(f)
+            m["ts_utc"] = pd.to_datetime(m["start_utc"], utc=True).dt.tz_localize(None)
+            parts.append(m[["ts_utc", "open", "close"]])
+        except Exception:
+            continue
+    if not parts:
+        return None
+    s = pd.concat(parts, ignore_index=True).drop_duplicates("ts_utc", keep="last")
+    return s.sort_values("ts_utc").reset_index(drop=True)
+
+
+def _us_open_bars(path, extra=()):
     """
     SOXX **美東 9:30 那根 5 分 K** 的 open→close 走幅%（⇒ 台北時間 21:30 或 22:30）。
     ⚠️ 檔頭是 `ts_utc` ⇒ 9:30 ET ＝ UTC 13:30（夏令）或 14:30（冬令）。
        ⛔ 不自己算夏令時間表：同一天**兩根都看**，有 13:30 就是夏令（那天的 14:30 是盤中）。
     """
-    s = _read_csv_chunked(path, parse_dates=["ts_utc"])
+    s = _soxx_frame(path, extra)
     if s is None or not len(s):
         return None
     mi = s["ts_utc"].dt.hour * 60 + s["ts_utc"].dt.minute
@@ -386,7 +429,7 @@ def market():
     #    SOXX 美東 9:30 那根 5 分 K 的走幅 vs 那一晚台指夜盤（開→收）的走幅。
     so = None
     try:
-        so = _us_open_bars(SOXX_CSV)
+        so = _us_open_bars(SOXX_CSV, _soxx_panel_files())
     except Exception as e:
         so = None
         so_err = str(e)[:120]
@@ -425,6 +468,8 @@ def market():
             flag_word=("要注意" if low_run else None),
             flag_note=("連續 %d 個交易日的滾動相關係數都低於 %.2f" % (COR_LOW_RUN, COR_LOW)
                        if low_run else None)))
+    for c in cards:
+        c["why"] = CARD_WHY.get(c.get("key"))
     return {"market": cards,
             "market_note": "數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。"}
 
@@ -433,7 +478,7 @@ def market():
 # ══ 快取（⛔ 重活只在背景執行緒，HTTP 執行緒只拿算好的）══════════════
 
 def _mkt_key():
-    return (_sig(MIN1_CSV), _sig(SOXX_CSV))
+    return (_sig(MIN1_CSV), _sig(SOXX_CSV), tuple(_sig(p) for p in _soxx_panel_files()))
 
 
 def _mkt_worker(key):

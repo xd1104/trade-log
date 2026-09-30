@@ -8387,6 +8387,8 @@ function hcMktCard(M){
        esc(M.flag_word||'')+'</span> '+esc(M.flag_note||'')+'</div>':'')+
     band+
     (lines?'<div class="hc-lines">'+lines+'</div>':'')+
+    /* ⭐ 2026-09-30 每張卡一句「跟我們的關係」（整句後端給，⛔ 前端不自己寫） */
+    (M.why?'<div class="hc-lines" style="opacity:.85">'+esc(M.why)+'</div>':'')+
     (M.as_of?'<div class="hc-foot"><span>資料到 '+esc(M.as_of)+'</span></div>':'')+
     ((M.series&&M.series.length>1)?'<div class="hc-spark">'+sparkLine(M.series,42,'#8D95A3')+'</div>':'')+
     '</div>';
@@ -10903,6 +10905,31 @@ def _backup_tick(now):
     print("[備份] %s 已另開備份程式（最低優先權）" % now.strftime("%H:%M"), flush=True)
 
 
+_SOXX = {"day": None}
+
+
+def _soxx_tick(now):
+    """
+    ⭐ 2026-09-30【健檢】第四張卡（美股半導體 vs 台指夜盤）的美股資料：每天 05:30~08:00 補抓一次 SOXX 5 分 K
+    （us_feed 的 Alpaca 管道、⛔ 只讀行情），存 us_bars/SOXX-sip-YYYY-MM.csv。
+    ⛔ 另開執行緒、面板不等它；抓不到只是那張卡停在舊日期（卡上的「資料到」會照實寫）。
+    """
+    if not (BACKUP_FROM <= now.time() < BACKUP_UNTIL) or _SOXX["day"] == str(now.date()):
+        return
+    _SOXX["day"] = str(now.date())
+
+    def run():
+        try:
+            import us_feed
+            cur = now.strftime("%Y-%m")
+            prv = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+            for ym in (prv, cur):
+                us_feed.ensure_month("SOXX", "sip", ym)
+        except Exception as e:                 # noqa: BLE001  ⛔ 看的東西，壞了不影響任何事
+            print("⚠️ 【健檢】SOXX 補抓失敗：%s" % str(e)[:100], flush=True)
+    threading.Thread(target=run, name="soxx-fetch", daemon=True).start()
+
+
 def backup_view(now=None):
     """給【帳戶總覽】與手機監控：最後一次備份的結果。超過 2 天沒成功 ⇒ warn。"""
     now = now or datetime.now()
@@ -10985,6 +11012,10 @@ def poll_equity():
         # ⭐ 2026-09-26 每天 05:30 觸發資料備份（另開行程、最低優先權；⛔ 面板自己不上傳）。壞了不影響任何事
         try:
             _backup_tick(now)
+        except Exception:
+            pass
+        try:
+            _soxx_tick(now)
         except Exception:
             pass
         # ⭐ 2026-09-29 期交所公告的一口原始保證金（一天一次；壞了只記錯）
