@@ -3135,6 +3135,16 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 - ⚠️ `.sm-stats b` 權重比全站 `.up／.down` 高 ⇒ 要另外補 `b.up／b.down`，不然紅漲綠跌會被蓋成白色（第一版就這樣，治具目視抓到）。
 - 探針 ⑦e（7 項，答案手算寫死：亂序、同長取較深、空紀錄、只有本月、壞列）；⑦ 與 ⑪ 的「6 個月」改成寫死 4。
 
+### ⛔ 2026-09-30【模擬】聯軍留倉（hold）下架（Benson：「聯軍留倉拿掉」）
+- 理由：留倉那段（13:44→04:58）賺的就是抱多過夜的大盤漂移 —— 留倉日 +42.9／晚 vs 每天都做多 +37.5，差 t 0.17
+  （`tick-research/day_bracket_results_2026-09-30.md`）；還會擋掉夜盤跟勢、半夜多抱一口。
+- 做法照 usml 前例：`hold` 從 `LANES`／`SHOWN_LANES`／`DERIVED_LANES`／`LANE_SESS` 拿掉、進 `RETIRED_LANES`
+  ⇒ **舊列照樣讀得進來、⛔ 不再算也不再寫、畫面不顯示**（⛔ 不刪 sim_lanes/*.jsonl 的舊資料）。
+  `hold_eval` 與 `DERIVED_EVAL["hold"]` 留著（test_derived ③ 還在驗函式本身）。週報候選 `analyst_facts.CANDS` 也拿掉。
+- 畫面剩六條：日盤＝多方聯軍；夜盤＝台積電快攻、夜盤跟勢、只做多、夜盤聯軍、跟勢大波動晚。
+- 探針跟著改：test_sim_lanes（十二條、畫面六條、⑦d 預期、新增「已下架」寫死檢查）、test_trend／test_tsm（畫面清單）、
+  test_derived ④（改驗「背景不會再算、不會再寫 hold」）。
+
 ### ⭐ 2026-09-24【手機監控】（Benson：晚上不在電腦前，用手機看面板活著沒、有沒有自動下單；要密碼）
 
 - `tools/shioaji/monitor_push.py`：面板 main() 起一條 daemon（包 try），每 120 秒 GET 面板**自己的**

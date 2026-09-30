@@ -66,11 +66,15 @@ FAST_HIST = HERE / "fast_hist.jsonl"  # ⛔ 唯讀（真單在用的那一份，
 MIN1_CSV = HERE / "tmf_1min.csv"      # ⛔ 唯讀（夜盤 1 分 K 先看本機，缺的才跟永豐要）
 
 LANES = ("fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend",
-         "tlong", "nunion", "hold", "tvol")
+         "tlong", "nunion", "tvol")
 # ⛔ 已下架的線：檔案裡的舊列**照樣讀得進來**（不算壞資料、不做資料遷移），但畫面不顯示、⛔ 也不准再寫。
 #    usml（美股開盤模型）2026-09-22 晚下架：SPY 時間標記偷看未來 5 分鐘，策略不成立
 #    （tick-research/night_ml_CORRECTION_2026-09-22.md）。
-RETIRED_LANES = ("usml",)
+#    hold（聯軍留倉）2026-09-30 下架（Benson：「聯軍留倉拿掉」）：留倉那段賺的就是抱多過夜的大盤漂移
+#    （跟每天抱多差 +5.4／晚、t 0.17，tick-research/day_bracket_results_2026-09-30.md）。
+#    ⚠️ `hold_eval` 與 DERIVED_EVAL["hold"] 留著（test_derived 的單元測試還在驗它、舊列的內頁與圖照樣認得），
+#       但 hold 不在 DERIVED_LANES ⇒ 背景與回填都不會再算、不會再寫。
+RETIRED_LANES = ("usml", "hold")
 # ⭐ 2026-09-22 Benson：「模擬就留下多方聯軍跟台積電快攻」⇒ **畫面只端這兩條**。
 #    ⛔ 其他幾條照樣在背景算、照樣落地：多方聯軍的三個候選就是快攻／開箱／純回馬，
 #       夜盤那條負責跟永豐抓夜盤 1 分 K（台積電快攻吃它抓回來的）⇒ 拿掉就壞。
@@ -81,8 +85,9 @@ RETIRED_LANES = ("usml",)
 #       ⛔ 三條都是**從現有的線推導**（夜盤跟勢、台積電快攻、多方聯軍的定論＋夜盤 1 分 K），不另外抓資料。
 #    ⭐ 2026-09-30 Benson「加進去模擬讓我看一下」：夜盤跟勢只在「預測會大波動」的晚上做（tvol）。
 #       研究 tick-research/quiet_skip_results_2026-09-30.md（⚠️ 事後題目 ⇒ 靠前瞻證明）。
-SHOWN_LANES = ("union", "tsm", "trend", "hold", "tlong", "nunion", "tvol")
-DERIVED_LANES = ("tlong", "nunion", "hold", "tvol")
+#    ⭐ 2026-09-30 聯軍留倉（hold）下架 ⇒ 畫面剩六條、推導剩三條（見上面 RETIRED_LANES）。
+SHOWN_LANES = ("union", "tsm", "trend", "tlong", "nunion", "tvol")
+DERIVED_LANES = ("tlong", "nunion", "tvol")
 # 逐筆那六條：同一天只讀一次 tick_hist、也只算一次 day_pack（⛔ 不要一條算一次）
 TICK_LANES = ("fast", "fast11", "hmq", "rev", "orb", "union")
 # ⛔ 2026-09-16 Benson 定名：**面板文字一律用這些名字**。
@@ -97,11 +102,10 @@ SRC_NAME = {"fast": "逐筆", "fast11": "逐筆", "hmq": "逐筆", "rev": "逐�
             "trend": "1 分 K", "tlong": "1 分 K", "nunion": "1 分 K ＋ 台積電 ADR",
             "hold": "逐筆 ＋ 夜盤 1 分 K", "tvol": "1 分 K"}
 # ⭐ 2026-09-30 Benson：「模擬分頁分成日盤跟夜盤兩頁，我想分開看」⇒ 每條線屬於哪一盤由**後端**決定
-#    （跟條數、順序一樣，⛔ 前端不寫死 lane）。以**進場**那一盤算：聯軍留倉是日盤進場、抱進夜盤 ⇒ 算日盤。
+#    （跟條數、順序一樣，⛔ 前端不寫死 lane）。以**進場**那一盤算（下架的聯軍留倉當時算日盤）。
 #    ⚠️ 值刻意用中文「日盤／夜盤」：用 "night" 會跟 lane key「夜盤順勢」撞名，
 #       前端一寫 'night' 就踩到「前端不寫死 lane key」那道守衛（test_sim_lanes ⑦，第一版就踩到）。
 LANE_SESS = {"fast": "日盤", "fast11": "日盤", "hmq": "日盤", "rev": "日盤", "orb": "日盤", "union": "日盤",
-             "hold": "日盤",
              "night": "夜盤", "tsm": "夜盤", "trend": "夜盤", "tlong": "夜盤", "nunion": "夜盤",
              "tvol": "夜盤"}
 HOLD_SPREAD = 1.0          # 聯軍留倉：夜盤那段用 1 分 K 收盤出場 ⇒ 多扣 1 點價差（日盤那段逐筆已經含買賣價）

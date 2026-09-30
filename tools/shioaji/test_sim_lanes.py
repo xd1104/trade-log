@@ -758,17 +758,20 @@ chk("  GET ⇒ 200", st_code, 200)
 # ⛔ 這裡**寫死** key 與名字：拿 S.LANES／S.LANE_NAME 去比是自己比自己（一起改就永遠綠，
 #    2026-09-16 突變 N15 當場抓到這個假綠燈）。
 # ⭐ 2026-09-23 深夜 Benson「三個都放」⇒ 多三條推導線（tlong／nunion／hold）。
-LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend", "tlong", "nunion", "hold", "tvol"]
+# ⭐ 2026-09-30 聯軍留倉（hold）下架（＝抱多過夜的大盤漂移）⇒ 十二條（hold 進 RETIRED_LANES，舊列照樣讀得進來）。
+LANE_KEYS = ["fast", "fast11", "hmq", "rev", "orb", "union", "night", "tsm", "trend", "tlong", "nunion", "tvol"]
 LANE_NAMES = ["快攻", "早收", "回馬槍", "純回馬", "開箱", "多方聯軍", "夜盤順勢", "台積電快攻", "夜盤跟勢",
-              "夜盤跟勢只做多", "夜盤聯軍", "聯軍留倉", "跟勢大波動晚"]
+              "夜盤跟勢只做多", "夜盤聯軍", "跟勢大波動晚"]
+chk("  ⛔ 聯軍留倉已下架：在 RETIRED_LANES、不在 LANES／SHOWN／DERIVED（寫死）",
+    ("hold" in S.RETIRED_LANES, "hold" in S.LANES, "hold" in REAL_SHOWN, "hold" in S.DERIVED_LANES), (True, False, False, False))
 chk("  ⛔ 後端 LANES 就是這十二條（寫死，⛔ 不准拿 S.LANES 比自己）", list(S.LANES), LANE_KEYS)
 chk("  端點端出來的十二條、順序一樣", list(body.get("lanes", {})), LANE_KEYS)
 chk("  ⛔ 十二條的名字（寫死）", [body["lanes"][k]["name"] for k in LANE_KEYS], LANE_NAMES)
 # ⛔ 寫死：Benson 2026-09-22「模擬就留下多方聯軍跟台積電快攻」
-chk("  ⛔ 真正的畫面端六條（寫死）", list(REAL_SHOWN), ["union", "tsm", "trend", "hold", "tlong", "nunion", "tvol"])
+chk("  ⛔ 真正的畫面端六條（寫死）", list(REAL_SHOWN), ["union", "tsm", "trend", "tlong", "nunion", "tvol"])
 S.SHOWN_LANES = REAL_SHOWN
 _two = S.state(NOW) if "NOW" in globals() else S.state()
-chk("  ⛔ 端點真的只端那六條、順序一樣", list(_two["lanes"]), ["union", "tsm", "trend", "hold", "tlong", "nunion", "tvol"])
+chk("  ⛔ 端點真的只端那六條、順序一樣", list(_two["lanes"]), ["union", "tsm", "trend", "tlong", "nunion", "tvol"])
 S.SHOWN_LANES = S.LANES
 say(set(REAL_SHOWN) <= set(S.LANES), "  畫面那兩條都還在 LANES 裡（背景照算）")
 chk("  ⛔ 後端端出去的字裡沒有舊名字",
@@ -1016,10 +1019,10 @@ print("\n=== ⑦d 日盤／夜盤兩頁 ===")
 # ⛔ 預期寫死在這裡（⛔ 不准拿 S.LANE_SESS 跟自己比）。以進場那一盤算：聯軍留倉日盤進場 ⇒ 日盤。
 #    值用中文：用 "night" 會跟 lane key「夜盤順勢」撞名（⑦「前端不寫死 lane key」第一版就這樣紅）。
 _SESS_WANT = {"fast": "日盤", "fast11": "日盤", "hmq": "日盤", "rev": "日盤", "orb": "日盤", "union": "日盤",
-              "hold": "日盤", "night": "夜盤", "tsm": "夜盤", "trend": "夜盤", "tlong": "夜盤", "nunion": "夜盤",
+              "night": "夜盤", "tsm": "夜盤", "trend": "夜盤", "tlong": "夜盤", "nunion": "夜盤",
               "tvol": "夜盤"}
 _st_lanes = S.state(NOW)["lanes"]
-chk("  /api/sim/state 每條都帶 sess、而且跟寫死的預期一樣（聯軍留倉＝日盤）",
+chk("  /api/sim/state 每條都帶 sess、而且跟寫死的預期一樣",
     {k: v.get("sess") for k, v in _st_lanes.items()}, {k: _SESS_WANT.get(k, "（預期表沒有這條）") for k in _st_lanes})
 chk("  LANE_SESS 蓋到全部 LANES（背景在算、沒上畫面的也要有）", sorted(S.LANE_SESS) == sorted(S.LANES), True)
 chk("  LANE_SESS 跟寫死的預期逐條一樣", S.LANE_SESS, _SESS_WANT)
