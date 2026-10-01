@@ -6206,6 +6206,79 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-pos .r span{color:var(--faint)}
 .al-pos .n{font-size:11px; color:var(--faint); line-height:1.6; margin-top:7px}
 .al-pos .none{font-size:13px; color:var(--dim); margin-top:8px; line-height:1.6}
+/* ══ ⭐⭐ 2026-10-01【自動下單】改版（Benson 看過預覽：上半一眼看完、下半收起來） ══ */
+#tab-fire .al-top{margin-bottom:14px}
+#tab-fire .al-top .at-head:has(.s:empty){display:none}
+/* 日盤／夜盤標籤：⛔ 不用紅綠金（紅綠只給賺賠、金色只給要注意） */
+.ses{display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500; letter-spacing:.08em;
+  border-radius:6px; padding:1px 7px; vertical-align:2px; white-space:nowrap; flex:none}
+.ses.d{color:#7CC4F2; background:rgba(124,196,242,.12); border:1px solid rgba(124,196,242,.35)}
+.ses.n{color:#B39DF0; background:rgba(179,157,240,.12); border:1px solid rgba(179,157,240,.38)}
+.al-pill .lb.d{color:#7CC4F2} .al-pill .lb.n{color:#B39DF0}
+/* 今天兩條 */
+.al-today2{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; margin-bottom:14px}
+.al-tc{padding:16px 18px; min-width:0}
+.al-tch{display:flex; align-items:baseline; gap:9px; margin-bottom:10px}
+.al-tch .nm{font-size:15px; font-weight:600; letter-spacing:.02em; color:var(--text)}
+.al-tch .when{margin-left:auto; font-size:12px; color:var(--faint)}
+.al-tc .al-today .t{font-size:19px; font-weight:600}
+.al-tc .al-today .t.off{font-size:17px; font-weight:600; color:var(--dim)}
+.al-tc .al-today .d{font-size:12.5px}
+/* 部位＋本月 */
+.al-row2{display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:14px; margin-bottom:14px; align-items:stretch}
+.al-row2 #alpos>.al-pos{height:100%}
+.al-row2 .al-cap{margin-top:0}
+.al-row2 .al-cap .cap{height:100%}
+@media(max-width:1000px){ .al-today2,.al-row2{grid-template-columns:minmax(0,1fr)} }
+#tab-fire .al-pos{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px}
+#tab-fire .al-pos.live{border-color:var(--gold-line)}
+#tab-fire .al-pos .hd{font-size:12px; letter-spacing:.12em}
+#tab-fire .al-pos .who{font-size:14.5px; font-weight:500; color:var(--text); margin-top:8px}
+#tab-fire .al-pos .big{font-size:40px; font-weight:600; letter-spacing:-.025em; margin:4px 0 6px}
+#tab-fire .al-pos .big u{text-decoration:none; font-size:15px; font-weight:400; color:var(--dim); margin-left:6px; letter-spacing:0}
+#tab-fire .al-pos .kv{display:flex; gap:24px; flex-wrap:wrap; font-size:13px; color:var(--dim)}
+#tab-fire .al-pos .kv b{color:var(--text); font-weight:600}
+#tab-fire .al-pos .none{font-size:15px; color:var(--faint); padding:14px 0 4px}
+/* 部位刻度：⭐ 一律「左＝虧（停損）、右＝賺（停利）」，做多做空都一樣 */
+.al-gauge{margin-top:18px}
+.al-gauge .dist{display:flex; justify-content:space-between; gap:10px; font-size:13px; color:var(--dim); margin-bottom:30px}
+.al-gauge .dist b{color:var(--text)}
+.al-gauge .track{position:relative; height:12px; border-radius:6px; background:var(--surface-2); border:1px solid var(--line)}
+.al-gauge .lz{position:absolute; left:0; top:0; bottom:0; border-radius:6px 0 0 6px; background:var(--down-soft)}
+.al-gauge .wz{position:absolute; right:0; top:0; bottom:0; border-radius:0 6px 6px 0; background:var(--up-soft)}
+.al-gauge .fill{position:absolute; top:2px; bottom:2px; border-radius:3px}
+.al-gauge .fill.up{background:var(--up)} .al-gauge .fill.down{background:var(--down)}
+.al-gauge .entry{position:absolute; top:-4px; width:2px; height:20px; background:var(--dim); transform:translateX(-1px)}
+.al-gauge .now{position:absolute; top:-6px; width:4px; height:24px; border-radius:2px; background:var(--text); transform:translateX(-2px)}
+.al-gauge .bub{position:absolute; bottom:28px; left:50%; transform:translateX(-50%); white-space:nowrap; font-size:12.5px;
+  font-weight:600; background:var(--surface-2); border:1px solid var(--line); border-radius:6px; padding:1px 8px}
+.al-gauge .ends{position:relative; height:38px; margin-top:8px; font-size:12px; color:var(--faint)}
+.al-gauge .ends span{position:absolute; top:0; line-height:1.45}
+.al-gauge .ends .l{left:0} .al-gauge .ends .r{right:0; text-align:right}
+.al-gauge .ends .m{transform:translateX(-50%); text-align:center; color:var(--dim)}
+.al-gauge .ends b{display:block; color:var(--dim); font-weight:600}
+#tab-fire .al-pos .r2{font-size:12.5px; color:var(--dim); margin-top:6px; line-height:1.7}
+#tab-fire .al-pos .r2 b{color:var(--text); font-weight:600}
+/* 本月（含風控）：⛔ 風控那條照舊用金色／中性灰；只有賺賠數字用紅綠 */
+#tab-fire .al-cap .cap{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px}
+#tab-fire .al-cap .cap.hit{border-color:var(--gold-line); background:var(--gold-soft)}
+.al-mon .h{font-size:12px; color:var(--faint); letter-spacing:.12em}
+.al-mon .tot{font-size:36px; font-weight:600; letter-spacing:-.025em; line-height:1.2; margin-top:4px}
+.al-mon .tot u{text-decoration:none; font-size:15px; font-weight:400; color:var(--dim); margin-left:6px; letter-spacing:0}
+.al-mon table{width:100%; border-collapse:collapse; margin:10px 0 6px; font-size:13.5px}
+.al-mon td{padding:6px 0; border-top:1px solid var(--line-soft)}
+.al-mon td.p{text-align:right} .al-mon td.n{text-align:right; color:var(--faint); width:64px}
+#tab-fire .al-cap .bar{height:8px; border-radius:4px; background:var(--surface-2)}
+/* 收起來的區塊 */
+.al-fold{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); margin-bottom:10px}
+.al-fold>summary{cursor:pointer; list-style:none; padding:14px 18px; font-size:14px; font-weight:500; letter-spacing:.03em;
+  display:flex; align-items:center; gap:10px; color:var(--dim)}
+.al-fold>summary::-webkit-details-marker{display:none}
+.al-fold>summary::before{content:"▸"; color:var(--faint); transition:transform .15s}
+.al-fold[open]>summary::before{transform:rotate(90deg)}
+.al-fold>summary:hover{color:var(--text)}
+.al-fold>summary .r{margin-left:auto; font-weight:400; font-size:12.5px; color:var(--faint)}
+.al-fbody{padding:0 18px 16px}
 .al-perf{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line-soft);
   border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden}
 @media(max-width:620px){ .al-perf{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -6511,77 +6584,76 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
        ⑥ 開關與規則（沉到最底：一年按不到幾次的東西）
      ⛔ 這一頁永遠是分頁的最右邊（動線的終點）。 -->
 <div id="tab-fire" hidden>
-
- <div class="card l1">
+ <!-- ⭐⭐ 2026-10-01 改版（Benson：「資訊太多、重要的不直觀、太亂」；預覽 fire_preview 他看過說可以）：
+      上半一眼看完 ⇒ ①狀態列（關閉鈕照舊在最上面，關掉永遠好按）②今天兩條（日盤／夜盤各一張）
+      ③現在的部位＋本月（含風控）④風險那幾句；下半全部收進可以點開的區塊（紀錄／最近做得如何／規則／開關）。
+      ⛔ 只換**版面**：每一個容器 id、每一句條件式警告、兩段式開關、風險句一句都沒少，下單邏輯一行沒動。 -->
+ <div class="al-top">
   <!-- ① 狀態列：日盤／夜盤兩顆藥丸。⛔ 開／關用金色與中性灰，⛔ 不准用紅綠（紅綠只給損益）。
        「關閉」鈕就在這裡（原 #aloff）：關掉永遠是安全的動作、要好按、⛔ 照舊不跳確認。 -->
   <div class="al-bar" id="albar"></div>
   <!-- 條件式的警告（真單關著／送單出過錯／結算日判不出來…）⛔ 一條都不准少 -->
   <div class="at-head"><div class="at-title"><div class="s" id="alsub"></div></div></div>
-  <div class="al-gates" id="algates"></div>
-  <!-- ⭐ 2026-09-24 風控規則 B：本月自動單損益／上限（＋到上限時的兩段式「手動解除」）。
-       ⛔ 空容器：按鈕一律由 alPaint 畫進來（這一頁的靜態 HTML 不准有 button）。 -->
-  <div class="al-cap" id="alcap"></div>
-  <!-- ⭐ 2026-09-15：今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 /api/fire/state 的 fast 來。 -->
-  <div class="al-fast" id="alfast"></div>
+ </div>
 
-  <!-- ② 今天：左＝結論（七種結局的文案⛔ 一句都不改）＋三個候選，右＝現在的部位 -->
-  <div class="al-now">
-   <!-- 今天那一口**已經出場**時左半整塊收起來（alPaint 設 hidden），改併進底下「紀錄」的第一列
-        （金框＋「今天」＋「已出場」標，2026-09-14 一件事只講一次）。
-        ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／持有中／收盤警示）照舊畫在這裡。 -->
-   <div id="altodaybox">
-    <div class="sec-head"><h2>今天</h2><span class="count" id="alcount"></span></div>
-    <div class="al-today" id="altoday"></div>
-   </div>
-   <!-- ⛔ 右邊這張**唯讀**：一顆鈕都沒有。 -->
-   <div id="alpos"></div>
+ <!-- ② 今天兩條：左＝日盤（七種結局的文案⛔ 一句都不改＋三個候選＋收盤平倉），右＝夜盤 -->
+ <div class="al-today2">
+  <div class="card al-tc">
+   <div class="al-tch"><span class="ses d">☀ 日盤</span><span class="nm" id="aldayname"></span><span class="when" id="alcount"></span></div>
+   <!-- ⚠️ 舊版今天已出場時會把這一塊收起來、併進紀錄第一列；紀錄現在收在下面 ⇒ 這一塊**永遠畫** -->
+   <div id="altodaybox"><div class="al-today" id="altoday"></div></div>
+   <!-- ⭐ 2026-09-15：今天的門檻與判定（快／不快／歷史不夠）。⛔ 判定只從後端 /api/fire/state 的 fast 來。 -->
+   <div class="al-fast" id="alfast"></div>
   </div>
-
-  <!-- ③ 風險兩句（2026-09-10）：⛔⛔ 一句都不准刪
-       （停損活在這台電腦裡／這個開關沒有有效期）。開著才畫。 -->
-  <div id="alrisk"></div>
+  <div class="card al-tc">
+   <div class="al-tch"><span class="ses n">☾ 夜盤</span><span class="nm" id="alnightname"></span><span class="when" id="alnightwhen"></span></div>
+   <div class="al-today" id="alnight"></div>
+  </div>
  </div>
 
- <!-- ④ 最近做得如何：⛔ 不放勝率、不放期望值、不放勝敗場數。
-      資料用 /api/fire/state 現有的帳本列＋real 出場價算，⛔ 不新開端點。 -->
- <div class="card">
-  <div class="sec-head"><h2>最近做得如何</h2><span class="count" id="alperfn"></span></div>
-  <div class="al-perf" id="alperf"></div>
-  <div class="al-spark" id="alsparkbox"></div>
-  <div class="al-empty">同一份數字在【健檢】那一頁有跟歷史基準的對照。</div>
+ <!-- ③ 現在的部位（⛔ 唯讀、一顆鈕都沒有）＋ 本月（⭐ 2026-09-24 風控規則 B；到上限時的兩段式「手動解除」）。
+      ⛔ 空容器：按鈕一律由 alPaint 畫進來（這一頁的靜態 HTML 不准有 button）。 -->
+ <div class="al-row2">
+  <div id="alpos"></div>
+  <div class="al-cap" id="alcap"></div>
  </div>
 
- <!-- ⑤ 紀錄 -->
- <div class="card">
-  <div class="sec-head"><h2>紀錄</h2><span class="count" id="allogn"></span></div>
-  <!-- 日盤／夜盤篩選 chips。⚠️ 兩邊是**不同的帳本**（autofire/ vs nightfire/），
-       合併只發生在**畫面**上。
-       ⛔⛔ 這裡是**空容器**：這一頁的靜態 HTML 一顆 button／form／input 都不准有
-       （test_auto_fire.py ⑪ 在守）—— 所有控制項一律由 alPaint 畫進來。 -->
-  <div class="al-chips" id="alfilter"></div>
-  <!-- ⛔⛔ 跟練習／真實那份清單**同一種卡片**（`.list` ＋ `.trade`）。
-       ⛔ `.list>*{flex:none}` 由 `.list` 自己帶著，⛔ 不可以省 ——
-          `.list` 是有 max-height 的 flex 直欄，少了那條、筆數一多就是**把每一列壓扁**
-          （實測 107px 被壓成 21.6px），而且筆數少的時候完全看不出來。 -->
-  <div class="list al-list" id="altbl"></div>
-  <div class="al-empty" id="alempty"></div>
-  <div class="at-notes" id="alnotes"></div>
- </div>
+ <!-- ④ 風險那幾句（2026-09-10）：⛔⛔ 一句都不准刪（停損活在這台電腦裡／這個開關沒有有效期）。開著才畫。 -->
+ <div id="alrisk"></div>
 
- <!-- ⑥ 開關：沉到最底（開難關易 —— 關在最上面隨手可及，開在最底下要捲下來）。
+ <!-- ⑤ 以下全部收起來，要看再點開。⛔ <details>／<summary> 不是 button（這一頁靜態 HTML 照樣 0 顆 button）。 -->
+ <!-- 紀錄。日盤／夜盤篩選 chips。⚠️ 兩邊是**不同的帳本**（autofire/ vs nightfire/），合併只發生在**畫面**上。
+      ⛔⛔ 這裡是**空容器**：這一頁的靜態 HTML 一顆 button／form／input 都不准有
+      （test_auto_fire.py ⑪ 在守）—— 所有控制項一律由 alPaint 畫進來。
+      ⛔⛔ 跟練習／真實那份清單**同一種卡片**（`.list` ＋ `.trade`）；`.list>*{flex:none}` ⛔ 不可以省。 -->
+ <details class="al-fold"><summary>紀錄<span class="r" id="allogn"></span></summary>
+  <div class="al-fbody">
+   <div class="al-chips" id="alfilter"></div>
+   <div class="list al-list" id="altbl"></div>
+   <div class="al-empty" id="alempty"></div>
+   <div class="at-notes" id="alnotes"></div>
+  </div>
+ </details>
+ <!-- 最近做得如何：⛔ 不放勝率、不放期望值、不放勝敗場數。 -->
+ <details class="al-fold"><summary>最近做得如何<span class="r" id="alperfn"></span></summary>
+  <div class="al-fbody">
+   <div class="al-perf" id="alperf"></div>
+   <div class="al-spark" id="alsparkbox"></div>
+   <div class="al-empty">同一份數字在【健檢】那一頁有跟歷史基準的對照。</div>
+  </div>
+ </details>
+ <!-- 規則與送單設定（自動下單／真單／怎麼送那三格；開關檔名掛在 title） -->
+ <details class="al-fold"><summary>規則與送單設定<span class="r">自動下單・真單・怎麼送</span></summary>
+  <div class="al-fbody"><div class="al-gates" id="algates"></div></div>
+ </details>
+ <!-- ⑥ 開關：沉到最底（開難關易 —— 關在最上面隨手可及，開在最底下要點開再捲下來）。
       ⛔ 「打開」那幾顆鈕＋第二段紅底確認條**一道都不准少**。
-      ⭐⭐ 2026-09-23 定案（規格 §2.7）：
-        ・**日盤**＝多方聯軍，⛔ **畫面上不給選做法**（後端 auto_fire.METHODS 仍支援 A，
-          但前端固定送 `U`；⛔ 整頁不准出現第二種做法可以選）。
-        ・**夜盤**＝做法**單選**（清單從後端 night_fire.METHODS 來，⛔ 前端不寫死）。
-          ⛔ 單選是刻意的：兩條同時開＝加倉，結構上就不可能。
-        ・換做法一定是**先關再開**（開關檔不覆蓋，後端已經開著再 on 會回 409）。
-      ⛔ 這裡只放空容器：兩組的內容都由 alPaint 畫進來（⛔ 靜態 HTML 一顆 button 都不准有）。 -->
- <div class="card" id="alswitchcard">
-  <div class="sec-head"><h2>開關</h2><span class="count">一年按不到幾次的東西放這裡</span></div>
-  <div id="alswitch"></div>
- </div>
+      ⭐⭐ 2026-09-23 定案（規格 §2.7）：日盤＝多方聯軍（⛔ 畫面上不給選做法）；夜盤＝做法**單選**（清單從後端來）；
+         換做法一定是**先關再開**。⛔ 這裡只放空容器：兩組的內容都由 alPaint 畫進來。
+      ⚠️ 「到開關」那顆會先把這一塊點開再捲過來（見 data-aljump）。 -->
+ <details class="al-fold" id="alswitchcard"><summary>開關<span class="r" id="alswsum">一年按不到幾次的東西放這裡</span></summary>
+  <div class="al-fbody"><div id="alswitch"></div></div>
+ </details>
 </div>
 
 <!-- ══ 【自動下單】到此 ══ （⛔ 這行是 tools/probe/autotest-backend.py ①／
@@ -8582,7 +8654,17 @@ function alCapHTML(R){
    '<div class="t">⚠️ '+esc(R.err)+' —— 算不出來的時候<b>不送單</b>（不猜）。</div></div>';
  const cap=Number(R.cap||0), pnl=Number(R.pnl||0), used=Number(R.used_pct||0);
  const fmt=v=>(v>0?'+':(v<0?'−':''))+Math.abs(Math.round(v)).toLocaleString();
- let h='<div class="cap'+(R.hit?' hit':'')+'">'+
+ /* ⭐⭐ 2026-10-01 改版：這張卡變成「本月」—— 最上面是本月合計＋日盤／夜盤各多少。
+    ⛔ 數字一律是後端 R.trades 每一口的點數（risk_cap.state，跟風控**同一份**），前端只照 sess 分組加總、⛔ 不另算。 */
+ const TR=Array.isArray(R.trades)?R.trades:[];
+ const grp=k=>{ const a=TR.filter(t=>t&&t.sess===k&&isFinite(Number(t.pts))); return [a.reduce((x,t)=>x+Number(t.pts),0),a.length]; };
+ const gd=grp('day'), gn=grp('night'), nx=NF.data;
+ const sp=v=>'<span class="'+sgn(v)+'">'+fmt(v)+'</span>';
+ const mon='<div class="h">本月（'+esc(String(R.month||'').slice(5).replace(/^0/,''))+' 月）</div>'+
+   '<div class="tot">'+sp(pnl)+'<u>點</u></div>'+
+   '<table><tr><td><span class="ses d">☀ 日盤</span> '+esc(alDayName(AL.data||{}))+'</td><td class="p">'+sp(gd[0])+' 點</td><td class="n">'+gd[1]+' 筆</td></tr>'+
+   '<tr><td><span class="ses n">☾ 夜盤</span> '+esc(nx?nfName(nx,nx.method):'—')+'</td><td class="p">'+sp(gn[0])+' 點</td><td class="n">'+gn[1]+' 筆</td></tr></table>';
+ let h='<div class="cap al-mon'+(R.hit?' hit':'')+'">'+mon+
    '<div class="hd"><span class="k">本月風控・日盤＋夜盤共用（'+esc(String(R.month||''))+
      (R.since?'，'+esc(String(R.since).slice(5))+' 起算':'')+'）</span>'+
    '<span class="v">'+fmt(pnl)+' 點　/　上限 −'+Math.round(cap).toLocaleString()+'</span></div>'+
@@ -8804,7 +8886,9 @@ function alWhy(x,fallback){
         而「關」永遠是安全方向。）
    ⚠️ 關著時右邊那顆是「到開關」——**純導覽**，⛔ 一個請求都不送（只捲到最底下那張卡）。 */
 function alPillHTML(lb,nm,on,live,canOff,offAttr,msg){
- return '<div class="al-pill'+(on?' on':'')+'"><span class="lb">'+esc(lb)+'</span>'+
+ /* ⭐ 2026-10-01：日盤／夜盤標籤上色（☀ 藍、☾ 紫；⛔ 不用紅綠金） */
+ const c=lb==='日盤'?'d':(lb==='夜盤'?'n':'');
+ return '<div class="al-pill'+(on?' on':'')+'"><span class="lb '+c+'">'+(c==='d'?'☀ ':(c==='n'?'☾ ':''))+esc(lb)+'</span>'+
    '<span class="nm">'+esc(nm||'—')+'</span>'+
    '<span class="st">'+esc(on?(live?'開著・真錢':'開著・演練'):(msg||'關著'))+'</span>'+
    (canOff?('<button class="off" '+offAttr+'>關閉</button>')
@@ -8857,6 +8941,8 @@ function alPaint(){
    setEl('alswitch',''); setEl('alpos','');
    setEl('alperf',''); setEl('alsparkbox',''); setEl('alperfn','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
+   setEl('aldayname',''); setEl('alswsum','');
+   alNightPaint();
    return;
  }
  const armed=!!D.armed, m=D.method, live=!!D.live;
@@ -8972,10 +9058,16 @@ function alPaint(){
  /* ── ⑥ 開關（沉到最底）──────────────────────────────────────
     ⛔ 「打開」兩段式：⛔ 只有開關檔**不在**的時候才畫（開著就只剩「關閉」）。 */
  setEl('alswitch', alSwDay(D)+alSwNight());
+ /* 開關那一塊收著時，summary 上直接看得到兩盤開著沒（⛔ 只是摘要，開／關照舊在裡面、關閉照舊在最上面） */
+ const nx=NF.data;
+ setEl('alswsum','日盤：'+esc(armed?alDayName(D):'關著')+'　·　夜盤：'+
+   esc(nx?(nx.on?nfName(nx,nx.method):'關著'):'—'));
+ alNightPaint();
 
  /* ── ② 今天送了沒／為什麼沒送 ─────────────────────────────── */
  const days=D.days||[], today=D.today||'', row=days.find(r=>r&&r.date===today)||null;
- setEl('alcount',esc(today));
+ setEl('alcount',esc(D.signal_at?(D.signal_at+' 起判定'):today));
+ setEl('aldayname',esc(alDayName(D)));
  /* ⛔⛔ 「今天」這一塊吃的是**跟紀錄清單同一份資料**（2026-09-10 一起改）：
     只改清單不改這裡的話，畫面會同時寫著「紀錄：出場 +100」與
     「今天：已送出委託單，13:43:30 會自動平倉」—— 後面那句在那一刻已經是假話。
@@ -8983,7 +9075,9 @@ function alPaint(){
        而且收盤那一段沒有警示）時，「今天」那半整塊收起來，改併進「紀錄」第一列
        （金框＋「今天」＋「已出場」標，見 alCard 的 today 版）—— 同一筆點數不再寫兩次。
     ⛔ 其他狀態（還沒到／沒有紀錄／沒送成／下落不明／持有中／對不到／收盤警示）照舊畫這裡。 */
- const merged=alTodayMerged(D,row);
+ /* ⭐⭐ 2026-10-01 改版：紀錄收進可以點開的區塊 ⇒ 今天已出場也**照樣畫在日盤那張卡**（⛔ 不再併進紀錄第一列，
+    不然紀錄收著的時候今天的結果就看不到了）。alTodayMerged 留著（判準本身沒變），這裡不再用它收起來。 */
+ const merged=false;
  const tbox=document.getElementById('altodaybox');
  if(tbox) tbox.hidden=merged;
  /* ⭐⭐ 2026-09-23（規格 §2.7）：**關掉之後今天那一口還在**這一幕要畫得出來。
@@ -9018,14 +9112,45 @@ function alPaint(){
    x=>'<button class="al-chip'+(ALF===x[0]?' on':'')+'" data-alf="'+x[0]+'">'+x[1]+'</button>').join(''));
 }
 
-/* ⭐ ② 右半「現在的部位」（⛔ 唯讀、⛔ 一顆鈕都沒有）。
+/* ⭐⭐ 2026-10-01 夜盤那張「今天」卡。⛔ 資料只用 GET /api/nightfire/state（NF.data），⛔ 不新開端點。
+   ⚠️ 夜盤帳本**沒有出場價**（出場在券商端成交）⇒ 這張卡⛔ 不寫點數、⛔ 不拿現價頂。
+   ⛔ 「關著」「今晚還沒到」「今晚不做」「已出手」是四句不同的話，⛔ 不准混。 */
+function alNightHTML(){
+ const x=NF.data;
+ if(!x) return '<div class="t off">'+esc(NF.err||'載入中…')+'</div>';
+ const T=x.tonight||null, E=T?String(T.E||''):'';
+ const recs=(x.recent||[]).filter(o=>E&&String(o.E||'')===E);
+ const res=recs.filter(o=>o.rec==='result')[0]||null, eod=recs.filter(o=>o.rec==='eod')[0]||null;
+ const r=res||recs[0]||null;
+ const why=o=>esc(String((o&&(o.msg||o.why||o.err))||''));
+ if(r&&r.rec==='result'&&r.ok){
+   const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
+   return '<div class="t">已出手：'+esc(nfName(x,r.method||null))+' → '+esc(dir)+'　1 口</div>'+
+     '<div class="d">進場 <b>'+esc(alF(r.entry))+'</b>　'+(eod?('已平倉'+(why(eod)?'（'+why(eod)+'）':'')):'04:58 自動平倉')+'</div>';
+ }
+ if(r&&r.rec==='result') return '<div class="t off">沒有送成</div><div class="d">'+why(r)+'</div>';
+ if(r) return '<div class="t off">今晚不做</div><div class="d">'+why(r)+'</div>';
+ if(!x.on) return '<div class="t off">關著</div><div class="d">夜盤自動下單沒開，一張單都不會送出去。</div>';
+ if(!T) return '<div class="t off">今晚沒有夜盤</div>';
+ return '<div class="t off">還沒到 '+esc(T.look_at||'')+'</div>'+
+   '<div class="d">開關是開著的（'+esc(nfName(x,x.method))+'），'+esc(T.look_at||'')+' 一到看要不要做。</div>';
+}
+function alNightPaint(){
+ const x=NF.data;
+ setEl('alnightname', esc(x?nfName(x,x.on?x.method:null):''));
+ setEl('alnightwhen', esc(x&&x.tonight&&x.tonight.look_at?(x.tonight.look_at+' 判定'):''));
+ setEl('alnight', alNightHTML());
+}
+/* ⭐ ② 「現在的部位」（⛔ 唯讀、⛔ 一顆鈕都沒有）。
    ⛔ 部位那幾個數字來自 /api/state 的 `real`（跟【即時】那張卡、跟停損監控**同一份**）——
-      ⛔ 這一頁不自己算浮動點數，也不自己算停利停損價。
+      ⛔ 這一頁不自己算浮動點數，也不自己算停利停損價（刻度只是把後端那幾個價**畫出來**）。
+   ⭐⭐ 2026-10-01 改版（Benson：「這條不直觀」）：刻度一律「**左＝虧（停損）、右＝賺（停利）**」，做多做空都一樣；
+      條上直接寫「離停損還有幾點／離停利還差幾點」。沒有停損價（R.sl 是 null）⇒ ⛔ 不畫刻度、照舊列數字。
    ⛔ 夜盤那一口**另起一行**（它是另一套帳、另一個帳本）。 */
 function alPosHTML(D,row){
  const s=LASTS||{}, R=s.real||{}, P=R.position;
  const nfp=NF.data;
- const nfline='<div class="r"><span>夜盤那一口</span><b>'+
+ const nfline='<div class="r2">夜盤那一口：<b>'+
    esc(nfp?(nfp.on?(nfp.tonight?('今晚 '+(nfp.tonight.look_at||'')+' 才看'):'沒有部位'):'關著'):'—')+
    '</b></div>';
  if(!P){
@@ -9034,24 +9159,41 @@ function alPosHTML(D,row){
    if(D&&D.armed&&D.signal_at) when.push('日盤那一口最早 '+D.signal_at);
    if(nfp&&nfp.on&&nfp.tonight&&nfp.tonight.look_at) when.push('夜盤那一口最早 '+nfp.tonight.look_at);
    return '<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
-     '<div class="none">現在沒有部位。'+(when.length?('<br>'+esc(when.join('、'))+'。'):'')+'</div></div>';
+     '<div class="none">現在沒有部位。'+(when.length?('<br><span style="font-size:13px">'+esc(when.join('、'))+'。</span>'):'')+'</div></div>';
  }
- const fp=R.float_pts;
- const dir=P.dir==='long'?'▲ 做多':(P.dir==='short'?'▼ 做空':'方向不明');
+ const fp=alN(R.float_pts), night=isNightNow();
+ const sgnDir=P.dir==='long'?1:(P.dir==='short'?-1:0);
+ const dir=P.dir==='long'?'做多':(P.dir==='short'?'做空':'方向不明');
+ const qty=esc(String(P.qty==null?1:P.qty));
+ /* ⚠️ 夜盤時段手上那一口是夜盤自動下單開的 ⇒ 04:58 平（⛔ 不是日盤的 13:43:30）。 */
+ const exitAt=night?'04:58':(D&&D.eod_at?String(D.eod_at):'');
+ const en=alN(P.entry), sl=alN(R.sl), tp=P.no_tp?null:alN(R.tp);
+ let gauge='';
+ if(en!=null&&sl!=null&&sgnDir){
+   const slP=Math.abs(sl-en), tpP=(tp!=null)?Math.abs(tp-en):null, v=(fp==null?0:fp);
+   const lo=-slP, hi=tpP||Math.max(slP,v*1.4,1);
+   const pc=q=>Math.max(0,Math.min(100,100*(q-lo)/(hi-lo))), z=pc(0), c=pc(v);
+   gauge='<div class="al-gauge"><div class="dist"><span>離停損還有 <b>'+(fp==null?'—':Math.round(slP+v))+'</b> 點</span><span>'+
+     (tpP!=null?('離停利還差 <b>'+(fp==null?'—':Math.round(tpP-v))+'</b> 點'):('不設停利'+(exitAt?'，抱到 '+esc(exitAt):'')))+'</span></div>'+
+     '<div class="track"><i class="lz" style="width:'+z+'%"></i>'+(tpP!=null?'<i class="wz" style="width:'+(100-z)+'%"></i>':'')+
+     '<i class="fill '+(v>=0?'up':'down')+'" style="left:'+Math.min(z,c)+'%;width:'+Math.abs(c-z)+'%"></i>'+
+     '<i class="entry" style="left:'+z+'%"></i><i class="now" style="left:'+c+'%"><b class="bub '+sgn(fp)+'">'+
+       (fp==null?'—':pm(fp))+' 點</b></i></div>'+
+     '<div class="ends"><span class="l">◀ 停損（虧 '+Math.round(slP)+' 點）<b>'+f(sl)+'</b></span>'+
+     '<span class="m" style="left:'+z+'%">進場<b>'+f(en)+'</b></span>'+
+     (tpP!=null?('<span class="r">停利（賺 '+Math.round(tpP)+' 點）▶<b>'+f(tp)+'</b></span>'):'<span class="r">往右＝賺 ▶</span>')+
+     '</div></div>';
+ }
  return '<div class="al-pos live"><div class="hd"><span>現在的部位</span>'+
-   '<span style="color:var(--gold)">'+dir+' '+esc(String(P.qty==null?1:P.qty))+' 口</span></div>'+
-   '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+
-     ' <small style="font-size:13px;font-weight:600;color:var(--faint)">點</small></div>'+
-   '<div class="r"><span>進場</span><b>'+f(P.entry)+
-     (P.entry_time?'（'+esc(String(P.entry_time).slice(0,8))+'）':'')+'</b></div>'+
-   '<div class="r"><span>現價</span><b>'+f(livePx(s))+'</b></div>'+
-   '<div class="r"><span>停損 / 停利</span><b>'+(R.sl==null?'—':f(R.sl))+' / '+
-     (P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'+
-   /* ⚠️ 夜盤時段手上那一口是夜盤自動下單開的 ⇒ 04:58 平（⛔ 不是日盤的 13:43:30）。 */
-   (isNightNow()
-     ? '<div class="r"><span>沒平掉就</span><b>04:58 自動平</b></div>'
-     : (D&&D.eod_at?'<div class="r"><span>沒平掉就</span><b>'+esc(D.eod_at)+' 自動平</b></div>':''))+
-   nfline+
+   (exitAt?('<span>沒平掉就 <b>'+esc(exitAt)+' 自動平</b></span>'):'')+'</div>'+
+   '<div class="who">'+(night?'<span class="ses n">☾ 夜盤</span>':'<span class="ses d">☀ 日盤</span>')+' '+esc(dir)+' '+qty+' 口</div>'+
+   '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+'<u>點</u></div>'+
+   '<div class="kv"><span>進場 <b>'+f(P.entry)+'</b>'+
+     (P.entry_time?'（'+esc(String(P.entry_time).slice(0,8))+'）':'')+'</span>'+
+   '<span>現價 <b>'+f(livePx(s))+'</b></span>'+
+   (gauge?'':('<span>停損 / 停利 <b>'+(R.sl==null?'—':f(R.sl))+' / '+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></span>'))+'</div>'+
+   gauge+
+   (night?'':nfline)+
    (P.no_tp?'<div class="n" style="color:var(--gold)">'+noTpTag()+'：券商端無掛單 —— '+
      '這一口沒有停利單、永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。</div>':'')+
    '</div>';
@@ -9401,7 +9543,7 @@ document.addEventListener('click', function(e){
  /* 「到開關」＝**純導覽**：⛔ 一個請求都不送，只把最底下那張卡捲到眼前。 */
  const jp=e.target.closest('[data-aljump]');
  if(jp){ const c=document.getElementById('alswitchcard');
-   if(c) c.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+   if(c){ c.open=true; c.scrollIntoView({behavior:'smooth',block:'start'}); } return; }
  /* ⭐ 夜盤那幾顆：⛔ 跟日盤同一套規矩（第一段零請求、第二段才 POST、關不跳確認）。
     ⛔⛔ 開著時點**目前那一條** ⇒ 什麼都不做（⛔ 不跳確認、⛔ 零請求）。 */
  const non=e.target.closest('[data-nfon]');
