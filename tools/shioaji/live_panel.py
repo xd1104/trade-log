@@ -5228,6 +5228,13 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 #acct:empty{display:none}
 /* 【帳戶】自己一頁（2026-09-21）：一張卡不要拉成整個螢幕寬，字會散掉 */
 #tab-acct{max-width:560px}
+/* ⭐ 2026-10-01 Benson：「排列有點醜，目標移到右邊」⇒ 寬螢幕左右兩欄（左帳戶總覽、右目標）；窄螢幕照舊上下疊。
+   ⚠️ 用 :not([hidden])：直接寫 display:grid 會蓋掉 hidden，切到別頁時這一頁還會露出來。 */
+@media(min-width:1100px){
+  #tab-acct:not([hidden]){display:grid; grid-template-columns:minmax(0,560px) minmax(0,1fr);
+    gap:16px; align-items:start; max-width:1400px}
+  #tab-acct .ac.gl{margin-top:0}
+}
 
 /* ── 【帳戶總覽】（2026-09-21）：券商端的錢。
    ⛔ 紅綠只給「賺賠」那一個數字（跟這一頁其他地方同一條規矩）；
