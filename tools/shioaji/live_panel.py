@@ -6279,6 +6279,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-fold>summary:hover{color:var(--text)}
 .al-fold>summary .r{margin-left:auto; font-weight:400; font-size:12.5px; color:var(--faint)}
 .al-fbody{padding:0 18px 16px}
+.al-riskfold>summary .w{color:var(--gold)}
+.al-riskfold>summary .r{color:var(--dim)}
+.al-riskfold .al-risk{margin-top:0}
 .al-perf{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line-soft);
   border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden}
 @media(max-width:620px){ .al-perf{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -6618,8 +6621,12 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="al-cap" id="alcap"></div>
  </div>
 
- <!-- ④ 風險那幾句（2026-09-10）：⛔⛔ 一句都不准刪（停損活在這台電腦裡／這個開關沒有有效期）。開著才畫。 -->
- <div id="alrisk"></div>
+ <!-- ④ 風險那幾句（2026-09-10）：⛔⛔ 一句都不准刪（停損活在這台電腦裡／這個開關沒有有效期）。開著才畫。
+      ⭐ 2026-10-01 Benson：「這個也可以摺疊起來，我平常根本不會看」⇒ 收進可點開的區塊（他拍板；句子一字沒刪）。
+      ⚠️ 收著的時候 summary 那一行照樣用金色寫出最要緊的那件事（停損靠這台面板），⛔ 不是整段消失；沒有句子時整塊藏起來。 -->
+ <details class="al-fold al-riskfold" id="alriskfold" hidden><summary><span class="w">⚠ 風險提醒</span><span class="r" id="alriskn"></span></summary>
+  <div class="al-fbody"><div id="alrisk"></div></div>
+ </details>
 
  <!-- ⑤ 以下全部收起來，要看再點開。⛔ <details>／<summary> 不是 button（這一頁靜態 HTML 照樣 0 顆 button）。 -->
  <!-- 紀錄。日盤／夜盤篩選 chips。⚠️ 兩邊是**不同的帳本**（autofire/ vs nightfire/），合併只發生在**畫面**上。
@@ -8942,6 +8949,7 @@ function alPaint(){
    setEl('alperf',''); setEl('alsparkbox',''); setEl('alperfn','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
    setEl('aldayname',''); setEl('alswsum','');
+   { const rf=document.getElementById('alriskfold'); if(rf) rf.hidden=true; }
    alNightPaint();
    return;
  }
@@ -9054,6 +9062,11 @@ function alPaint(){
          '</b> —— '+emb(nfRisk(nfd))+'</span></p>'):'')+
      '</div>'
    : '');
+ /* ⭐ 2026-10-01：風險句收進可點開的區塊；沒有句子 ⇒ 整塊藏起來，有 ⇒ summary 寫幾條＋最要緊那件事 */
+ { const rf=document.getElementById('alriskfold'), rk=document.getElementById('alrisk');
+   const n=rk?rk.querySelectorAll('.al-risk p').length:0;
+   if(rf) rf.hidden=!n;
+   setEl('alriskn', n?(n+' 條・停損靠這台面板，有部位時面板要開著'):''); }
 
  /* ── ⑥ 開關（沉到最底）──────────────────────────────────────
     ⛔ 「打開」兩段式：⛔ 只有開關檔**不在**的時候才畫（開著就只剩「關閉」）。 */
