@@ -12,6 +12,7 @@
   ⑦ ⛔ 不碰正式的 sim_lanes/、⛔ 不連永豐、⛔ 不連任何外部行情
 """
 import csv
+import hashlib
 import json
 import shutil
 import sys
@@ -30,6 +31,25 @@ import sim_lanes as S  # noqa: E402
 
 FAIL = 0
 REAL_SIM = S.SIM_DIR
+
+
+def _fingerprint(d):
+    """資料夾裡每個檔的（大小, 修改時間, sha256）；資料夾不在就是空的"""
+    d = Path(d)
+    if not d.exists():
+        return {}
+    return {p.relative_to(d).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns,
+                                          hashlib.sha256(p.read_bytes()).hexdigest())
+            for p in sorted(d.rglob("*")) if p.is_file()}
+
+
+def _changed(before, after):
+    return sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
+
+
+# ⛔ 開跑前先記下正式 sim_lanes/ 的指紋；收尾比對有沒有被這支測試動到
+#    （正式資料本來就有 trend 列 ⇒ 不能再用「找不到 trend」來判）
+REAL_BEFORE = _fingerprint(REAL_SIM)
 
 
 def say(cond, name, extra=""):
@@ -161,9 +181,24 @@ say(not any(l["label"] in ("停利", "停損") for l in _c["lines"]), "  ⛔ 沒
 
 print("\n=== ⑦ ⛔ 收尾 ===")
 say(S.SIM_DIR != REAL_SIM and TMP_FIX in str(S.SIM_DIR), "  全程在暫存區", str(S.SIM_DIR))
-say(not (HERE / "sim_lanes" / "2026-06.jsonl").exists()
-    or '"trend"' not in (HERE / "sim_lanes" / "2026-06.jsonl").read_text(encoding="utf-8"),
-    "  ⛔ 沒有把測試資料寫進正式的 sim_lanes/")
+_moved = _changed(REAL_BEFORE, _fingerprint(REAL_SIM))
+say(not _moved, "  ⛔ 沒有把測試資料寫進正式的 sim_lanes/（開跑前後指紋一致）",
+    ("被動到：" + "、".join(_moved)) if _moved else f"{len(REAL_BEFORE)} 個檔")
+# 對照組：拿副本做，證明這道檢查真的抓得到（⛔ 不碰正式的那份）
+_ctl = TMP / "real_copy"
+_ctl.mkdir()
+_src = REAL_SIM / "2026-06.jsonl"
+if _src.exists():
+    shutil.copy2(_src, _ctl / "2026-06.jsonl")
+else:
+    (_ctl / "2026-06.jsonl").write_text("", encoding="utf-8")
+_fp = _fingerprint(_ctl)
+chk("  對照：副本沒動 ⇒ 判沒動", _changed(_fp, _fingerprint(_ctl)), [])
+with open(_ctl / "2026-06.jsonl", "a", encoding="utf-8") as f:
+    f.write(json.dumps({"lane": "trend", "date": "2026-06-10", "calc": "對照組假列"}) + "\n")
+chk("  對照：副本多塞一列假的 ⇒ 抓得到", _changed(_fp, _fingerprint(_ctl)), ["2026-06.jsonl"])
+(_ctl / "2026-07.jsonl").write_text("{}\n", encoding="utf-8")
+chk("  對照：副本多一個新檔 ⇒ 也抓得到", _changed(_fp, _fingerprint(_ctl)), ["2026-06.jsonl", "2026-07.jsonl"])
 say("trend" in S.LANES and S.LANE_NAME["trend"] == "夜盤跟勢" and "trend" in S.SHOWN_LANES,
     "  LANES／畫面都註冊好了")
 
