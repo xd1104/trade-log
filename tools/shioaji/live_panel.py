@@ -4771,6 +4771,9 @@ PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <!-- 圖示直接內嵌（面板是單一檔、不另外供應靜態檔）。桌面 App 的視窗與
      工作列圖示就是靠這張 favicon；同一張圖也做成 panel.ico 給捷徑用。 -->
 <link rel="manifest" href="/manifest.webmanifest">
+<!-- ⭐ 2026-10-01 字型（Benson：「面板都換字」）。⛔ 只有字型檔，不載任何程式；斷網就退回系統字。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <meta name="theme-color" content="#0F1218">
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAvklEQVR42mNgwANEJBT+UwMzkAKoZSlZjqG15XgdQS/LsTqCVM2PVwZixWQ7ghJLKXEM0Q4gxWBS1JJkObnRRNARtLCcFP0MxGp+FxUCxtR2BAOxmsh1ACFHMJDie0KOMNlcB8ZUcQA235PrAGxm4nQAvuDH5wCY5aSGwqgDRh0w+BxAbjYkxgE0LQnxOYDikpDuDiC3JiTVcqpXx+gOoKg6pluDZMCbZEOiUUrzZvmAd0wGRddsUHROB6J7DgCcaOnIVZuz+QAAAABJRU5ErkJggg==">
 <style>
@@ -4792,13 +4795,18 @@ PAGE = r"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
   --shadow-1:0 18px 40px -22px rgba(0,0,0,.85);
   --shadow-2:0 24px 60px -20px rgba(0,0,0,.7);
   --ease:cubic-bezier(.22,.68,.36,1);
-  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
-  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+  /* ⭐ 2026-10-01 Benson：「字好醜、沒質感」⇒ 中文思源黑體（Noto Sans TC）、數字與英文 Inter（Google Fonts，見 <head>）。
+     ⚠️ 斷網載不到 ⇒ 自動退回後面的系統字，⛔ 不影響任何功能。
+     ⚠️ --font-mono 也改 Inter：靠 body 的 tnum（等寬數字）對齊，數字每秒跳動也不會抖。 */
+  --font-sans:"Inter","Noto Sans TC","PingFang TC","Microsoft JhengHei","Segoe UI",sans-serif;
+  --font-mono:"Inter","Noto Sans TC",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
   background-image:radial-gradient(1100px 460px at 50% -10%, rgba(227,169,81,.055), transparent 72%);
-  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased}
+  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased;
+  letter-spacing:.01em; font-feature-settings:'tnum' 1; font-variant-numeric:tabular-nums;
+  text-rendering:optimizeLegibility}
 /* 電腦大螢幕：左邊大圖、右邊操作區。Benson 只在電腦上開這個面板。 */
 .app{max-width:1500px; margin:0 auto; padding:0 24px 28px}
 .cols{display:grid; grid-template-columns:minmax(0,1fr) 388px; gap:18px; align-items:start}
