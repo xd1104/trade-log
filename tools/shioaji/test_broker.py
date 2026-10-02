@@ -380,6 +380,61 @@ broker.is_live = lambda: broker.REAL_FLAG.exists()
 broker._state["position"] = None
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
 
+print("\n=== ⭐ 2026-10-02：平倉等成交那幾秒撞到定期對帳 ⇒ 同一口只准記一筆 ===")
+
+
+class RaceSim(BrokerSim):
+    """平倉市價單一成交，平倉迴圈**下一次**問券商之前，另一條執行緒的定期對帳先問到「已空手」。
+    （⛔ 不開真的執行緒：在 list_positions 裡直接呼叫 reconcile()，時間順序跟 10-02 13:43:36 一模一樣。）"""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.raced = False
+
+    def list_positions(self, acc=None):
+        if self.flat and not self.raced:
+            self.raced = True
+            broker.reconcile()
+        return super().list_positions(acc)
+
+
+def trades_today():
+    p = broker.TRADE_DIR / f"{TODAY}.jsonl"
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
+
+
+_n0 = len(trades_today())
+race = RaceSim("Action.Buy")
+connect(race)
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.2
+broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
+                             "entry_time": "09:15:00", "target_trade": None, "recovered": False}
+ok, err = broker.close("eod")
+_new = trades_today()[_n0:]
+chk("  尺的自證：對帳真的在平倉等成交時插進來了", race.raced, True)
+chk("  平倉回報成功", ok, True)
+chk("  ⛔ 同一口只有一筆成績（10-02 那天是兩筆）", len(_new), 1)
+chk("  那一筆是平倉迴圈記的（理由 eod），⛔ 不是 closed_elsewhere", [r.get("reason") for r in _new], ["eod"])
+chk("  出了平倉之後旗標一定放掉", broker._CLOSE_INFLIGHT["on"], False)
+recs = [json.loads(l) for l in
+        (broker.ORDER_DIR / f"{TODAY}.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+chk("  有留下「交給平倉那段記帳」的紀錄",
+    any(r["kind"] == "position_gone" and r.get("skip_record") for r in recs), True)
+# 負控組：**沒有**在平倉時，部位自己不見（停利成交／他自己平掉）⇒ 照舊要記一筆（⛔ 不准因為這次修改變成不記）
+_n1 = len(trades_today())
+connect(BrokerSim("Action.Buy"))
+broker._state["api"].flat = True
+broker._state["position"] = {"dir": "long", "entry": 46978, "qty": 1,
+                             "entry_time": "10:00:00", "target_trade": None, "recovered": False}
+broker.reconcile()
+_new2 = trades_today()[_n1:]
+chk("  負控組：不是我們在平倉時部位不見 ⇒ 照舊記一筆 closed_elsewhere",
+    [r.get("reason") for r in _new2], ["closed_elsewhere"])
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+broker._state["position"] = None
+(broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
+
 print("\n=== 有部位但方向不符 → 停手，不可以當成「沒成交」 ===")
 connect(pos_api("Action.Buy"))          # 券商說是多單
 broker.is_live = lambda: True

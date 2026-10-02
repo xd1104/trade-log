@@ -59,6 +59,12 @@ _lock = threading.Lock()
 # （lab-qa 退件第 5 條）。拿不到鎖就直接回報「正在平倉中」，不排隊。
 _close_lock = threading.Lock()
 _close_fail = {"at": 0.0}
+# ⭐ 2026-10-02 重複記帳：13:43:30 收盤平倉送出後、等成交那幾秒，另一條執行緒的定期對帳（reconcile）
+#    剛好問到「券商已經空手」⇒ 記了一筆 closed_elsewhere（出場價空白），平倉迴圈接著又記一筆 eod（+27）
+#    ⇒ 同一口兩筆 ⇒ 畫面「對不到」、風控把那一口當成「問不到出場價」不算（虧錢那天就會少算）。
+#    ⇒ **自己送出平倉單、還在等成交**的這段期間（_CLOSE_INFLIGHT），對帳**不記帳**，交給平倉迴圈記那一筆。
+#    ⛔ 只管「記不記帳」：清本機部位、其他對帳行為一律照舊。
+_CLOSE_INFLIGHT = {"on": False}
 CLOSE_COOLDOWN = 15.0     # 秒。平倉失敗後隔多久才准再試（不然主迴圈每 0.25 秒就重送一輪）
 _state = {
     "api": None,
@@ -574,10 +580,16 @@ def reconcile():
                     # （面板永遠不送停利單，close() 也就不會被呼叫）。
                     # 也可能是他自己用別的工具平掉的，所以成交價一律去問那張停利單，
                     # 問不到就留白、理由記 closed_elsewhere（畫面上寫「別處平的」），不猜。
-                    px = _fill_price(gone.get("target_trade"))
-                    record_trade(gone, px, "tp" if px is not None else "closed_elsewhere")
-                    _log("position_gone", {"ok": True, "exit": px,
-                                           "why": "券商那邊已經沒有部位（停利成交或他自己平掉）"})
+                    if _CLOSE_INFLIGHT["on"]:
+                        # ⭐ 2026-10-02：是**我們自己**剛送出的平倉單成交了 ⇒ 那一筆由平倉迴圈記（有成交價），
+                        #    ⛔ 這裡再記就是同一口兩筆（見 _CLOSE_INFLIGHT 的說明）。
+                        _log("position_gone", {"ok": True, "exit": None, "skip_record": True,
+                                               "why": "平倉單等成交中，券商已空手 —— 交給平倉那段記帳"})
+                    else:
+                        px = _fill_price(gone.get("target_trade"))
+                        record_trade(gone, px, "tp" if px is not None else "closed_elsewhere")
+                        _log("position_gone", {"ok": True, "exit": px,
+                                               "why": "券商那邊已經沒有部位（停利成交或他自己平掉）"})
         elif _state["position"] is None:
             # 重啟後撿回部位：只知道方向與均價，停利單的下落要另外查
             got = {"dir": pos["dir"], "entry": pos["entry"],
@@ -813,6 +825,7 @@ def close(reason):
     try:
         return _close_locked(reason)
     finally:
+        _CLOSE_INFLIGHT["on"] = False      # ⛔ 不管成功、失敗、例外，出了平倉就一定放掉
         _close_lock.release()
 
 
@@ -851,6 +864,9 @@ def _close_locked(reason):
                                    "why": "撤不掉，平倉後請自己到大戶投刪掉那張停利單"})
     act = sj.Action.Sell if pos["dir"] == "long" else sj.Action.Buy
     last_err = None
+    # ⭐ 2026-10-02：從這裡開始是「我們自己送的平倉單在路上」⇒ 對帳那邊看到空手不記帳（見 _CLOSE_INFLIGHT）。
+    #    ⚠️ 刻意排在上面那次 reconcile() **之後**：送單之前就已經空手（停利早就成交）的那一筆，照舊由對帳記 tp。
+    _CLOSE_INFLIGHT["on"] = True
     for attempt in range(CLOSE_TRIES):
         ok, err, res = _send(
             _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC,
