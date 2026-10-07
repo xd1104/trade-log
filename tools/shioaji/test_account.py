@@ -244,6 +244,17 @@ mo = v["month"]
 chk("  帳戶帳面變化", mo["change"], 108000.0)
 chk("  其中出入金", mo["deposit"], 100000.0)
 chk("  ⭐ 真正賺到的（扣掉出入金）", mo["net"], 8000.0)
+# ⭐ 2026-10-07：月初＝**上個月最後一列**（⛔ 不是這個月第一列 —— 那樣會漏掉那一天自己的賺賠）
+(LP.EQUITY_DIR / "2026.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [
+    {"date": "2026-09-30", "equity": 37560.0, "deposit": 0.0, "settle_pl": 0.0, "fee": 0, "tax": 0, "float_pl": 0},
+    {"date": "2026-10-01", "equity": 52924.0, "deposit": 0.0, "settle_pl": 2420.0, "fee": 36, "tax": 20, "float_pl": 0},
+]), encoding="utf-8")
+LP._EQ_HIST["key"] = None
+LP.EQUITY.update({"m": dict(mm, equity_amount=52924.0), "err": None})
+mo = LP.equity_view(datetime(2026, 10, 1, 15, 0))["month"]
+chk("  月初是九月最後一列", mo["base"], 37560.0)
+chk("  券商漏寫的 1.3 萬入金推得出來、扣掉", mo["deposit"], 13000.0)
+chk("  ⭐ 本月 ＝ 10-01 當天真的賺的 2,364（舊版這裡是 0、帶到今天是 −1,108）", mo["net"], 2364.0)
 
 print("\n=== ⑧ 今日損益 ＝ 未平倉 ＋ 平倉 − 成本 ===")
 reset_eq()

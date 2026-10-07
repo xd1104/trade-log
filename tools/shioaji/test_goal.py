@@ -88,6 +88,26 @@ V3 = G.view(rows, 520000.0, 0, datetime(2026, 11, 3, 15))
 say(V3["next"] is None and "最後一級" in V3["pos"], "  超過 50 萬 ⇒ 最後一級", V3["pos"])
 say(all(p["t"] is None or p["t"] < G.GOAL * 1.2 for p in V["line"]), "  目標線到 50 萬就收（圖的刻度不會被撐爆）")
 
+print("\n=== ③b ⭐ 2026-10-07 券商漏寫的入金（09-30 傍晚存 1.3 萬，兩列的出入金都是 0）===")
+# 照他真的那幾天的形狀（金額縮整）：09-30 14:00 記 37,560；當晚入金 13,000；10-01 日盤賺 2,420、成本 56
+_R = [{"date": "2026-09-29", "equity": 37560, "deposit": 3006, "settle_pl": -2540, "fee": 36, "tax": 20, "float_pl": 0},
+      {"date": "2026-09-30", "equity": 37560, "deposit": 0, "settle_pl": 0, "fee": 0, "tax": 0, "float_pl": 0},
+      {"date": "2026-10-01", "equity": 52924, "deposit": 0, "settle_pl": 2420, "fee": 36, "tax": 20, "float_pl": 0},
+      {"date": "2026-10-02", "equity": 53138, "deposit": 0, "settle_pl": 270, "fee": 36, "tax": 20, "float_pl": 0}]
+chk("  推得出 10-01 那段的入金", G.infer_deposit(_R[1], _R[2]), 13000.0)
+chk("  ⛔ 券商有寫就照券商（09-29 寫 3,006）", G.eff_deposit(_R[0], dict(_R[0], deposit=3006)), 3006.0)
+chk("  ⛔ 一般交易日推出來 ≈ 0 ⇒ 不當成入金", G.eff_deposit(_R[2], _R[3]), 0.0)
+_gap = dict(_R[2], date="2026-10-03")
+chk("  負控組：⛔ 不相鄰（中間有沒開面板的日子）⇒ 不推、照券商寫的 0", G.eff_deposit(_R[0], _gap), 0.0)
+_live = {"equity_amount": 51816.0, "deposit_withdrawal": 0.0, "future_settle_profitloss": -1680.0,
+         "fee": 36.0, "tax": 20.0, "future_open_position": 0.0}
+_m = {x["ym"]: x for x in G.months_actual(_R + [{"date": "2026-10-06", "equity": 53552, "deposit": 0,
+                                                    "settle_pl": 0, "fee": 0, "tax": 0, "float_pl": 0}],
+                                          51816.0, 0.0, date(2026, 10, 7), live=_live)}
+chk("  十月：月初＝09-30 那列、扣掉推出來的 1.3 萬", (_m["2026-10"]["base"], _m["2026-10"]["dep"]), (37560, 13000))
+_V = G.view(_R, 53138.0, 0, datetime(2026, 10, 2, 15))
+say("交易賺賠 +2,578" in (_V["since"] or ""), "  ⭐ 目標卡：1.3 萬⛔ 不再算成交易賺的（2,364＋214）", _V["since"])
+
 print("\n=== ④ ⛔ 用字 ===")
 _txt = json.dumps([V, V2, V3], ensure_ascii=False)
 for w in ("建議", "推薦", "會賺", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):

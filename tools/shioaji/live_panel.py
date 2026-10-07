@@ -11035,8 +11035,22 @@ def _equity_lot1_restore():
 
 
 def _equity_month(rows, m, now):
-    """這個月帳戶變了多少（⛔ 扣掉出入金 —— 匯錢進去不是賺到）。⇒ dict 或 None。"""
+    """這個月帳戶變了多少（⛔ 扣掉出入金 —— 匯錢進去不是賺到）。⇒ dict 或 None。
+    ⭐ 2026-10-07（Benson：「本月增加金額是不是算錯了？」—— 對）：舊版拿**這個月第一列**當月初，
+       漏掉那一天自己的賺賠（10-01 +2,364），而且券商漏寫的入金（09-30 傍晚 1.3 萬）也扣不到。
+       ⇒ 改成跟目標卡**同一套**（goal.months_actual：月初＝上個月最後一列、出入金用 eff_deposit），⛔ 不再各算各的。
+       goal 模組沒載入才退回舊算法。"""
     mth = str(now.date())[:7]
+    now_eq = m.get("equity_amount")
+    if goal is not None and isinstance(now_eq, (int, float)):
+        dep = m.get("deposit_withdrawal") if isinstance(m.get("deposit_withdrawal"), (int, float)) else 0.0
+        cur = [x for x in goal.months_actual(rows, now_eq, dep, now.date(), live=m) if x["ym"] == mth]
+        if not cur:
+            return None
+        x = cur[0]
+        return {"from": x["from"] or str(now.date()), "n": x.get("n", 0), "base": float(x["base"]),
+                "now": float(now_eq), "change": round(float(now_eq) - float(x["base"]), 1),
+                "deposit": float(x["dep"]), "net": float(x["net"])}
     mine = [r for r in rows if str(r.get("date", ""))[:7] == mth
             and isinstance(r.get("equity"), (int, float))]
     now_eq = m.get("equity_amount")
@@ -11106,7 +11120,7 @@ def goal_view(now=None):
         m = EQUITY.get("m") or {}
         eq = m.get("equity_amount")
         dep = m.get("deposit_withdrawal") if isinstance(m.get("deposit_withdrawal"), (int, float)) else 0.0
-        return goal.view(equity_hist_read(), eq if isinstance(eq, (int, float)) else None, dep, now)
+        return goal.view(equity_hist_read(), eq if isinstance(eq, (int, float)) else None, dep, now, live=m)
     except Exception as e:                 # noqa: BLE001
         return {"ok": False, "msg": "目標算不出來：%s" % str(e)[:100]}
 

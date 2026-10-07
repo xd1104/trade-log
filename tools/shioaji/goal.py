@@ -118,44 +118,102 @@ def _pm(v):
     return ("+" if n > 0 else "") + format(n, ",")
 
 
-def months_actual(rows, eq_now=None, dep_today=0.0, today=None):
+# ⭐⭐ 2026-10-07（Benson：「帳戶的本月增加金額是不是算錯了？」）—— 對，兩張卡都錯：
+#    09-30 傍晚存進去的 1.3 萬，券商的「出入金」欄**只算當天**、而面板每天 14:00 才記一列
+#    ⇒ 09-30 那列（14:00）還沒入帳、10-01 那列又說「今天出入金 0」⇒ 1.3 萬兩邊都沒記到。
+#    結果：目標卡把 1.3 萬當成交易賺的（+14,256）、帳戶卡拿 10-01 當月初又漏掉 10-01 當天的 +2,364（−1,108）。
+#    ⇒ 相鄰兩天（日曆上連續）可以**推**出那一段的出入金：權益變化 − 當天已實現（平倉損益 − 手續費 − 稅）− 未平倉變化。
+#    ⛔ 只在券商寫 0、而推出來的超過 DEP_TOL 才採用（券商有寫就照券商）；⛔ 不連續（中間有沒開面板的日子）不推，照舊。
+DEP_TOL = 100.0                    # 元。推出來的跟券商寫的差多少以內算一樣（手續費尾數之類）
+
+
+def _num(v):
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def live_row(m, today):
+    """券商現在那一份（shioaji 的欄位名）⇒ 跟 equity/ 每一列同樣的欄位，好用同一套算法。"""
+    m = m or {}
+    return {"date": str(today), "equity": m.get("equity_amount"), "deposit": m.get("deposit_withdrawal"),
+            "settle_pl": m.get("future_settle_profitloss"), "float_pl": m.get("future_open_position"),
+            "fee": m.get("fee"), "tax": m.get("tax")}
+
+
+def infer_deposit(prev, cur):
+    """prev → cur（相鄰兩天）推出來的出入金；推不出來（不相鄰／缺欄位）⇒ None。"""
+    try:
+        gap = (date.fromisoformat(str(cur["date"])) - date.fromisoformat(str(prev["date"]))).days
+    except (KeyError, TypeError, ValueError):
+        return None
+    e0, e1, s1 = _num(prev.get("equity")), _num(cur.get("equity")), _num(cur.get("settle_pl"))
+    if gap != 1 or None in (e0, e1, s1):
+        return None
+    rz = s1 - float(cur.get("fee") or 0) - float(cur.get("tax") or 0)
+    f0, f1 = _num(prev.get("float_pl")) or 0.0, _num(cur.get("float_pl")) or 0.0
+    return e1 - e0 - rz - (f1 - f0)
+
+
+def eff_deposit(prev, cur):
+    """cur 那一段**實際**的出入金：券商有寫就用券商的；券商寫 0 但推得出明顯的金額 ⇒ 用推的。"""
+    rec = float(cur.get("deposit") or 0)
+    if rec or prev is None:
+        return rec
+    inf = infer_deposit(prev, cur)
+    return round(inf) if (inf is not None and abs(inf) > DEP_TOL) else rec
+
+
+def _effs(rows):
+    """每一列的實際出入金（跟 rows 一一對應）。"""
+    return [eff_deposit(rows[i - 1] if i else None, r) for i, r in enumerate(rows)]
+
+
+def months_actual(rows, eq_now=None, dep_today=0.0, today=None, live=None):
     """
     每個月實際賺賠（⛔ 扣掉存入 —— 匯錢進去不是賺到）。
     月初基準 ＝ 上個月最後一列；那個月之前沒紀錄 ⇒ 用那個月第一列（那一列當天的出入金已經在權益裡，不再扣）。
-    ⚠️ 面板沒開的日子沒有那一列 ⇒ 那天的出入金會漏掉（畫面照實寫「從 equity 紀錄算」）。
+    ⭐ 2026-10-07：出入金用 eff_deposit（券商漏寫的那種也抓得到，見 DEP_TOL 上面那段）。
+       `live`＝券商現在那一份（shioaji 欄位）；今天還沒有那一列時，今天那段的出入金也用同一套推。
+    ⚠️ 面板沒開的日子沒有那一列 ⇒ 那一段推不出來、只能照券商寫的（畫面照實寫「從 equity 紀錄算」）。
     """
     rs = [r for r in rows if isinstance(r.get("equity"), (int, float))]
+    effs = dict(zip(range(len(rs)), _effs(rs)))
     by = {}
-    for r in rs:
-        by.setdefault(str(r["date"])[:7], []).append(r)
+    for i, r in enumerate(rs):
+        by.setdefault(str(r["date"])[:7], []).append(i)
     out, prev_end = [], None
     today = today or date.today()
     cur_ym = _ym(today)
+    dep_now = float(dep_today or 0)
+    if live is not None and rs and isinstance(eq_now, (int, float)):
+        lr = live_row(live, today)
+        lr["equity"] = eq_now
+        dep_now = eff_deposit(rs[-1], lr)
     for ym in sorted(by):
         mine = by[ym]
         if prev_end is not None:
-            base, dep_rows = prev_end, mine
+            base, dep_idx = prev_end, mine
         else:
-            base, dep_rows = float(mine[0]["equity"]), mine[1:]
-        dep = sum(float(r.get("deposit") or 0) for r in dep_rows)
-        end = float(mine[-1]["equity"])
-        live = False
+            base, dep_idx = float(rs[mine[0]]["equity"]), mine[1:]
+        dep = sum(effs[i] for i in dep_idx)
+        end = float(rs[mine[-1]]["equity"])
+        live_m = False
         if ym == cur_ym and isinstance(eq_now, (int, float)):
-            end, live = float(eq_now), True
-            if not any(str(r["date"]) == str(today) for r in mine):
-                dep += float(dep_today or 0)
+            end, live_m = float(eq_now), True
+            if not any(str(rs[i]["date"]) == str(today) for i in mine):
+                dep += dep_now
         out.append({"ym": ym, "base": round(base), "end": round(end), "dep": round(dep),
-                    "net": round(end - base - dep), "live": live, "from": str(mine[0]["date"])})
-        prev_end = float(mine[-1]["equity"])
+                    "net": round(end - base - dep), "live": live_m, "from": str(rs[mine[0]]["date"]),
+                    "n": len(mine)})
+        prev_end = float(rs[mine[-1]]["equity"])
     if isinstance(eq_now, (int, float)) and cur_ym not in by and prev_end is not None:
         out.append({"ym": cur_ym, "base": round(prev_end), "end": round(eq_now),
-                    "dep": round(float(dep_today or 0)),
-                    "net": round(eq_now - prev_end - float(dep_today or 0)), "live": True,
-                    "from": None})
+                    "dep": round(dep_now),
+                    "net": round(eq_now - prev_end - dep_now), "live": True,
+                    "from": None, "n": 0})
     return out
 
 
-def view(rows, eq_now, dep_today=0.0, now=None):
+def view(rows, eq_now, dep_today=0.0, now=None, live=None):
     """
     ⇒ 目標卡要的整份（句子全在這裡組好，⛔ 前端不自己算、不自己寫評語）。
     `rows`：equity/ 的每日紀錄（舊到新）；`eq_now`：券商現在的權益（問不到 ⇒ None，退回最後一列）。
@@ -207,10 +265,16 @@ def view(rows, eq_now, dep_today=0.0, now=None):
             "超前" if diff >= 0 else "落後", _money(abs(diff)),
             "高於" if eq_now >= safe_now else "低於")
 
-    # 起算後實際存了多少、交易賺賠多少（⛔ 只用紀錄裡的出入金）
-    dep_since = sum(float(r.get("deposit") or 0) for r in rows if str(r["date"]) > str(d0))
+    # 起算後實際存了多少、交易賺賠多少（⭐ 2026-10-07 出入金用 eff_deposit：券商漏寫的也抓得到）
+    effs = _effs(rows)
+    dep_since = sum(e for r, e in zip(rows, effs) if str(r["date"]) > str(d0))
     if not any(str(r["date"]) == str(today) for r in rows) and today > d0:
-        dep_since += float(dep_today or 0)
+        if live is not None and rows:
+            lr = live_row(live, today)
+            lr["equity"] = eq_now
+            dep_since += eff_deposit(rows[-1], lr)
+        else:
+            dep_since += float(dep_today or 0)
     trade_since = eq_now - e0 - dep_since
     since = ("從 %s 起：實際存入 %s（計畫 %s）、交易賺賠 %s。" % (
         str(d0)[5:].replace("-", "/"), _money(dep_since),
@@ -232,7 +296,7 @@ def view(rows, eq_now, dep_today=0.0, now=None):
             "done": hit, "now": (j == k),
         })
 
-    mon = months_actual(rows, eq_now, dep_today, today)
+    mon = months_actual(rows, eq_now, dep_today, today, live=live)
     for mrow in mon:
         mrow["goal"] = monthly_of(*lots_of(level_of(mrow["base"])))
 
