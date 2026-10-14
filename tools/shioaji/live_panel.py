@@ -7625,26 +7625,29 @@ function chartSVG(s){
      '<text x="'+(W-R+7)+'" y="'+(py+h-5).toFixed(1)+'" fill="#0E1116" font-size="11.5"'+
      ' font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
  };
- // 時間軸帶上的膠囊：彼此水平避讓（碰到就往右推），並夾在圖區內
- const lanePill=(X,txt,col)=>{
-   const fs=10.5, w=tw(txt,fs)+13, h=17;
-   const clampX=v=>Math.max(1,Math.min(W-R-w-1,v));
-   const fits=v=>!LANE.some(b=>v<b.x+b.w+3&&b.x<v+w+3);
-   /* ⭐ 2026-10-14：舊版只會往右推 ⇒ 擠在最右邊時推不動、兩枚疊在一起（夜盤 04:58 出場 ＋ 日盤那一口實測疊到）。
-      ⇒ 候選位置 ＝ 原位 ＋ 每一枚已畫膠囊的左右兩側，挑放得下而且離原位最近的那個。 */
-   const px0=clampX(X-w/2);
-   let px=px0;
-   if(!fits(px0)){
-     const cands=[];
-     LANE.forEach(b=>{ cands.push(clampX(b.x+b.w+5)); cands.push(clampX(b.x-w-5)); });
-     const ok=cands.filter(fits).sort((a,b)=>Math.abs(a-px0)-Math.abs(b-px0));
-     if(ok.length) px=ok[0];
-   }
+ // 時間軸帶上的膠囊：⛔ 不在這裡避讓 —— 落點由下面的 layPills() 一次排好（左到右照時間順序）再交給這支畫。
+ const pillW=txt=>tw(txt,10.5)+13;
+ const lanePill=(px,txt,col)=>{
+   const fs=10.5, w=pillW(txt), h=17;
    LANE.push({x:px,w:w});
    return '<rect x="'+px.toFixed(1)+'" y="'+(H-BOT+3)+'" width="'+w.toFixed(1)+'" height="'+h+
      '" rx="5" fill="#0E1116" fill-opacity=".92" stroke="'+col+'" stroke-opacity=".55"/>'+
      '<text x="'+(px+w/2).toFixed(1)+'" y="'+(H-BOT+15)+'" text-anchor="middle" fill="'+col+
      '" font-size="'+fs+'" font-weight="700" font-family="ui-monospace,monospace">'+txt+'</text>';
+ };
+ /* ⭐ 2026-10-14（Benson 截圖：「這邊怪怪的」）：舊版一枚一枚找空位 ⇒ 擠在右邊時日盤那枚被塞到夜盤出場那枚的**左邊**，
+    時間順序顛倒、而且離自己的標記很遠。
+    ⇒ 一次排：照想放的位置（＝標記的 X）由左到右排，碰到前一枚就往右挪；超出右邊界就整串往左推回來。
+    ⛔ 順序永遠跟時間一樣（左早右晚），每枚盡量貼著自己的標記。 */
+ const layPills=list=>{
+   const gap=5, lo=1, hi=W-R-1;
+   const P=list.map(p=>({X:p[0], txt:p[1], col:p[2], w:pillW(p[1])})).sort((a,b)=>a.X-b.X);
+   let end=lo-gap;
+   P.forEach(p=>{ p.x=Math.max(p.X-p.w/2, end+gap, lo); end=p.x+p.w; });
+   let lim=hi;
+   for(let k=P.length-1;k>=0;k--){ P[k].x=Math.min(P[k].x, lim-P[k].w); lim=P[k].x-gap; }
+   P.forEach(p=>{ p.x=Math.max(lo,p.x); });
+   return P;
  };
  T.forEach(t=>{
    const ia=idxAll(t.time); if(ia<G.from||ia>=G.to) return;
@@ -7709,7 +7712,7 @@ function chartSVG(s){
  // 膠囊先算（lanePill 會把實際落點記進 LANE，互相避讓後位置才確定），
  // 時間刻度再依 LANE 的實際位置閃避 —— 用「原本想放的中心」去比會漏掉被推開的那幾枚。
  let pills='';
- laneX.forEach(p=>{ pills+=lanePill(p[0],p[1],p[2]); });
+ layPills(laneX).forEach(p=>{ pills+=lanePill(p.x,p.txt,p.col); });
  // 時間刻度：依疏密自動決定間隔；壓到膠囊的就整個跳過，不要疊字
  const step=Math.max(1,Math.ceil(B.length/8));
  B.forEach((b,i)=>{ if(i%step) return;

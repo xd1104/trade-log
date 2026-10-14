@@ -205,6 +205,11 @@ try:
     body = src[i:src.index("\n}\n", i)]
     say("'eve'" in body and "'dawn'" in body, "  idxAll 先認時段（前一晚／凌晨／日盤）再找")
     say("if(b.t<'08:45') continue;" not in body, "  ⛔ 舊的「只找日盤」那一行不在了")
+    i = src.index("const layPills=list=>{")
+    body = src[i:src.index("\n };\n", i)]
+    say(".sort((a,b)=>a.X-b.X)" in body and "lim-P[k].w" in body,
+        "  底部膠囊一次排：照時間由左到右、超出右邊就整串往左推（⛔ 不會順序顛倒）")
+    say("layPills(laneX)" in src, "  畫圖真的走 layPills")
     i = src.index("function alPts(D,days){")
     body = src[i:src.index("\nfunction alPerfPaint", i)]
     say("x.results" in body and "NR[E]" in body, "  最近做得如何：夜盤也算進來")
