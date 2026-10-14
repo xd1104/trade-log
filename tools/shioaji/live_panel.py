@@ -165,6 +165,38 @@ DEPTH_OPT_STRIKES = 10                 # 價平附近幾個履約價（× 買權
 DEPTH_MAX_PCT = 70.0                   # 券商流量超過這個 % ⇒ 當天退訂大台與選擇權（微台照舊，下單不受影響）
 DEPTH_SUBS = {"contracts": [], "codes": [], "paused_day": None, "err": None, "at": None}
 
+# ⭐ 2026-10-14【五檔看門狗】10-12 08:59 永豐傳五檔那條線斷了（shioaji.log：「BidAsk FOP receiver disconnected」，
+#    當天 08:30 換登入憑證之後），**成交那條沒斷** ⇒ 原本的斷線看門狗只看成交、什麼都沒發現，
+#    五檔整整漏錄一天（日盤＋夜盤），畫面也沒有任何警告。
+#    ⇒ 成交還在跳、五檔卻超過 DEPTH_STALE_S 秒沒進來 ⇒ 畫面與手機示警；**手上沒有部位**、
+#       而且不在送單／平倉那幾刻前後 ⇒ 整條重連（跟原本斷線重連同一支 try_reconnect）。
+#    ⛔ 有部位時**只示警不重連**：重連會卡住主迴圈幾秒，而主迴圈就是停損。等平倉後下一輪再重連。
+DEPTH_STALE_S = 180
+DEPTH_RETRY_EVERY = 600
+DEPTH_QUIET_ZONES = ("09:03:30", "09:15:00", "13:43:30", "21:35:00", "21:40:00", "04:58:00")
+DEPTH_QUIET_PAD_S = 120
+DEPTH_WD = {"last_ba": None, "stale_s": None, "retries": 0, "last_retry": 0.0, "held": False}
+
+
+def depth_check(now_ts, last_ba, tick_quiet, market_open, conn_ok, has_pos, last_retry, clock):
+    """⇒ (五檔幾秒沒進來 或 None, 要不要現在重連)。純函式（test_depth_watchdog 直接打）。
+    ⚠️ 成交也停了（tick_quiet 大或 None）⇒ 那是整條斷線，交給原本的看門狗，這裡不管。"""
+    if not market_open or not conn_ok or last_ba is None:
+        return None, False
+    if tick_quiet is None or tick_quiet > 60:
+        return None, False
+    q = now_ts - last_ba
+    if q <= DEPTH_STALE_S:
+        return None, False
+    sec = clock.hour * 3600 + clock.minute * 60 + clock.second
+    near = False
+    for z in DEPTH_QUIET_ZONES:
+        zs = int(z[:2]) * 3600 + int(z[3:5]) * 60 + int(z[6:8])
+        d = abs(sec - zs)
+        if min(d, 86400 - d) <= DEPTH_QUIET_PAD_S:
+            near = True
+    return q, (not has_pos and not near and now_ts - last_retry >= DEPTH_RETRY_EVERY)
+
 
 def _is_main_code(code):
     """這筆報價是不是真單那個商品（微台）的？代碼讀不到 ⇒ 當成是（跟加這段之前一模一樣）。"""
@@ -250,7 +282,13 @@ def depth_view():
     n_mxf = sum(v for k, v in bc.items() if str(k).startswith("MXF"))
     n_opt = sum(v for k, v in bc.items() if str(k).startswith("TXO"))
     lost = s["dropped"] + s["lost_io"]
-    if DEPTH_SUBS["paused_day"] == str(date.today()):
+    stale = DEPTH_WD.get("stale_s")
+    if stale:
+        # ⭐ 2026-10-14 五檔看門狗：成交還在、五檔卻停了（10-12 那種）⇒ 一定要講出來
+        head, warn = ("五檔錄製：⚠️ 已 %d 分鐘沒收到五檔（成交還在）—— %s"
+                      % (int(stale // 60), "手上有部位，平倉後自動重連" if DEPTH_WD.get("held")
+                         else "會自動重連（每 10 分鐘試一次）")), True
+    elif DEPTH_SUBS["paused_day"] == str(date.today()):
         head, warn = "五檔錄製：流量偏高，今天只錄微台", True
     elif DEPTH_SUBS["err"]:
         head, warn = "五檔錄製：" + DEPTH_SUBS["err"], True
@@ -12037,6 +12075,7 @@ def main():
         TICKS.tick(ts, price, vol)      # 只 append，不碰磁碟
 
     def on_bidask(exchange: Exchange, ba: BidAskFOPv1):
+        DEPTH_WD["last_ba"] = time.time()   # ⭐ 五檔看門狗：只記一個時間（⛔ 不加任何 I/O）
         DEPTH.push(ba)                  # 研究用全天五檔：只 append、自己吞錯
         # ⛔⛔ 大台／選擇權的五檔到這裡就停 —— 絕對不可以進 Today（停損看的價、報價新不新鮮）
         if not _is_main_code(getattr(ba, "code", None)):
@@ -12115,6 +12154,7 @@ def main():
               f"（交割月 {contract.delivery_month}）")
         # ⭐ 研究用五檔（大台＋選擇權）。排在真單合約訂好、狀態都設好之後；⛔ 它自己吞錯，不會讓連線失敗
         depth_subscribe(api, contract)
+        DEPTH_WD["last_ba"] = time.time()   # 剛訂好 ⇒ 從現在起算，⛔ 不拿上一條連線的舊時間判斷
         return api, contract
 
     def try_reconnect(reason):
@@ -12335,10 +12375,24 @@ def main():
                     CONN["ok"] = False
                     where = "日盤" if in_day else "夜盤"
                     try_reconnect(f"{where}已 {int(quiet) if quiet else '?'} 秒沒收到報價")
+                # ⭐ 2026-10-14 五檔看門狗（見 DEPTH_WD）。⛔ 包 try：研究用的東西出錯不可以打斷停損迴圈。
+                try:
+                    _has_pos = broker._state.get("position") is not None
+                    _dq, _go = depth_check(time.time(), DEPTH_WD["last_ba"], quiet, market_open,
+                                           CONN["ok"] and not lost, _has_pos, DEPTH_WD["last_retry"], now)
+                    DEPTH_WD["stale_s"], DEPTH_WD["held"] = _dq, bool(_dq and _has_pos)
+                    if _go:
+                        DEPTH_WD["last_retry"] = time.time()
+                        DEPTH_WD["retries"] += 1
+                        try_reconnect("五檔已 %d 秒沒進來（成交還在）" % int(_dq))
+                except Exception as _de:      # noqa: BLE001
+                    print("⚠️ 五檔看門狗出錯（不影響停損）：%s" % str(_de)[:120])
             elif CONN["ok"] is False and time.time() - last_retry > RECONNECT_EVERY * 5:
                 # 休市時段（13:45~15:00、05:00~08:45）慢慢重試就好
                 last_retry = time.time()
                 try_reconnect("休市時段定期重試")
+            if not market_open:
+                DEPTH_WD["stale_s"] = None      # 休市時本來就沒有五檔 ⇒ 不示警
             # 【程式下單】09:03:30 記一筆、13:47 之後補算 ±100。
             # ⚠️ 只有整數比較與 queue.put_nowait，⛔ 一行 I/O 都沒有 ——
             #    這條迴圈就是他的停損（永豐沒有停損單）。

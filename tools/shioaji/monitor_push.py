@@ -140,6 +140,8 @@ def snapshot(port):
         snap["equity"]["cushion"] = _pick((s.get("equity") or {}).get("cushion") or {}, ("warn", "msg"))
         # ⭐ 2026-09-26 資料備份：失敗或太久沒備份才會在手機「要注意的事」出現
         snap["equity"]["backup"] = _pick((s.get("equity") or {}).get("backup") or {}, ("ok", "warn", "msg"))
+        # ⭐ 2026-10-14 五檔看門狗：五檔停了（成交還在）⇒ 手機「要注意的事」
+        snap["equity"]["depth"] = _pick((s.get("equity") or {}).get("depth") or {}, ("warn", "msg"))
         snap["real"] = dict(_pick(r, ("live", "position", "stale_sec", "entries_today", "can_enter", "why",
                                       "last_error", "ca_ok")),
                             float_pts=r.get("float_pts"), sl=r.get("sl"), tp=r.get("tp"),
