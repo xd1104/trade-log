@@ -380,10 +380,12 @@
         h += '<div class="msg">今天還沒有紀錄（' + esc(d.signal_at || '09:03:30') + ' 才開始看）</div>';
       }
       var hist = (d.days || []).filter(function (x) { return x.date !== d.today; }).slice(0, 4);
+      var dClosed = d.closed || [];
       if (hist.length) {
         h += '<div class="hist">' + hist.map(function (x) {
+          // ⭐ 2026-10-14：國定假日寫「休市」（面板判斷好的 closed，⛔ 手機不自己猜）
           var v = x.trade ? (x.real && x.real.state === 'ok' ? '<b class="' + cls(x.real.points) + '">' + pm(x.real.points) + ' 點</b>' : dirTxt(x.trade.dir) + '・點數對不到')
-            : '<span class="faint">沒做</span>';
+            : (dClosed.indexOf(x.date) >= 0 ? '<span class="faint">休市</span>' : '<span class="faint">沒做</span>');
           return row(x.date.slice(5), v);
         }).join('') + '</div>';
       }
@@ -397,10 +399,22 @@
       var hn = '<h2>夜盤自動下單 <span class="pill ' + (n.on ? 'on' : '') + '">' + esc(modeTxt(n.on, n.live)) + '</span></h2>' +
         row('做法', esc(n.method_name || n.method || '—')) +
         (n.tonight ? row('今晚幾點看', esc(n.tonight.look_at || '')) : '');
-      (n.recent || []).slice(0, 4).forEach(function (x) {
-        var what = x.rec === 'result' ? ((x.ok ? '已送出 ' : '沒送成 ') + dirTxt(x.dir) + (x.entry ? ' 進場 ' + x.entry : '') + (x.err ? '：' + x.err : ''))
-          : x.rec === 'eod' ? (x.msg || '04:58 平倉') : (x.msg || x.why || '');
-        hn += row((x.E || '').slice(5), '<span class="dim" style="font-size:13px">' + esc(what) + '</span>');
+      // ⭐ 2026-10-14：送出了的那一晚，出場價與點數一起列（面板唯讀比對券商成績單的結果；對不到就照舊不寫點數）。
+      //    同一晚的「04:58 平倉完成」那一列在有點數時就不再重複列。日期寫「那一晚」＋「晚」。
+      var nReal = n.real || {}, nClosed = n.closed || [], shown = 0;
+      (n.recent || []).forEach(function (x) {
+        if (shown >= 4) return;
+        var R = nReal[x.E] && nReal[x.E].state === 'ok' ? nReal[x.E] : null;
+        if (x.rec === 'eod' && R) return;
+        var what, val = null;
+        if (x.rec === 'result') {
+          what = (x.ok ? '已送出 ' : '沒送成 ') + dirTxt(x.dir) + (x.entry ? ' 進場 ' + x.entry : '') + (x.err ? '：' + x.err : '');
+          if (x.ok && R) { what = dirTxt(x.dir) + ' ' + x.entry + ' → ' + R.exit + '（' + String(R.exit_time || '').slice(0, 5) + '）'; val = R.points; }
+        } else if (x.rec === 'eod') what = x.msg || '04:58 平倉';
+        else what = nClosed.indexOf(x.E) >= 0 ? '休市' : (x.msg || x.why || '');
+        hn += row((x.E || '').slice(5) + ' 晚', '<span class="dim" style="font-size:13px">' + esc(what) + '</span>' +
+          (val != null ? ' <b class="' + cls(val) + '">' + pm(val) + ' 點</b>' : ''));
+        shown++;
       });
       if (n.errors) hn += '<div class="err">⚠️ 夜盤背景出錯 ' + esc(n.errors) + ' 次：' + esc(n.last_err || '') + '</div>';
       $('night').innerHTML = hn;

@@ -40,6 +40,7 @@ REPO = HERE.parent.parent
 KEY_FILE = HERE / "MONITOR_KEY.json"
 BRANCH = "monitor"
 FILE = "monitor.json"
+HC_FILE = HERE / "HC_PING_URL.txt"   # ⭐ 2026-10-14 斷線通知的心跳網址（Healthchecks.io；gitignore／本機 exclude，⛔ 不上傳）
 AN_FILE = "analyst.json"      # ⭐ 2026-09-24【交易分析師】週報全文（加密）；內容沒變就沿用同一份密文（同一個 blob，不重傳）
 EVERY_S = 120                # 每 2 分鐘一張（手機超過 6 分鐘沒更新就亮紅燈）
 HTTP_TIMEOUT = 10
@@ -151,6 +152,7 @@ def snapshot(port):
         snap["day"] = dict(_pick(f, ("armed", "method", "live", "flag_exists", "arm_msg", "err", "err_n",
                                      "entries_today", "eod_at", "signal_at", "today", "eod_expiry")),
                            method_name=names.get(f.get("method")),
+                           closed=list(f.get("closed") or [])[-30:],
                            days=[_day(x, (f.get("real") or {}).get(x.get("date"))) for x in (f.get("days") or [])[:5]])
         # ⭐ 2026-09-24 風控規則 B：**日盤＋夜盤共用**的本月額度 ⇒ 自己一塊（⛔ 不塞在 day 裡）
         snap["risk"] = _pick(f.get("risk") or {}, ("month", "since", "pnl", "cap", "hit", "override",
@@ -164,7 +166,11 @@ def snapshot(port):
                              method_name=mname.get(n.get("method")),
                              recent=[_pick(x, ("E", "rec", "why", "msg", "method", "dir", "px", "entry", "entry_time",
                                                "ok", "err", "sl_points", "tp_points", "at"))
-                                     for x in (n.get("recent") or [])[:6]])
+                                     for x in (n.get("recent") or [])[:6]],
+                             # ⭐ 2026-10-14：那一口後來怎麼了（面板唯讀比對 real_trades/ 的結果，鍵是那一晚 E）
+                             real={E: _pick(v, ("state", "exit", "exit_time", "exit_date", "points", "why"))
+                                   for E, v in (n.get("real") or {}).items() if isinstance(v, dict)},
+                             closed=list(n.get("closed") or [])[-30:])
     except Exception as e:
         snap["errs"].append("夜盤自動下單讀不到：%s" % str(e)[:120])
     try:
@@ -213,11 +219,40 @@ def push(data_bytes, extra=None):
     return commit
 
 
+def hc_url():
+    """心跳網址；沒有檔案或看不懂 ⇒ None（⛔ 不心跳，看門狗那條照舊）。"""
+    try:
+        u = HC_FILE.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+    except Exception:
+        return None
+    return u if u.startswith("https://hc-ping.com/") else None
+
+
+def heartbeat():
+    """⭐ 2026-10-14【斷線通知】：GitHub 的 */5 排程實際上 3～7 小時才跑一次 ⇒ 改由 Healthchecks.io 盯著。
+    ⛔ 只在快照**真的推上去之後**才跳一下 ⇒ 「Healthchecks 收不到」＝「手機也收不到新快照」，兩邊同一件事。
+    它超過時間沒收到 ⇒ 叫 GitHub 跑一次看門狗（workflow_dispatch）⇒ 照舊用 Web Push 推到手機。
+    ⛔ 失敗只記一筆，⛔ 不影響快照（那才是主線）。"""
+    u = hc_url()
+    if not u:
+        return False
+    try:
+        with urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "trade-log-panel"}),
+                                    timeout=HTTP_TIMEOUT) as r:
+            r.read()
+        STATE["hc_ok"] = datetime.now().isoformat(timespec="seconds")
+        return True
+    except Exception as e:
+        STATE["hc_err"] = str(e)[:160]
+        return False
+
+
 def once(port, key):
     box = seal(snapshot(port), key)
     push(json.dumps(box, separators=(",", ":")).encode("utf-8"), {AN_FILE: _analyst_box(key)})
     STATE["pushes"] += 1
     STATE["last_ok"] = datetime.now().isoformat(timespec="seconds")
+    heartbeat()
 
 
 def _loop(port, key):

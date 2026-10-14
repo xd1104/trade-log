@@ -3168,6 +3168,21 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 - ⚠️ 鑰匙圈後台不在這台電腦 ⇒ 這一版是**獨立密碼**；之後可接進鑰匙圈（替交易日誌加一個欄位放 monitor 鑰匙）。
 - 探針 `test_monitor.py`（加解密／竄改／錯密碼／快照沒有 token 與帳號／沒鑰匙不啟動／只用 plumbing／main 包 try）。
 
+### ⭐ 2026-10-14 全面對帳（Benson：「交易儀表板跟手機 App 資料看起來沒有同步」）
+探針 `test_sync_audit.py`。修了七件：
+- **斷線通知改由 Healthchecks.io 盯**：GitHub 的 `*/5` 排程實測 3～7 小時才跑一次 ⇒ 面板每推完一張快照就打一下
+  `HC_PING_URL.txt`（gitignore；只認 `https://hc-ping.com/`）。Healthchecks 那邊 Period 2 分、Grace 10 分，
+  超時就用 webhook 打 GitHub `workflow_dispatch`（watchdog.yml）⇒ 看門狗照舊用 Web Push 推手機。
+  那把 GitHub 金鑰是 fine-grained、只開 trade-log 的 Actions 寫入，存在 Healthchecks（⛔ 不在這台電腦）。原排程保留當備援。
+- **夜盤那一口的點數**：夜盤帳本沒有出場價，但 `real_trades/` 有（檔名是**出場那天**）⇒ `night_real_pairs()`
+  往後找 `risk_cap.NIGHT_EXIT_MAX_D` 天比對；【自動下單】列表／夜盤卡／【健檢】／手機都吃這一份。⛔ 對不到照舊留白。
+- **「最近做得如何」日盤＋夜盤一起算**，本月照開盤那晚 E 歸月 ⇒ 跟【本月】風控卡同一個數。
+- **「模擬那邊」**：U 的模擬在 `sim_lanes/`（union 線），舊的 `fire_sim_pairs()` 只讀 autotest A／B ⇒ 09-17 起整欄空白；改看 `fire_sim_lane()`。
+- **有部位時不再喊「下一口會被退單」**：看「可動用＋正在壓的原始保證金」。
+- **休市日**寫「休市」（`closed_days()`＝月曆那把尺；當天的假日要等隔天清晨 csv 併檔才認得出來）。
+- **K 線圖**：`idxAll()` 先認時段（前一晚／凌晨／日盤）⇒ 夜盤標記不再掉到最後一根；底下膠囊推不動時改往左找空位。
+- 夜盤列日期一律寫「MM-DD 晚」（那一晚 E）；收盤那一列有點數時不再重複列、名字跟著同一晚送出那一列。
+
 ## ⭐⭐ 早盤儀表板 v3（2026-09-23，Benson 交辦「版面整理」）
 
 規格：`test/ux-demo/panel-v3-spec.md`（定案 demo `test/ux-demo/panel-v3.html`）。

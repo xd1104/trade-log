@@ -1569,6 +1569,15 @@ def day_index(n=70):
     return days
 
 
+def closed_days():
+    """最近的休市平日（國定假日、補假）⇒ ['YYYY-MM-DD', …]。
+    ⭐ 2026-10-14：10-09 國慶補假，【自動下單】寫「09:03:30 收不到成交價」、夜盤寫「報價不新鮮」，
+       看起來像壞掉 ⇒ 畫面改說「休市」。⛔ 判斷沿用月曆那一把尺（`day_index()` 的 closed：
+       本機 1 分 K 範圍內、那天卻沒有日盤）——⛔ 不另寫一份行事曆。
+    ⚠️ 本機檔每天清晨才併進前一天 ⇒ **當天**的假日要到隔天才認得出來（當天照舊寫收不到報價）。"""
+    return [x["d"] for x in day_index() if x.get("closed")]
+
+
 # ------------------------------------------------- 【細節】分頁：逐筆早盤圖的資料層
 #
 # 資料源是 tick_writer.py 落地的 tick_logs/YYYY-MM-DD.jsonl。
@@ -3541,6 +3550,51 @@ def fire_sim_pairs(days):
     return out
 
 
+
+_SIM_LANE_CACHE = {}        # "YYYY-MM" -> ((mtime_ns, size) | None, {(lane, date): 列})
+
+
+def fire_sim_lane(days):
+    """
+    ⭐ 2026-10-14（Benson：「資料看起來沒有同步」）：【自動下單】每一列的「模擬那邊」。
+    舊的 `fire_sim_pairs()` 讀的是 autotest/ 那份四種做法（A／B）的模擬 ⇒ 09-17 改跑 U（多方聯軍）之後
+    結構上永遠對不到 ⇒ 每一列都寫「模擬那邊 —」。U 的模擬其實一直在【模擬】那一頁（sim_lanes/ 的 union 線）。
+    ⇒ 這裡**唯讀** sim_lanes/ 那幾個月的檔（⛔ 不寫、⛔ 不重算），一天給 {lane: 精簡列}；
+       哪個做法對哪條線由 `auto_fire.RULE_ID` 決定（端點一併端出去，⛔ 前端不寫死）。
+    ⛔ 每 5 秒被輪詢 ⇒ 每個月一份 (mtime, size) 快取，穩態零次讀檔。
+    ⚠️ 模擬的點數**已扣成本**，真單那欄是**沒扣**的毛點數 ⇒ 兩邊差幾點是正常的。
+    """
+    if sim_lanes is None:
+        return {}
+    want = {str(r.get("date")) for r in (days or []) if isinstance(r, dict) and r.get("date")}
+    lanes = set(auto_fire.RULE_ID.values())
+    out = {}
+    for mth in sorted({d[:7] for d in want}):
+        f = sim_lanes.SIM_DIR / (mth + ".jsonl")
+        try:
+            st = f.stat()
+            key = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            key = None
+        hit = _SIM_LANE_CACHE.get(mth)
+        if hit is None or hit[0] != key:
+            rows = {}
+            if key is not None:
+                for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                    try:
+                        o = json.loads(ln)
+                    except Exception:
+                        continue
+                    if isinstance(o, dict) and o.get("lane") in lanes and (o["lane"], o.get("date")) not in rows:
+                        rows[(o["lane"], o.get("date"))] = o
+            hit = (key, rows)
+            _SIM_LANE_CACHE[mth] = hit
+        for (lane, d), o in hit[1].items():
+            if d in want:
+                out.setdefault(d, {})[lane] = {k: o.get(k) for k in ("decision", "entry", "exit", "points",
+                                                                     "exit_reason")}
+    return out
+
 # ---------------------------------- 【自動下單】那一口的「下場」（⛔ 唯讀 real_trades/）
 #
 # ⛔⛔ **這一段補的是一個真的 bug，不是新功能**（2026-09-10 lab-ux 查到、PM 拍板）：
@@ -3652,6 +3706,85 @@ def fire_real_pairs(days, today=None, now=None, eod_at=None):
             out[d] = {"state": "open" if holding else "none"}
         else:
             out[d] = {"state": "many", "n": len(hits)}
+    return out
+
+
+# 夜盤那一口出場可能落在 E 當晚（停損）、E+1（04:58 平）、週五晚 ⇒ 週六 ⇒ 往後找幾天跟風控**同一個數**
+NIGHT_REAL_SPAN = risk_cap.NIGHT_EXIT_MAX_D + 1
+_NF_RESULTS = {"key": None, "rows": []}
+
+
+def night_results(months=120):
+    """夜盤帳本裡「送出了」的那幾列（新到舊，最近 `months` 個月檔）。⛔ 唯讀；檔案沒變就不重讀。
+    ⚠️ `night_fire.state()` 的 `recent` 只有最後 10 列（混著 skip／eod）⇒ 算成績要從這裡拿。"""
+    d = night_fire.NF_DIR
+    fs = [f for f in sorted(d.glob("*.jsonl")) if night_fire._MONTH_RE.match(f.name)][-months:] if d.exists() else []
+    key = tuple((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in fs)
+    if _NF_RESULTS["key"] == key:
+        return _NF_RESULTS["rows"]
+    rows = []
+    for f in fs:
+        for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                o = json.loads(ln)
+            except Exception:
+                continue
+            if isinstance(o, dict) and o.get("rec") == "result" and o.get("ok"):
+                rows.append(o)
+    rows = rows[::-1]
+    _NF_RESULTS.update(key=key, rows=rows)
+    return rows
+
+
+def night_real_pairs(recent, now=None):
+    """
+    【夜盤自動下單】那一口**後來怎麼了**。⇒ {E: {...}}，E ＝ 夜盤帳本的「那一晚」。**唯讀。**
+
+    ⭐ 2026-10-14 修（Benson：「資料看起來都沒有同步」）：舊註解說「夜盤帳本沒有出場價」——
+       帳本本身確實沒有，但 `broker.close("night_eod")`／停損一樣會 `record_trade()` 寫進 `real_trades/`，
+       只是**檔名是出場那天**（04:58 平 ⇒ 隔天；週五晚 ⇒ 週六）⇒ 所以要往後找 NIGHT_REAL_SPAN 天。
+       （`risk_cap._match()` 早就這樣對夜盤了 ——【本月】卡的夜盤點數一直都有，只有這一頁的列表沒有。）
+    ⛔ 認人方式跟日盤 `fire_real_pairs()` 同一組欄位（方向、進場時刻到分、進場價 ±EOD_PX_TOL），
+       ⛔ 對不到／對到多筆一律留白（state 的意思也跟日盤同一套：ok／open／none／many／drill）。
+    """
+    out = {}
+    tol = auto_fire.EOD_PX_TOL
+    now = now or datetime.now()
+    for r in (recent or []):
+        if not isinstance(r, dict) or r.get("rec") != "result" or not r.get("ok"):
+            continue
+        E = str(r.get("E") or "")
+        try:
+            e0 = date.fromisoformat(E)
+        except ValueError:
+            continue
+        if r.get("live") is False:
+            out[E] = {"state": "drill"}
+            continue
+        ent, dv = _auto_num(r.get("entry")), r.get("dir")
+        want_t = str(r.get("entry_time") or "")[:5]
+        hits = []
+        for k in range(NIGHT_REAL_SPAN):
+            for t in _fire_real_day(str(e0 + timedelta(days=k))):
+                if not dv or t.get("dir") != dv:
+                    continue
+                if not want_t or str(t.get("entry_time") or "")[:5] != want_t:
+                    continue
+                te = _auto_num(t.get("entry"))
+                if te is None or ent is None or abs(te - ent) > tol:
+                    continue
+                hits.append(t)
+        if len(hits) == 1:
+            t = hits[0]
+            out[E] = {"state": "ok", "exit": _auto_num(t.get("exit")),
+                      "exit_time": t.get("exit_time"), "exit_date": t.get("date"),
+                      "points": _auto_num(t.get("points")), "why": t.get("why")}   # ⚠️ _auto_mine_day 已把 reason 改名成 why
+        elif not hits:
+            # 還沒到那一晚的 04:58（＋1 分鐘讓券商回報）⇒ 那口本來就還開著
+            close_at = datetime.combine(e0 + timedelta(days=1), datetime.min.time()).replace(hour=4, minute=59)
+            out[E] = {"state": "open" if now < close_at else "none"}
+        else:
+            out[E] = {"state": "many", "n": len(hits)}
     return out
 
 
@@ -6757,7 +6890,7 @@ function pfetch(url,body){
 
 /* 平倉原因的字。⛔ 【自動下單】那一頁的紀錄卡也在用（rwhy），
    ⛔ 不可以跟著右欄那兩區一起被刪掉。 */
-const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的', eod:'收盤'};
+const RWHY={sl:'停損', tp:'停利', manual:'手動', closed_elsewhere:'別處平的', eod:'收盤', night_eod:'夜盤收盤'};
 function rwhy(t){ return RWHY[t&&t.reason]||'其他'; }
 
 /* 沒有即時報價時，現價退回「最後一根 K 棒的收盤」。 */
@@ -7495,10 +7628,17 @@ function chartSVG(s){
  // 時間軸帶上的膠囊：彼此水平避讓（碰到就往右推），並夾在圖區內
  const lanePill=(X,txt,col)=>{
    const fs=10.5, w=tw(txt,fs)+13, h=17;
-   let px=Math.max(1,Math.min(W-R-w-1,X-w/2));
-   for(let k=0;k<8;k++){
-     if(!LANE.some(b=>px<b.x+b.w+3&&b.x<px+w+3)) break;
-     px=Math.min(W-R-w-1,px+w+5);
+   const clampX=v=>Math.max(1,Math.min(W-R-w-1,v));
+   const fits=v=>!LANE.some(b=>v<b.x+b.w+3&&b.x<v+w+3);
+   /* ⭐ 2026-10-14：舊版只會往右推 ⇒ 擠在最右邊時推不動、兩枚疊在一起（夜盤 04:58 出場 ＋ 日盤那一口實測疊到）。
+      ⇒ 候選位置 ＝ 原位 ＋ 每一枚已畫膠囊的左右兩側，挑放得下而且離原位最近的那個。 */
+   const px0=clampX(X-w/2);
+   let px=px0;
+   if(!fits(px0)){
+     const cands=[];
+     LANE.forEach(b=>{ cands.push(clampX(b.x+b.w+5)); cands.push(clampX(b.x-w-5)); });
+     const ok=cands.filter(fits).sort((a,b)=>Math.abs(a-px0)-Math.abs(b-px0));
+     if(ok.length) px=ok[0];
    }
    LANE.push({x:px,w:w});
    return '<rect x="'+px.toFixed(1)+'" y="'+(H-BOT+3)+'" width="'+w.toFixed(1)+'" height="'+h+
@@ -7810,15 +7950,19 @@ function calHTML(){
 
 /* 交易時間（HH:MM）→ K 棒索引。
    含夜盤之後，圖上的時間不再是遞增的字串（…23:55, 00:00…, 08:45…），
-   整條掃會在午夜那裡就停住。練習交易一定落在當天日盤，所以只在那一段找。 */
+   整條掃會在午夜那裡就停住 ⇒ 先照時間認出它在哪一段，只在那一段找：
+     15:00 以後 ＝ 前一晚夜盤（b.d 是前一天）、08:45 以前 ＝ 當天凌晨（仍屬夜盤）、其餘 ＝ 當天日盤。
+   ⛔ 2026-10-14 修：舊版只找日盤 ⇒ 夜盤真單 21:40 進場被畫到最後一根、04:58 出場整個不見。 */
 function idxAll(t){
  const all=(barsCache&&barsCache.bars)||[];
  const dd=(barsCache&&barsCache.date)||'';
+ const seg=t>='15:00'?'eve':(t<'08:45'?'dawn':'day');
  let r=-1;
  for(let i=0;i<all.length;i++){
    const b=all[i];
-   if(b.d&&b.d!==dd) continue;      // 前一晚的夜盤
-   if(b.t<'08:45') continue;        // 當天凌晨那段仍屬夜盤
+   const prev=!!(b.d&&b.d!==dd);
+   const bs=prev?'eve':(b.t<'08:45'?'dawn':'day');
+   if(bs!==seg) continue;
    if(b.t<=t) r=i; else break;
  }
  return r;
@@ -9126,8 +9270,11 @@ function alPaint(){
 }
 
 /* ⭐⭐ 2026-10-01 夜盤那張「今天」卡。⛔ 資料只用 GET /api/nightfire/state（NF.data），⛔ 不新開端點。
-   ⚠️ 夜盤帳本**沒有出場價**（出場在券商端成交）⇒ 這張卡⛔ 不寫點數、⛔ 不拿現價頂。
+   ⭐ 2026-10-14：夜盤帳本本身沒有出場價，但後端會唯讀比對 real_trades/（x.real，鍵是那一晚 E）⇒
+      對到才寫出場價與點數；⛔ 對不到照舊留白、⛔ 不拿現價頂。
    ⛔ 「關著」「今晚還沒到」「今晚不做」「已出手」是四句不同的話，⛔ 不准混。 */
+function nfReal(x,E){ const R=((x&&x.real)||{})[E]; return (R&&R.state==='ok')?R:null; }
+function nfClosed(x,E){ return !!(x&&Array.isArray(x.closed)&&E&&x.closed.indexOf(E)>=0); }
 function alNightHTML(){
  const x=NF.data;
  if(!x) return '<div class="t off">'+esc(NF.err||'載入中…')+'</div>';
@@ -9138,10 +9285,15 @@ function alNightHTML(){
  const why=o=>esc(String((o&&(o.msg||o.why||o.err))||''));
  if(r&&r.rec==='result'&&r.ok){
    const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
+   const R=nfReal(x,E), p=R?alN(R.points):null;
    return '<div class="t">已出手：'+esc(nfName(x,r.method||null))+' → '+esc(dir)+'　1 口</div>'+
-     '<div class="d">進場 <b>'+esc(alF(r.entry))+'</b>　'+(eod?('已平倉'+(why(eod)?'（'+why(eod)+'）':'')):'04:58 自動平倉')+'</div>';
+     '<div class="d">進場 <b>'+esc(alF(r.entry))+'</b>　'+
+     (R?('出場 <b>'+esc(alF(R.exit))+'</b>（'+esc(String(R.exit_time||'').slice(0,5))+'）　<b class="'+sgn(p)+'">'+
+          (p==null?'—':pm(p))+' 點</b>')
+       :(eod?('已平倉'+(why(eod)?'（'+why(eod)+'）':'')):'04:58 自動平倉'))+'</div>';
  }
  if(r&&r.rec==='result') return '<div class="t off">沒有送成</div><div class="d">'+why(r)+'</div>';
+ if(r&&nfClosed(x,E)) return '<div class="t off">今晚休市</div><div class="d">國定假日沒有夜盤。</div>';
  if(r) return '<div class="t off">今晚不做</div><div class="d">'+why(r)+'</div>';
  if(!x.on) return '<div class="t off">關著</div><div class="d">夜盤自動下單沒開，一張單都不會送出去。</div>';
  if(!T) return '<div class="t off">今晚沒有夜盤</div>';
@@ -9222,15 +9374,24 @@ function alPts(D,days){
  for(let i=days.length-1;i>=0;i--){
    const r=days[i]; if(!r||r.rec!=='result'||!r.ok) continue;
    const X=R[r.date]; if(!X||X.state!=='ok'||!alN(X.points)) continue;
-   out.push({date:r.date, pts:X.points});
+   out.push({date:r.date, k:r.date+' 09', mo:r.date, pts:X.points});
  }
+ /* ⭐ 2026-10-14：夜盤那幾口也算進來（Benson：資料對不起來）——【本月風控】一直是日盤＋夜盤一起算，
+    這裡只算日盤的話「本月合計」永遠跟它對不上。排序鍵用那一晚 E 的 21 點；
+    ⚠️ 「本月」照**開盤那晚 E** 歸月（跟 risk_cap 規則③同一把尺：9/30 晚那口算 9 月）。 */
+ const x=NF.data, NR=(x&&x.real)||{};
+ ((x&&x.results)||[]).forEach(o=>{
+   const E=String(o.E||''), X=NR[E]; if(!X||X.state!=='ok'||!alN(X.points)) return;
+   out.push({date:E, k:E+' 21', mo:E, pts:X.points, night:true});
+ });
+ out.sort((a,b)=>(a.k<b.k?-1:(a.k>b.k?1:0)));
  return out;
 }
 function alPerfPaint(D,days){
  const P=alPts(D,days);
  const avg=n=>{ const a=P.slice(-n); return a.length?a.reduce((x,y)=>x+y.pts,0)/a.length:null; };
  const mo=(D.today||'').slice(0,7);
- const moRows=P.filter(x=>String(x.date).slice(0,7)===mo);
+ const moRows=P.filter(x=>String(x.mo).slice(0,7)===mo);
  const moSum=moRows.length?moRows.reduce((x,y)=>x+y.pts,0):null;
  setEl('alperfn', P.length?(P.length+' 筆算得出點數'):'還沒有算得出點數的紀錄');
  if(!P.length){
@@ -9246,7 +9407,7 @@ function alPerfPaint(D,days){
      (a30==null?'—':pm(a30))+'</div><div class="s">點／筆</div></div>'+
    '<div class="c"><div class="k">本月合計</div><div class="v '+sgn(moSum)+'">'+
      (moSum==null?'—':pm(moSum))+'</div><div class="s">'+moRows.length+
-     ' 筆・⛔ 不含手續費與稅</div></div>');
+     ' 筆・日盤＋夜盤・不含手續費與稅</div></div>');
  setEl('alsparkbox', sparkBars(P.slice(-30).map(x=>x.pts),50));
 }
 
@@ -9260,18 +9421,28 @@ var ALF='all';
 function nfCard(o){
  const dir=o.dir==='long'?'▲ 多':(o.dir==='short'?'▼ 空':'');
  const sent=(o.rec==='result');
- const tag=sent?(o.ok?'送出了':'沒送成'):(o.rec==='eod'?'收盤':'沒送');
+ const E=String(o.E||''), closed=!sent&&nfClosed(NF.data,E);
+ /* ⭐ 2026-10-14：送出了的那一晚，出場價與點數從後端比對 real_trades/ 的結果拿（⛔ 對不到照舊留白） */
+ const R=(sent&&o.ok)?nfReal(NF.data,E):null, pts=R?alN(R.points):null;
+ const tag=sent?(o.ok?(R?rwhy({reason:R.why}):'送出了'):'沒送成'):(o.rec==='eod'?'收盤':(closed?'休市':'沒送'));
  const px=sent&&o.entry!=null
-   ? f(o.entry)+'<span class="arrow">&rarr;</span>— <span class="tag">'+esc(tag)+'</span>'
+   ? f(o.entry)+'<span class="arrow">&rarr;</span>'+(R&&alN(R.exit)!=null?f(R.exit):'—')+' <span class="tag">'+esc(tag)+'</span>'
    : '— <span class="tag">'+esc(tag)+'</span>';
- const why=String(o.msg||o.why||o.err||'');
- return '<div class="trade"><div class="tr-top">'+
-   '<span class="tr-date">'+esc(String(o.E||'').slice(5))+'</span>'+
+ const why=closed?'國定假日沒有夜盤':String(o.msg||o.why||o.err||'');
+ /* ⚠️ 收盤那一列沒有 `method` ⇒ 舊版一律掛成預設的「台積電快攻」（實測 10-13 晚寫錯）——改拿同一晚送出那一列的 */
+ const sib=(o.rec==='eod')?(((NF.data&&NF.data.recent)||[]).filter(z=>z.rec==='result'&&String(z.E||'')===E)[0]||null):null;
+ const meth=o.method||(sib&&sib.method)||null;
+ const cls=(pts==null)?'':(pts>0?' win':' loss');
+ /* ⚠️ 日期欄寫「那一晚」（E）＋「晚」：出場在隔天清晨，券商成績單記在隔天 —— 寫明是哪一晚才不會跟日盤錯開一天 */
+ return '<div class="trade'+cls+'"><div class="tr-top">'+
+   '<span class="tr-date">'+esc(E.slice(5))+' 晚</span>'+
    (dir?'<span class="dir '+(o.dir==='long'?'l':'s')+'">'+dir+'</span>':'')+
    '<span class="tr-px">'+px+'</span>'+
-   '<span class="tr-res na">—</span></div>'+
-   '<div class="al-meta">'+esc(nfName(NF.data,o.method||null))+'・04:58 平倉'+
-     (why?' · '+esc(why):'')+'</div></div>';
+   '<span class="tr-res '+(pts==null?'na':(pts>0?'r-win':'r-loss'))+'">'+(pts==null?'—':pm(pts))+'</span></div>'+
+   '<div class="al-meta">'+esc(nfName(NF.data,meth))+
+     (R?('・'+esc(String(o.entry_time||'').slice(0,5))+' → '+esc(String(R.exit_date||'').slice(5))+' '+esc(String(R.exit_time||'').slice(0,5)))
+       :((sent&&o.ok)?'・04:58 平倉':''))+
+     (why&&!R?' · '+esc(why):'')+'</div></div>';
 }
 function alRows(D,days,todayMerged){
  const out=[];
@@ -9279,7 +9450,9 @@ function alRows(D,days,todayMerged){
  days.slice(0,60).forEach(r=>out.push({kind:'day', date:String(r.date||''),
    html:alCard(D,r,!!(todayMerged&&r&&r.date===todayMerged))}));
  const x=NF.data;
- if(x&&x.recent) x.recent.forEach(o=>out.push({kind:'night', date:String(o.E||''), html:nfCard(o)}));
+ /* ⭐ 2026-10-14：那一晚已經對到出場（賺賠那一列寫得出點數）⇒ 「04:58 平倉完成」那一列不再重複列。 */
+ if(x&&x.recent) x.recent.forEach(o=>{ if(o.rec==='eod'&&nfReal(x,String(o.E||''))) return;
+   out.push({kind:'night', date:String(o.E||''), html:nfCard(o)}); });
  /* 兩份帳本合在一起要重新排序（新到舊）。⛔ 同一天時日盤排前面（它先發生）。 */
  out.sort((a,b)=>(a.date<b.date?1:(a.date>b.date?-1:(a.kind==='day'?-1:1))));
  return out;
@@ -9781,6 +9954,10 @@ function alSecs(hms){
 /* 後端有沒有端出「那一口後來怎麼了」那一份對照。⛔ 沒有 ≠ 對不起來。 */
 function alHasReal(D){ return !!(D&&D.real&&typeof D.real==='object'); }
 function alSimTxt(D,r){
+ /* ⭐ 2026-10-14：先看 sim_lanes/ 那條線（U＝多方聯軍 ⇒ union）；那條線沒有那一天才退回舊的 A／B 模擬。
+    ⚠️ 模擬已扣成本、真單那欄沒扣 ⇒ 差幾點正常。 */
+ const lid=((D.rule_id||{})[r.method||'A'])||null, L=lid?(((D.sim_lane||{})[r.date]||{})[lid]||null):null;
+ if(L) return '模擬那邊 '+(L.decision==='不做'?'不做':(alN(L.points)!=null?alSigned(L.points):'—'));
  const s=(D.sim||{})[r.date]||null;
  if(!s) return '模擬那邊 —';
  if(s.miss) return '模擬那邊也沒記到';
@@ -9802,8 +9979,11 @@ function alCard(D,r,isToday){
  /* ⛔ 每一種狀態一個 tag，⛔ 一種都不准跟別種寫同一個字
     （「還開著」跟「對不起來」長得像，但一個是正常、一個要他去大戶投看）。 */
  let tag;
+ /* ⭐ 2026-10-14：休市的平日（國慶補假那種）⇒ 「休市」，⛔ 不寫「收不到成交價」（看起來像壞掉）。判斷是後端 D.closed。 */
+ const closed=!sent&&Array.isArray(D.closed)&&D.closed.indexOf(r.date)>=0;
  /* ⭐ 2026-09-15 晚上：「等反轉」（wait，還沒定論）與「沒反轉」（no_reversal 終局）各自一個 tag（≤4 字） */
- if(!sent) tag=(r.rec==='fire')?'下落不明':(r.rec==='wait'?'等反轉':(r.why==='no_reversal'?'沒反轉':'沒送'));
+ if(closed) tag='休市';
+ else if(!sent) tag=(r.rec==='fire')?'下落不明':(r.rec==='wait'?'等反轉':(r.why==='no_reversal'?'沒反轉':'沒送'));
  else if(done) tag=rwhy({reason:R.why});
  else if(st==='drill') tag='演練';
  else if(st==='open') tag='持有中';
@@ -9820,7 +10000,8 @@ function alCard(D,r,isToday){
     **你該往那個檔案裡寫什麼**，不是「這個做法叫什麼名字」，所以它不在
     「孤立 A／B 零命中」那把尺裡。⛔ 沒有這個包裝的話，那把尺會被自己的原話打紅，
     而唯一的「修法」就是去改後端那句話 —— 那是把尺弄壞不是把東西修好。 */
- if(!sent) meta='<span class="why">'+esc(r.why_msg||alWhy(r.why))+'</span> · '+
+ if(closed) meta='<span class="why">國定假日休市，沒有開盤</span>';
+ else if(!sent) meta='<span class="why">'+esc(r.why_msg||alWhy(r.why))+'</span> · '+
    esc(alSimTxt(D,r));
  /* 今天版（「今天」卡併進來的那一列）：把原本「今天」卡才有的兩樣（「不需要收盤平倉」／
     後端的 warn）接在同一行 —— 只講一次。
@@ -10552,6 +10733,19 @@ class Handler(BaseHTTPRequestHandler):
                 #   ⛔ 只給一份的話，選夜盤跟勢時確認條會寫「照『台積電快攻』跑」（實測抓到）。
                 out["arm_confirm"] = {m: night_arm_confirm(out.get("live"), m)
                                       for m in night_fire.METHODS}
+                # ⭐ 2026-10-14：那一口後來怎麼了（唯讀比對 real_trades/，鍵是那一晚 E）＋ 送出過的那幾列
+                #   （畫面「最近做得如何」要日盤夜盤一起算，才會跟【本月風控】同一個數）。⛔ 包 try：算不出來只是留白。
+                try:
+                    res = night_results()
+                    out["results"] = [{k: o.get(k) for k in ("E", "method", "dir", "entry", "entry_time", "live")}
+                                      for o in res]
+                    out["real"] = night_real_pairs(res)
+                except Exception as e:      # noqa: BLE001
+                    out["results"], out["real"], out["real_err"] = [], {}, str(e)[:120]
+                try:
+                    out["closed"] = closed_days()
+                except Exception:           # noqa: BLE001
+                    out["closed"] = []
                 return self._json(200, out)
             except Exception as e:
                 return self._json(500, {"ok": False, "msg": "夜盤自動下單狀態讀不出來：%s" % str(e)[:120]})
@@ -10564,6 +10758,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 out = auto_fire.state()
                 out["sim"] = fire_sim_pairs(out.get("days") or [])
+                # ⭐ 2026-10-14：U（多方聯軍）的模擬在 sim_lanes/ ⇒ 另外一份（⛔ 包 try：算不出來只是留白）
+                try:
+                    out["sim_lane"] = fire_sim_lane(out.get("days") or [])
+                    out["rule_id"] = dict(auto_fire.RULE_ID)
+                except Exception:           # noqa: BLE001
+                    out["sim_lane"], out["rule_id"] = {}, {}
                 # ⛔ 「那一口後來怎麼了」**唯讀** real_trades/ 比對出來的
                 #    （`auto_fire` 那一側結構上拿不到停利成交的出場價，見上面那一段）。
                 #    ⛔ 對不到就留白，⛔ 不挑一筆、⛔ 不拿現價頂。
@@ -10578,6 +10778,11 @@ class Handler(BaseHTTPRequestHandler):
                 #    ⛔ 前端拿 `arm_confirm[他選的那個]`，⛔ 不准自己組字。
                 out["arm_confirm"] = {m: fire_arm_confirm(out.get("live"), mode=m)
                                       for m in auto_fire.METHODS}
+                # ⭐ 2026-10-14：休市的平日（畫面上那一天改寫「休市」，⛔ 不是「收不到成交價」）
+                try:
+                    out["closed"] = closed_days()
+                except Exception:           # noqa: BLE001
+                    out["closed"] = []
                 # ⭐⭐ 今天是不是結算日（2026-09-17 PM 裁示 M1）：⛔ 「判不出來」
                 #    一定要上畫面 —— 那一天收盤平倉用的是平常那一組（13:43:30），
                 #    而真的是結算日的話市場 13:30 就關了。⛔ 不可以只留在主控台。
@@ -11083,12 +11288,25 @@ def equity_view(now=None):
         enough = {"ok": None, "why": "no_lot1",
                   "msg": "還不知道一口要壓多少保證金（%s）" % (EQUITY.get("tfx_err") or "還在問期交所")}
     else:
-        ok = avail >= lot1
-        enough = {"ok": ok, "why": None, "need": lot1, "avail": float(avail),
-                  "since": EQUITY.get("tfx_at") or EQUITY.get("lot1_at"), "src": lot1_src,
-                  "msg": ("可動用 %s／一口要 %s（%s）—— %s"
-                          % (format(int(round(avail)), ","), format(int(round(lot1)), ","), lot1_src,
-                             "夠下一口" if ok else "⚠️ 不夠，下一口會被券商退單"))}
+        # ⭐ 2026-10-14（Benson：有部位時一直跳「不夠，下一口會被退單」）：手上那一口正壓著保證金，
+        #    可動用當然少一口 —— 而規則一次只開一口，下一口一定是平倉之後才送。
+        #    ⇒ 有部位時改看「平倉後約可動用」＝ 可動用 ＋ 正在壓的原始保證金（⛔ 不是現在就能再開一口）。
+        held = m.get("initial_margin")
+        holding = isinstance(held, (int, float)) and held > 0
+        after = float(avail) + (float(held) if holding else 0.0)
+        ok = after >= lot1
+        enough = {"ok": ok, "why": "holding" if holding else None, "need": lot1, "avail": float(avail),
+                  "since": EQUITY.get("tfx_at") or EQUITY.get("lot1_at"), "src": lot1_src}
+        if holding:
+            enough["after"] = round(after, 1)
+            enough["msg"] = ("現在有部位壓著 %s；平倉後約可動用 %s／一口要 %s（%s）—— %s"
+                             % (format(int(round(held)), ","), format(int(round(after)), ","),
+                                format(int(round(lot1)), ","), lot1_src,
+                                "平倉後夠下一口" if ok else "⚠️ 平倉後也不夠，下一口會被券商退單"))
+        else:
+            enough["msg"] = ("可動用 %s／一口要 %s（%s）—— %s"
+                             % (format(int(round(avail)), ","), format(int(round(lot1)), ","), lot1_src,
+                                "夠下一口" if ok else "⚠️ 不夠，下一口會被券商退單"))
     fee = float(m.get("fee") or 0) + float(m.get("tax") or 0)
     pl = None
     if isinstance(m.get("future_open_position"), (int, float)) \
@@ -11653,8 +11871,7 @@ def _health_real():
 
     ⛔⛔ **不另寫一套對帳法**：日盤走既有的 `fire_real_pairs()`（唯讀比對 `real_trades/`，
        跟【自動下單】那一頁的出場價是**同一把尺**）；夜盤走 `night_fire` 自己的帳本。
-    ⚠️ **夜盤帳本沒有出場價**（出場在券商端成交，`night_fire` 那一側看不到）⇒
-       夜盤只給「送出了幾口」，⛔ 點數留白、⛔ 不猜。
+    ⚠️ 夜盤帳本本身沒有出場價 ⇒ 2026-10-14 起走 `night_real_pairs()` 對 real_trades/（對不到才留白、⛔ 不猜）。
     ⚠️ 「夜盤跟勢」(trend) 是前瞻考試、⛔ 不下單 ⇒ 沒有這一條（呼叫端會照實寫出來）。
     ⛔ 這支跑在 HTTP 執行緒上 ⇒ 只讀那 60 天（`FIRE_REAL_DAYS`），⛔ 不掃整個帳本。
     """
@@ -11680,23 +11897,28 @@ def _health_real():
     out["hmq"] = out.get("union")          # ⭐ 快攻回馬槍跟多方聯軍讀同一本日盤帳
     # ⭐ 2026-09-23 夜盤有兩條了（T 台積電快攻／R 夜盤跟勢）⇒ 依帳本那一列的 `method` 分開數；
     #    ⚠️ 2026-09-23 以前的列沒有 `method`，那時只有 T ⇒ 算 T。⛔ 不可以兩條混成一張卡。
+    # ⭐ 2026-10-14：點數從 `night_real_pairs()` 拿（唯讀比對 real_trades/，跟【自動下單】那一頁同一把尺）。
+    #    ⛔ 對不到的那幾口只算「送出了」、不算進平均。
     try:
-        n = {"T": 0, "R": 0}
-        for f in sorted(night_fire.NF_DIR.glob("*.jsonl")) if night_fire.NF_DIR.exists() else []:
-            if not night_fire._MONTH_RE.match(f.name):
-                continue
-            for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
-                try:
-                    o = json.loads(ln)
-                except Exception:
-                    continue
-                if o.get("rec") == "result" and o.get("ok"):
-                    k = o.get("method") or "T"
-                    n[k] = n.get(k, 0) + 1
+        res = night_results()
+        real = night_real_pairs(res)
+        n, pts = {"T": 0, "R": 0}, {"T": [], "R": []}
+        for o in res:
+            k = o.get("method") or "T"
+            n[k] = n.get(k, 0) + 1
+            v = real.get(str(o.get("E") or ""))
+            if isinstance(v, dict) and v.get("state") == "ok" and isinstance(v.get("points"), (int, float))                     and not isinstance(v.get("points"), bool):
+                pts.setdefault(k, []).append(v["points"])
         for k, lane in (("T", "tsm"), ("R", "trend")):
-            out[lane] = {"n": n.get(k, 0), "avg": None,
-                         "msg": ("送出了 %d 口；⛔ 夜盤帳本沒有出場價（出場在券商端成交），"
-                                 "點數留白" % n[k]) if n.get(k) else "還沒有送出過真單"}
+            p = pts.get(k) or []
+            avg = round(sum(p) / len(p), 1) if p else None
+            if not n.get(k):
+                msg = "還沒有送出過真單"
+            elif p:
+                msg = "送出了 %d 口，%d 口算得出點數，每筆平均 %+.1f 點" % (n[k], len(p), avg)
+            else:
+                msg = "送出了 %d 口；還對不到出場紀錄，點數留白" % n[k]
+            out[lane] = {"n": n.get(k, 0), "avg": avg, "msg": msg}
     except Exception as e:
         out["tsm"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
     return out
