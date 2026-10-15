@@ -3397,6 +3397,14 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
 > - 待辦：「證明我們整趟都平完了 ⇒ 分不出改成他的手動部位（給他手動 130 點停損）」沒做 —— 做了會讓 QA R5（他平掉我們的、另開 3 口）
 >   從 0 張單變成手動停損會送單，跟「R1／R3／R4／R5 仍 0 張單」那條要求衝突，等 PM／Benson 定。
 >
+> ⭐ 2026-10-15 第七輪（QA r5 非阻擋三條，`broker.resolve_shrink`）：
+> - 等對帳時問不到已實現損益 ⇒ 每 10 秒才再問一次（`REAL_RETRY_S`）；等超過 1 分鐘（`REAL_WARN_S`）⇒ 部位卡／金條／手機改講
+>   「券商已實現損益問不到 N 分鐘，停損不會執行，請自己處理」。
+> - 只算我們進場**之後**的列：券商的已實現沒有時間欄位 ⇒ 多口部位一成立（停利掛完之後）問一次已實現，記下當下已有的列的 `id`
+>   （`real_base`，跟著落地），對帳時排除；進場時沒問到 ⇒ 不排除（保守）。另外列的進場價要落在我們成交價區間內：有記到各口成交價區間（fill_lo／fill_hi）⇒ ±0.01；沒記到（進場時成交明細沒回報）⇒ 退回均價 ±1（QA r6 S5：只剩均價還用 ±0.01 會漏數我們被平掉的口數）。那次快照在掛停利單**之前**問。
+> - 夜盤跨午夜：部位的 `entry_day` 早於今天 ⇒ 連那一天的已實現一起看（`broker._realized_day`）。日盤不會跨日 ⇒ 不問。
+> - `test_lots` ② 的「改版前」改成 `72291049^`（多口併進 main 之後 HEAD 已經不是改版前）；拿不到那個 commit（QA 突變複本）⇒ 退回 HEAD。
+>
 > ⭐⭐ **2026-10-14 多口第一階段（後端，畫面還沒接）**——口數的唯一正本是 `tools/shioaji/lots.py`：
 > - 級存在 `LOTS_LEVEL.json`（⛔ gitignore）；**檔案不存在／看不懂 ⇒ 1＋1**（跟以前一模一樣，`test_lots.py` ② 用 git HEAD 的 broker／auto_fire／night_fire 逐位元對照送出的每一張單）。階梯正本 `goal.LADDER`。
 > - 送單：`auto_fire._send` 問 `lots.day_lots()`、`night_fire._decide` 問 `lots.night_plan()`（夜盤波動規則 B：偏高 b 口、其他 max(1,b−1)；預測值與門檻記進夜盤帳本那一列 `vol`／`vol_thr`／`vol_high`）；`broker.enter(qty=)`。手動真單照舊 1 口。

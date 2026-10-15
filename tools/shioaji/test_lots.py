@@ -441,9 +441,13 @@ _scen.write_text(SCEN, encoding="utf-8")
 _old = TMP / "__tmp__head"
 _old.mkdir()
 _repo = HERE.parent.parent
+# ⭐ 2026-10-15：多口已經併進 main（72291049）⇒ 「改版前」＝那一筆的上一筆，⛔ 不再是 HEAD。
+#    QA 的突變複本（自己的 git、只有一筆 base）沒有那個 commit ⇒ 退回 HEAD（那邊的 HEAD 就是改版前）。
+_BASE_REV = "72291049^" if subprocess.run(["git", "-C", str(_repo), "rev-parse", "--verify", "-q", "72291049^"],
+                                           capture_output=True).returncode == 0 else "HEAD"
 _gitok = True
 for _f in ("broker.py", "auto_fire.py", "night_fire.py", "risk_cap.py"):
-    _r = subprocess.run(["git", "-C", str(_repo), "show", "HEAD:tools/shioaji/" + _f], capture_output=True)
+    _r = subprocess.run(["git", "-C", str(_repo), "show", _BASE_REV + ":tools/shioaji/" + _f], capture_output=True)
     if _r.returncode != 0:
         _gitok = False
     (_old / _f).write_bytes(_r.stdout)
@@ -2267,7 +2271,7 @@ chk("  ⭐ 券商補到 3 口 ⇒ 是我們的（⛔ 不是他動過）、收盤
      broker._state["position"]), (["eod_closed"], [3], 0, None))
 live(False)
 print("  -- 必修 2：主迴圈那幾支跟改版前（git HEAD）AST 一模一樣（⛔ 動主迴圈要在回報第一段講）--")
-_head_lp = subprocess.run(["git", "-C", str(HERE), "show", "HEAD:tools/shioaji/live_panel.py"], capture_output=True).stdout
+_head_lp = subprocess.run(["git", "-C", str(HERE), "show", _BASE_REV + ":tools/shioaji/live_panel.py"], capture_output=True).stdout
 if _head_lp:
     import ast as _ast
 
@@ -2296,6 +2300,183 @@ for _ in range(4):
 chk("  分不出的部位被按 4 次平倉 ⇒ 0 張單、close_refused 只記 1 列",
     (qtys(api, "close"), len([o for o in order_log() if o.get("kind") == "close_refused"]) - _n0), ([], 1))
 live(False)
+
+print("\n=== ⑳ QA r5 非阻擋三條（對帳退避、只算進場之後的列、夜盤跨午夜）===")
+_RT0 = broker.realized_today
+_RD0 = broker._realized_day
+_RC = {"n": 0}
+
+
+def real_stub(rows):
+    def f(fresh=False):
+        _RC["n"] += 1
+        return None if rows is None else [dict(x) for x in rows]
+    broker.realized_today = f
+
+
+def shrink_restart():
+    broker._state["position"] = None
+    broker._META.update(last=None)
+    AF._MEM.update({"date": None, "entry": None, "state": None})
+    NF._MEM.update(E=None, entry=None)
+    broker._LAST_RECONCILE["at"] = 0.0
+    broker.reconcile()
+
+
+try:
+    print("  -- 1：等對帳時問不到 ⇒ 每 10 秒才再問；等超過 1 分鐘 ⇒ 改講「問不到 N 分鐘，停損不會執行」--")
+    real_stub([])
+    api = MultiAPI()
+    r = af_send(api, 3)
+    api.fill_target(1, 12070.0)
+    shrink_restart()
+    real_stub(None)
+    _RC["n"] = 0
+    _t = time.time()
+    for _ in range(20):
+        broker.resolve_shrink(now=_t + 0.5)
+    chk("  ⭐ 問不到之後連叫 20 次（同一個 10 秒內）⇒ 只打券商 1 次", _RC["n"], 1)
+    broker.resolve_shrink(now=_t + 11.0)
+    chk("  過了 10 秒 ⇒ 再問 1 次", _RC["n"], 2)
+    p = broker._state["position"]
+    say("正在跟券商的已實現損益對帳" in str(broker.pos_note(p)[0]), "  1 分鐘以內：照舊「正在對帳」那一句", broker.pos_note(p)[0])
+    p["shrink_pend"]["since"] = time.time() - 125
+    _note = broker.pos_note(p)[0]
+    chk("  ⭐ 等了 2 分多鐘 ⇒「券商已實現損益問不到 2 分鐘，停損不會執行，請自己處理」",
+        str(_note).startswith("券商已實現損益問不到 2 分鐘，停損不會執行，請自己處理"), True)
+    _sn = broker.snapshot()["position"]
+    _PN = LP.lots_panel_now()
+    say("問不到 2 分鐘" in str(_sn.get("lot_note")) and _sn.get("stop_off")
+        and any("問不到 2 分鐘" in str(a.get("text")) for a in _PN.get("alarm") or [])
+        and "問不到 2 分鐘" in str((_PN.get("phone") or {}).get("warn")),
+        "  部位卡（不畫停損）、【自動下單】金條、手機都換成那一句", _sn.get("lot_note"))
+    real_stub([{"dir": "long", "entry": 12010.0, "exit": 12070.0, "qty": 1, "id": 31}])
+    broker.resolve_shrink(now=_t + 25.0)
+    p = broker._state["position"]
+    chk("  之後問到了 ⇒ 認回（我們剩 2 口）", (p.get("multi_unknown"), broker._ours_left(p)), (None, 2))
+    live(False)
+
+    print("  -- 2：只算我們進場之後的列（他當天稍早同方向、同價位的手動單不算）--")
+    _manual = {"dir": "long", "entry": 12010.0, "exit": 12030.0, "qty": 1, "id": 7}
+    real_stub([_manual])                                # 進場那一刻：已實現裡已經有他稍早的那一筆
+    api = MultiAPI()
+    r = af_send(api, 3)
+    chk("  進場時記下當下已有的列（real_base）、也落地", (broker._state["position"].get("real_base"),
+                                              json.loads((broker.ORDER_DIR / broker.META_NAME).read_text(encoding="utf-8")).get("real_base")),
+        (["7"], ["7"]))
+    api.fill_target(1, 12070.0)
+    shrink_restart()
+    real_stub([_manual, {"dir": "long", "entry": 12010.0, "exit": 12070.0, "qty": 1, "id": 9}])
+    AF._recover_poll()
+    p = broker._state["position"]
+    chk("  ⭐ 他那筆（id 7，同價 12010）排除 ⇒ 我們平掉 1 口 ＝ 帳上的 1 口 ⇒ 認回、收盤照平",
+        (p.get("multi_unknown"), broker._ours_left(p)), (None, 2))
+    AF._eod(DAY, 0, time.time(), "13:43:30")
+    chk("  收盤平 2 口", (qtys(api, "close"), len(api.lots)), ([2], 0))
+    live(False)
+    # 對照：進場那一刻沒問到（real_base 沒有）⇒ 不排除 ⇒ 2 口 > 1 口 ⇒ 分不出（保守）
+    real_stub(None)
+    api = MultiAPI()
+    r = af_send(api, 3)
+    api.fill_target(1, 12070.0)
+    shrink_restart()
+    real_stub([_manual, {"dir": "long", "entry": 12010.0, "exit": 12070.0, "qty": 1, "id": 9}])
+    AF._recover_poll()
+    chk("  對照：進場時沒問到 ⇒ 不排除任何列 ⇒ 分不出（寧可認不出來）", broker._state["position"].get("unknown_src"), "meta")
+    broker._state["position"] = None
+    live(False)
+    # 價錢不一樣的手動單（沒有 id 也一樣）⇒ 不在我們成交價區間 ⇒ 不算（有記到各口成交價區間時 ⛔ 不再外擴 1 點）
+    real_stub([])
+    api = MultiAPI()
+    r = af_send(api, 3)
+    chk("  前置：這一筆進場時有記到各口成交價區間（fill_lo／fill_hi）",
+        (broker._state["position"].get("fill_lo"), broker._state["position"].get("fill_hi")), (12010.0, 12010.0))
+    api.fill_target(1, 12070.0)
+    shrink_restart()
+    real_stub([{"dir": "long", "entry": 12009.5, "exit": 12020.0, "qty": 1},
+               {"dir": "long", "entry": 12010.0, "exit": 12070.0, "qty": 1}])
+    AF._recover_poll()
+    chk("  ⭐ QA S4：他稍早 12009.5 那筆（我們成交 12010）⇒ 不算我們的 ⇒ 認回", broker._state["position"].get("multi_unknown"), None)
+    broker._state["position"] = None
+    live(False)
+
+    print("  -- QA r6 S5：進場時成交明細沒回報（沒有成交價區間）⇒ 對帳區間退回 ±1（⛔ 不用 ±0.01）--")
+
+
+    class SpreadNoDeals(MultiAPI):
+        """3 口成交在 12009／12010／12011，但委託單的成交明細讀不到（只有均價 12010）。"""
+
+        def place_order(self, contract, order):
+            t = MultiAPI.place_order(self, contract, order)
+            if str(order.octype).endswith("New"):
+                self.lots = [12009.0, 12010.0, 12011.0]
+                t.status.deals = []
+            return t
+
+
+    real_stub([])
+    broker.FILL_WAIT, _fw = 0.9, broker.FILL_WAIT
+    try:
+        api = SpreadNoDeals()
+        r = af_send(api, 3)
+    finally:
+        broker.FILL_WAIT = _fw
+    p = broker._state["position"]
+    chk("  前置：沒有成交價區間、均價 12010", (p.get("fill_lo"), p.get("fill_hi"), p.get("entry_fill"), p.get("qty")),
+        (None, None, 12010.0, 3))
+    api.lots = [12011.0, 12011.0]                      # 停機時停利吃掉 12009、12010 兩口；他又在 12011 加 1 口
+    shrink_restart()
+    real_stub([{"dir": "long", "entry": 12009.0, "exit": 12070.0, "qty": 1, "id": 61},
+               {"dir": "long", "entry": 12010.0, "exit": 12070.0, "qty": 1, "id": 62}])
+    AF._recover_poll()
+    p = broker._state["position"]
+    AF._eod(DAY, 0, time.time(), "13:43:30")
+    ok, err = broker.close("sl")
+    chk("  ⭐ 我們平掉的 2 口（12009、12010）都算到 ⇒ 2 口 > 帳上 1 口 ⇒ 分不出、收盤與停損 0 張單、他那口不動",
+        (p.get("unknown_src"), qtys(api, "close"), len(api.lots)), ("meta", [], 2))
+    broker._state["position"] = None
+    live(False)
+
+    print("  -- 3：夜盤跨午夜（停機在午夜前、重啟在午夜後）⇒ 連進場那天的已實現一起看 --")
+    _YD = str(date.today() - timedelta(days=1))
+    for tag, prev_rows, want in (
+            ("前一天平了 2 口（他又同價加 1 口）", [{"dir": "long", "entry": 12001.0, "exit": 11950.0, "qty": 1, "id": 51}] * 2, "meta"),
+            ("前一天平了 1 口", [{"dir": "long", "entry": 12001.0, "exit": 11950.0, "qty": 1, "id": 51}], None)):
+        real_stub([])
+        api = MultiAPI(px=12001.0, exit_px=11700.0)
+        ent = nf_open(api, lvl=9)                         # 9＋4，振幅不知道 ⇒ 3 口
+        with broker._lock:
+            broker._state["position"]["entry_day"] = _YD   # 進場在昨天晚上
+        broker._meta_sync()
+        api.lots = [12001.0, 12001.0]                     # 停機期間（午夜前）少了 1 口
+        shrink_restart()
+        real_stub([])                                     # 今天（午夜後）的已實現：空的
+        _asked = []
+        broker._realized_day = (lambda rows: (lambda d: (_asked.append(str(d)), [dict(x) for x in rows])[1]))(prev_rows)
+        broker.resolve_shrink()
+        p = broker._state["position"]
+        chk("  ⭐ [%s] ⇒ 有去問 %s 的已實現、結果 %s" % (tag, _YD, "分不出" if want else "認回"),
+            (_asked, p.get("unknown_src")), ([_YD], want))
+        broker._realized_day = _RD0
+        broker._state["position"] = None
+        live(False)
+    # 日盤（進場是今天）⇒ ⛔ 不問前一天
+    real_stub([])
+    api = MultiAPI()
+    r = af_send(api, 3)
+    api.fill_target(1, 12070.0)
+    shrink_restart()
+    _asked = []
+    broker._realized_day = lambda d: (_asked.append(str(d)), [])[1]
+    real_stub([{"dir": "long", "entry": 12010.0, "exit": 12070.0, "qty": 1, "id": 3}])
+    broker.resolve_shrink()
+    chk("  日盤（今天進場）⇒ 不問前一天", _asked, [])
+    broker._realized_day = _RD0
+    broker._state["position"] = None
+    live(False)
+finally:
+    broker.realized_today = _RT0
+    broker._realized_day = _RD0
 
 # ══ 收尾：全程沒有指回真的資料夾 ═════════════════════════════════════════
 print("\n=== 收尾：全程沒有寫到他真的資料夾 ===")

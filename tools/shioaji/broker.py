@@ -332,11 +332,23 @@ def realized_today(fresh=False):
     if not fresh and now - _REALIZED["at"] < REALIZED_TTL:
         return _REALIZED["rows"]
     d = str(date.today())
+    out = _realized_day(d)
+    if out is None:
+        return None                       # ⛔ 不回舊快取、也不回 []
+    _REALIZED["at"], _REALIZED["rows"] = now, out
+    return out
+
+
+def _realized_day(d):
+    """
+    某一天的已實現損益（⛔ 不用快取；問不到 ⇒ None）。realized_today 與「夜盤跨午夜對帳要看前一天」共用。
+    ⭐ 2026-10-15 多帶 `id`（券商那一列的編號）：多口對帳要排除「進場那一刻就已經在的列」（見 _real_snapshot）。
+    """
     try:
-        rows = _state["api"].list_profit_loss(_state["account"], d, d) or []
+        rows = _state["api"].list_profit_loss(_state["account"], str(d), str(d)) or []
     except Exception as e:
         _state["last_error"] = "問不到已實現損益：" + str(e)[:120]
-        return None                       # ⛔ 不回舊快取、也不回 []
+        return None
     out = []
     for r in rows:
         try:
@@ -347,10 +359,10 @@ def realized_today(fresh=False):
                 "pnl": float(getattr(r, "pnl", 0) or 0),
                 "qty": int(getattr(r, "quantity", 0) or 0),
                 # 期貨的 direction 是**進場**那一邊：Buy ＝ 做多
-                "dir": "long" if "buy" in act else ("short" if "sell" in act else None)})
+                "dir": "long" if "buy" in act else ("short" if "sell" in act else None),
+                "id": getattr(r, "id", None)})
         except Exception:
             pass
-    _REALIZED["at"], _REALIZED["rows"] = now, out
     return out
 
 
@@ -725,6 +737,15 @@ def pos_note(p=None):
     p = _state["position"] if p is None else p
     if not isinstance(p, dict):
         return None, None
+    sp = p.get("shrink_pend") if p.get("unknown_src") == "shrink" else None
+    if p.get("multi_unknown") and isinstance(sp, dict) and sp.get("miss_since") is not None \
+            and time.time() - float(sp.get("since") or sp["miss_since"]) >= REAL_WARN_S:
+        # ⭐ 2026-10-15 QA r5：等對帳等超過 1 分鐘還問不到券商 ⇒ 照實講多久了
+        mins = max(1, int((time.time() - float(sp.get("since") or sp["miss_since"])) // 60))
+        return ("券商已實現損益問不到 %d 分鐘，停損不會執行，請自己處理（重啟後這筆 %s 口還沒對完帳）"
+                % (mins, p.get("qty"))), "unknown"
+    if p.get("multi_unknown") and isinstance(sp, dict) and p.get("sl_warn"):
+        return str(p["sl_warn"]), "unknown"          # 等對帳（1 分鐘內）：照實講「正在對帳，對完之前不平」
     if p.get("multi_unknown"):
         return ("重啟後這筆部位（%s 口）對不上程式開的多口紀錄，分不出哪幾口是你自己的 ⇒ "
                 "收盤／04:58 不會自動平、停損也不會幫你平，請自己到大戶投處理" % p.get("qty")), "unknown"
@@ -748,7 +769,7 @@ def pos_note(p=None):
 META_NAME = "_open_multi.json"
 _META_KEYS = ("dir", "entry_fill", "entry_qty", "qty_sent", "legs", "tgt_used", "touched", "late_fill",
               "handover", "entry_time", "sl_points", "tp_points", "no_tp", "fill_warn", "qty",
-              "bpx", "fill_lo", "fill_hi")
+              "bpx", "fill_lo", "fill_hi", "entry_day", "real_base")
 _META = {"last": None}
 
 
@@ -891,7 +912,7 @@ def _meta_apply(got, meta):
         # 先標「分不出」（停損、收盤都不平），等工作執行緒對完已實現損益再放行（見 resolve_shrink）
         keep = {k: got.get(k) for k in ("sl_points", "tp_points", "no_tp") if got.get(k) is not None}
         got["shrink_pend"] = {"legs_before": sum(int(l.get("qty") or 0) for l in (meta.get("legs") or [])),
-                              "down_n": down_n}
+                              "down_n": down_n, "since": time.time()}
         _mark_unknown(got, "重啟後撿回的部位比面板關掉前少了 %d 口（停機期間有成交）—— 正在跟券商的已實現損益對帳，"
                            "對完之前停損、收盤都不會幫你平" % down_n, "shrink")
         got.update(keep)                    # 停損點數留著（放行之後要用）；分不出期間停損本來就不會送單
@@ -901,28 +922,76 @@ def _meta_apply(got, meta):
     return "ok"
 
 
-def resolve_shrink():
+REAL_RETRY_S = 10.0    # 等對帳期間問不到已實現損益 ⇒ 每幾秒才再問一次（⛔ 不要每輪都打券商）
+REAL_WARN_S = 60.0     # 等超過幾秒還問不到 ⇒ 提示改寫成「問不到 N 分鐘，停損不會執行」
+REAL_PX_EPS = 0.01     # 已實現那一列的進場價要落在我們成交價區間內（券商的每口進場價＝成交價；⛔ 不再外擴 1 點）
+
+
+def _real_snapshot():
     """
-    ⭐ QA r4（G3）：重啟時口數變少、先標了「分不出（shrink）」的部位 ⇒ 問一次券商今天的已實現損益再決定。
+    ⭐ 2026-10-15：多口部位一成立（停利掛完之後、工作執行緒）問一次券商今天的已實現損益，記下**當下已經有的那幾列的 id**
+    （`real_base`）—— 那些是我們進場**之前**就平掉的單（例如他稍早的手動單），之後對帳（resolve_shrink）一律排除。
+    問不到 ⇒ real_base＝None（之後對帳就不排除任何列 ＝ 保守：只會更容易判成分不出）。⛔ 永遠不丟例外。
+    """
+    try:
+        real = realized_today(fresh=True)
+        base = None if real is None else sorted(str(r.get("id")) for r in real if r.get("id") is not None)
+        with _lock:
+            p = _state["position"]
+            if isinstance(p, dict):
+                p["real_base"] = base
+        _meta_sync()
+    except Exception:                       # noqa: BLE001
+        pass
+
+
+def resolve_shrink(now=None):
+    """
+    ⭐ QA r4（G3）：重啟時口數變少、先標了「分不出（shrink）」的部位 ⇒ 問券商的已實現損益再決定。
     ⚠️ 工作執行緒（auto_fire／night_fire 的 _recover_poll）叫；⛔ 不在 4Hz 迴圈、⛔ 不在 _lock 裡打網路。
-    已實現裡「我們那幾口」（方向一樣、進場價落在我們成交價區間 ±1）平掉的口數 ≤ 帳上應該有的（之前出去的段＋停機期間少掉的）
-      ⇒ 認成我們的（剩幾口就幾口）；超過 ⇒ 有幾口是他的 ⇒ 改成「分不出（meta）」、不平；問不到 ⇒ 先不動（下一輪再問）。
-    ⇒ "ok"／"mismatch"／None（沒事或問不到）。
+    算「我們那幾口」平掉幾口：方向一樣、進場價落在我們成交價區間（±REAL_PX_EPS）、⭐ 而且**不是進場那一刻就已經在的列**
+      （real_base；2026-10-15 QA r5 S4：他當天稍早同方向同價位的手動單）。
+    ⭐ 夜盤跨午夜（進場那天 < 今天）：連進場那天的已實現一起看（只有夜盤會這樣；日盤 13:43:30 前一定平完）。
+    ≤ 帳上應該有的（之前出去的段＋停機期間少掉的）⇒ 認成我們的；超過 ⇒ 分不出（meta）；
+    問不到 ⇒ 先不動，⭐ 而且 REAL_RETRY_S 秒內不再問（2026-10-15 QA r5：舊版每輪都打券商，約每秒 4 次）。
+    ⇒ "ok"／"mismatch"／None（沒事、問不到或還在退避）。
     """
     p = _state["position"]
     if not isinstance(p, dict) or p.get("unknown_src") != "shrink" or not isinstance(p.get("shrink_pend"), dict):
         return None
-    real = realized_today(fresh=True)               # ⛔ 鎖外面
-    if real is None:
-        return None
     sp = p["shrink_pend"]
+    now = time.time() if now is None else now
+    if now < float(sp.get("next_at") or 0):
+        return None                                  # 退避中
+    real = realized_today(fresh=True)               # ⛔ 鎖外面
+    eday = p.get("entry_day")
+    if real is not None and eday and str(eday) < str(date.today()):
+        prev = _realized_day(eday)                   # 夜盤跨午夜：進場那天的也要
+        real = None if prev is None else list(prev) + list(real)
+    if real is None:
+        with _lock:
+            sp["next_at"] = now + REAL_RETRY_S
+            sp.setdefault("miss_since", now)
+        return None
+    base = p.get("real_base")
+    skip = {}
+    for i in (base or []):
+        skip[str(i)] = skip.get(str(i), 0) + 1
     lo, hi = p.get("fill_lo"), p.get("fill_hi")
+    eps = REAL_PX_EPS
     if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float))):
+        # ⭐ QA r6（S5）：進場當下成交明細沒回報 ⇒ 沒有各口成交價區間，只剩均價 ⇒ ⛔ 不可以用 ±0.01
+        #    （多口不同成交價時會漏數我們被平掉的口數 ⇒ 誤認回來）⇒ 退回 ±META_FILL_TOL（寧可多算、判成分不出）
         lo = hi = p.get("entry_fill")
+        eps = META_FILL_TOL
     closed = 0
     for r in real:
         try:
-            if r.get("dir") == p.get("dir") and float(lo) - META_FILL_TOL <= float(r.get("entry")) <= float(hi) + META_FILL_TOL:
+            rid = str(r.get("id")) if r.get("id") is not None else None
+            if rid is not None and skip.get(rid):
+                skip[rid] -= 1                       # 進場那一刻就在的列 ⇒ 不是我們這一趟平的
+                continue
+            if r.get("dir") == p.get("dir") and float(lo) - eps <= float(r.get("entry")) <= float(hi) + eps:
                 closed += int(r.get("qty") or 1)
         except (TypeError, ValueError):
             continue
@@ -1367,7 +1436,8 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
                               "target_trade": None, "recovered": False,
                               "ref_price": float(price),
                               # ⭐ 多口：我們自己開了幾口／送了幾口／成交那一刻的均價（部分出場後券商均價會變）
-                              "entry_qty": k, "qty_sent": want, "entry_fill": entry}
+                              "entry_qty": k, "qty_sent": want, "entry_fill": entry,
+                              "entry_day": str(date.today())}
         if rng:
             _state["position"].update(rng)
         if want > 1:
@@ -1389,6 +1459,10 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
             _state["position"]["sl_points"] = float(sl_points)
     if want > 1 and is_live():
         _meta_sync()                    # ⭐ QA r2 必修 4：多口部位一成立就落地（重啟後補得回來）；一口的不寫
+    if want > 1 and is_live():
+        # ⭐ 多口：記下「進場那一刻券商已實現裡已經有的列」（之後對帳要排除）。
+        #    QA r6：放在掛停利單**之前** ⇒ 停利單就算立刻成交，那一列也不會被誤記成「進場前就有」。一口的路不叫。
+        _real_snapshot()
     if tp_points is None:
         # ⛔⛔ **一次 place_target 都不呼叫**（選項 A）。券商端這一口沒有任何掛單。
         return True, None, _state["position"]
