@@ -167,6 +167,40 @@ def _jsonl(p):
     return risk_cap._jsonl(p) if p.exists() else []
 
 
+# ⭐ 2026-10-14：「這一列算不算下單錯誤／滑價幾點」抽成四支（週報的 system() 與 lots.exec_quality()
+#    升級條件「最近 30 筆沒有下單錯誤、平均滑價 ≤ 4」共用 —— ⛔ 同一把尺，不准各寫一份）。
+#    ⛔ 內容跟抽出來之前一個字都沒改（test_analyst 守週報那一半）。
+def day_err(o):
+    """日盤帳本一列 ⇒ 錯誤那句話（含「日盤：」／「日盤收盤平倉：」開頭；不是錯誤 ⇒ None）。"""
+    if o.get("rec") in ("skip", "result") and o.get("why") in ERR_DAY:
+        return "日盤：" + str(o.get("why_msg") or o.get("why"))[:60]
+    if o.get("rec") == "eod" and o.get("alarm"):
+        return "日盤收盤平倉：" + str(o.get("why_msg") or "")[:60]
+    return None
+
+
+def night_err(o):
+    """夜盤帳本一列 ⇒ 錯誤那句話（含「夜盤：」開頭；不是錯誤 ⇒ None）。"""
+    if o.get("rec") in ("skip", "result") and (o.get("why") in ERR_NIGHT or (o.get("rec") == "result" and not o.get("ok"))):
+        return "夜盤：" + str(o.get("msg") or o.get("err") or o.get("why"))[:60]
+    return None
+
+
+def day_slip(o):
+    """日盤 result 那一列的滑價（點；算不出 ⇒ None）。"""
+    if o.get("rec") == "result" and o.get("ok") and _num(o.get("slip")):
+        return float(o["slip"])
+    return None
+
+
+def night_slip(o):
+    """夜盤 result 那一列的滑價 ＝（成交 − 報價）× 方向（點；算不出 ⇒ None）。"""
+    if o.get("rec") == "result" and o.get("ok") and _num(o.get("entry")) and _num(o.get("px")):
+        sg = 1 if o.get("dir") == "long" else -1
+        return round((float(o["entry"]) - float(o["px"])) * sg, 1)
+    return None
+
+
 def system(mon, fri):
     af, nf, _t = risk_cap._dirs()
     months = sorted({str(mon)[:7], str(fri)[:7]})
@@ -178,18 +212,15 @@ def system(mon, fri):
     sent_night = [o for o in night_rows if o.get("rec") == "result"]
     errs = Counter()
     for o in day_rows:
-        if o.get("rec") in ("skip", "result") and o.get("why") in ERR_DAY:
-            errs["日盤：" + str(o.get("why_msg") or o.get("why"))[:60]] += 1
-        if o.get("rec") == "eod" and o.get("alarm"):
-            errs["日盤收盤平倉：" + str(o.get("why_msg") or "")[:60]] += 1
+        e = day_err(o)
+        if e:
+            errs[e] += 1
     for o in night_rows:
-        if o.get("rec") in ("skip", "result") and (o.get("why") in ERR_NIGHT or (o.get("rec") == "result" and not o.get("ok"))):
-            errs["夜盤：" + str(o.get("msg") or o.get("err") or o.get("why"))[:60]] += 1
-    slips = [float(o["slip"]) for o in sent_day if o.get("ok") and _num(o.get("slip"))]
-    for o in sent_night:
-        if o.get("ok") and _num(o.get("entry")) and _num(o.get("px")):
-            sg = 1 if o.get("dir") == "long" else -1
-            slips.append(round((float(o["entry"]) - float(o["px"])) * sg, 1))
+        e = night_err(o)
+        if e:
+            errs[e] += 1
+    slips = [s for s in (day_slip(o) for o in sent_day) if s is not None]
+    slips += [s for s in (night_slip(o) for o in sent_night) if s is not None]
     nofill = 0
     od = HERE / "real_orders"
     d = mon

@@ -159,6 +159,11 @@ def snapshot(port):
         # ⭐ 2026-09-24 風控規則 B：**日盤＋夜盤共用**的本月額度 ⇒ 自己一塊（⛔ 不塞在 day 裡）
         snap["risk"] = _pick(f.get("risk") or {}, ("month", "since", "pnl", "cap", "hit", "override",
                                                    "blocked", "msg", "err"))
+        # ⭐ 2026-10-14 口數：只帶後端組好的那幾句（級、a＋b、建議／減級提示）。⛔ 手機零按鈕、⛔ 不自己判斷。
+        _lp = (f.get("lots") or {}).get("phone") or {}
+        snap["lots"] = dict(_pick(_lp, ("label", "line", "att", "warn")),
+                            day=((f.get("lots") or {}).get("pills") or {}).get("day"),
+                            night=((f.get("lots") or {}).get("pills") or {}).get("night"))
     except Exception as e:
         snap["errs"].append("日盤自動下單讀不到：%s" % str(e)[:120])
     try:

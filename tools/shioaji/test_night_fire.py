@@ -50,16 +50,24 @@ TMP = Path(tempfile.mkdtemp(prefix="nightfire-test-"))
 NF.ARM_FLAG = TMP / "NIGHT_ORDERS_ON"
 NF.NF_DIR = TMP / "nightfire"
 NF.TSM_CTX = TMP / "tsm_ctx.json"
+# ⭐ 2026-10-14：口數模組（lots.py）也導到暫存區 —— 狀態檔不存在 ⇒ 1＋1；夜盤振幅讀一個不存在的檔 ⇒ 不偏高
+#    （⛔ 不讀他真的 LOTS_LEVEL.json／tmf_1min.csv；這支只守「1＋1 時每晚 1 口」那一半，多口在 test_lots）
+import lots  # noqa: E402
+lots.LEVEL_FILE = TMP / "LOTS_LEVEL.json"
+lots.LOG_DIR = TMP / "lots"
+lots.VOL_CSV = TMP / "__no_such_tmf_1min.csv"
 
 # ── 假的東西 ──
 CALLS = {"enter": [], "close": []}
 FAKE = {"can": (True, None), "first": None, "quote": (46000.0, 1.0), "sess": "night"}
 
 
-def fake_enter(d, px, tp, sl_points=None):
+def fake_enter(d, px, tp, sl_points=None, qty=None):
+    # ⭐ 2026-10-14：夜盤送單多帶 qty（lots.night_plan）；口數另外記在 CALLS["qty"]（舊斷言看的四格不變）
     CALLS["enter"].append((d, px, tp, sl_points))
-    pos = {"dir": d, "entry": px + FAKE.get("slip", 1), "qty": 1, "entry_time": "21:35:04",
-           "sl_points": sl_points, "tp_points": tp}
+    CALLS.setdefault("qty", []).append(qty)
+    pos = {"dir": d, "entry": px + FAKE.get("slip", 1), "qty": 1 if qty is None else qty,
+           "entry_time": "21:35:04", "sl_points": sl_points, "tp_points": tp}
     broker._state["position"] = pos
     return True, None, pos
 
@@ -365,6 +373,11 @@ run_until(T5, TA - timedelta(seconds=1))
 chk("  ⛔ 開著 R：21:35 台積電那一刻不動、21:40 以前一張都不送", (CALLS["enter"], r_rows()), ([], []))
 run_until(TA, TA + timedelta(seconds=30))
 chk("  走 +200 點（≥ 門檻 %.0f）⇒ 送一張做多" % thr_want, [c[0] for c in CALLS["enter"]], ["long"])
+chk("  ⭐ 2026-10-14：沒有口數狀態檔（1＋1）⇒ 送 1 口", CALLS.get("qty", [])[-1:], [1])
+_r0 = [o for o in NF.rows_of(E) if o.get("rec") == "result"]
+chk("  ⭐ 帳本那一列記下口數、振幅門檻 1.03、規則 B（之後對帳用）",
+    (_r0[0].get("qty"), _r0[0].get("qty_sent"), _r0[0].get("vol_thr"), _r0[0].get("vol_rule"), _r0[0].get("lots_b"))
+    if _r0 else None, (1, 1, 1.03, "B", 1))
 c0 = CALLS["enter"][0] if CALLS["enter"] else (None,) * 4
 chk("  ⛔⛔ 不設停利：broker.enter 的 tp 是 None（券商端一張限價單都不掛）", c0[2], None)
 chk("  送單時先帶保守停損（報價 × 2% × 0.975）", c0[3], SL0_WANT)

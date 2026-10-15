@@ -97,6 +97,15 @@ try:
     s2 = st("2026-07", qty=2)
     chk("2 口上限 1,600 ⇒ −850 不擋", (s2["cap"], s2["blocked"]), (1600.0, False))
 
+    print("── ⑤b ⭐ 2026-10-14 多口：上限 ＝ 400 ×（聯軍 a ＋ 跟勢 b）")
+    for ab, want in (((1, 1), 800.0), ((2, 1), 1200.0), ((4, 2), 2400.0), ((10, 4), 5600.0)):
+        chk("  %d＋%d ⇒ 上限 %g" % (ab[0], ab[1], want),
+            RC.state(month="2026-07", fire_dir=FD, nf_dir=ND, trade_dir=TD, flag=FLAG, lots=ab)["cap"], want)
+    chk("  1＋1 跟舊算法（800 × 1 口）一樣", RC.cap_of(1, (1, 1)), RC.cap_of(1))
+    chk("  2＋1 ⇒ −850 不擋（上限 1,200）",
+        RC.state(month="2026-07", fire_dir=FD, nf_dir=ND, trade_dir=TD, flag=FLAG, lots=(2, 1))["blocked"], False)
+    chk("  a、b 看不懂 ⇒ 退回 800（⛔ 不放大）", RC.cap_of(1, ("x", None)), 800.0)
+    chk("  負數 ⇒ 退回 800", RC.cap_of(1, (-3, 9)), 800.0)
     print("── ⑥ 手動解除只對寫的那個月有效")
     FLAG.write_text("2026-06", encoding="ascii")
     chk("寫 6 月 ⇒ 7 月照擋", st("2026-07")["blocked"], True)
@@ -143,8 +152,9 @@ try:
     nf = (HERE / "night_fire.py").read_text(encoding="utf-8")
     body = nf[nf.index("def _decide("):nf.index("def _trend_sl_after_fill(")]
     chk("night_fire._decide 有問 risk_cap.blocked", "risk_cap.blocked(E" in body, True)
+    # ⚠️ 2026-10-14：_decide_trend 多帶一個口數參數（lp）⇒ 針對「return _decide_trend(E, now」比（意思不變）
     chk("…而且在分 T／R 之前（兩條都管到）",
-        body.index("risk_cap.blocked(") < body.index("return _decide_trend(E, now)"), True)
+        body.index("risk_cap.blocked(") < body.index("return _decide_trend(E, now"), True)
     chk("…而且在送單之前", body.index("risk_cap.blocked(") < body.index("broker.enter("), True)
 
     print("── ⑫ 起算日之前的單不算（Benson：只從 09-23 算）")

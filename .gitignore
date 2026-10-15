@@ -94,3 +94,7 @@ tools/shioaji/usage/
 tools/shioaji/depth_logs/
 # 【資料備份】狀態與執行記錄（2026-09-26）
 tools/shioaji/backup/
+# ⛔⛔ 【口數】現在的級與升降級紀錄（2026-10-14；含權益金額＝真實金額）。檔案不存在 ⇒ 1＋1
+tools/shioaji/LOTS_LEVEL.json
+tools/shioaji/LOTS_LEVEL.json.*
+tools/shioaji/lots/

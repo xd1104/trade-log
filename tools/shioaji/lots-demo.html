@@ -1,0 +1,733 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>口數 demo（假資料）— 早盤儀表板</title>
+<!-- lab-ux 2026-10-14：口數（加碼／減碼）介面 demo。
+     ⛔ 全部假資料、不連任何東西（沒有 fetch、沒有 POST）。價格一律 12000 附近（團隊治具慣例）。
+     色票／元件逐字取自 live_panel.py 的 PAGE（:root、.ac、.gl-*、.al-*、.trade）與 css/monitor.css（手機淺色）。
+     規格：LOTS-UI-SPEC.md（同資料夾）。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ══ 面板 :root（逐字照 live_panel.py）══ */
+:root{
+  --bg:#0E1116; --surface:#151A22; --surface-2:#1C222C; --raise:#1A212B;
+  --line:#242C38; --line-soft:#1E2530;
+  --text:#E9ECF1; --dim:#8D95A3; --faint:#5C6472; --ghost:#39414F;
+  --gold:#E3A951; --gold-soft:rgba(227,169,81,.14); --gold-line:rgba(227,169,81,.42);
+  --up:#EE5A54; --up-soft:rgba(238,90,84,.15); --up-line:rgba(238,90,84,.38);
+  --down:#34B37E; --down-soft:rgba(52,179,126,.15); --down-line:rgba(52,179,126,.38);
+  --r-lg:16px; --r-md:12px; --r-sm:9px; --r-xs:6px;
+  --ease:cubic-bezier(.22,.68,.36,1);
+  --font-sans:"Inter","Noto Sans TC","PingFang TC","Microsoft JhengHei","Segoe UI",sans-serif;
+  --font-mono:"Inter","Noto Sans TC",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none !important}
+body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line-height:1.5;
+  background-image:radial-gradient(1100px 460px at 50% -10%, rgba(227,169,81,.055), transparent 72%);
+  background-repeat:no-repeat; min-height:100vh; -webkit-font-smoothing:antialiased;
+  letter-spacing:.01em; font-feature-settings:'tnum' 1; font-variant-numeric:tabular-nums}
+.up{color:var(--up)} .down{color:var(--down)}
+
+/* ══ demo 控制列（⛔ 不是產品的一部分：虛線框＋「DEMO」字樣，一眼分得出來）══ */
+.demo{position:sticky; top:0; z-index:50; background:#0A0C10; border-bottom:1px dashed #3a4250; padding:10px 16px}
+.demo .in{max-width:1500px; margin:0 auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+.demo .tag{font:700 10px var(--font-mono); letter-spacing:1.5px; color:#0A0C10; background:#8D95A3; border-radius:4px; padding:2px 6px; flex:none}
+.demo .lb{font-size:12px; color:var(--faint); flex:none}
+.demo button{border:1px dashed #3a4250; background:transparent; color:var(--dim); font:600 12.5px var(--font-sans);
+  border-radius:999px; padding:7px 13px; cursor:pointer; min-height:36px}
+.demo button.on{border-style:solid; border-color:var(--text); color:var(--text); background:#1C222C}
+.demo button:active{transform:scale(.97)}
+.demo .sep{width:1px; height:22px; background:#2a313c; flex:none}
+.demo .say{flex:1 1 100%; font-size:12px; color:var(--faint); line-height:1.6}
+.demo .say b{color:var(--dim)}
+
+/* ══ 面板殼 ══ */
+.app{max-width:1500px; margin:0 auto; padding:0 24px 40px}
+.topbar{display:flex; align-items:center; justify-content:space-between; padding:18px 2px 16px; gap:16px; flex-wrap:wrap}
+.brand{display:flex; align-items:center; gap:11px}
+.brand .mark{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(150deg,rgba(227,169,81,.22),rgba(227,169,81,.06)); color:var(--gold); font-size:15px;
+  box-shadow:inset 0 0 0 1px rgba(227,169,81,.2)}
+.brand .nm{font-size:15px; font-weight:680; letter-spacing:.3px}
+.brand .sub{font-size:11px; color:var(--faint); margin-top:1px}
+.clock{text-align:right; font-family:var(--font-mono)}
+.clock .d{font-size:14px; font-weight:600; letter-spacing:.4px}
+.clock .w{font-size:11px; color:var(--faint)}
+.tabs{display:flex; gap:3px; background:var(--surface-2); border-radius:12px; padding:3px; border:1px solid var(--line-soft); margin-bottom:16px; overflow-x:auto}
+.tabs button{border:0; background:transparent; color:var(--dim); cursor:pointer; min-width:92px; position:relative;
+  font-family:var(--font-sans); font-size:13.5px; font-weight:650; padding:8px 18px; border-radius:9px; white-space:nowrap}
+.tabs button:hover{color:var(--text)}
+.tabs button.on{background:var(--gold-soft); color:var(--gold)}
+.tabs button.na{color:var(--ghost); cursor:default}
+/* ⭐ 新：分頁上的小金點（有事要他按的時候才有；跟右上角信件的未讀同一個語彙） */
+.tabs .dot{position:absolute; top:6px; right:9px; width:7px; height:7px; border-radius:50%; background:var(--gold); box-shadow:0 0 0 3px var(--gold-soft)}
+
+/* ── 共用：按鈕、卡 ── */
+.btn{padding:11px 18px; border-radius:var(--r-md); cursor:pointer; border:1px solid transparent;
+  font-family:var(--font-sans); font-size:14px; font-weight:700; letter-spacing:1px; min-height:44px;
+  transition:transform .1s var(--ease), background .15s var(--ease), border-color .15s var(--ease)}
+.btn:active:not(:disabled){transform:scale(.985)}
+.btn:disabled{opacity:.3; cursor:not-allowed}
+.card{background:var(--surface); border:1px solid var(--line-soft); border-radius:var(--r-lg); padding:16px 18px}
+
+/* ══ 【帳戶】（逐字照 .ac／.gl-*）══ */
+#tab-acct{max-width:560px}
+@media(min-width:1100px){ #tab-acct:not([hidden]){display:grid; grid-template-columns:minmax(0,560px) minmax(0,1fr); gap:16px; align-items:start; max-width:1400px} }
+@media(max-width:1099px){ #tab-acct .ac+.ac{margin-top:12px} }
+.ac{border:1px solid var(--line); border-radius:var(--r-md); background:var(--surface); padding:13px 14px 12px}
+.ac .hd{display:flex; align-items:baseline; justify-content:space-between; gap:8px}
+.ac .hd .t{font-size:13px; font-weight:700}
+.ac .hd .at{font-size:10.5px; color:var(--faint); font-family:var(--font-mono)}
+.ac .big{font-size:23px; font-weight:700; line-height:1.25; margin-top:6px; font-family:var(--font-mono)}
+.ac .sub{font-size:11.5px; color:var(--dim); line-height:1.65; margin-top:3px; font-family:var(--font-mono)}
+.ac .line{margin-top:8px; padding-top:8px; border-top:1px solid var(--line-soft); font-size:11.5px; color:var(--dim); line-height:1.6}
+.gl-pos{font-size:14px; font-weight:650; line-height:1.6; margin-top:7px}
+.gl-bar{height:8px; border-radius:4px; background:var(--line-soft); margin-top:9px; overflow:hidden}
+.gl-bar i{display:block; height:100%; background:var(--gold); border-radius:4px}
+.gl-scale{display:flex; justify-content:space-between; font-size:10.5px; color:var(--faint); margin-top:3px; font-family:var(--font-mono)}
+.gl-h{font-size:12px; font-weight:650; margin-top:14px}
+.gl-tw{overflow-x:auto; margin-top:6px}
+.gl-t{width:100%; border-collapse:collapse; font-size:11.5px; font-family:var(--font-mono); white-space:nowrap}
+.gl-t th{font-weight:600; color:var(--faint); text-align:right; padding:4px 8px; border-bottom:1px solid var(--line-soft)}
+.gl-t td{color:var(--dim); text-align:right; padding:4px 8px; border-bottom:1px solid var(--line-soft)}
+.gl-t th:first-child,.gl-t td:first-child{text-align:left}
+.gl-t tr.done td{color:var(--faint)}
+.gl-t tr.now td{color:var(--text); font-weight:650}
+.gl-notes{font-size:10.5px; color:var(--faint); line-height:1.7; margin-top:10px}
+.demo-omit{font-size:10.5px; color:var(--ghost); margin-top:6px; border:1px dashed var(--line); border-radius:6px; padding:6px 8px}
+/* ⭐ 新：目標卡裡的「口數」一行（唯讀；只有導覽連結，⛔ 沒有會動到錢的按鈕） */
+.gl-lots{margin-top:10px; padding:9px 12px; border-radius:var(--r-sm); background:var(--surface-2); border:1px solid var(--line-soft);
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12.5px; color:var(--dim); line-height:1.55}
+.gl-lots b{color:var(--text); font-weight:700; font-family:var(--font-mono)}
+.gl-lots.att{border-color:var(--gold-line); background:var(--gold-soft); color:var(--gold)}
+.gl-lots.att b{color:var(--gold)}
+.gl-lots .go{margin-left:auto; flex:none; border:1px solid var(--line); background:transparent; color:var(--dim);
+  font:600 12px var(--font-sans); border-radius:999px; padding:6px 12px; cursor:pointer; min-height:32px}
+.gl-lots.att .go{border-color:var(--gold-line); color:var(--gold)}
+.gl-t .mk{font-family:var(--font-sans); font-size:10.5px; font-weight:700; border-radius:5px; padding:0 6px; white-space:nowrap}
+.gl-t .mk.run{color:var(--text); background:var(--surface-2); border:1px solid var(--line)}
+.gl-t .mk.wait{color:var(--gold); background:var(--gold-soft); border:1px solid var(--gold-line)}
+
+/* ══ 【自動下單】（逐字照 .al-*）══ */
+.al-bar{display:flex; gap:9px; flex-wrap:wrap; align-items:stretch; margin-bottom:13px}
+.al-pill{display:flex; align-items:center; gap:11px; background:var(--surface-2); border:1px solid var(--line); border-radius:999px;
+  padding:7px 9px 7px 14px; flex:1 1 260px; min-width:0}
+.al-pill .lb{font-size:10px; letter-spacing:1px; flex:none}
+.al-pill .lb.d{color:#7CC4F2} .al-pill .lb.n{color:#B39DF0}
+.al-pill .nm{font-size:13.5px; font-weight:700; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.al-pill .q{font-size:12px; font-weight:700; color:var(--text); font-family:var(--font-mono); white-space:nowrap; flex:none}
+.al-pill .st{font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px 4px; background:var(--surface); color:var(--faint); margin-left:auto; white-space:nowrap}
+.al-pill.on{border-color:var(--gold-line); background:var(--gold-soft)}
+.al-pill.on .nm{color:var(--gold)}
+.al-pill.on .st{background:rgba(227,169,81,.22); color:var(--gold)}
+.al-pill .off{border:1px solid var(--line); background:transparent; color:var(--faint); font-size:11.5px; border-radius:999px; padding:5px 12px; flex:none; font-family:var(--font-sans); cursor:pointer}
+.al-alarm{margin:0 0 13px; padding:9px 12px 10px; border-radius:var(--r-md); background:var(--gold-soft); border:1px solid var(--gold-line);
+  color:var(--gold); font-size:12.5px; line-height:1.7; font-weight:600; display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+.al-alarm .g{flex:1 1 300px}
+.al-alarm .go{flex:none; border:1px solid var(--gold-line); background:transparent; color:var(--gold); font:600 12px var(--font-sans);
+  border-radius:999px; padding:6px 12px; cursor:pointer; min-height:32px}
+.ses{display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500; letter-spacing:.08em; border-radius:6px; padding:1px 7px; vertical-align:2px; white-space:nowrap; flex:none}
+.ses.d{color:#7CC4F2; background:rgba(124,196,242,.12); border:1px solid rgba(124,196,242,.35)}
+.ses.n{color:#B39DF0; background:rgba(179,157,240,.12); border:1px solid rgba(179,157,240,.38)}
+.al-today2{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; margin-bottom:14px}
+.al-tc{padding:16px 18px; min-width:0}
+.al-tch{display:flex; align-items:baseline; gap:9px; margin-bottom:10px}
+.al-tch .nm{font-size:15px; font-weight:600}
+.al-tch .when{margin-left:auto; font-size:12px; color:var(--faint)}
+.al-today .t{font-size:19px; font-weight:600; line-height:1.35}
+.al-today .t.off{font-size:17px; color:var(--dim)}
+.al-today .d{font-size:12.5px; color:var(--faint); line-height:1.7; margin-top:5px}
+.al-today .d b{color:var(--dim); font-weight:650; font-family:var(--font-mono)}
+.al-today .lq{margin-top:8px; font-size:12px; color:var(--dim); line-height:1.6; padding-top:8px; border-top:1px solid var(--line-soft)}
+.al-today .lq b{color:var(--text); font-family:var(--font-mono)}
+.al-row2{display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:14px; margin-bottom:14px; align-items:stretch}
+@media(max-width:1000px){ .al-today2,.al-row2{grid-template-columns:minmax(0,1fr)} }
+.al-pos{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px; height:100%}
+.al-pos.live{border-color:var(--gold-line)}
+.al-pos .hd{font-size:12px; color:var(--faint); letter-spacing:.12em; display:flex; justify-content:space-between; gap:8px}
+.al-pos .hd b{color:var(--dim)}
+.al-pos .who{font-size:14.5px; font-weight:500; margin-top:8px}
+.al-pos .big{font-size:40px; font-weight:600; letter-spacing:-.025em; margin:4px 0 6px; font-family:var(--font-mono); line-height:1.1}
+.al-pos .big u{text-decoration:none; font-size:15px; font-weight:400; color:var(--dim); margin-left:6px; letter-spacing:0}
+.al-pos .kv{display:flex; gap:24px; flex-wrap:wrap; font-size:13px; color:var(--dim)}
+.al-pos .kv b{color:var(--text); font-weight:600}
+.al-pos .none{font-size:15px; color:var(--faint); padding:14px 0 4px}
+.al-pos .r2{font-size:12.5px; color:var(--dim); margin-top:6px; line-height:1.7}
+.al-pos .r2 b{color:var(--text); font-weight:600}
+.al-mon{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px; height:100%}
+.al-mon .h{font-size:12px; color:var(--faint); letter-spacing:.12em}
+.al-mon .tot{font-size:36px; font-weight:600; letter-spacing:-.025em; line-height:1.2; margin-top:4px; font-family:var(--font-mono)}
+.al-mon .tot u{text-decoration:none; font-size:15px; font-weight:400; color:var(--dim); margin-left:6px; letter-spacing:0}
+.al-mon table{width:100%; border-collapse:collapse; margin:10px 0 6px; font-size:13.5px}
+.al-mon td{padding:6px 0; border-top:1px solid var(--line-soft)}
+.al-mon td.p{text-align:right} .al-mon td.n{text-align:right; color:var(--faint); width:64px}
+.al-mon .k{font-size:10.5px; color:var(--faint); letter-spacing:.4px}
+.al-mon .v{font-size:13.5px; font-weight:650; font-family:var(--font-mono)}
+.al-mon .hd2{display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap}
+.al-mon .bar{height:8px; border-radius:4px; background:var(--surface-2); margin:8px 0 6px; overflow:hidden}
+.al-mon .bar i{display:block; height:100%; border-radius:4px; background:var(--dim)}
+.al-mon .n{font-size:11px; color:var(--faint); line-height:1.7}
+.al-mon .n b{color:var(--dim)}
+.al-fold{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); margin-bottom:10px}
+.al-fold>summary{cursor:pointer; list-style:none; padding:14px 18px; font-size:14px; font-weight:500; display:flex; align-items:center; gap:10px; color:var(--dim)}
+.al-fold>summary::-webkit-details-marker{display:none}
+.al-fold>summary::before{content:"▸"; color:var(--faint); transition:transform .15s}
+.al-fold[open]>summary::before{transform:rotate(90deg)}
+.al-fold>summary .r{margin-left:auto; font-weight:400; font-size:12.5px; color:var(--faint)}
+.al-fold>summary .w{color:var(--gold)}
+.al-fbody{padding:0 18px 16px}
+.al-risk{padding:10px 14px 11px 13px; border-radius:var(--r-md); background:var(--surface-2); border:1px solid var(--line-soft); border-left:3px solid var(--gold)}
+.al-risk p{display:flex; gap:9px; font-size:12px; line-height:1.65; color:var(--dim)}
+.al-risk p+p{margin-top:4px}
+.al-risk i{font-style:normal; color:var(--gold); flex:none}
+.al-risk b{color:var(--text)}
+/* 紀錄卡（逐字照 .trade） */
+.al-list{max-width:640px; display:flex; flex-direction:column; gap:7px}
+.al-list>*{flex:none}
+.trade{background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-md); padding:10px 12px 10px 13px; position:relative; overflow:hidden}
+.trade::before{content:''; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--ghost)}
+.trade.win::before{background:var(--up)} .trade.loss::before{background:var(--down)}
+.tr-top{display:flex; align-items:center; gap:9px}
+.tr-date{font-family:var(--font-mono); font-size:12px; color:var(--faint); width:42px; flex:none}
+.dir{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:var(--r-xs); flex:none; letter-spacing:.3px}
+.dir.l{background:var(--up-soft); color:var(--up)} .dir.s{background:var(--down-soft); color:var(--down)}
+/* ⭐ 新：口數小標（只有 >1 口才出現；中性灰，⛔ 不用紅綠金） */
+.qty{font-size:10.5px; font-weight:700; padding:1px 6px; border-radius:var(--r-xs); flex:none; color:var(--text);
+  border:1px solid var(--line); background:var(--surface); font-family:var(--font-mono)}
+.tr-px{flex:1; min-width:0; font-family:var(--font-mono); font-size:12.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.tr-px .arrow{color:var(--ghost); margin:0 3px}
+.tr-res{font-family:var(--font-mono); font-size:15px; font-weight:700; text-align:right; min-width:52px; flex:none}
+.r-win{color:var(--up)} .r-loss{color:var(--down)}
+.tag{font-size:10px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
+.trade .al-meta{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:5px; font-size:11.5px; color:var(--faint); line-height:1.5; font-family:var(--font-mono)}
+.trade .al-meta b{color:var(--dim); font-weight:600}
+
+/* ══ ⭐⭐ 新卡：口數（#allots，class 一律 lt- 前綴）══
+   版型＝本月那張卡（#tab-fire .al-cap .cap）的同一套：surface、line 邊、r-lg、16/18 內距、.h 標題。
+   ⛔ 通過＝中性灰、卡住＝金色；⛔ 不准用紅綠（紅綠只給損益）。 */
+.lt{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:14px}
+.lt.att{border-color:var(--gold-line)}
+.lt-hd{display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap}
+.lt-hd .h{font-size:12px; color:var(--faint); letter-spacing:.12em}
+.lt-hd .r{font-size:12px; color:var(--faint)}
+.lt-hd .r b{color:var(--dim); font-weight:600}
+.lt-top{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:18px; align-items:end; margin-top:4px}
+@media(max-width:820px){ .lt-top{grid-template-columns:minmax(0,1fr); gap:10px} }
+.lt-now .tot{font-size:36px; font-weight:600; letter-spacing:-.01em; line-height:1.2; font-family:var(--font-mono)}
+.lt-now .tot u{text-decoration:none; font-size:13px; font-weight:600; color:var(--dim); margin-left:8px; letter-spacing:.02em; font-family:var(--font-sans);
+  border:1px solid var(--line); border-radius:999px; padding:1px 9px; vertical-align:8px}
+.lt-now .sub{font-size:12.5px; color:var(--dim); margin-top:2px; line-height:1.6}
+.lt-now .sub b{color:var(--text); font-family:var(--font-mono)}
+.lt-next .k{display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--dim)}
+.lt-next .k b{color:var(--text); font-weight:650}
+.lt-next .bar{height:8px; border-radius:4px; background:var(--surface-2); margin:7px 0 4px; overflow:hidden; position:relative}
+.lt-next .bar i{display:block; height:100%; border-radius:4px; background:var(--dim)}
+.lt.att .lt-next .bar i{background:var(--gold)}
+.lt-next .sc{display:flex; justify-content:space-between; font-size:10.5px; color:var(--faint); font-family:var(--font-mono)}
+.lt-say{margin-top:12px; font-size:14px; font-weight:650; line-height:1.6}
+.lt-say.g{color:var(--gold)}
+.lt-say small{display:block; font-size:12px; font-weight:500; color:var(--dim); margin-top:1px}
+.lt-conds{margin-top:10px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; background:var(--line-soft);
+  border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden}
+@media(max-width:820px){ .lt-conds{grid-template-columns:minmax(0,1fr)} }
+.lt-c{background:var(--surface); padding:8px 12px 9px; display:flex; gap:9px; align-items:baseline; min-width:0}
+.lt-c .i{flex:none; width:16px; text-align:center; font-size:12px; color:var(--faint)}
+.lt-c .w{min-width:0; flex:1}
+.lt-c .k{font-size:11px; color:var(--faint); letter-spacing:.3px}
+.lt-c .v{font-size:12.5px; color:var(--dim); line-height:1.5}
+.lt-c .v b{color:var(--text); font-weight:650; font-family:var(--font-mono)}
+.lt-c.no{background:linear-gradient(90deg,rgba(227,169,81,.08),var(--surface) 70%)}
+.lt-c.no .i,.lt-c.no .v,.lt-c.no .v b{color:var(--gold)}
+.lt-c.na .v{color:var(--faint)}
+/* 升級那一段：第一段＝金色框線鈕（跟「打開日盤自動下單」同一個語彙）；第二段＝真錢紅底確認條（.al-conf.real，面板唯一准用紅的地方） */
+.lt-act{margin-top:12px}
+.lt-act .row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.lt-act .btn.arm{background:var(--gold-soft); color:var(--gold); border-color:var(--gold-line)}
+.lt-act .btn.arm:hover{background:rgba(227,169,81,.24)}
+.lt-act .n{font-size:11.5px; color:var(--faint); line-height:1.7; margin-top:8px}
+.lt-act .n b{color:var(--dim); font-weight:650}
+.al-conf{padding:12px 14px 13px; border-radius:var(--r-md); border:1px solid var(--line); background:var(--surface-2)}
+.al-conf.real{border-color:var(--up-line); background:var(--up-soft)}
+.al-conf .q{font-size:13px; line-height:1.75; font-weight:650; color:var(--dim)}
+.al-conf.real .q{color:var(--up)}
+.al-conf .q b{font-weight:750}
+.al-conf .btns2{display:flex; gap:10px; margin-top:11px; flex-wrap:wrap}
+.al-conf .btn.go{background:var(--up-soft); color:var(--up); border-color:var(--up-line)}
+.al-conf .btn.no{background:transparent; color:var(--faint); border-color:var(--line)}
+.lt-cmp{width:100%; border-collapse:collapse; margin:8px 0 4px; font-size:12.5px; background:rgba(14,17,22,.35); border-radius:8px; overflow:hidden}
+.lt-cmp th,.lt-cmp td{padding:6px 10px; text-align:right; border-top:1px solid rgba(238,90,84,.18); white-space:nowrap}
+.lt-cmp th{font-size:11px; font-weight:600; color:var(--dim); border-top:0}
+.lt-cmp th:first-child,.lt-cmp td:first-child{text-align:left; color:var(--dim); font-weight:500; white-space:normal}
+.lt-cmp td{color:var(--dim); font-family:var(--font-mono)}
+.lt-cmp td.a{color:var(--text); font-weight:700}
+.lt-cmp-w{overflow-x:auto}
+.al-conf .fine{font-size:11.5px; color:var(--dim); line-height:1.7; margin-top:6px; font-weight:500}
+.al-conf .fine b{color:var(--text)}
+.lt-done{margin-top:12px; padding:10px 14px; border-radius:var(--r-md); background:var(--surface-2); border:1px solid var(--line);
+  font-size:12.5px; color:var(--dim); line-height:1.7; display:flex; gap:12px; align-items:center; flex-wrap:wrap}
+.lt-done .g{flex:1 1 280px}
+.lt-done b{color:var(--text)}
+.lt-done .btn{flex:none; padding:7px 14px; font-size:12.5px; min-height:36px; background:transparent; color:var(--faint); border-color:var(--line); letter-spacing:.3px}
+.lt-hist{margin-top:12px; border-top:1px solid var(--line-soft); padding-top:9px}
+.lt-hist .k{font-size:11px; color:var(--faint); letter-spacing:.3px; margin-bottom:3px}
+.lt-hist .r{display:flex; gap:12px; font-size:12px; color:var(--dim); line-height:1.75}
+.lt-hist .r .d{font-family:var(--font-mono); color:var(--faint); flex:none; width:44px}
+.lt-hist .r .who{flex:none; font-size:10.5px; border:1px solid var(--line); border-radius:5px; padding:0 6px; height:18px; line-height:16px; margin-top:3px; color:var(--faint)}
+.lt-hist .r b{color:var(--text); font-family:var(--font-mono)}
+.lt-foot{font-size:11px; color:var(--faint); line-height:1.7; margin-top:8px}
+.lt-cd{margin-top:10px}
+.lt-cd>summary{cursor:pointer; list-style:none; font-size:12.5px; color:var(--dim); padding:6px 0; min-height:32px; display:flex; align-items:center; gap:6px}
+.lt-cd>summary::-webkit-details-marker{display:none}
+.lt-cd>summary::before{content:"▸"; color:var(--faint); transition:transform .15s}
+.lt-cd[open]>summary::before{transform:rotate(90deg)}
+.lt-cd>summary b{color:var(--text); font-family:var(--font-mono)}
+.lt-cd>summary:hover{color:var(--text)}
+.lt-cd .lt-conds{margin-top:4px}
+.lt-act .al-conf{max-width:760px}
+.lt-busy{opacity:.6; pointer-events:none}
+
+/* ══ 手機監控（淺色，逐字照 css/monitor.css 的 light 那組）══ */
+.ph-wrap{display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start}
+.ph-note{flex:1 1 280px; max-width:460px; font-size:13px; color:var(--dim); line-height:1.8}
+.ph-note b{color:var(--text)}
+.ph{--bg:#F3F5F8; --surface:#FFFFFF; --surface-2:#EEF1F5; --line:#E1E5EB; --text:#191D25; --dim:#5B636F; --faint:#98A0AD;
+  --gold:#B77A22; --gold-soft:rgba(183,122,34,.12); --win:#D6352E; --loss:#158060;
+  --font-sans:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Noto Sans TC","Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SF Mono","JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+  width:390px; max-width:100%; flex:none; background:var(--bg); color:var(--text); font-family:var(--font-sans); border-radius:28px;
+  border:8px solid #22262E; padding:14px 14px 20px; line-height:1.5; letter-spacing:0}
+.ph .top{display:flex; justify-content:space-between; align-items:center; padding:4px 2px 12px}
+.ph .top h1{font-size:17px; font-weight:650}
+.ph .top .upd{font-size:12px; color:var(--dim)}
+.ph .card{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:14px 16px; margin:0 0 12px}
+.ph .card h2{font-size:14px; margin:0 0 8px; color:var(--dim); font-weight:600}
+.ph .row{display:flex; justify-content:space-between; gap:10px; padding:5px 0; font-size:14px}
+.ph .row+.row{border-top:1px solid var(--line)}
+.ph .row .k{color:var(--dim); flex:none} .ph .row .v{text-align:right}
+.ph .num{font-family:var(--font-mono)}
+.ph .win{color:var(--win)} .ph .loss{color:var(--loss)} .ph .gold{color:var(--gold)} .ph .dim{color:var(--dim)} .ph .faint{color:var(--faint)}
+.ph .msg{font-size:13px; color:var(--dim); margin-top:6px; line-height:1.6}
+.ph .msg.gold{color:var(--gold)}
+.ph .big{font-size:30px; font-weight:700; font-family:var(--font-mono)}
+.ph .alive{display:flex; gap:12px; align-items:center}
+.ph .alive .dot{width:12px; height:12px; border-radius:50%; background:#2E9E6A; flex:none}
+.ph .alive .t{font-weight:650} .ph .alive .s{font-size:12px; color:var(--dim)}
+.ph .warn{border-color:rgba(183,122,34,.45); background:#FFF8EC}
+.ph .warn .item{font-size:13.5px; line-height:1.6; padding:4px 0; color:#7A5212}
+.ph .new{outline:2px dashed #5B8DEF; outline-offset:3px}
+.ph .newtag{display:inline-block; font:700 9.5px var(--font-mono); color:#fff; background:#5B8DEF; border-radius:4px; padding:0 5px; margin-left:6px; vertical-align:2px}
+@media(max-width:600px){ .app{padding:0 12px 40px} .ph{border-width:0; border-radius:0; padding:8px 0; width:100%} }
+
+/* 量測輸出（?measure） */
+#mout{white-space:pre-wrap; font:12px var(--font-mono); color:var(--dim)}
+</style></head>
+<body>
+<div class="demo"><div class="in">
+  <span class="tag">DEMO</span><span class="lb">情境</span>
+  <span id="scn"></span>
+  <span class="sep"></span><span class="lb">看哪裡</span>
+  <span id="vw"></span>
+  <div class="say" id="say"></div>
+</div></div>
+
+<div class="app">
+ <div class="topbar">
+  <div class="brand"><div class="mark">◆</div><div><div class="nm">早盤儀表板</div><div class="sub">微台・demo（假資料，不連任何東西）</div></div></div>
+  <div class="clock"><div class="d" id="ck"></div><div class="w" id="ckw"></div></div>
+ </div>
+ <div class="tabs" id="tabs"></div>
+ <div id="tab-acct" hidden></div>
+ <div id="tab-fire" hidden></div>
+ <div id="tab-phone" hidden></div>
+ <pre id="mout" hidden></pre>
+</div>
+
+<script>
+/* ══════════ 假資料 ══════════
+   數字出處（⛔ demo 不發明數字）：
+   ・階梯、要補錢機率：goal.py LADDER（09-30 積極版）
+   ・回落中位數／最差 5%、停損失靈最壞一次：tick-research/capital_ladder_out.txt（同一組口數那一列）
+   ・一口保證金 35,050：capital_ladder_out 的口徑（⚠️ 正式版要用面板從帳戶學到的那個值）
+   ・風控上限 400 點 ×（a＋b）：CLAUDE.md 加碼規則 */
+const LADDER=[[70000,1,1,4],[100000,2,1,15],[150000,3,1,12],[200000,4,2,15],[250000,5,2,12],[300000,6,3,15],[350000,7,3,13],[400000,8,3,12],[450000,9,4,13],[500000,10,4,12]];
+const COST={ // a+b ⇒ [回落中位數, 回落最差5%, 停損失靈最壞一次]
+ '1+1':[20483,42725,23883], '2+1':[30514,59019,47766], '3+1':[42375,80014,71649],
+ '4+2':[61029,118039,95532], '5+2':[72809,138745,119415] };
+const MARGIN=35050;
+const wan=v=>(Math.round(v/1000)/10)+' 萬';
+const money=v=>Math.round(v).toLocaleString();
+const pm=v=>(v>0?'+':(v<0?'−':''))+Math.abs(Math.round(v)).toLocaleString();
+const sgn=v=>v>0?'up':(v<0?'down':'');
+const lbl=(a,b)=>a+'＋'+b;
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* 共用條件列（每個情境覆寫自己那幾條） */
+function conds(o){
+ const base={
+  eq:   {k:'權益',            ok:false, v:''},
+  err:  {k:'下單錯誤',        ok:true,  v:'最近 30 筆 <b>0</b> 次'},
+  slip: {k:'平均滑價',        ok:true,  v:'最近 30 筆 <b>3.2</b> 點（要 ≤ 4）'},
+  ret:  {k:'策略狀態',        ok:true,  v:'兩條都<b>正常</b>（不在觀察／降級）'},
+  cool: {k:'上次升級',        ok:true,  v:'還沒升過'},
+  inc:  {k:'停損失靈事故',    ok:true,  v:'最近 6 個月沒有'},
+ };
+ Object.keys(o||{}).forEach(k=>Object.assign(base[k],o[k]));
+ return ['eq','err','slip','ret','cool','inc'].map(k=>base[k]);
+}
+
+const SC={
+ now:{
+  btn:'① 現在', date:'2026-10-14', wd:'三', time:'20:40',
+  say:'現在 5.1 萬、還沒到第一級 ⇒ 照舊 <b>1＋1</b>。卡片平常就長這樣：小、安靜，一眼看到「現在幾口、下一級差多少、哪天檢查」。',
+  eq:51230, dayPl:+340, run:[1,1], runLv:0, next:LADDER[1], prevThr:0, floor:null,
+  check:'11/2（一）', checkWhy:'每月第一個交易日',
+  conds:conds({eq:{ok:false,v:'<b>5.1 萬</b>，2＋1 要 10 萬，還差 <b>4.9 萬</b>'},
+               err:{v:'目前 <b>22</b> 筆（還不到 30 筆）<b>0</b> 次'}, slip:{v:'目前 22 筆平均 <b>3.2</b> 點（要 ≤ 4）'}}),
+  say2:{t:'離下一級還遠', s:'權益到 10 萬、而且其他條件都過，11/2 起的每月第一個交易日才會出現升級建議。'},
+  offer:null, notice:null, hist:[],
+  pos:null, tonightB:1, vol:0.94,
+  day:{t:'今天不做', d:'09:03:30 三個候選都沒觸發。', lq:'今天 <b>1 口</b>'},
+  night:{t:'還沒到 21:00', d:'開關是開著的（夜盤跟勢），21:00 一到看要不要做。', lq:'今晚 <b>1 口</b>'},
+  mon:{pnl:+126, d:[+88,6], n:[+38,7], m:'10'},
+  recs:[
+   {d:'10-13',s:'n',dir:'l',q:1,en:12466,ex:12511,p:45,tag:'04:58平',meta:'夜盤跟勢 · 21:00 → 04:58 · 滑價 +1'},
+   {d:'10-13',s:'d',dir:'l',q:1,en:12402,ex:12371,p:-31,tag:'停損',meta:'多方聯軍・開箱 · 09:06:40 → 10:12:05 · 滑價 +2 · 模擬那邊 −29'},
+   {d:'10-08',s:'d',dir:'l',q:1,en:12350,ex:12419,p:69,tag:'收盤平',meta:'多方聯軍・快攻 · 09:03:31 → 13:43:30 · 滑價 +3 · 模擬那邊 +66'},
+  ],
+  phone:{warn:[], acct:'1＋1（起始級）', acctMsg:'下一級 10 萬（2＋1），還差 4.9 萬。'}
+ },
+ offer:{
+  btn:'② 可以升級', date:'2026-11-02', wd:'一', time:'08:20',
+  say:'11 月第一個交易日，權益 10.6 萬、六條都過 ⇒ 出現「可以升到 2＋1」。<b>按鈕真的可以點</b>：按一次出確認條（含代價），再按「確定」才算數；生效前還能一鍵撤回。',
+  eq:106480, dayPl:0, run:[1,1], runLv:0, next:LADDER[1], prevThr:0, floor:null,
+  check:'今天', checkWhy:'11 月第一個交易日',
+  conds:conds({eq:{ok:true,v:'<b>10.6 萬</b> ≥ 10 萬'}, err:{v:'最近 30 筆 <b>0</b> 次'}}),
+  say2:{t:'條件都過了，可以升到 2＋1', s:'要你按確認才會生效。這個建議到 11/30 都有效（條件掉了就自動收回）。'},
+  offer:{to:LADDER[1], toLv:1, eff:'11/3（二）日盤', until:'11/30'}, notice:null, hist:[],
+  pos:null, tonightB:1, vol:1.08,
+  day:{t:'還沒到 09:03:30', d:'開關是開著的（多方聯軍），09:03:30 一到看三個候選。', lq:'今天 <b>1 口</b>'},
+  night:{t:'今晚還沒到', d:'21:00 判定。', lq:'今晚 <b>1 口</b>（2＋1 的夜盤也是 1 口）'},
+  mon:{pnl:0, d:[0,0], n:[0,0], m:'11'},
+  recs:[
+   {d:'10-30',s:'n',dir:'s',q:1,en:12620,ex:12588,p:32,tag:'04:58平',meta:'夜盤跟勢 · 21:00 → 04:58 · 滑價 +2'},
+   {d:'10-30',s:'d',dir:'l',q:1,en:12544,ex:12610,p:66,tag:'停利',meta:'多方聯軍・快攻 · 09:03:31 → 09:41:12 · 滑價 +3 · 模擬那邊 +63'},
+  ],
+  phone:{warn:['可以升到 2＋1 了（11/30 前有效）—— 要在電腦面板【自動下單】按確認才會生效'], acct:'1＋1（起始級）', acctMsg:'條件都過了，可以升到 2＋1（等你在電腦上確認）。'}
+ },
+ slip:{
+  btn:'③ 卡在滑價', date:'2026-11-02', wd:'一', time:'08:20',
+  say:'權益 10.4 萬已經夠，但最近 30 筆平均滑價 5.1 點 > 4 ⇒ <b>這個月不升</b>。卡住的那一條是金色，其他是灰色；下次 12/1 再看一次。',
+  eq:104120, dayPl:0, run:[1,1], runLv:0, next:LADDER[1], prevThr:0, floor:null,
+  check:'12/1（二）', checkWhy:'這個月已經檢查過',
+  conds:conds({eq:{ok:true,v:'<b>10.4 萬</b> ≥ 10 萬'}, slip:{ok:false,v:'最近 30 筆平均 <b>5.1</b> 點，要 ≤ 4'}}),
+  say2:{t:'這個月不升：卡在「平均滑價」', s:'權益已經夠 2＋1 了。滑價大代表多口時成交會更差，先把執行品質顧好；12/1 會再檢查一次。'},
+  offer:null, notice:null, hist:[],
+  pos:null, tonightB:1, vol:1.08,
+  day:{t:'還沒到 09:03:30', d:'開關是開著的（多方聯軍），09:03:30 一到看三個候選。', lq:'今天 <b>1 口</b>'},
+  night:{t:'今晚還沒到', d:'21:00 判定。', lq:'今晚 <b>1 口</b>'},
+  mon:{pnl:0, d:[0,0], n:[0,0], m:'11'},
+  recs:[
+   {d:'10-30',s:'d',dir:'l',q:1,en:12544,ex:12601,p:57,tag:'停利',meta:'多方聯軍・快攻 · 09:03:31 → 09:41:12 · 滑價 <b>+9</b> · 模擬那邊 +66'},
+   {d:'10-29',s:'d',dir:'l',q:1,en:12488,ex:12460,p:-28,tag:'停損',meta:'多方聯軍・開箱 · 09:07:02 → 09:58:40 · 滑價 <b>+7</b> · 模擬那邊 −21'},
+  ],
+  phone:{warn:[], acct:'1＋1（起始級）', acctMsg:'權益夠 2＋1，但平均滑價 5.1 點 > 4，這個月不升。'}
+ },
+ down:{
+  btn:'④ 剛被減級', date:'2026-11-18', wd:'三', time:'08:30',
+  say:'11/3 升到 2＋1，11/17 收盤後權益 8.31 萬 < 8.5 萬（10 萬級 × 0.85）⇒ <b>今天起自動退回 1＋1</b>。最上面一條金色說明「哪天、為什麼」，卡片下面留紀錄。',
+  eq:83140, dayPl:0, run:[1,1], runLv:0, next:LADDER[1], prevThr:0, floor:null,
+  check:'12/1（二）', checkWhy:'每月第一個交易日',
+  conds:conds({eq:{ok:false,v:'<b>8.3 萬</b>，2＋1 要 10 萬，還差 <b>1.7 萬</b>'},
+               cool:{ok:false,v:'上次升級 <b>11/3</b>，<b>2027/2/1</b> 起才能再升'}}),
+  say2:{t:'11/18 起已自動退回 1＋1', s:'11/17 收盤後權益 8.31 萬，低於 8.5 萬（10 萬級的 85%）。減級是自動的，不用你按。'},
+  offer:null,
+  notice:{t:'今天（11/18）起口數自動退回 1＋1：11/17 收盤後權益 8.31 萬，低於 8.5 萬（10 萬級 × 0.85）。', go:'看口數'},
+  hist:[{d:'11/18',who:'自動',t:'<b>2＋1 → 1＋1</b>：權益 8.31 萬 < 8.5 萬（11/17 收盤後）'},
+        {d:'11/02',who:'你按的',t:'<b>1＋1 → 2＋1</b>：11/3 日盤起生效'}],
+  pos:null, tonightB:1, vol:1.21,
+  day:{t:'還沒到 09:03:30', d:'開關是開著的（多方聯軍），09:03:30 一到看三個候選。', lq:'今天 <b>1 口</b>（昨天是 2 口）'},
+  night:{t:'今晚還沒到', d:'21:00 判定。', lq:'今晚 <b>1 口</b>'},
+  mon:{pnl:-1036, d:[-842,9], n:[-194,11], m:'11', cap:1200, capNote:'本月用過最多 2＋1 ⇒ 這個月上限維持 1,200，12 月起照 1＋1 算 800。（待拍板：若改成跟著今天的 800，這個月會立刻停單）'},
+  recs:[
+   {d:'11-17',s:'d',dir:'l',q:2,en:12380,ex:12319,p:-61,tag:'停損',meta:'多方聯軍・開箱 · 09:06:10 → 09:31:44 · 滑價 +2 · 模擬那邊 −59'},
+   {d:'11-14',s:'d',dir:'l',q:2,en:12455,ex:12398,p:-57,tag:'停損',meta:'多方聯軍・快攻 · 09:03:31 → 10:02:15 · 滑價 +3 · 模擬那邊 −54'},
+   {d:'11-13',s:'n',dir:'l',q:1,en:12510,ex:12466,p:-44,tag:'04:58平',meta:'夜盤跟勢 · 21:00 → 04:58 · 滑價 +1'},
+  ],
+  phone:{warn:['11/18 起口數自動退回 1＋1：權益 8.31 萬 < 8.5 萬（10 萬級 × 0.85）'], acct:'1＋1（11/18 自動退回）', acctMsg:'再升最快 2027/2/1，而且權益要回到 10 萬。'}
+ },
+ big:{
+  btn:'⑤ 參考：4＋2', date:'2027-06-10', wd:'四', time:'21:30',
+  say:'（額外）到 4＋2 時，「這一口是幾口」怎麼顯示：部位卡寫「做多 2 口」、每口點數＋合計；紀錄列多一個「×2」小標，右邊是<b>合計點數</b>；夜盤寫明今晚為什麼是 2 口。',
+  eq:213400, dayPl:+640, run:[4,2], runLv:4, next:LADDER[4], prevThr:200000, floor:170000,
+  check:'7/1（四）', checkWhy:'每月第一個交易日',
+  conds:conds({eq:{ok:false,v:'<b>21.3 萬</b>，5＋2 要 25 萬，還差 <b>3.7 萬</b>'},
+               cool:{v:'上次升級 <b>2027/4/1</b>，7/1 起可以再升'},
+               ret:{v:'兩條都<b>正常</b>'}}),
+  extra:{k:'營運',ok:null,v:'升 5＋2 前要再談一次備援（09-30 說好的）'},
+  say2:{t:'離下一級還差 3.7 萬', s:'權益掉到 17 萬以下（20 萬級 × 0.85），隔天會自動退回 3＋1。'},
+  offer:null, notice:null,
+  hist:[{d:'04/01',who:'你按的',t:'<b>3＋1 → 4＋2</b>'},{d:'2026/12',who:'你按的',t:'<b>2＋1 → 3＋1</b>'}],
+  pos:{s:'n',dir:'long',q:2,en:12480,px:12512,sl:12230,exit:'04:58'}, tonightB:2, vol:1.12,
+  day:{t:'已出場：多方聯軍 → 做多　4 口', d:'進場 <b>12,402</b>　出場 <b>12,457</b>（13:43）　<b class="up">每口 +55 點・合計 +220</b>', lq:'今天 <b>4 口</b>'},
+  night:{t:'已出手：夜盤跟勢 → 做多　2 口', d:'進場 <b>12,480</b>　04:58 自動平倉', lq:'今晚 <b>2 口</b>：近幾晚夜盤振幅指標 <b>1.12%</b>（≥ 1.03% 算偏高）。沒偏高的晚上做 1 口。'},
+  mon:{pnl:+1236, d:[+940,6], n:[+296,7], m:'6'},
+  recs:[
+   {d:'今天',s:'d',dir:'l',q:4,en:12402,ex:12457,p:220,per:55,tag:'收盤平',meta:'多方聯軍・快攻 · 09:03:31 → 13:43:30 · 滑價 +3 · 模擬那邊 +58'},
+   {d:'06-09',s:'n',dir:'s',q:1,en:12530,ex:12544,p:-14,per:-14,tag:'04:58平',meta:'夜盤跟勢 · 21:00 → 04:58 · 滑價 +2'},
+   {d:'06-09',s:'d',dir:'l',q:4,en:12350,ex:12321,p:-116,per:-29,tag:'停損',meta:'多方聯軍・開箱 · 09:06:40 → 10:12:05 · 滑價 +2 · 模擬那邊 −27'},
+   {d:'06-08',s:'n',dir:'l',q:2,en:12290,ex:12352,p:124,per:62,tag:'04:58平',meta:'夜盤跟勢 · 21:00 → 04:58 · 滑價 +1'},
+  ],
+  phone:{warn:[], acct:'4＋2', acctMsg:'下一級 25 萬（5＋2），還差 3.7 萬。'}
+ }
+};
+const ORDER=['now','offer','slip','down','big'];
+
+/* ══════════ 畫面狀態 ══════════ */
+let CUR='now', TAB='fire', UP={step:'idle'};   // UP.step: idle → confirm → busy → done（→ 撤回回 idle）
+
+function curRun(S){ // 升級確認之後「明天起」的口數只顯示成預告，今天照舊
+ return S.run; }
+
+/* ══════════ ⭐ 新卡：口數（#allots）══════════ */
+function ltHTML(S){
+ const [a,b]=S.run, nx=S.next, done=UP.step==='done'&&S.offer;
+ const span=nx[0]-S.prevThr, pr=Math.max(0,Math.min(100,(S.eq-S.prevThr)/span*100));
+ const att=!!(S.offer||S.notice)&&!done;
+ const tier=S.runLv===0?'起始級':('第 '+S.runLv+' 級・'+wan(LADDER[S.runLv-1][0]));
+ const nightTxt=b>=2?('夜盤跟勢 <b>'+b+' 口</b>（振幅偏高的晚上；其他晚上 '+Math.max(1,b-1)+' 口）'):('夜盤跟勢 <b>'+b+' 口</b>');
+ let h='<div class="lt'+(att?' att':'')+'" id="allots">'+
+  '<div class="lt-hd"><span class="h">口數</span><span class="r">'+esc(S.checkWhy)+'檢查・下次 <b>'+esc(S.check)+'</b></span></div>'+
+  '<div class="lt-top"><div class="lt-now"><div class="tot">'+lbl(a,b)+'<u>'+esc(tier)+'</u></div>'+
+    '<div class="sub">日盤多方聯軍 <b>'+a+' 口</b>・'+nightTxt+'</div></div>'+
+  '<div class="lt-next"><div class="k"><span>下一級 <b>'+wan(nx[0])+'・'+lbl(nx[1],nx[2])+'</b></span><span>權益 <b>'+wan(S.eq)+'</b></span></div>'+
+    '<div class="bar"><i style="width:'+pr.toFixed(1)+'%"></i></div>'+
+    '<div class="sc"><span>'+(S.floor?('退級線 '+wan(S.floor)):(S.prevThr?wan(S.prevThr):'0'))+'</span><span>'+wan(nx[0])+'</span></div></div></div>';
+ const say=done?{t:'已確認：'+S.offer.eff+'起改成 '+lbl(S.offer.to[1],S.offer.to[2]),s:'今天照舊 1＋1。'}:S.say2;
+ h+='<div class="lt-say'+(att?' g':'')+'">'+esc(say.t)+'<small>'+esc(say.s)+'</small></div>';
+ const cs=S.conds.slice(); if(S.extra) cs.push(S.extra);
+ /* 條件清單：⭐ 只有「有事」才攤開（有升級建議／剛減級／權益以外的條件卡住）；
+    平常只卡權益（進度條已經講了）⇒ 收成一行摘要，卡片維持小。 */
+ const bad=cs.filter(c=>c.ok===false), okN=cs.filter(c=>c.ok===true).length, tot=cs.filter(c=>c.ok!==null).length;
+ const open=!!(S.offer||S.notice||bad.some(c=>c.k!=='權益'));
+ h+='<details class="lt-cd"'+(open?' open':'')+'><summary>升級條件 <b>'+okN+'／'+tot+'</b> 過'+
+   (bad.length?'・卡在：'+bad.map(c=>esc(c.k)).join('、'):'・全部通過')+'</summary>'+
+   '<div class="lt-conds">'+cs.map(c=>'<div class="lt-c'+(c.ok===false?' no':(c.ok===null?' na':''))+'"><span class="i">'+(c.ok===false?'✕':(c.ok===null?'·':'✓'))+'</span>'+
+   '<div class="w"><div class="k">'+esc(c.k)+'</div><div class="v">'+c.v+'</div></div></div>').join('')+'</div>'+
+   '<div class="lt-foot">升級要你按確認才生效、一次一級、升完 3 個月內不再升；減級是自動的（權益低於這一級門檻的 85%，隔天就退）。⛔ 不看最近賺不賺。</div></details>';
+ if(S.offer) h+=ltActHTML(S);
+ const hist=(done?[{d:'11/02',who:'你按的',t:'<b>1＋1 → 2＋1</b>：11/3 日盤起生效'}]:[]).concat(S.hist||[]);
+ if(hist.length) h+='<div class="lt-hist"><div class="k">口數紀錄</div>'+hist.slice(0,3).map(x=>
+   '<div class="r"><span class="d">'+esc(x.d)+'</span><span class="who">'+esc(x.who)+'</span><span>'+x.t+'</span></div>').join('')+'</div>';
+ return h+'</div>';
+}
+function ltActHTML(S){
+ const o=S.offer, [a0,b0]=S.run, a1=o.to[1], b1=o.to[2], k0=a0+'+'+b0, k1=a1+'+'+b1;
+ const C0=COST[k0], C1=COST[k1];
+ if(UP.step==='done')
+   return '<div class="lt-done"><span class="g">已確認：<b>'+esc(o.eff)+'起</b>做 '+lbl(a1,b1)+'（11/02 08:21 你按的）。在那之前改主意可以撤回，撤回不用再確認。</span>'+
+     '<button class="btn" data-undo="1">撤回，維持 1＋1</button></div>';
+ if(UP.step==='confirm'||UP.step==='busy'){
+   const busy=UP.step==='busy';
+   const row=(k,v0,v1)=>'<tr><td>'+k+'</td><td>'+v0+'</td><td class="a">'+v1+'</td></tr>';
+   return '<div class="lt-act"><div class="al-conf real'+(busy?' lt-busy':'')+'">'+
+    '<div class="q">⚠️ 確定從 <b>'+lbl(a0,b0)+'</b> 升到 <b>'+lbl(a1,b1)+'</b>？'+
+      (a1!==a0?'日盤每一筆從 '+a0+' 口變 '+a1+' 口，賺賠跟著放大。':'')+(b1!==b0?'夜盤（振幅偏高的晚上）從 '+b0+' 口變 '+b1+' 口。':'')+'</div>'+
+    '<div class="lt-cmp-w"><table class="lt-cmp"><tr><th></th><th>現在 '+lbl(a0,b0)+'</th><th>升級後 '+lbl(a1,b1)+'</th></tr>'+
+     row('口數（日盤＋夜盤）', a0+'＋'+b0+' 口', a1+'＋'+b1+' 口')+
+     row('要壓的保證金', money(MARGIN*Math.max(a0,b0)), money(MARGIN*Math.max(a1,b1)))+
+     row('從高點回落：一般（中位數）', '約 '+wan(C0[0]), '約 '+wan(C1[0]))+
+     row('從高點回落：很糟的年（最差 5%）', '約 '+wan(C0[1]), '約 '+wan(C1[1]))+
+     row('停損失靈最壞一次', '約 '+wan(C0[2]), '約 '+wan(C1[2]))+
+     row('一年內要補錢的機率（剛好在門檻起步時）', '約 '+LADDER[0][3]+'%（7 萬）', '約 '+o.to[3]+'%（'+wan(o.to[0])+'）')+
+     row('本月風控上限', '−'+money(400*(a0+b0))+' 點', '−'+money(400*(a1+b1))+' 點')+
+    '</table></div>'+
+    '<div class="fine">・<b>'+esc(o.eff)+'起</b>生效，今天照舊 1＋1；手上已經有的部位不受影響。<br>'+
+     '・權益掉到 <b>'+wan(o.to[0]*0.85)+'</b> 以下，隔天自動退回 1＋1。<br>'+
+     '・停損失靈最壞一次＝白天斷線沒處理、留到 13:43:30 才平的那一次（2025-04-09）。<br>'+
+     '・以上回落與機率是<b>回測推估、不是保證</b>（優勢打折到 65%、重抽樣 2 萬次）。</div>'+
+    '<div class="btns2"><button class="btn go" data-upyes="1"'+(busy?' disabled':'')+'>'+(busy?'升級中…':'確定，升到 '+lbl(a1,b1))+'</button>'+
+     '<button class="btn no" data-upno="1"'+(busy?' disabled':'')+'>取消</button></div></div></div>';
+ }
+ return '<div class="lt-act"><div class="row"><button class="btn arm" data-upon="1">升到 '+lbl(a1,b1)+'（'+wan(o.to[0])+'級）</button></div>'+
+   '<div class="n">按下去會<b>再問你一次</b>，並列出升級後的代價。不按就維持 '+lbl(a0,b0)+'；'+esc(o.until)+' 前都可以按。</div></div>';
+}
+
+/* ══════════ 【自動下單】其他區塊（只動到「口數」相關的字）══════════ */
+function fireHTML(S){
+ const [a,b]=S.run, done=UP.step==='done'&&S.offer;
+ const pillQ=(n,nx)=>'<span class="q">'+n+' 口'+(nx&&nx!==n?(' → 明天 '+nx+' 口'):'')+'</span>';
+ let h='<div class="al-bar">'+
+  '<div class="al-pill on"><span class="lb d">日盤</span><span class="nm">多方聯軍</span>'+pillQ(a,done?S.offer.to[1]:0)+'<span class="st">開著・真錢</span><button class="off">關閉</button></div>'+
+  '<div class="al-pill on"><span class="lb n">夜盤</span><span class="nm">夜盤跟勢</span>'+pillQ(S.tonightB>=2?b:Math.max(1,b-1))+'<span class="st">開著・真錢</span><button class="off">關閉</button></div></div>';
+ if(S.offer&&!done) h+='<div class="al-alarm"><span class="g">口數：本月檢查條件都過了，可以升到 '+lbl(S.offer.to[1],S.offer.to[2])+'（要你按確認才會生效）。</span><button class="go" data-jump="1">看口數 ↓</button></div>';
+ if(S.notice) h+='<div class="al-alarm"><span class="g">'+esc(S.notice.t)+'</span><button class="go" data-jump="1">'+esc(S.notice.go)+' ↓</button></div>';
+ h+='<div class="al-today2">'+
+  '<div class="card al-tc"><div class="al-tch"><span class="ses d">☀ 日盤</span><span class="nm">多方聯軍</span><span class="when">09:03:30 判定</span></div>'+
+    '<div class="al-today"><div class="t'+(/^已/.test(S.day.t)?'':' off')+'">'+esc(S.day.t)+'</div><div class="d">'+S.day.d+'</div><div class="lq">'+S.day.lq+'</div></div></div>'+
+  '<div class="card al-tc"><div class="al-tch"><span class="ses n">☾ 夜盤</span><span class="nm">夜盤跟勢</span><span class="when">21:00 判定</span></div>'+
+    '<div class="al-today"><div class="t'+(/^已/.test(S.night.t)?'':' off')+'">'+esc(S.night.t)+'</div><div class="d">'+S.night.d+'</div><div class="lq">'+S.night.lq+'</div></div></div></div>';
+ h+='<div class="al-row2"><div>'+posHTML(S)+'</div><div>'+monHTML(S)+'</div></div>';
+ h+=ltHTML(S);
+ h+='<details class="al-fold"><summary><span class="w">⚠ 風險提醒</span><span class="r">停損活在這台面板裡</span></summary><div class="al-fbody"><div class="al-risk">'+
+   '<p><i>⚠</i><span>停損<b>活在這台電腦的面板裡</b>（面板關掉／當掉／電腦睡著就沒有停損）。</span></p>'+
+   '<p><i>⚠</i><span>這個開關<b>沒有有效期</b>，每個交易日都會送，直到你自己關掉。</span></p></div></div></details>';
+ h+='<details class="al-fold" open><summary>紀錄<span class="r">'+S.recs.length+' 筆（demo）</span></summary><div class="al-fbody"><div class="al-list">'+S.recs.map(recHTML).join('')+'</div></div></details>';
+ return h;
+}
+function posHTML(S){
+ const P=S.pos;
+ if(!P) return '<div class="al-pos"><div class="hd"><span>現在的部位</span></div><div class="none">現在沒有部位。</div></div>';
+ const per=(P.px-P.en)*(P.dir==='long'?1:-1), tot=per*P.q;
+ return '<div class="al-pos live"><div class="hd"><span>現在的部位</span><span>沒平掉就 <b>'+P.exit+' 自動平</b></span></div>'+
+  '<div class="who"><span class="ses n">☾ 夜盤</span> 做多 <b>'+P.q+' 口</b></div>'+
+  '<div class="big '+sgn(per)+'">'+pm(per)+'<u>點／口</u></div>'+
+  '<div class="kv"><span>'+P.q+' 口合計 <b class="'+sgn(tot)+'">'+pm(tot)+' 點</b>（約 '+pm(tot*10)+' 元）</span><span>進場 <b>'+money(P.en)+'</b></span><span>現價 <b>'+money(P.px)+'</b></span><span>停損 <b>'+money(P.sl)+'</b>／不設停利</span></div>'+
+  '<div class="r2">停損、平倉都是 <b>'+P.q+' 口一起</b>。</div></div>';
+}
+function monHTML(S){
+ const M=S.mon, [a,b]=S.run, cap=M.cap||400*(a+b), used=M.pnl<0?Math.min(100,-M.pnl/cap*100):0;
+ const sp=v=>'<span class="'+sgn(v)+'">'+pm(v)+'</span>';
+ return '<div class="al-mon"><div class="h">本月（'+M.m+' 月）</div><div class="tot">'+sp(M.pnl)+'<u>點</u></div>'+
+  '<table><tr><td><span class="ses d">☀ 日盤</span> 多方聯軍</td><td class="p">'+sp(M.d[0])+' 點</td><td class="n">'+M.d[1]+' 筆</td></tr>'+
+  '<tr><td><span class="ses n">☾ 夜盤</span> 夜盤跟勢</td><td class="p">'+sp(M.n[0])+' 點</td><td class="n">'+M.n[1]+' 筆</td></tr></table>'+
+  '<div class="hd2"><span class="k">本月風控・日盤＋夜盤共用</span><span class="v">'+pm(M.pnl)+' 點　/　上限 −'+money(cap)+'</span></div>'+
+  '<div class="bar"><i style="width:'+used.toFixed(1)+'%"></i></div>'+
+  '<div class="n">上限 ＝ 400 點 ×（'+a+'＋'+b+' 口）＝ <b>'+money(400*(a+b))+'</b>；點數是<b>每一筆的合計</b>（多口已經乘進去）。'+(M.capNote?'<br>'+esc(M.capNote):'')+'</div></div>';
+}
+function recHTML(r){
+ const cls=r.p>0?' win':(r.p<0?' loss':'');
+ const per=r.per!=null?r.per:r.p/r.q;
+ return '<div class="trade'+cls+'"><div class="tr-top"><span class="tr-date">'+esc(r.d)+'</span>'+
+  '<span class="dir '+r.dir+'">'+(r.dir==='l'?'▲ 多':'▼ 空')+'</span>'+
+  (r.q>1?'<span class="qty">×'+r.q+'</span>':'')+
+  '<span class="tr-px">'+money(r.en)+'<span class="arrow">→</span>'+money(r.ex)+' <span class="tag">'+esc(r.tag)+'</span></span>'+
+  '<span class="tr-res '+(r.p>0?'r-win':'r-loss')+'">'+pm(r.p)+'</span></div>'+
+  '<div class="al-meta">'+(r.q>1?('<b>'+r.q+' 口・每口 '+pm(per)+'</b> · '):'')+(r.s==='n'?'☾ ':'☀ ')+r.meta+'</div></div>';
+}
+
+/* ══════════ 【帳戶】：帳戶總覽＋目標卡（只加一行口數＋表格標記）══════════ */
+function acctHTML(S){
+ const [a,b]=S.run, done=UP.step==='done'&&S.offer;
+ const pr=Math.max(0,Math.min(100,(S.eq-S.prevThr)/(S.next[0]-S.prevThr)*100));
+ let line;
+ if(S.offer&&!done) line='<div class="gl-lots att" id="lotsline"><span>口數：可以升到 <b>'+lbl(S.offer.to[1],S.offer.to[2])+'</b> 了，要到【自動下單】按確認（'+esc(S.offer.until)+' 前）。</span><button class="go" data-tab="fire">到自動下單</button></div>';
+ else if(S.notice) line='<div class="gl-lots att" id="lotsline"><span>口數：<b>11/18</b> 起自動退回 <b>1＋1</b>（權益 8.31 萬 < 8.5 萬）。</span><button class="go" data-tab="fire">看口數</button></div>';
+ else line='<div class="gl-lots" id="lotsline"><span>現在做 <b>'+lbl(a,b)+'</b>'+(done?'（<b>11/3</b> 起 2＋1）':'')+
+   (!S.offer&&S.eq>=S.next[0]?'・這個月卡在'+S.conds.filter(c=>!c.ok).map(c=>'「'+c.k+'」').join('、'):'')+
+   '・下次檢查 '+esc(S.check)+(S.floor?'・掉到 '+wan(S.floor)+' 會自動退一級':'')+'</span><button class="go" data-tab="fire">看口數</button></div>';
+ const rows=LADDER.map((L,i)=>{
+   const lv=i+1, reached=S.eq>=L[0], running=(lv===S.runLv)||(S.runLv===0&&lv===1);
+   let mk='';
+   if(running) mk='<span class="mk run">現在在跑</span>';
+   else if(reached&&lv>S.runLv) mk='<span class="mk wait">'+(S.offer&&!done&&lv===S.offer.toLv?'權益到了・等你確認':(done&&lv===S.offer.toLv?'已確認・11/3 起':'權益到了・條件沒過'))+'</span>';
+   return '<tr class="'+(reached&&!running&&lv<S.runLv?'done':'')+(running?' now':'')+'"><td>'+(lv<=S.runLv&&!running?'✓ ':'')+wan(L[0])+'</td><td>'+lbl(L[1],L[2])+'</td><td>'+L[3]+'%</td><td>−'+money(23883*L[1])+'</td><td>'+mk+'</td></tr>';
+ }).join('');
+ return '<div class="ac"><div class="hd"><span class="t">帳戶總覽</span><span class="at">'+S.date.slice(5).replace('-','/')+' '+S.time+'　券商端</span></div>'+
+   '<div class="big">'+money(S.eq)+'</div><div class="sub">今日 '+pm(S.dayPl)+'（demo 省略細項）</div>'+
+   '<div class="line">錢夠下一筆：現在 '+lbl(a,b)+' 最多同時壓 '+Math.max(a,b)+' 口保證金（約 '+money(MARGIN*Math.max(a,b))+'）。</div></div>'+
+  '<div class="ac gl"><div class="hd"><span class="t">目標：滾到 50 萬（10＋4 口）</span><span class="at">從 09/30 起算</span></div>'+
+   /* ⚠️ 權益夠了 ≠ 已經升級：這句一定要分開講（goal.py 現在那句只看權益，會寫出「還差 0 元」或把沒升的級數當成現在） */
+   '<div class="gl-pos">現在 '+money(S.eq)+' 元，'+(S.runLv===0?'在跑起始級 1＋1':'在跑第 '+S.runLv+' 級（'+lbl(a,b)+' 口）')+'。'+
+     (S.eq>=S.next[0]
+       ?('權益已經夠「'+wan(S.next[0])+'・'+lbl(S.next[1],S.next[2])+'」，'+(S.offer?(done?'你已確認，11/3 起升級。':'等你到【自動下單】確認。'):('但這個月卡在'+S.conds.filter(c=>!c.ok).map(c=>'「'+c.k+'」').join('、')+'，'+esc(S.check)+'再檢查。')))
+       :('離下一級「'+wan(S.next[0])+'・'+lbl(S.next[1],S.next[2])+'」還差 '+money(S.next[0]-S.eq)+' 元。'))+'</div>'+
+   '<div class="gl-bar"><i style="width:'+pr.toFixed(1)+'%"></i></div>'+
+   '<div class="gl-scale"><span>'+(S.prevThr?wan(S.prevThr):'0')+'</span><span>下一級 '+wan(S.next[0])+'</span></div>'+
+   line+
+   '<div class="demo-omit">demo 省略：計畫線圖、「保守線到／目標線到」兩欄、每月實際（照現在，不動）。</div>'+
+   '<div class="gl-h">每一級：要多少錢、做幾口</div>'+
+   '<div class="gl-tw"><table class="gl-t"><thead><tr><th>權益</th><th>聯軍＋跟勢</th><th>一年內要補錢</th><th>停損失靈最壞一次</th><th>狀態</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+   '<div class="gl-notes"><div>・「現在在跑」＝程式真的在送的口數；權益到了不等於已經升（要條件都過、你按確認）。還沒到 7 萬時也是 1＋1，標在 7 萬那一列。</div>'+
+   '<div>・升級：每月第一個交易日檢查、一次一級、升完 3 個月不再升；權益掉到這一級門檻的 85% 以下，隔天自動退一級。</div>'+
+   '<div>・要補錢機率、最壞一次是回測推估、不是保證。</div></div></div>';
+}
+
+/* ══════════ 手機監控（淺色；⛔ 零按鈕）══════════ */
+function phoneHTML(S){
+ const [a,b]=S.run, P=S.pos, done=UP.step==='done'&&S.offer;
+ const warn=(done?[]:S.phone.warn);
+ const row=(k,v)=>'<div class="row"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>';
+ let pos;
+ if(P){ const per=(P.px-P.en), tot=per*P.q;
+   pos='<div class="big win">'+pm(per)+' <small class="dim" style="font-size:14px">點／口</small></div>'+row('方向','<b>做多 '+P.q+' 口</b>')+row(P.q+' 口合計','<span class="num win">'+pm(tot)+' 點</span>')+row('進場','<span class="num">'+money(P.en)+'</span>');
+ } else pos='<div class="big dim" style="font-size:20px">沒有部位</div>';
+ const cap=400*(a+b);
+ return '<div class="ph-wrap"><div class="ph">'+
+  '<div class="top"><h1>儀表板監控</h1><span class="upd">更新 1 分鐘前</span></div>'+
+  '<section class="card"><div class="alive"><span class="dot"></span><div><div class="t">面板正常運作中</div><div class="s">最後回報 1 分鐘前（'+S.time+'）</div></div></div></section>'+
+  '<section class="card"><h2>現在的部位</h2>'+pos+'</section>'+
+  '<section class="card"><h2>本月風控（日盤＋夜盤共用）</h2>'+row('本月自動單','<span class="num '+(S.mon.pnl>0?'win':(S.mon.pnl<0?'loss':''))+'">'+pm(S.mon.pnl)+' 點</span>')+row('上限','<span class="num">−'+money(cap)+' 點</span>')+'</section>'+
+  '<section class="card"><h2>日盤自動下單</h2>'+row('做法','多方聯軍・<b>'+a+' 口</b>')+'</section>'+
+  '<section class="card"><h2>夜盤自動下單</h2>'+row('做法','夜盤跟勢・今晚 <b>'+(S.tonightB>=2?b:Math.max(1,b-1))+' 口</b>')+'</section>'+
+  '<section class="card new"><h2>帳戶（券商端）<span class="newtag">新：一行</span></h2>'+row('權益總值','<span class="num">'+money(S.eq)+' 元</span>')+
+    row('口數','<b>'+esc(done?'1＋1（11/3 起 2＋1）':S.phone.acct)+'</b>')+'<div class="msg'+(warn.length?' gold':'')+'">'+esc(done?'已在電腦上確認升級，11/3 日盤起 2＋1。':S.phone.acctMsg)+'</div></section>'+
+  (warn.length?'<section class="card warn new"><h2>要注意的事<span class="newtag">新：口數事件</span></h2>'+warn.map(x=>'<div class="item">⚠️ '+esc(x)+'</div>').join('')+'</section>':'')+
+  '</div><div class="ph-note"><b>手機只加兩件事，⛔ 一顆按鈕都沒有</b>（手機頁結構上不能操作任何東西）：<br>'+
+  '① 帳戶卡多一行「口數」＋一句說明（藍色虛線框）。<br>'+
+  '② 有事才進「要注意的事」：<b>可以升級</b>（提醒要回電腦按）、<b>剛被減級</b>（哪天、為什麼，顯示 3 天）。卡在條件不算事，只寫在帳戶卡那句。<br><br>'+
+  '日盤／夜盤卡的「做法」後面帶口數；部位卡多口時寫「點／口」＋合計。<br><br>'+
+  '<span style="color:var(--faint)">手機實際是跟著系統深淺色；這裡用淺色那組示意。</span></div></div>';
+}
+
+/* ══════════ 繪製 ══════════ */
+const TABS=[['live','即時',1],['acct','帳戶'],['sim','模擬',1],['hc','健檢',1],['fire','自動下單']];
+function paint(){
+ const S=SC[CUR];
+ document.getElementById('scn').innerHTML=ORDER.map(k=>'<button class="'+(k===CUR?'on':'')+'" data-scn="'+k+'">'+SC[k].btn+'</button>').join(' ');
+ document.getElementById('vw').innerHTML=[['fire','電腦：自動下單'],['acct','電腦：帳戶'],['phone','手機監控']].map(x=>'<button class="'+(TAB===x[0]?'on':'')+'" data-tab="'+x[0]+'">'+x[1]+'</button>').join(' ');
+ document.getElementById('say').innerHTML=S.say;
+ document.getElementById('ck').textContent=S.date.replace(/-/g,'/')+'（'+S.wd+'）';
+ document.getElementById('ckw').textContent=S.time+'　demo 的日期';
+ const dotFire=!!((S.offer&&UP.step!=='done')||S.notice);
+ document.getElementById('tabs').innerHTML=TABS.map(t=>'<button class="'+(TAB===t[0]?'on':'')+(t[2]?' na':'')+'"'+(t[2]?' title="demo 沒做這一頁"':' data-tab="'+t[0]+'"')+'>'+t[1]+(t[0]==='fire'&&dotFire?'<i class="dot"></i>':'')+'</button>').join('');
+ const A=document.getElementById('tab-acct'), F=document.getElementById('tab-fire'), Ph=document.getElementById('tab-phone');
+ A.hidden=TAB!=='acct'; F.hidden=TAB!=='fire'; Ph.hidden=TAB!=='phone';
+ if(TAB==='acct') A.innerHTML=acctHTML(S);
+ if(TAB==='fire') F.innerHTML=fireHTML(S);
+ if(TAB==='phone') Ph.innerHTML=phoneHTML(S);
+}
+document.addEventListener('click',e=>{
+ const t=e.target;
+ const sc=t.closest('[data-scn]'); if(sc){ CUR=sc.dataset.scn; UP={step:'idle'}; paint(); return; }
+ const tb=t.closest('[data-tab]'); if(tb){ TAB=tb.dataset.tab; paint(); return; }
+ if(t.closest('[data-jump]')){ const el=document.getElementById('allots'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+ if(t.closest('[data-upon]')){ UP.step='confirm'; paint();                       // 第一段：只換畫面（正式版：零請求）
+   const c=document.querySelector('.lt-act .al-conf'); if(c) c.scrollIntoView({behavior:'smooth',block:'nearest'}); return; }
+ if(t.closest('[data-upno]')){ UP.step='idle'; paint(); return; }
+ if(t.closest('[data-upyes]')){ UP.step='busy'; paint();                          // 第二段：正式版這裡才 POST
+   setTimeout(()=>{ UP.step='done'; paint(); },700); return; }
+ if(t.closest('[data-undo]')){ UP.step='idle'; paint(); return; }                 // 撤回＝安全方向，一鍵、不確認
+});
+
+/* ══════════ ?measure：實際量版面（getBoundingClientRect，⛔ 不用字級推算）══════════ */
+function measure(){
+ const out=[], vw=innerWidth;
+ const q=(sel)=>{ const el=document.querySelector(sel); if(!el||el.offsetParent===null&&getComputedStyle(el).position!=='fixed') return null; const r=el.getBoundingClientRect(); return Math.round(r.width*10)/10+'×'+Math.round(r.height*10)/10; };
+ ORDER.forEach(k=>{
+  CUR=k; UP={step:'idle'};
+  TAB='fire'; paint();
+  out.push(k+' 自動下單 #allots='+q('#allots')+'  .al-alarm='+q('.al-alarm')+'  .al-row2='+q('.al-row2')+'  .trade(首列)='+q('.al-list .trade')+'  .al-pill='+q('.al-pill'));
+  if(SC[k].offer){ UP.step='confirm'; paint(); out.push(k+' 確認條 .lt-act='+q('.lt-act')+'  .lt-cmp='+q('.lt-cmp')+'  #allots='+q('#allots'));
+                   UP.step='done'; paint(); out.push(k+' 已確認 .lt-done='+q('.lt-done')+'  #allots='+q('#allots')); UP.step='idle'; }
+  TAB='acct'; paint();
+  out.push(k+' 帳戶 #lotsline='+q('#lotsline')+'  .ac.gl='+q('.ac.gl'));
+  TAB='phone'; paint();
+  out.push(k+' 手機 .ph='+q('.ph')+'  帳戶卡='+q('.ph .card.new')+'  要注意='+q('.ph .card.warn'));
+  ['fire','acct','phone'].forEach(tb=>{ TAB=tb; UP.step=SC[k].offer?'confirm':'idle'; paint();
+    const sw=document.documentElement.scrollWidth, cw=document.documentElement.clientWidth;
+    if(sw>cw) out.push('  ⚠ 橫向溢出 '+k+'/'+tb+' scrollWidth '+sw+' > '+cw); });
+  UP.step='idle';
+ });
+ const o=document.getElementById('mout'); o.hidden=false; o.textContent='viewport '+vw+'×'+innerHeight+'\n'+out.join('\n');
+ CUR='now'; TAB='fire'; UP={step:'idle'};
+}
+/* 網址參數（方便直接分享某一幕）：?s=offer&t=fire&step=confirm */
+(function(){ const p=new URLSearchParams(location.search);
+ if(SC[p.get('s')]) CUR=p.get('s');
+ if(['fire','acct','phone'].indexOf(p.get('t'))>=0) TAB=p.get('t');
+ if(['confirm','done'].indexOf(p.get('step'))>=0&&SC[CUR].offer) UP.step=p.get('step'); })();
+paint();
+if(/[?&]measure/.test(location.search)){ (document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(measure); }
+</script>
+</body></html>

@@ -100,7 +100,15 @@ REAL_PATHS = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.T
               "NF.ARM_FLAG": NF.ARM_FLAG, "NF.NF_DIR": NF.NF_DIR,
               # ⛔ /api/replay 那條路會寫檔（`save_replay`）。2026-09-09 加測那條路時
               #    一起導走 —— 漏掉就是往他真的 replay_log/ 寫進測試垃圾。
-              "LP.REPLAY_DIR": LP.REPLAY_DIR}
+              "LP.REPLAY_DIR": LP.REPLAY_DIR,
+              # ⭐ 2026-10-14 口數：/api/lots/upgrade／revoke 會寫 LOTS_LEVEL.json 與 lots/ 紀錄；
+              #    apply 要讀 equity/ ⇒ 三個都導走（⛔ 漏一個就是動到他真的口數狀態）
+              "LP.lots.LEVEL_FILE": LP.lots.LEVEL_FILE, "LP.lots.LOG_DIR": LP.lots.LOG_DIR,
+              "LP.EQUITY_DIR": LP.EQUITY_DIR}
+LP.lots.LEVEL_FILE = TMP / "LOTS_LEVEL.json"
+LP.lots.LOG_DIR = TMP / "lots"
+LP.EQUITY_DIR = TMP / "equity"
+REAL_LOTS_EXISTED = REAL_PATHS["LP.lots.LEVEL_FILE"].exists()
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"
@@ -509,6 +517,8 @@ _POSTS = ["/api/real/enter", "/api/real/close", "/api/fire/on", "/api/fire/off",
           "/api/nightfire/on", "/api/nightfire/off",
           # ⭐ 2026-09-24 風控規則 B 的「手動解除」：解除後單就送得出去 ⇒ 同一排攻擊一樣要擋
           "/api/risk/override",
+          # ⭐ 2026-10-14 口數：升級會放大真錢曝險（跟打開自動下單同一級）；撤回是安全方向但一樣過六道
+          "/api/lots/upgrade", "/api/lots/revoke",
           # ⭐ 2026-09-24【交易分析師】面板上讀過（只寫讀過狀態，但一樣要過六道防護）
           "/api/analyst/read",
           "/api/enter", "/api/close", "/api/note", "/api/replay",
@@ -813,6 +823,101 @@ c, ct, b = post("/api/replay", b'{"date":"2026-09-09","judged":false}')
 say(c == 200, "  尺的自證：沒有判斷（judged=false）那一種也照樣收", f"{c} {b[:70]}")
 
 # ── ⑤ ⛔ 全程一張單都沒有出去、也沒有碰他真的資料夾
+print("\n=== ⑥ ⭐ 2026-10-14 口數：POST /api/lots/upgrade／/api/lots/revoke（真的打進去）===")
+# ⛔ 升級條件的那三樣（執行品質／退休標準／事故）換成治具：⛔ 不讀他真的帳本與模擬（暫存區也沒有）
+_L = LP.lots
+_real_gather = _L._gather
+_GOOD = ({"ok": True, "n": 30, "need": 30, "slip_avg": 3.0, "errors": []},
+         {"union": "ok", "trend": "ok"}, None, [])
+_GATHER = {"v": _GOOD}
+_L._gather = lambda ctx: _GATHER["v"]
+from datetime import date as _date, datetime as _dt  # noqa: E402
+_today = _date.today()
+_month = str(_today)[:7]
+LP.EQUITY_DIR.mkdir(parents=True, exist_ok=True)
+(LP.EQUITY_DIR / (str(_today)[:4] + ".jsonl")).write_text(
+    json.dumps({"date": str(_today), "equity": 106000.0}) + "\n", encoding="utf-8")
+LP._EQ_HIST["key"] = None
+_save_m = LP.EQUITY.get("m")
+LP.EQUITY["m"] = None
+
+
+def _lots_seed(ok=True, to=2, frm=1, sid=None):
+    st = json.loads(json.dumps(_L.DEFAULT))
+    # ⭐ 10-14 新規則：建議每天出、id＝「建議那天:從>到」、1＋1 那一次是試車（kind trial）
+    st.update(level=frm, checked=str(_today),
+              suggest={"ok": ok, "id": sid or ("%s:%d>%d" % (_today, frm, to)), "from": frm, "to": to,
+                       "kind": "trial", "until": None, "lots": "2＋1",
+                       "why": [] if ok else ["權益還沒到"], "made": str(_today)})
+    _L.LEVEL_FILE.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+
+
+def _lots_state():
+    return _L.read_state()[0]
+
+
+_lots_seed()
+_oid = "%s:1>2" % _today
+c, ct, b = get("/api/fire/state")
+j = as_json(b) or {}
+say(isinstance(j.get("lots"), dict) and ((j["lots"].get("offer") or {}).get("id")) == _oid,
+    "  GET /api/fire/state 端得出口數那一份（含這個月的建議 id）", str((j.get("lots") or {}).get("offer"))[:80])
+say(isinstance((j.get("lots") or {}).get("verdict"), dict) and (j["lots"].get("phone") or {}).get("warn"),
+    "    句子是後端組好的（verdict／phone.warn）", str((j.get("lots") or {}).get("verdict"))[:60])
+c, ct, b = get("/api/state")
+say(((as_json(b) or {}).get("lots") is None) or isinstance((as_json(b) or {}).get("lots"), dict),
+    "  /api/state 帶的 lots 是一小份（或還沒跑到）", str((as_json(b) or {}).get("lots")))
+# ── 尺的自證：路由真的中了（回的是路由自己的話，⛔ 不是 HTML、⛔ 不是守衛擋的 403）
+c, ct, b = post("/api/lots/upgrade", b'{}')
+say(c == 400 and "看不懂" in (b or ""), "  尺的自證：body 沒有 offer_id ⇒ 走到路由自己的欄位檢查（400）", f"{c} {b[:60]}")
+for _bad, _why in (('"%s:1>3"' % _today, "跳級"), ('"%s:2>3"' % _today, "建議以外的級"),
+                   ('"2000-01-03:1>2"', "舊的建議"), ('123', "數字")):
+    c, ct, b = post("/api/lots/upgrade", ('{"offer_id":%s}' % _bad).encode())
+    say(c in (400, 409) and _lots_state()["level"] == 1 and _lots_state()["pending"] is None,
+        "  ⛔ offer_id＝%s（%s）⇒ 拒絕、級數沒變、沒有 pending" % (_bad, _why), f"{c} {(b or '')[:60]}")
+# 當下重驗：條件掉了 ⇒ 拒絕
+_GATHER["v"] = (_GOOD[0], {"union": "ok", "trend": "watch"}, None, [])
+c, ct, b = post("/api/lots/upgrade", json.dumps({"offer_id": _oid}).encode())
+say(c == 409 and _lots_state()["pending"] is None, "  ⛔ 後端重驗：夜盤跟勢在「觀察」⇒ 409、不升", f"{c} {(b or '')[:70]}")
+_GATHER["v"] = _GOOD
+# 正確的那一個 ⇒ 200、pending 下一個交易日
+c, ct, b = post("/api/lots/upgrade", json.dumps({"offer_id": _oid}).encode())
+_st = _lots_state()
+say(c == 200 and (as_json(b) or {}).get("ok") and (_st["pending"] or {}).get("to") == 2,
+    "  ✔ 這個月建議的那一級 ⇒ 200、寫成 pending（下一個交易日生效）", f"{c} {(b or '')[:70]}")
+chk("    生效日 ＝ 下一個平日", (_st["pending"] or {}).get("eff"), str(_L.next_weekday(_today)))
+chk("    ⛔ 級數本身還沒變（今天照舊）", _st["level"], 1)
+# 連按兩下（同時兩個請求）⇒ 只升一級
+import concurrent.futures as _cf  # noqa: E402
+_lots_seed()
+with _cf.ThreadPoolExecutor(4) as _ex:
+    _rs = list(_ex.map(lambda _i: post("/api/lots/upgrade", json.dumps({"offer_id": _oid}).encode())[0], range(4)))
+_st = _lots_state()
+say(sorted(_rs).count(200) == 1 and (_st["pending"] or {}).get("to") == 2 and _st["level"] == 1,
+    "  ⛔ 四個請求同時打（連按）⇒ 只有一個成功、只升一級", str(sorted(_rs)))
+# 撤回：一鍵
+c, ct, b = post("/api/lots/revoke")
+say(c == 200 and _lots_state()["pending"] is None, "  撤回 ⇒ 200、pending 清掉", f"{c} {(b or '')[:60]}")
+c, ct, b = post("/api/lots/revoke")
+say(c == 409 and "沒有等著生效" in (b or ""), "  再撤一次 ⇒ 409（沒有東西可撤）", f"{c} {(b or '')[:60]}")
+# 只收 POST；路由精確比對
+for m in ("GET", "HEAD"):
+    for p in ("/api/lots/upgrade", "/api/lots/revoke"):
+        c, ct2, b = _req(p, m)
+        say(c == 405, f"  {m} {p} ⇒ 405", str(c))
+for p in ("/api/lots/upgradeX", "/api/lots/upgrade/", "/api/lots/upgrade?offer_id=" + _oid, "/api/lots",
+          "/api/lots/revokeX"):
+    c, ct, b = post(p, json.dumps({"offer_id": _oid}).encode())
+    say(c in (400, 404, 405) or (as_json(b) is None), f"  POST {p} 不是那個端點", f"{c}")
+say(_lots_state()["pending"] is None and _lots_state()["level"] == 1, "  ⇒ 上面那一排一個都沒有升到級")
+# 守衛：沒 token ⇒ 403 且沒升
+c, ct, b = _req("/api/lots/upgrade", "POST", json.dumps({"offer_id": _oid}).encode(),
+                {"Content-Type": "application/json", "X-Panel": "1"})
+say(c == 403 and _lots_state()["pending"] is None, "  ⛔ 沒有 token ⇒ 403、沒升", str(c))
+_L._gather = _real_gather
+LP.EQUITY["m"] = _save_m
+chk("  ⛔ 整段 broker.enter／close 一次都沒被呼叫（升級不會送單）", SENT, [])
+
 print("\n=== ⑤ ⛔ 收尾 ===")
 chk("  ⛔ broker.enter / broker.close 全程 0 次", SENT, [])
 for k, real in REAL_PATHS.items():
@@ -820,12 +925,16 @@ for k, real in REAL_PATHS.items():
            "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
            "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
            "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "LP.REPLAY_DIR": LP.REPLAY_DIR,
-           "NF.ARM_FLAG": NF.ARM_FLAG, "NF.NF_DIR": NF.NF_DIR}[k]
+           "NF.ARM_FLAG": NF.ARM_FLAG, "NF.NF_DIR": NF.NF_DIR,
+           "LP.lots.LEVEL_FILE": LP.lots.LEVEL_FILE, "LP.lots.LOG_DIR": LP.lots.LOG_DIR,
+           "LP.EQUITY_DIR": LP.EQUITY_DIR}[k]
     say(now != real and str(TMP) in str(now), f"  {k} 全程都在暫存區", str(now))
 say(not REAL_ARM.exists(),
     "  ⛔⛔ 真的 AUTO_ORDERS_ON **不存在**（測試絕對不可以把它建出來）")
 say(REAL_NARM.exists() == REAL_NARM_EXISTED,
     "  ⛔⛔ 真的 NIGHT_ORDERS_ON 沒被碰（存在與否跟開跑前一樣）", str(REAL_NARM_EXISTED))
+say(REAL_PATHS["LP.lots.LEVEL_FILE"].exists() == REAL_LOTS_EXISTED,
+    "  ⛔⛔ 真的 LOTS_LEVEL.json 沒被碰（存在與否跟開跑前一樣）", str(REAL_LOTS_EXISTED))
 
 srv.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)

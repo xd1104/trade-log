@@ -9,6 +9,9 @@
 規則（Benson 2026-09-24 逐條確認）：
   ① 只算**自動下的真單**（autofire／nightfire 帳本裡 `result ok` 的那幾口），⛔ 他手動的單不算。
   ② 上限 ＝ `CAP_PER_LOT`（800 點）× 口數（`broker.QTY`）。點數 ＝ `real_trades` 的 points × qty。
+     ⭐ 2026-10-14 多口：上限 ＝ `CAP_PER_LEG`（400）×（聯軍 a ＋ 跟勢 b），a、b ＝ 現在這一級的階梯口數
+     （`lots.cap_lots()`，送單與畫面都傳這一份）；1＋1 ＝ 800 跟原本一樣。
+     points 是**每口**點數（多口時是各口出場的加權平均），qty 是實際成交的口數 ⇒ 乘起來就是那一趟的總點數。
   ③ 夜盤那一口算**開盤那晚（E）的月份**（7/31 晚上那筆算 7 月，雖然它 8/1 凌晨才平）。
   ④ 跨過上限的那一筆照算；之後當月剩下的日子**日盤、夜盤都不送**（模擬照常記）。
   ⑤ 下個月自動恢復。
@@ -30,7 +33,8 @@ FIRE_DIR = HERE / "autofire"            # ⛔ 唯讀（auto_fire 的帳本）
 NF_DIR = HERE / "nightfire"             # ⛔ 唯讀（night_fire 的帳本）
 TRADE_DIR = HERE / "real_trades"        # ⛔ 唯讀（broker 的成績單；檔名＝**出場**那天）
 OVERRIDE_FLAG = HERE / "RISK_OVERRIDE"  # ⛔ gitignore；⛔ 這個模組不准建它
-CAP_PER_LOT = 800.0                     # 每口每月上限（點）
+CAP_PER_LOT = 800.0                     # 每口每月上限（點）——舊算法（兩條同口數時）
+CAP_PER_LEG = 400.0                     # ⭐ 2026-10-14：上限 ＝ 400 ×（聯軍 a ＋ 跟勢 b）（Benson 09-30 同意）
 # 有了這條規則之後，兩條真單 1 口在回測裡「從高點最多回落幾點」（risk_rules_results_2026-09-24.md 的 B 800）。
 # ⛔ 只拿來算「每口建議本金」＝ 保證金 ＋ 這個數 × 2（未來可能比歷史更糟）× 每點金額。
 DD_PER_LOT = 2345.0
@@ -87,12 +91,15 @@ def auto_entries(month, fire_dir=None, nf_dir=None):
         if o.get("rec") == "result" and o.get("ok") and _num(o.get("entry")) \
                 and str(o.get("date", ""))[:7] == month:
             out.append({"sess": "day", "d": str(o["date"]),
-                        "entry_time": str(o.get("entry_time") or ""), "entry": float(o["entry"])})
+                        "entry_time": str(o.get("entry_time") or ""), "entry": float(o["entry"]),
+                        # ⭐ 2026-10-14：lots.incidents()（停損失靈事故）要比「賠的有沒有超過自己的停損」
+                        "sl_points": o.get("sl_points")})
     for o in _jsonl(nf_dir / ("%s.jsonl" % month)):
         if o.get("rec") == "result" and o.get("ok") and _num(o.get("entry")) \
                 and str(o.get("E", ""))[:7] == month:
             out.append({"sess": "night", "d": str(o["E"]),
-                        "entry_time": str(o.get("entry_time") or ""), "entry": float(o["entry"])})
+                        "entry_time": str(o.get("entry_time") or ""), "entry": float(o["entry"]),
+                        "sl_points": o.get("sl_points")})
     out = [x for x in out if x["d"] >= RULE_START]          # ⭐ 規則開始那天以前的不算
     out.sort(key=lambda x: (x["d"], x["sess"] == "night"))
     return out
@@ -142,14 +149,33 @@ def override_month(flag=None):
     return None
 
 
-def state(month=None, qty=1, today=None, fire_dir=None, nf_dir=None, trade_dir=None, flag=None):
+def cap_of(qty=1, lots=None):
+    """
+    上限（點）。⭐ 2026-10-14 起送單與畫面都傳 `lots`＝(聯軍 a, 跟勢 b)（`lots.cap_lots()`）⇒ 400 ×（a＋b）
+    （Benson 09-30 同意；a＝b 時跟原本 800 × 口數一樣、1＋1 ＝ 800）。沒傳 ⇒ 舊算法 800 × qty。
+    ⛔ a、b 看不懂 ⇒ 退回 1＋1 ＝ 800（⛔ 不放大）。
+    """
+    if lots is not None:
+        try:
+            a, b = (int(x) for x in lots)
+            if a < 0 or b < 0 or a + b <= 0:
+                raise ValueError
+        except Exception:                       # noqa: BLE001
+            a, b = 1, 1
+        return CAP_PER_LEG * (a + b)
+    return CAP_PER_LOT * max(int(qty or 1), 1)
+
+
+def state(month=None, qty=1, today=None, fire_dir=None, nf_dir=None, trade_dir=None, flag=None, lots=None):
     """
     ⇒ 這個月的風控狀態（面板、手機、送單前都用這一份）。⛔ 讀檔失敗 ⇒ `err` 有值、`blocked=True`。
+    `lots`＝(a, b) ⇒ 上限 400 ×（a＋b）（見 cap_of）。
     """
     today = today or date.today()
     month = month or _month_of(today)
-    cap = CAP_PER_LOT * max(int(qty or 1), 1)
+    cap = cap_of(qty, lots)
     base = {"month": month, "cap": cap, "qty": int(qty or 1), "cap_per_lot": CAP_PER_LOT,
+            "lots": (list(lots) if lots is not None else None),
             "since": RULE_START if RULE_START[:7] == month else None,
             "pnl": 0.0, "n": 0, "open": 0, "unknown": 0, "trades": [],
             "hit": False, "override": False, "blocked": False, "err": None}
@@ -194,7 +220,7 @@ def state(month=None, qty=1, today=None, fire_dir=None, nf_dir=None, trade_dir=N
     return base
 
 
-def blocked(d, qty=1):
+def blocked(d, qty=1, lots=None):
     """送單前問一次：`d` 是這一口算哪一天（日盤＝今天；夜盤＝開盤那晚 E）。⇒ (擋不擋, 那句話, state)。"""
-    s = state(month=_month_of(d), qty=qty)
+    s = state(month=_month_of(d), qty=qty, lots=lots)
     return bool(s["blocked"]), s.get("msg") or "", s

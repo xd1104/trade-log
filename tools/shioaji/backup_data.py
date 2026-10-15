@@ -51,6 +51,9 @@ PANEL_ITEMS = [   # trade-log/tools/shioaji 底下、只在本機的資料（程
     "tick_hist", "tick_logs", "tmf_1min.csv", "txf_1min.csv", "index_1min.csv", "intraday.csv",
     "us_bars", "us_spy", "stats.json", "calibration.json", "my_trades.json", "practice_trades",
     "replay_log", "daily_reports", "morning_logs", "autotest", "sim_orders", "review_cache.json",
+    # ⭐ 2026-10-14 多口：目前在第幾級／試車進度（LOTS_LEVEL.json）與口數紀錄（lots/）——
+    #    電腦重灌少了它會退回 1＋1、試車通過也要重跑（QA 10-14 建議）
+    "LOTS_LEVEL.json", "lots",
 ]
 PANEL_SKIP_DIRS = {"cache", "__pycache__"}
 RESEARCH = ROOT / "tick-research"

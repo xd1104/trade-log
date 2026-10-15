@@ -364,7 +364,7 @@
     var d = s.day;
     if (d) {
       var h = '<h2>日盤自動下單 <span class="pill ' + (d.armed ? 'on' : '') + '">' + esc(modeTxt(d.armed, d.live)) + '</span></h2>' +
-        row('做法', esc(d.method_name || d.method || '—')) + row('今天', esc(d.today || ''));
+        row('做法', esc(d.method_name || d.method || '—') + (s.lots && s.lots.day ? '・' + esc(s.lots.day) : '')) + row('今天', esc(d.today || ''));
       var today = (d.days || [])[0];
       if (today && today.date === d.today) {
         if (today.trade) {
@@ -397,7 +397,7 @@
     var n = s.night;
     if (n) {
       var hn = '<h2>夜盤自動下單 <span class="pill ' + (n.on ? 'on' : '') + '">' + esc(modeTxt(n.on, n.live)) + '</span></h2>' +
-        row('做法', esc(n.method_name || n.method || '—')) +
+        row('做法', esc(n.method_name || n.method || '—') + (s.lots && s.lots.night ? '・今晚 ' + esc(s.lots.night) : '')) +
         (n.tonight ? row('今晚幾點看', esc(n.tonight.look_at || '')) : '');
       // ⭐ 2026-10-14：送出了的那一晚，出場價與點數一起列（面板唯讀比對券商成績單的結果；對不到就照舊不寫點數）。
       //    同一晚的「04:58 平倉完成」那一列在有點數時就不再重複列。日期寫「那一晚」＋「晚」。
@@ -426,6 +426,9 @@
       row('權益總值', '<span class="num">' + (e.equity != null ? Math.round(e.equity).toLocaleString() + ' 元' : '—') + '</span>') +
       row('今日損益', '<span class="num ' + cls(e.day_pl) + '">' + (e.day_pl != null ? pm(e.day_pl) + ' 元' : '—') + '</span>') +
       row('查詢時間', esc(e.at || '—')) +
+      // ⭐ 2026-10-14 口數：一行＋一句（整句面板算好的；⛔ 手機不自己判斷、⛔ 一顆按鈕都沒有）
+      (s.lots && s.lots.label ? row('口數', '<b>' + esc(s.lots.label) + '</b>') +
+        (s.lots.line ? '<div class="msg' + (s.lots.att ? ' gold' : '') + '">' + esc(s.lots.line) + '</div>' : '') : '') +
       // ⭐ 2026-09-24：保證金還撐得住幾次停損（整句面板算好的）
       (e.cushion && e.cushion.msg ? '<div class="msg' + (e.cushion.warn ? ' gold' : '') + '">' + esc(e.cushion.msg) + '</div>' : '');
 
@@ -438,6 +441,8 @@
     if (e.cushion && e.cushion.warn) w.push(e.cushion.msg);
     if (e.backup && e.backup.warn) w.push(e.backup.msg);
     if (e.depth && e.depth.warn) w.push(e.depth.msg);   // ⭐ 2026-10-14 五檔停了（成交還在）
+    // ⭐ 2026-10-14 口數：只有「可以升級」「剛被減級」才進來（面板決定、手機只照抄；卡在條件不算事）
+    if (s.lots && s.lots.warn) w.push(s.lots.warn);
     if (pn.conn && pn.conn.ok === false) w.push('跟永豐的連線有問題：' + (pn.conn.last_error || ''));
     // ⚠️ 券商的 last_error 沒有時間、而且背景對帳偶發失敗也會寫進來（跟真單無關）⇒ 不當警示，放最底下小字
     // ⭐ 分析師信件：列表跟著快照更新（打開中的全文不重畫，免得他看到一半跳掉）

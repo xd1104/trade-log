@@ -110,7 +110,8 @@ retest/FINAL_REPORT.md。Benson 決定隔天起自動下單換這一套（⛔ �
 `broker.py` 的每一道防呆都是踩過事故換來的（方向誤判、IOC 沒成交卻掛停利、
 平倉送錯邊…）。自動下單就是「**在 09:03:30 呼叫既有的 `enter()`**」，其餘照舊：
 
-- 口數寫死 1 口（`broker.QTY`）
+- 口數問 `lots.day_lots()`（⭐ 2026-10-14 多口；狀態檔不存在 ⇒ 1 口，跟以前一樣）。
+  送 N 口只成交 k 口 ⇒ 帳本 `qty` 記 k（`qty_sent` 記 N），之後認人、收盤平倉都照 k。
 - 一天上限 `broker.MAX_ENTRIES`（送單前 `broker.can_enter()` 會擋）
 - 送單前 `can_enter()` 會跟券商對帳（沒報價／報價不新鮮／還沒連上永豐／
   對帳失敗／券商已有部位／當天已達上限，任何一項都擋下來）
@@ -158,6 +159,8 @@ retest/FINAL_REPORT.md。Benson 決定隔天起自動下單換這一套（⛔ �
      ③ 現在券商上那口部位的**方向 ＋ 進場價 ＋ 進場時間 ＋ 口數**跟帳本那一列對得上
         （認人方式跟 `broker.set_trade_note()` 同一套：日期＋進場時間＋進場價；
         口數一定要是 `broker.QTY` —— 他加碼之後是 2 口，而 `close()` 會平到 0 口）。
+        ⭐ 2026-10-14 多口：口數改成「1 ≤ 現在 ≤ 帳本那一列實際成交的口數」（停利單部分成交會變少；
+        比帳本多 ⇒ 他自己加過碼 ⇒ 不平）。帳本沒有口數（舊帳本）⇒ 當成 1 口 ⇒ 跟以前一模一樣。
    ⛔ 任何一項對不上就**不平**，並把「為什麼不平」寫在畫面上。
    ⚠️ 這是**刻意不對稱**的：誤判成「不是我的」最多是他多抱一晚（＝現況），
       誤判成「是我的」就是把他的單平掉。**寧可不平，不可以平錯。**
@@ -177,6 +180,7 @@ from datetime import date, datetime
 import numpy as np       # 門檻用 numpy.percentile（跟研究同一個算法，⛔ 不自己寫內插）
 
 import broker            # ⛔ 唯一的下單出口。這個檔不自己組單、不自己送單
+import lots              # ⛔ 口數的唯一正本（2026-10-14 多口）：今天日盤送幾口、風控上限用幾口算
 import risk_cap          # ⛔ 唯讀：本月自動單虧到上限就不送（2026-09-24 風控規則 B）
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -421,6 +425,8 @@ WHY = {
     "no_long": "今天三個候選都沒有給出做多 —— 照規則今天不做",
     # ── 2026-09-24 風控規則 B（risk_cap.py）───────────────────────────
     "risk_cap": "本月自動單到了風控上限，這個月不送",
+    # ── 2026-10-14 多口（lots.py）：這一條的口數是 0（退休標準「退休」且已拍板歸零）────
+    "lots_zero": "多方聯軍現在的口數是 0（退休標準：退休）—— 今天不送",
     "no_cand_rev": "純回馬只有「09:03:30 判定不快」的日子才有 —— 今天沒有這個候選",
     "union_done": "今天已經照另一個候選送出去了 —— 一天最多一口，這個候選不再看",
     # ── 開箱（ORB）自己的每一種不可用 ──────────────────────────────────
@@ -1427,18 +1433,30 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
     # ⭐ 2026-09-24 風控規則 B（`risk_cap.py`）：本月自動單真單虧到上限 ⇒ 不送。
     #    三個候選共用這一段 ⇒ 只擋這一處（⛔ 不在各候選各寫一份）。⛔ 在「先落地 sending」之前擋，
     #    這樣帳本那天是一列乾淨的 skip，不會留一列送到一半的 sending。
+    # ⭐ 2026-10-14 多口：口數與風控上限都問 lots（唯一正本）。狀態檔不存在 ⇒ 1 口、上限 800（跟以前一樣）。
+    #    ⛔ lots 自己壞掉（照理不會：它看不懂就回 1＋1）⇒ 退回 1 口（少送是安全方向）。
     try:
-        rb, rmsg, _rs = risk_cap.blocked(d, broker.QTY)
+        _lst = lots.read_state()[0]
+        qty = lots.day_lots(_lst, d)
+        cab = lots.cap_lots(_lst, d)
+        lvl = lots.effective_level(_lst, d)
+    except Exception:                            # noqa: BLE001
+        qty, cab, lvl = broker.QTY, (1, 1), None
+    try:
+        rb, rmsg, _rs = risk_cap.blocked(d, lots=cab)
     except Exception as e:                       # ⛔ 風控自己壞掉 ⇒ 不猜，這次不送
         rb, rmsg = True, "風控算不出本月損益 —— 不猜，這次不送（%s）" % str(e)[:80]
     if rb:
         return _skip(d, "risk_cap", base, WHY["risk_cap"] + "：" + rmsg, cand=_cand_of(base))
+    if not broker.qty_ok(qty):
+        # 退休歸零（RETIRE_ZERO）才會走到這裡 ⇒ 這一條今天不送
+        return _skip(d, "lots_zero", dict(base, qty=qty, lots_level=lvl), cand=_cand_of(base))
 
     # ⛔⛔ **先落地再送單**。送到一半當掉的話，重啟後 _has() 讀得到這一列
     #     ⇒ 那天不會再送第二張。⛔ 寧可漏記結果，不可以重送。
     fire = dict(base)
     fire.update({"rec": "fire", "stage": "sending", "date": d,
-                 "live": broker.is_live(), "qty": broker.QTY,
+                 "live": broker.is_live(), "qty": qty, "lots_level": lvl,
                  "wrote_at": datetime.now().isoformat(timespec="seconds")})
     _append(fire)
     _ST["last"] = fire
@@ -1465,15 +1483,15 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
     #    U 才有候選的名字。⛔ 兩者不要混成一句（他要看得出現在跑的是哪條規則）。
     _seg = (("的「%s」" % CAND_NAME[_cand_of(base)]) if _cand_of(base) in CANDS
             else ("的" + LEG_NAME.get(base.get("leg"), "")))
-    print("[%s] 自動下單：用「%s」%s判定 %s（%s），送出 1 口，%s，停損 %g 點（%s）" %
+    print("[%s] 自動下單：用「%s」%s判定 %s（%s），送出 %d 口，%s，停損 %g 點（%s）" %
           (d, METHOD_NAME[a["method"]], _seg,
-           "做多" if direction == "long" else "做空", how,
+           "做多" if direction == "long" else "做空", how, qty,
            "不設停利" if tp_points is None else ("停利 %g 點" % tp_points), pts,
            "真單" if broker.is_live() else "演練，不會真的送出去"), flush=True)
     # ⛔⛔ sl_points 一定要帶：停損活在面板迴圈（check_real_position），它讀的是
     #     **這一口部位自己的** sl_points；沒帶就掉回手動真單的 SL_POINTS（130）⇒ 提早被洗掉。
     # ⭐ tp_points=None ⇒ broker 一次 place_target 都不呼叫（開箱那個候選不設停利）。
-    ok, err, pos = broker.enter(direction, px, tp_points, sl_points=pts)
+    ok, err, pos = broker.enter(direction, px, tp_points, sl_points=pts, qty=qty)
     if not ok:
         return _result(d, base, False, "order_failed",
                        WHY["order_failed"] + "：" + str(err or "券商沒有說原因"))
@@ -1495,7 +1513,16 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
                   #    ⛔ 這件事要寫進畫面那一列與 reason（PM 2026-09-16 指定）。
                   "no_tp": bool((pos or {}).get("no_tp")),
                   # ⛔ 停利掛失敗不可以吞掉：broker 會回 ok=True ＋ 一句警告
-                  "warn": err or None})
+                  "warn": err or None,
+                  # ⭐ 2026-10-14 多口：`qty` ＝ **實際成交**的口數（收盤平倉認人、撿回部位都照它）；
+                  #    `qty_sent` ＝ 送了幾口（部分成交時兩個不一樣）。
+                  "qty": (pos or {}).get("qty", qty), "qty_sent": qty, "lots_level": lvl})
+    for k in ("fill_lo", "fill_hi"):
+        if (pos or {}).get(k) is not None:
+            extra[k] = pos[k]
+    if (pos or {}).get("fill_warn"):
+        # ⭐ QA 必修 2：成交口數沒定案（照券商部位口數先記）⇒ 收盤認人時最多認到送出去的口數（見 _ent_own）
+        extra["fill_unsure"] = True
     return _result(d, extra, True, None, None)
 
 
@@ -1981,6 +2008,39 @@ def _auto_entry(d):
     return f, None
 
 
+def _ent_qty(ent):
+    """帳本那一列實際成交幾口（舊帳本沒有／看不懂 ⇒ broker.QTY ＝ 1 口，跟 10-14 以前一樣）。"""
+    q = _num((ent or {}).get("qty"))
+    return float(q) if (q is not None and q >= 1 and q == int(q)) else float(broker.QTY)
+
+
+def _ent_own(ent):
+    """
+    帳本那一列「可能是我們的」最多幾口：平常 ＝ 帳本 qty（實際成交）。
+    ⭐ QA 必修 2（2026-10-14）：送單那一刻成交口數**沒定案**（部位跟委託單明細到期限都對不上，帳本 `fill_unsure`）
+       ⇒ 上限放到當初送出去的口數（`qty_sent`）——之後部位口數補上來（回報慢）、或面板重啟記憶體沒了，
+       收盤照樣認得出來、⛔ 不留倉過夜。
+    """
+    q = _ent_qty(ent)
+    sent = _num((ent or {}).get("qty_sent"))
+    if (ent or {}).get("fill_unsure") and sent is not None and sent == int(sent) and broker.qty_ok(int(sent)):
+        return max(q, float(sent))
+    return q
+
+
+def _ent_px_range(ent):
+    """
+    帳本那一口的進場價可以落在哪裡 ⇒ (lo, hi)。
+    一口 ⇒ (entry, entry)（＝舊的 |差| ≤ EOD_PX_TOL）。
+    ⭐ 多口而且帳本有各口成交價的高低（fill_lo／fill_hi）⇒ 部分出場後剩下那幾口的券商均價一定落在這之間。
+    """
+    e = _num(ent.get("entry"))
+    lo, hi = _num(ent.get("fill_lo")), _num(ent.get("fill_hi"))
+    if e is not None and _ent_own(ent) > 1 and lo is not None and hi is not None and lo <= e <= hi:
+        return lo, hi
+    return e, e
+
+
 def _looks_ours(pos, ent):
     """
     券商上那口部位，是不是帳本上那一列開出來的。回 (是嗎, 不是的話差在哪)。
@@ -1995,8 +2055,27 @@ def _looks_ours(pos, ent):
     #    ⇒ 舊版判定「是我們的」。而 `broker.close()` 的成交判準是「部位**整個**不見」，
     #    於是它連送 Cover 直到券商剩 0 口 —— **他自己那一口一起被平掉**。
     #    這一項不是「多比一個欄位」，是「這口是不是我們的」那把尺原本缺的一格。
-    pq, eq = _num(pos.get("qty")), float(broker.QTY)
-    if pq is None or pq != eq:
+    # ⭐ 2026-10-14 多口：帳本那一列記的是**實際成交**的口數（舊帳本 ⇒ 1 口，跟以前一樣）。
+    #    現在券商上的口數要 1 ≤ 現在 ≤ 帳本：少了 ⇒ 停利單部分成交（或他在別處平掉幾口）、剩下的還是我們的；
+    #    多了 ⇒ 他自己加過碼 ⇒ ⛔ 不是我們的（M2 那一條照守）。1 口時這一條就是「現在要剛好 1 口」。
+    # ⭐ 2026-10-14 QA 必修 3：broker 對帳時看到券商口數變多、而且進場那張單的成交明細對不上 ⇒ 標了「他動過」
+    #    ⇒ 這一口裡混著他自己的 ⇒ ⛔ 收盤不平（「寧可不平，不可以平錯」；停損只平我們剩下的口數）。
+    if pos.get("touched"):
+        return False, "你在這一筆上自己加碼過（券商 %s 口，我們的只剩 %s 口）—— 混在一起就不幫你平" % (
+            pos.get("qty"), broker._ours_left(pos))
+    if pos.get("handover"):
+        # ⭐ QA r2 必修 1：程式開的那幾口已經出場，剩下的是他加碼的（broker 交接成手動部位）⇒ ⛔ 不碰
+        return False, "程式開的那幾口已經出場，剩下 %s 口是你自己加碼的 —— 不幫你平" % pos.get("qty")
+    if pos.get("multi_unknown"):
+        return False, "重啟後這筆部位對不上程式開的多口紀錄，分不出是誰的 —— 不幫你平"
+    eq = _ent_own(ent)
+    # ⭐ QA 必修 2：進場那張單其實成交了更多口（部位回報慢一拍，broker 用委託單明細確認過 ⇒ late_fill）
+    #    ⇒ 那幾口也是我們的。⛔ 上限是當初送出去的口數。
+    lq, sent = pos.get("entry_qty"), _num(ent.get("qty_sent"))
+    if pos.get("late_fill") and broker.qty_ok(lq) and sent is not None and lq <= sent:
+        eq = max(eq, float(lq))
+    pq = _num(pos.get("qty"))
+    if pq is None or pq != int(pq) or not (1 <= pq <= eq):
         return False, "口數不一樣（現在 %s 口，自動下單只開 %g 口）—— 你自己加減碼過" % (
             "?" if pq is None else ("%g" % pq), eq)
     if pos.get("dir") != ent.get("dir"):
@@ -2005,7 +2084,8 @@ def _looks_ours(pos, ent):
     pe, ee = _num(pos.get("entry")), _num(ent.get("entry"))
     if pe is None or ee is None:
         return False, "沒有進場價可以比對"
-    if abs(pe - ee) > EOD_PX_TOL:
+    lo, hi = _ent_px_range(ent)
+    if not (lo - EOD_PX_TOL <= pe <= hi + EOD_PX_TOL):
         return False, "進場價差了 %.1f 點（現在 %.1f，自動下單開在 %.1f）" % (
             abs(pe - ee), pe, ee)
     pt, et = pos.get("entry_time"), ent.get("entry_time")
@@ -2070,15 +2150,24 @@ def _already_closed(ent):
         # ⛔⛔ 這裡就是 M1 的落點。broker 那層以前把例外吞掉、靜靜回一個空陣列，
         #    所以外面這個 try/except **結構上永遠接不到** —— 現在它回 None。
         return "unknown", "問不到券商的已實現損益（對不了帳）"
+    # ⭐ 2026-10-14 多口：券商的已實現損益是一口一列。停利單**部分成交**時這裡會有其中幾口 ——
+    #    那不是「整趟平掉了」，剩下的還開著、收盤要平 ⇒ 對得上的口數加起來 ≥ 帳本的口數才算 closed。
+    #    一口（帳本 1 口）⇒ 對到第一列就 closed，跟以前一模一樣。
+    need = _ent_own(ent)
+    lo, hi = _ent_px_range(ent)
+    got = 0.0
     for r in real:
         if not isinstance(r, dict):
             continue
         if r.get("dir") and dv and r["dir"] != dv:
             continue
         re_ = _num(r.get("entry"))
-        if re_ is None or abs(re_ - e) > EOD_PX_TOL:
+        if re_ is None or not (lo - EOD_PX_TOL <= re_ <= hi + EOD_PX_TOL):
             continue
-        return "closed", "券商今天的已實現損益裡已經有這一趟（進場 %.1f）" % re_
+        rq = _num(r.get("qty"))
+        got += rq if (rq is not None and rq > 0) else 1.0
+        if got >= need:
+            return "closed", "券商今天的已實現損益裡已經有這一趟（進場 %.1f）" % re_
     return "open", None
 
 
@@ -2267,11 +2356,24 @@ def _recover_decide(pos, ent, why):
         if ent.get("no_tp") or (tpp is None and ent.get("cand") == "orb"):
             out["no_tp"] = True
             out["tp_points"] = None
+        # ⭐ 2026-10-14 多口：帳本記的是多口 ⇒ 補回「我們開了幾口、成交均價」
+        #    （broker 平倉每張最多送 entry_qty 口、停損基準用 entry_fill）。一口 ⇒ 不補（行為照舊）。
+        if _ent_own(ent) > 1:
+            out["entry_qty"] = int(_ent_own(ent))
+            if _num(ent.get("entry")) is not None:
+                out["entry_fill"] = float(ent["entry"])
         return out
     if ours:
         return {"sl_src": "unmatched",
                 "sl_warn": "撿回來的這口對得上今天自動下單那一口，但帳本那一列沒有停損點數"
                            " —— 停損先用手動真單那一套，請自己確認"}
+    pq = _num(pos.get("qty")) if isinstance(pos, dict) else None
+    if pq is not None and pq > 1 and (_ent_own(ent) > 1 or (_num(ent.get("qty_sent")) or 1) > 1):
+        # ⭐ QA r2 必修 4：今天自動下單開的是多口、撿回來的又是多口、卻對不上（落地的狀態也沒補回）
+        #    ⇒ 分不出哪幾口是誰的 ⇒ ⛔ 不准退到一口的迴圈去平（QA D3：[1,1,1]）⇒ 不平、示警
+        return {"sl_src": "unmatched", "multi_unknown": True, "unknown_src": "ledger",
+                "sl_warn": "撿回來的這筆（%g 口）對不上今天自動下單開的多口（%s）—— 分不出哪幾口是你的，"
+                           "收盤與停損都不會幫你平，請自己到大戶投處理" % (pq, diff)}
     return {"sl_src": "unmatched",
             "sl_warn": "撿回來的這口對不上今天自動下單那一口（%s）—— 停損用手動真單那一套" % diff}
 
@@ -2292,6 +2394,21 @@ def recover_meta(pos):
         return None
 
 
+def _night_claims(pos):
+    """今晚夜盤帳本開著的那一筆對得上這口部位嗎（⚠️ 工作執行緒；會讀夜盤帳本）。⛔ 永遠不丟例外。"""
+    try:
+        import night_fire as NFm             # 晚一點才 import（night_fire 不 import 這一支，沒有循環）
+        E = NFm._MEM.get("E") or NFm.evening_of(datetime.now())
+        if E is None:
+            return False
+        ent = NFm._MEM.get("entry") if NFm._MEM.get("E") == E else None
+        if ent is None:
+            ent = NFm._entry_of(NFm.rows_of(E))
+        return bool(ent) and NFm.claims(pos, ent)
+    except Exception:                        # noqa: BLE001
+        return False
+
+
 def _mem_load(d):
     """⚠️ 送單執行緒／start()：讀今天帳本那一口放進記憶體。"""
     ent, why = _auto_entry(d)
@@ -2306,6 +2423,10 @@ def _recover_poll():
     ⚠️ **送單執行緒**（⛔ 不是主迴圈）：看有沒有「撿回來、還沒補停損點數」的部位。
     `recover_meta()` 在主迴圈上補不起來（記憶體還沒有今天的帳本）時，由這裡讀檔補。
     """
+    try:
+        broker.resolve_shrink()              # ⭐ QA r4（G3）：重啟時口數變少的那筆 ⇒ 在工作執行緒跟已實現損益對帳
+    except Exception:                        # noqa: BLE001
+        pass
     pos = broker._state.get("position")
     if not isinstance(pos, dict) or not pos.get("recovered"):
         return None
@@ -2314,6 +2435,10 @@ def _recover_poll():
         if _MEM["date"] != d:
             _mem_load(d)
         meta = _recover_decide(pos, _MEM["entry"], _MEM["state"])
+        if meta.get("multi_unknown") and _night_claims(pos):
+            # ⭐ QA r3 必修 2：對不上**日盤**帳本，但對得上**今晚夜盤**帳本開著的那一筆 ⇒ 那是夜盤的單，
+            #    ⛔ 不標「分不出」—— 交給夜盤那支補（night_fire._recover_poll），結果不看兩條執行緒誰先跑
+            meta = {}
         with broker._lock:
             if broker._state.get("position") is pos and pos.get("sl_src") is None:
                 pos.update(meta)
@@ -2725,6 +2850,13 @@ def orb_today(today, day_row=None):
     return out
 
 
+def _day_qty_view():
+    try:
+        return lots.day_lots()
+    except Exception:                            # noqa: BLE001
+        return broker.QTY
+
+
 def state():
     """給 `/api/fire/state`。⚠️ **唯讀**，這個函式一張單都不會送。"""
     a = arm()
@@ -2782,7 +2914,8 @@ def state():
         "hist_msg": _ST["hist_msg"],
         # 現在那一口部位用的停損點數從哪來（自動下單那一口／手動那一套／撿回來對不上）
         "pos_sl": pos_sl, "rec_msg": _ST["rec_msg"],
-        "qty": broker.QTY, "max_entries": broker.MAX_ENTRIES,
+        # ⭐ 2026-10-14：今天日盤送幾口問 lots（唯一正本）；狀態檔不存在 ⇒ 1
+        "qty": _day_qty_view(), "max_entries": broker.MAX_ENTRIES,
         "entries_today": broker.entries_today(),
         "wired": _ST["wired"], "started": _ST["started"],
         "err": _ST["err"], "err_n": _ST["err_n"],

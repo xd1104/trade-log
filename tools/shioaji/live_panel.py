@@ -59,6 +59,7 @@ import broker            # 真實下單。預設 dry run，見那個檔開頭的
 import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
 import night_fire        # 夜盤自動下單（台積電快攻）。預設**關著**（沒有 NIGHT_ORDERS_ON 就完全不送；跟日盤開關分開）
 import risk_cap          # 風控規則 B（2026-09-24）：本月自動單虧到上限就不送。⛔ 唯讀模組
+import lots              # 口數的唯一正本（2026-10-14 多口）。狀態檔不存在 ⇒ 1＋1（跟以前一樣）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 import depth_writer      # 研究用全天五檔落地（同一條鐵律：on_bidask 只 append）
 # 【健檢】那一頁（唯讀）。⛔ 不 import broker、不碰任何下單路徑、一個位元組都不寫。
@@ -126,6 +127,7 @@ REVIEW_CACHE = HERE / "review_cache.json"
 #    每一口部位自己帶 sl_points；check_real_position 只有在部位**沒有** sl_points 時才用 SL_POINTS。
 TP_POINTS = 130.0
 SL_POINTS = 130.0
+broker.MANUAL_SL_POINTS = SL_POINTS   # ⭐ 2026-10-14：多口交接成手動部位時，那句話要講的停損點數（只拿來寫字）
 # 當過產品常數的下單規則值（公開規格，git 歷史裡看得到，不是他的個人資料）。
 # ⛔ 留著是給 tools/probe/leak-scan.py 讀的：它把「等於產品常數的值」當成公開資訊。
 #    規則一改，repo 裡大量寫著 09:03:30／±100 的註解與測試就會被誤判成他的真實紀錄（實測 651 處）。
@@ -3241,6 +3243,8 @@ def _auto_mine_day(d):
                     "entry": _auto_num(o.get("entry")), "exit": _auto_num(o.get("exit")),
                     "exit_time": o.get("exit_time") if isinstance(o.get("exit_time"), str) else None,
                     "points": _auto_num(o.get("points")),
+                    # ⭐ 2026-10-14 多口：那一趟幾口（points 是每口）⇒ 畫面「合計」＝ points × qty
+                    "qty": _auto_num(o.get("qty")),
                     "why": o.get("reason") if isinstance(o.get("reason"), str) else None})
     out.sort(key=lambda t: t.get("entry_time") or "")
     return out
@@ -3737,7 +3741,8 @@ def fire_real_pairs(days, today=None, now=None, eod_at=None):
             t = hits[0]
             out[d] = {"state": "ok", "exit": _auto_num(t.get("exit")),
                       "exit_time": t.get("exit_time"),
-                      "points": _auto_num(t.get("points")), "why": t.get("why")}
+                      "points": _auto_num(t.get("points")), "why": t.get("why"),
+                      "qty": _auto_num(t.get("qty"))}
         elif not hits:
             # 今天、而且還沒到收盤平倉那一刻 ⇒ 那口本來就還開著（⛔ 不是對不起來）。
             holding = (d == today and can_time and str(now) < str(eod_at))
@@ -3816,7 +3821,8 @@ def night_real_pairs(recent, now=None):
             t = hits[0]
             out[E] = {"state": "ok", "exit": _auto_num(t.get("exit")),
                       "exit_time": t.get("exit_time"), "exit_date": t.get("date"),
-                      "points": _auto_num(t.get("points")), "why": t.get("why")}   # ⚠️ _auto_mine_day 已把 reason 改名成 why
+                      "points": _auto_num(t.get("points")), "why": t.get("why"),
+                      "qty": _auto_num(t.get("qty"))}   # ⚠️ _auto_mine_day 已把 reason 改名成 why
         elif not hits:
             # 還沒到那一晚的 04:58（＋1 分鐘讓券商回報）⇒ 那口本來就還開著
             close_at = datetime.combine(e0 + timedelta(days=1), datetime.min.time()).replace(hour=4, minute=59)
@@ -4537,12 +4543,95 @@ def risk_view(force=False):
     if not force and _RISK["v"] is not None and now - _RISK["at"] < RISK_TTL:
         return _RISK["v"]
     try:
-        v = risk_cap.state(qty=broker.QTY)
+        # ⭐ 2026-10-14 多口：上限 ＝ 400 ×（本月用過最大的 a＋b）（lots.cap_lots；1＋1 ＝ 800 跟以前一樣）
+        v = risk_cap.state(lots=lots.cap_lots())
     except Exception as e:
         v = {"err": "風控算不出來：%s" % str(e)[:120], "blocked": True,
              "msg": "風控算不出本月損益 —— 不猜，這段時間不送"}
     _RISK.update(at=now, v=v)
     return v
+
+
+# ---------------------------------------------------------------- 口數（2026-10-14 多口第二階段）
+# ⭐ 正本 lots.py。這裡只做三件事：① 給畫面的那一份（lots.panel，句子後端組好）② 升級／撤回兩個端點
+#    ③ /api/state 帶一個很小的 `lots`（分頁小金點用，⛔ 不是整份）。
+# ⛔⛔ 升級＝放大真錢曝險 ⇒ 跟「打開自動下單」同一級：前端**兩段式**、後端 do_POST 入口的六道防護（fire_post_guard）、
+#    路由精確比對；只收「這個月建議的那一級」（offer_id），⛔ 不自動改升別級。
+# ⛔ apply 要重驗全部條件（退休標準約 2.5 秒）⇒ 跑在 HTTP 執行緒上、⛔ 不拿 state_lock、⛔ 不碰主迴圈。
+# ⛔ LOTS_LEVEL.json 的寫入者**只有 lots.py**（apply_upgrade／revoke_pending／daily_check）—— 這裡一個位元組都不寫
+#    （test_lots 的 AST 名單在守）。
+def lots_panel_now(now=None):
+    """⇒ lots.panel()（權益用券商現在的；一口保證金用面板學到的；今晚＝夜盤那一晚）。⛔ 永遠不丟例外。"""
+    now = now or datetime.now()
+    try:
+        m = EQUITY.get("m") or {}
+        eq = m.get("equity_amount") if isinstance(m.get("equity_amount"), (int, float)) else None
+        lot1 = _lot1()[0]
+        E = night_fire.evening_of(now) or now.date()
+        P = lots.panel(now=now, eq=eq, lot1=lot1, E=E)
+        # ⭐ QA r2 必修 2：多口部位不照平常規矩走（他自己加碼過／交接成他的手動部位／重啟後對不上／成交口數一度對不上）
+        #    ⇒ 【自動下單】頂部金條＋分頁小金點＋手機「要注意的事」都要有一句白話（句子＝broker.pos_note，只讀記憶體）。
+        note, kind = broker.pos_note()
+        if note and isinstance(P, dict):
+            P["alarm"] = list(P.get("alarm") or []) + [{"kind": "pos_" + str(kind), "text": "部位：" + note + "。"}]
+            P["dot"] = True
+            ph = dict(P.get("phone") or {})
+            ph["warn"] = ("部位：" + note + "。") + ((" ／ " + ph["warn"]) if ph.get("warn") else "")
+            ph["att"] = True
+            P["phone"] = ph
+        return P
+    except Exception as e:                     # noqa: BLE001
+        return {"ok": False, "err": "讀不到口數狀態（%s）—— 讀不到的時候照 1＋1 送" % str(e)[:80], "dot": False,
+                "alarm": [], "phone": {"label": "1＋1", "line": "讀不到口數狀態，照 1＋1 送", "att": False, "warn": None}}
+
+
+def lots_state_small(P=None):
+    """/api/state 帶的那一小份（分頁小金點、狀態列）。⛔ 讀檔在鎖外面做好，呼叫端只在鎖裡指派。"""
+    P = P if P is not None else lots_panel_now()
+    return {"dot": bool(P.get("dot")), "label": ((P.get("run") or {}).get("label")), "ok": P.get("ok", False)}
+
+
+def _lots_rows_now():
+    """apply 要的「最新權益」：equity/ 每天那幾列，再接上券商**現在**那一個（有的話）。"""
+    rows = list(equity_hist_read())
+    m = EQUITY.get("m") or {}
+    if isinstance(m.get("equity_amount"), (int, float)):
+        rows.append({"date": str(date.today()), "equity": float(m["equity_amount"]), "live": True})
+    return rows
+
+
+def lots_upgrade(body, who="panel"):
+    """POST /api/lots/upgrade ⇒ (code, payload)。⛔ 呼叫端已經過 fire_post_guard（do_POST 入口）。"""
+    oid = body.get("offer_id") if isinstance(body, dict) else None
+    if not isinstance(oid, str) or not oid or len(oid) > 40:
+        return 400, {"ok": False, "msg": "要確認哪一個建議看不懂"}
+    try:
+        ok, msg = lots.apply_upgrade(oid, rows=_lots_rows_now())
+    except Exception as e:                     # noqa: BLE001
+        return 500, {"ok": False, "msg": "升級出錯，沒有升：%s" % str(e)[:120]}
+    _lots_refresh_small()
+    print("[口數] %s 升級：%s（%s）" % (who, msg, "成功" if ok else "拒絕"), flush=True)
+    return (200 if ok else 409), {"ok": ok, "msg": msg}
+
+
+def lots_revoke(who="panel"):
+    """POST /api/lots/revoke ⇒ (code, payload)。⛔ 撤回是安全方向：一鍵、不跳確認（跟「關閉」同一個不對稱）。"""
+    try:
+        ok, msg = lots.revoke_pending()
+    except Exception as e:                     # noqa: BLE001
+        return 500, {"ok": False, "msg": "撤回出錯：%s" % str(e)[:120]}
+    _lots_refresh_small()
+    print("[口數] %s 撤回：%s" % (who, msg), flush=True)
+    return (200 if ok else 409), {"ok": ok, "msg": msg}
+
+
+def _lots_refresh_small():
+    try:
+        small = lots_state_small()
+        with state_lock:
+            STATE["lots"] = small
+    except Exception:                          # noqa: BLE001
+        pass
 
 
 def risk_override_on(who="panel"):
@@ -6586,6 +6675,116 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .hc-legend .hc-lamp{margin-left:0; font-style:normal; font-size:10.5px; padding:2px 9px 3px}
 .hc-legend .hc-lamp b{width:7px; height:7px}
 .hc-foot2{font-size:11.5px; color:var(--faint); line-height:1.7; margin:2px 4px 0}
+/* ══ ⭐ 2026-10-14 口數（多口第二階段；樣式逐字照 lab-ux 的 lots-demo.html，Benson 試過說可以）══
+   ⛔ class 一律 lt- 前綴（al-／at-／sm-／hc-／gl- 都被佔了）。⛔ 通過＝中性灰、卡住＝金色；⛔ 不准用紅綠（紅綠只給損益），
+   唯一例外是升級確認條（.al-conf.real，跟「打開自動下單（真錢）」同一級）。 */
+.tabs button{position:relative}
+.tabs button.ltdot::after{content:""; position:absolute; top:6px; right:9px; width:7px; height:7px; border-radius:50%; background:var(--gold); box-shadow:0 0 0 3px var(--gold-soft)}
+.al-pill .q{font-size:12px; font-weight:700; color:var(--text); font-family:var(--font-mono); white-space:nowrap; flex:none}
+.lt-alarm{display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12.5px}
+.lt-alarm .g{flex:1 1 300px}
+.lt-alarm .go{flex:none; border:1px solid var(--gold-line); background:transparent; color:var(--gold); font:600 12px var(--font-sans);
+  border-radius:999px; padding:6px 12px; cursor:pointer; min-height:32px}
+.al-today .lq{margin-top:8px; font-size:12px; color:var(--dim); line-height:1.6; padding-top:8px; border-top:1px solid var(--line-soft)}
+.al-today .lq b{color:var(--text); font-family:var(--font-mono)}
+.trade .qty{font-size:10.5px; font-weight:700; padding:1px 6px; border-radius:var(--r-xs); flex:none; color:var(--text);
+  border:1px solid var(--line); background:var(--surface); font-family:var(--font-mono)}
+.lt{background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px 18px; margin-bottom:14px}
+.lt.att{border-color:var(--gold-line)}
+.lt-hd{display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap}
+.lt-hd .h{font-size:12px; color:var(--faint); letter-spacing:.12em}
+.lt-hd .r{font-size:12px; color:var(--faint)}
+.lt-hd .r b{color:var(--dim); font-weight:600}
+.lt-top{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:18px; align-items:end; margin-top:4px}
+@media(max-width:820px){ .lt-top{grid-template-columns:minmax(0,1fr); gap:10px} }
+.lt-now .tot{font-size:36px; font-weight:600; letter-spacing:-.01em; line-height:1.2; font-family:var(--font-mono)}
+.lt-now .tot u{text-decoration:none; font-size:13px; font-weight:600; color:var(--dim); margin-left:8px; letter-spacing:.02em; font-family:var(--font-sans);
+  border:1px solid var(--line); border-radius:999px; padding:1px 9px; vertical-align:8px}
+.lt-now .sub{font-size:12.5px; color:var(--dim); margin-top:2px; line-height:1.6}
+.lt-now .sub b{color:var(--text); font-family:var(--font-mono)}
+.lt-now .cp{font-size:12px; color:var(--gold); margin-top:2px}
+.lt-next .k{display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--dim)}
+.lt-next .k b{color:var(--text); font-weight:650}
+.lt-next .bar{height:8px; border-radius:4px; background:var(--surface-2); margin:7px 0 4px; overflow:hidden; position:relative}
+.lt-next .bar i{display:block; height:100%; border-radius:4px; background:var(--dim)}
+.lt.att .lt-next .bar i{background:var(--gold)}
+.lt-next .sc{display:flex; justify-content:space-between; font-size:10.5px; color:var(--faint); font-family:var(--font-mono)}
+.lt-say{margin-top:12px; font-size:14px; font-weight:650; line-height:1.6}
+.lt-say.g{color:var(--gold)}
+.lt-say small{display:block; font-size:12px; font-weight:500; color:var(--dim); margin-top:1px}
+/* ⭐ 10-14 試車進度（五格＋一句）／確認條的停電那一行（目標 ≥ 5 口才有） */
+.lt-trial{display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:12px; color:var(--dim); line-height:1.65}
+.lt-trial .pips{display:inline-flex; gap:3px; padding-top:4px; flex:none}
+.lt-trial .pips i{width:10px; height:10px; border-radius:2px; border:1px solid var(--line); background:transparent}
+.lt-trial .pips i.on{background:var(--gold); border-color:var(--gold)}
+.lt-trial b{color:var(--text); font-weight:650}
+.lt-pw{margin:10px 0 6px; padding:8px 10px; border:1px solid var(--gold-line); background:var(--gold-soft);
+  border-radius:8px; color:var(--gold); font-size:13px; font-weight:650; line-height:1.6}
+.lt-pw b{color:var(--gold)}
+.lt-pw small{display:block; font-size:12px; font-weight:500}
+.lt-conds{margin-top:10px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; background:var(--line-soft);
+  border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden}
+@media(max-width:820px){ .lt-conds{grid-template-columns:minmax(0,1fr)} }
+.lt-c{background:var(--surface); padding:8px 12px 9px; display:flex; gap:9px; align-items:baseline; min-width:0}
+.lt-c .i{flex:none; width:16px; text-align:center; font-size:12px; color:var(--faint)}
+.lt-c .w{min-width:0; flex:1}
+.lt-c .k{font-size:11px; color:var(--faint); letter-spacing:.3px}
+.lt-c .v{font-size:12.5px; color:var(--dim); line-height:1.5}
+.lt-c .v b{color:var(--text); font-weight:650; font-family:var(--font-mono)}
+.lt-c.no{background:linear-gradient(90deg,rgba(227,169,81,.08),var(--surface) 70%)}
+.lt-c.no .i,.lt-c.no .v,.lt-c.no .v b{color:var(--gold)}
+.lt-c.na .v{color:var(--faint)}
+.lt-act{margin-top:12px}
+.lt-act .row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.lt-act .btn.arm{background:var(--gold-soft); color:var(--gold); border-color:var(--gold-line)}
+.lt-act .btn.arm:hover{background:rgba(227,169,81,.24)}
+.lt-act .n{font-size:11.5px; color:var(--faint); line-height:1.7; margin-top:8px}
+.lt-act .n b{color:var(--dim); font-weight:650}
+.lt-act .al-conf{max-width:760px}
+.lt-cmp{width:100%; border-collapse:collapse; margin:8px 0 4px; font-size:12.5px; background:rgba(14,17,22,.35); border-radius:8px; overflow:hidden}
+.lt-cmp th,.lt-cmp td{padding:6px 10px; text-align:right; border-top:1px solid rgba(238,90,84,.18); white-space:nowrap}
+.lt-cmp th{font-size:11px; font-weight:600; color:var(--dim); border-top:0}
+.lt-cmp th:first-child,.lt-cmp td:first-child{text-align:left; color:var(--dim); font-weight:500; white-space:normal}
+.lt-cmp td{color:var(--dim); font-family:var(--font-mono)}
+.lt-cmp td.a{color:var(--text); font-weight:700}
+.lt-cmp-w{overflow-x:auto}
+.al-conf .fine{font-size:11.5px; color:var(--dim); line-height:1.7; margin-top:6px; font-weight:500}
+.al-conf .fine b{color:var(--text)}
+.lt-done{margin-top:12px; padding:10px 14px; border-radius:var(--r-md); background:var(--surface-2); border:1px solid var(--line);
+  font-size:12.5px; color:var(--dim); line-height:1.7; display:flex; gap:12px; align-items:center; flex-wrap:wrap}
+.lt-done .g{flex:1 1 280px}
+.lt-done b{color:var(--text)}
+.lt-done .btn{flex:none; padding:7px 14px; font-size:12.5px; min-height:36px; background:transparent; color:var(--faint); border-color:var(--line); letter-spacing:.3px}
+.lt-msg{margin-top:8px; font-size:12px; color:var(--dim)}
+.lt-msg.err{color:var(--gold)}
+.lt-hist{margin-top:12px; border-top:1px solid var(--line-soft); padding-top:9px}
+.lt-hist .k{font-size:11px; color:var(--faint); letter-spacing:.3px; margin-bottom:3px}
+.lt-hist .r{display:flex; gap:12px; font-size:12px; color:var(--dim); line-height:1.75}
+.lt-hist .r .d{font-family:var(--font-mono); color:var(--faint); flex:none; width:44px}
+.lt-hist .r .who{flex:none; font-size:10.5px; border:1px solid var(--line); border-radius:5px; padding:0 6px; height:18px; line-height:16px; margin-top:3px; color:var(--faint)}
+.lt-hist .r b{color:var(--text); font-family:var(--font-mono)}
+.lt-foot{font-size:11px; color:var(--faint); line-height:1.7; margin-top:8px}
+.lt-cd{margin-top:10px}
+.lt-cd>summary{cursor:pointer; list-style:none; font-size:12.5px; color:var(--dim); padding:6px 0; min-height:32px; display:flex; align-items:center; gap:6px}
+.lt-cd>summary::-webkit-details-marker{display:none}
+.lt-cd>summary::before{content:"▸"; color:var(--faint); transition:transform .15s}
+.lt-cd[open]>summary::before{transform:rotate(90deg)}
+.lt-cd>summary b{color:var(--text); font-family:var(--font-mono)}
+.lt-cd>summary:hover{color:var(--text)}
+.lt-cd .lt-conds{margin-top:4px}
+.lt-busy{opacity:.6; pointer-events:none}
+.gl-lots{margin-top:10px; padding:9px 12px; border-radius:var(--r-sm); background:var(--surface-2); border:1px solid var(--line-soft);
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12.5px; color:var(--dim); line-height:1.55}
+.gl-lots b{color:var(--text); font-weight:700; font-family:var(--font-mono)}
+.gl-lots.att{border-color:var(--gold-line); background:var(--gold-soft); color:var(--gold)}
+.gl-lots.att b{color:var(--gold)}
+.gl-lots .go{margin-left:auto; flex:none; border:1px solid var(--line); background:transparent; color:var(--dim);
+  font:600 12px var(--font-sans); border-radius:999px; padding:6px 12px; cursor:pointer; min-height:32px}
+.gl-lots.att .go{border-color:var(--gold-line); color:var(--gold)}
+.gl-t .mk{font-family:var(--font-sans); font-size:10.5px; font-weight:700; border-radius:5px; padding:0 6px; white-space:nowrap}
+.gl-t .mk.run{color:var(--text); background:var(--surface-2); border:1px solid var(--line)}
+.gl-t .mk.wait,.gl-t .mk.pending{color:var(--gold); background:var(--gold-soft); border:1px solid var(--gold-line)}
+.gl-t .mk.blocked{color:var(--dim); border:1px solid var(--line)}
 </style></head><body><div class="app">
 <div class="topbar">
   <div class="brand"><div class="mark">&#9702;</div>
@@ -6768,6 +6967,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="al-bar" id="albar"></div>
   <!-- 條件式的警告（真單關著／送單出過錯／結算日判不出來…）⛔ 一條都不准少 -->
   <div class="at-head"><div class="at-title"><div class="s" id="alsub"></div></div></div>
+  <!-- ⭐ 2026-10-14 口數的頂部金條：只有「可以升級」「剛被減級／單條降級／退休／事故暫停」才畫（句子＝後端 D.lots.alarm）。
+       ⛔ 空容器（這一頁靜態 HTML 0 顆 button）；「看口數 ↓」是純導覽，⛔ 一個請求都不送。 -->
+  <div id="allotsbar"></div>
  </div>
 
  <!-- ② 今天兩條：左＝日盤（七種結局的文案⛔ 一句都不改＋三個候選＋收盤平倉），右＝夜盤 -->
@@ -6791,6 +6993,12 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div id="alpos"></div>
   <div class="al-cap" id="alcap"></div>
  </div>
+
+ <!-- ⭐ 2026-10-14 口數卡（LOTS-UI-SPEC §2.1）：現在幾口、下一級、條件、**升級兩段式**、撤回、口數紀錄。
+      ⛔⛔ 升級＝放大真錢 ⇒ 跟「打開自動下單」同一套：第一段只換畫面（⛔ 零請求）、第二段紅底確認條「確定，升到…」
+         才 POST /api/lots/upgrade（帶 offer_id）；撤回是安全方向 ⇒ 一鍵、不確認。
+      ⛔ 空容器：內容與按鈕一律由 alPaint 畫（這一頁靜態 HTML 0 顆 button）。句子全部是後端 D.lots 給的。 -->
+ <div id="allots"></div>
 
  <!-- ④ 風險那幾句（2026-09-10）：⛔⛔ 一句都不准刪（停損活在這台電腦裡／這個開關沒有有效期）。開著才畫。
       ⭐ 2026-10-01 Benson：「這個也可以摺疊起來，我平常根本不會看」⇒ 收進可點開的區塊（他拍板；句子一字沒刪）。
@@ -7003,8 +7211,11 @@ function lvPosHTML(s){
       ' <small style="font-size:13px;font-weight:600;color:var(--faint)">點</small></div>'+
     '<div class="r"><span>進場</span><b>'+f(P.entry)+
       (P.entry_time?'（'+esc(String(P.entry_time).slice(0,8))+'）':'')+'</b></div>'+
-    '<div class="r"><span>停損</span><b>'+(R.sl==null?'—':f(R.sl))+'</b></div>'+
-    '<div class="r"><span>停利</span><b>'+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'+
+    /* ⭐ QA r3 必修 3：分不出是誰的（stop_off）⇒ 停損不會執行，⛔ 不寫停損價 */
+    (P.stop_off?'<div class="r"><span>停損</span><b style="color:var(--gold)">不會執行，請自己處理</b></div>'+
+       (P.lot_note?'<div class="n" style="color:var(--gold)">⚠️ '+esc(P.lot_note)+'。</div>':''):
+    ('<div class="r"><span>停損</span><b>'+(R.sl==null?'—':f(R.sl))+'</b></div>'+
+    '<div class="r"><span>停利</span><b>'+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'))+
     (P.no_tp?'<div class="r"><span>券商端</span><b style="color:var(--gold)">無掛單</b></div>':'')+
     '</div>';
 }
@@ -7163,21 +7374,29 @@ function goalHTML(G){
  const bar='<div class="gl-bar"><i style="width:'+pr.toFixed(1)+'%"></i></div>'+
    '<div class="gl-scale"><span>'+(G.prev?goalWan(G.prev):'0')+'</span><span>'+
    (G.next?('下一級 '+goalWan(G.next)):'已到最後一級')+'</span></div>';
+ /* ⭐ 2026-10-14 口數：「狀態」欄（現在在跑／權益到了・等你確認／權益到了・條件沒過／已確認・N 起）
+    與「現在那一列」都是後端 lots.goal_overlay 算的（⛔ 權益夠了 ≠ 已經升級，前端不自己判斷）。 */
+ const hasSt=(G.steps||[]).some(st=>'state' in st);
  const rows=(G.steps||[]).map(st=>'<tr class="'+(st.done?'done':'')+(st.now?' now':'')+'">'+
    '<td>'+(st.done?'✓ ':'')+goalWan(st.eq)+'</td><td>'+esc(st.lots)+'</td>'+
    '<td>+'+acctMoney(st.monthly)+'</td><td>'+st.topup+'%</td><td>−'+acctMoney(st.worst)+'</td>'+
    '<td>'+esc(st.done?('已到 '+st.done.slice(5).replace('-','/')):(st.safe_at||'—'))+'</td>'+
-   '<td>'+esc(st.done?'':(st.target_at||'—'))+'</td></tr>').join('');
+   '<td>'+esc(st.done?'':(st.target_at||'—'))+'</td>'+
+   (hasSt?'<td>'+(st.state?'<span class="mk '+esc(st.state)+'">'+esc(st.state_txt||'')+'</span>':'')+'</td>':'')+'</tr>').join('');
+ const LL=G.lots_line;
+ const lline=(LL&&LL.text)?('<div class="gl-lots'+(LL.att?' att':'')+'" id="lotsline"><span>'+LL.text+'</span>'+
+   '<button class="go" data-tab="fire">'+(LL.att?'到自動下單':'看口數')+'</button></div>'):'';
  const mon=(G.months||[]).map(m=>'<tr><td>'+esc(m.ym)+(m.live?'（到現在）':'')+'</td>'+
    '<td>'+acctMoney(m.dep)+'</td><td>'+acctPM(m.net)+'</td><td>+'+acctMoney(m.goal)+'</td></tr>').join('');
  return '<div class="ac gl"><div class="hd"><span class="t">'+esc(G.title||'目標')+'</span>'+
    '<span class="at">從 '+esc(String(G.start||'').slice(5).replace('-','/'))+' 起算</span></div>'+
-   '<div class="gl-pos">'+esc(G.pos||'')+'</div>'+bar+
+   '<div class="gl-pos">'+esc(G.pos||'')+'</div>'+bar+lline+
    '<div class="line">'+esc(G.vs||'')+(G.since?'<br>'+esc(G.since):'')+'</div>'+
    goalChart(G)+
    '<div class="gl-h">每一級：要多少錢、做幾口、大概幾月到</div>'+
    '<div class="gl-tw"><table class="gl-t"><thead><tr><th>權益</th><th>聯軍＋跟勢</th><th>目標每月</th>'+
-   '<th>一年內要補錢</th><th>停損失靈最壞一次</th><th>保守線到</th><th>目標線到</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+   '<th>一年內要補錢</th><th>停損失靈最壞一次</th><th>保守線到</th><th>目標線到</th>'+(hasSt?'<th>狀態</th>':'')+
+   '</tr></thead><tbody>'+rows+'</tbody></table></div>'+
    (mon?'<div class="gl-h">每月實際（券商端、已扣掉存入）</div><div class="gl-tw"><table class="gl-t">'+
      '<thead><tr><th>月份</th><th>存入</th><th>交易賺賠</th><th>目標</th></tr></thead><tbody>'+mon+'</tbody></table></div>':'')+
    '<div class="gl-notes">'+(G.notes||[]).map(n=>'<div>・'+esc(n)+'</div>').join('')+'</div></div>';
@@ -7264,6 +7483,10 @@ async function tick(nf){
     ⛔ 少了這一行，重啟之後他的「平倉」鈕會 403 按不動，而畫面上看不出原因。 */
  if(s&&s.token) PTOK=s.token;
  LASTS=s;
+ /* ⭐ 2026-10-14 口數：「可以升級／剛被減級」⇒ 分頁「自動下單」右上一個小金點（跟信件未讀同一個語彙）。
+    ⛔ 旗子是後端算的（s.lots.dot），⛔ 前端不自己判斷；只換 class，⛔ 不動按鈕上的字。 */
+ { const fb=document.querySelector('.tabs button[data-tab="fire"]');
+   if(fb) fb.classList.toggle('ltdot', !!(s&&s.lots&&s.lots.dot)); }
  /* ⚠️ 2026-09-23 v3：練習成績那一區從【即時】拿掉了 ⇒ 每 5 秒一次的 /api/stats 輪詢
     也跟著拿掉（它會讀所有紀錄檔，留著就是白白在 HTTP 執行緒上做磁碟 I/O）。
     ⛔ **後端 /api/stats 與 /api/export 一個字都沒拆** —— 手機 App 與下載那條路照舊。 */
@@ -8840,7 +9063,7 @@ var ALON={step:'idle',mode:null,busy:false,err:''};
 var RCAP={step:'idle',busy:false,err:'',ok:''};
 /* 本月風控那張卡（#alcap）。⛔ 數字與那句話全部從後端 D.risk 來，前端不自己算。
    ⛔ 用金色／中性灰，⛔ 不准用紅綠（紅綠只給損益）。 */
-function alCapHTML(R){
+function alCapHTML(R,L){
  if(!R||typeof R!=='object') return '';
  if(R.err) return '<div class="cap hit"><div class="hd"><span class="k">本月風控</span></div>'+
    '<div class="t">⚠️ '+esc(R.err)+' —— 算不出來的時候<b>不送單</b>（不猜）。</div></div>';
@@ -8879,6 +9102,11 @@ function alCapHTML(R){
    else
      h+='<div class="rbtn"><button class="btn" data-rcon="1">手動解除本月風控</button></div>';
  }
+ /* ⭐ 2026-10-14 多口：上限怎麼算（400 ×（a＋b））與「月中減級上限不掉」那句 —— 句子是後端 D.lots.cap 的。
+    ⛔ 1＋1 而且沒有月中換級時不畫（畫面跟以前一樣）。 */
+ const LC=(L&&L.cap)||null;
+ if(LC&&(LC.note||(Array.isArray(LC.ab)&&(Number(LC.ab[0])+Number(LC.ab[1]))!==2)))
+   h+='<div class="n">'+esc(LC.line||'')+'；點數是<b>每一筆的合計</b>（多口已經乘進去）。'+(LC.note?'<br>'+esc(LC.note):'')+'</div>';
  if(RCAP.err) h+='<div class="err">'+esc(RCAP.err)+'</div>';
  if(RCAP.ok) h+='<div class="n">'+esc(RCAP.ok)+'</div>';
  return h+'</div>';
@@ -8892,6 +9120,108 @@ function rcArm(){
     if(r&&r.ok){ RCAP.ok=(r.msg||'已解除')+(r.warn?('（'+r.warn+'）'):''); }
     else RCAP.err=(r&&r.msg)||'解除不了'; })
   .catch(()=>{ RCAP.busy=false; RCAP.step='idle'; RCAP.err='解除不了：連不上面板'; })
+  .then(()=>alFetch());
+}
+/* ══ ⭐ 2026-10-14 口數卡 #allots（LOTS-UI-SPEC §2.1～2.3）══
+   ⛔ 句子、日期、百分比、代價表全部從後端 D.lots（lots.panel）來，前端只畫（⛔ 不自己算）。
+   ⛔⛔ 升級＝放大真錢曝險 ⇒ 跟「打開自動下單」同一套兩段式：
+      第一段（data-upon）只換畫面、⛔ **零請求**；第二段紅底確認條「確定，升到…」（data-upyes）才
+      POST /api/lots/upgrade（帶後端給的 offer_id，⛔ 前端不組 id）。撤回（data-ltrev）是安全方向 ⇒ 一鍵、不確認。
+   ⛔ 兩段式狀態只活在記憶體（⛔ 不寫 localStorage），切進這一頁就回到 idle（alEnter）。 */
+var LTUP={step:'idle',busy:false,err:'',ok:''};
+/* ⭐ 「那一口」：多口時講「那一筆」（PM 10-14：1 口時維持原字，⛔ 既有字串與測試不動）。
+   口數＝後端 D.lots.run（日盤 a、夜盤 b）；讀不到 ⇒ 照舊「那一口」。sess：'d' 日盤／'n' 夜盤。 */
+function ltYi(sess){ const R=(((AL&&AL.data)||{}).lots||{}).run||{}; const n=Number(sess==='n'?R.b:R.a); return (n>1)?'那一筆':'那一口'; }
+function ltHTML(L){
+ if(!L||typeof L!=='object') return '';
+ if(!L.run) return '<div class="lt"><div class="lt-hd"><span class="h">口數</span></div>'+
+   '<div class="lt-say">'+esc(L.err||'讀不到口數狀態 —— 讀不到的時候照 1＋1 送')+'</div></div>';
+ const R=L.run, N=L.next, B=L.bar, V=L.verdict||{}, O=L.offer, P=L.pending, C=L.check||{};
+ const att=!!V.att;
+ let h='<div class="lt'+(att?' att':'')+'">'+
+  '<div class="lt-hd"><span class="h">口數</span><span class="r">'+esc(C.head||'')+'・下次 <b>'+esc(C.next_txt||'')+'</b></span></div>'+
+  (L.err?'<div class="lt-msg err">'+esc(L.err)+'</div>':'')+
+  '<div class="lt-top"><div class="lt-now"><div class="tot">'+esc(R.label||'')+'<u>'+esc(R.tier||'')+'</u></div>'+
+   '<div class="sub">'+(R.sub||'')+'</div>'+(R.capped?'<div class="cp">'+esc(R.capped)+'</div>':'')+'</div>'+
+  (N&&B?('<div class="lt-next"><div class="k"><span>下一級 <b>'+esc(N.eq_txt||'')+'・'+esc(N.label||'')+'</b></span>'+
+     '<span>權益 <b>'+esc(B.eq_txt||'—')+'</b></span></div>'+
+     '<div class="bar"><i style="width:'+Number(B.pct||0).toFixed(1)+'%"></i></div>'+
+     '<div class="sc"><span>'+esc(B.lo_txt||'0')+'</span><span>'+esc(B.next_txt||'')+'</span></div></div>')
+       :'<div class="lt-next"></div>')+'</div>'+
+  '<div class="lt-say'+(att?' g':'')+'">'+esc(V.title||'')+'<small>'+esc(V.sub||'')+'</small></div>';
+ /* ⭐ 老闆 10-14：試車進度「試車 3／5 筆」（五格小方塊＋句子；句子＝後端 L.trial.line，⛔ 前端不自己數） */
+ const TR=L.trial||{};
+ if(TR.line) h+='<div class="lt-trial">'+(Array.isArray(TR.pips)?'<span class="pips">'+
+   TR.pips.map(x=>'<i'+(x?' class="on"':'')+'></i>').join('')+'</span>':'')+'<span class="t">'+TR.line+'</span></div>';
+ const cs=Array.isArray(L.conds)?L.conds:[];
+ const bad=cs.filter(c=>c.ok===false), okN=cs.filter(c=>c.ok===true).length, tot=cs.filter(c=>c.ok!==null).length;
+ /* 還沒算過（剛上線、面板還沒過 14:00）⇒ 照實講（⛔ 不寫「0／0 過・全部通過」那種假話）；句子是後端的 */
+ if(L.conds_note) h+='<div class="lt-foot">'+esc(L.conds_note)+'</div>';
+ else h+='<details class="lt-cd"'+(L.conds_open?' open':'')+'><summary>升級條件 <b>'+okN+'／'+tot+'</b> 過'+
+   (bad.length?'・卡在：'+bad.map(c=>esc(c.name)).join('、'):'・全部通過')+'</summary>'+
+   '<div class="lt-conds">'+cs.map(c=>'<div class="lt-c'+(c.ok===false?' no':(c.ok===null?' na':''))+'">'+
+     '<span class="i">'+(c.ok===false?'✕':(c.ok===null?'·':'✓'))+'</span>'+
+     '<div class="w"><div class="k">'+esc(c.name||'')+'</div><div class="v">'+(c.html||'')+'</div></div></div>').join('')+'</div>'+
+   '<div class="lt-foot">'+esc(L.rule_foot||'')+'</div></details>';
+ if(P) h+='<div class="lt-done"><span class="g">已確認：<b>'+esc(P.eff_txt||'')+'起</b>做 '+esc((P.to||{}).label||'')+
+     '（'+esc(P.at_txt||'')+' 你按的）。在那之前改主意可以撤回，撤回不用再確認。</span>'+
+     '<button class="btn" data-ltrev="1"'+(LTUP.busy?' disabled':'')+'>'+(LTUP.busy?'撤回中…':'撤回，維持 '+esc(R.label||''))+'</button></div>';
+ else if(O) h+=ltActHTML(L);
+ if(LTUP.err) h+='<div class="lt-msg err">'+esc(LTUP.err)+'</div>';
+ if(LTUP.ok&&!P) h+='<div class="lt-msg">'+esc(LTUP.ok)+'</div>';   /* 已確認那一塊自己會講，⛔ 不重複 */
+ const H=Array.isArray(L.hist)?L.hist:[];
+ if(H.length) h+='<div class="lt-hist"><div class="k">口數紀錄</div>'+H.slice(0,3).map(x=>
+   '<div class="r"><span class="d">'+esc(x.date_txt||x.date||'')+'</span><span class="who">'+esc(x.who||'')+'</span><span>'+
+   (x.from&&x.to?'<b>'+esc(x.from)+' → '+esc(x.to)+'</b>：':'')+esc(x.why||'')+'</span></div>').join('')+'</div>';
+ return h+'</div>';
+}
+function ltActHTML(L){
+ const O=L.offer, R=L.run||{}, T=O.to||{};
+ if(LTUP.step==='confirm'){
+   const busy=LTUP.busy;
+   return '<div class="lt-act"><div class="al-conf real'+(busy?' lt-busy':'')+'">'+
+    '<div class="q">⚠️ '+(O.q||'')+'</div>'+
+    '<div class="lt-cmp-w"><table class="lt-cmp"><tr><th></th><th>現在 '+esc(R.ladder||R.label||'')+'</th><th>升級後 '+esc(T.label||'')+'</th></tr>'+
+    (O.costs||[]).map(c=>'<tr><td>'+esc(c.k)+'</td><td>'+esc(c.now)+'</td><td class="a">'+esc(c.after)+'</td></tr>').join('')+
+    '</table></div>'+
+    /* ⭐ 老闆 10-14：目標日盤 ≥ 5 口 ⇒ 醒目的停電代價＋提醒（句子＝後端 O.power） */
+    (O.power?'<div class="lt-pw">⚡ '+(O.power.line||'')+'<small>'+esc(O.power.remind||'')+'</small></div>':'')+
+    '<div class="fine">'+(O.fine||[]).map(x=>'・'+x).join('<br>')+'</div>'+
+    '<div class="btns2"><button class="btn go" data-upyes="1"'+(busy?' disabled':'')+'>'+
+      (busy?'升級中…':'確定，'+esc(O.arm_txt||('升到 '+(T.label||''))))+'</button>'+
+    '<button class="btn no" data-upno="1"'+(busy?' disabled':'')+'>取消</button></div></div></div>';
+ }
+ return '<div class="lt-act"><div class="row"><button class="btn arm" data-upon="1">'+esc(O.arm_txt||('升到 '+(T.label||'')))+
+   '（'+esc(T.eq_txt||'')+'級）</button></div>'+
+   '<div class="n">按下去會<b>再問你一次</b>，並列出升級後的代價。不按就維持 '+esc(R.label||'')+'；'+
+   esc(O.keep_txt||'')+'。</div></div>';
+}
+/* 頂部金條：只有「可以升級」「剛被減級／單條降級退休／事故暫停」才有（句子＝後端 D.lots.alarm）。
+   「看口數 ↓」⛔ 純導覽，⛔ 一個請求都不送。 */
+function ltBarHTML(L){
+ const A=(L&&Array.isArray(L.alarm))?L.alarm:[];
+ return A.map(a=>'<div class="al-alarm lt-alarm"><span class="g">'+esc(a.text||'')+'</span>'+
+   '<button class="go" data-ltjump="1">看口數 ↓</button></div>').join('');
+}
+function ltArm(){
+ const L=(AL.data||{}).lots||{}, O=L.offer;
+ if(LTUP.busy) return;
+ if(!O||!O.id){ LTUP.step='idle'; LTUP.err='現在沒有可以確認的升級建議'; alPaint(); return; }
+ LTUP.busy=true; LTUP.err=''; LTUP.ok=''; alPaint();
+ pfetch('/api/lots/upgrade',JSON.stringify({offer_id:O.id}))
+  .then(r=>r.json().catch(()=>({ok:false,msg:'面板回了看不懂的東西（HTTP '+r.status+'）'})))
+  .then(r=>{ LTUP.busy=false; LTUP.step='idle';
+    if(r&&r.ok) LTUP.ok=r.msg||'已確認'; else LTUP.err=(r&&r.msg)||'升不了'; })
+  .catch(()=>{ LTUP.busy=false; LTUP.step='idle'; LTUP.err='升不了：連不上面板'; })
+  .then(()=>alFetch());
+}
+function ltRevoke(){
+ if(LTUP.busy) return;
+ LTUP.busy=true; LTUP.err=''; LTUP.ok=''; alPaint();
+ pfetch('/api/lots/revoke','{}')
+  .then(r=>r.json().catch(()=>({ok:false,msg:'面板回了看不懂的東西（HTTP '+r.status+'）'})))
+  .then(r=>{ LTUP.busy=false; if(r&&r.ok) LTUP.ok=r.msg||'已撤回'; else LTUP.err=(r&&r.msg)||'撤不回來'; })
+  .catch(()=>{ LTUP.busy=false; LTUP.err='撤不回來：連不上面板'; })
   .then(()=>alFetch());
 }
 /* ⚠️ 2026-09-15 自動下單只剩 A，名字改成「開盤快才做」（跟後端 auto_fire.METHOD_NAME 同一組字）。
@@ -9017,6 +9347,7 @@ function alEnter(){
  ALON.step='idle'; ALON.mode=null; ALON.busy=false; ALON.err='';
  NFON.step='idle'; NFON.mode=null; NFON.busy=false; NFON.err='';
  RCAP.step='idle'; RCAP.busy=false; RCAP.err=''; RCAP.ok='';
+ LTUP.step='idle'; LTUP.busy=false; LTUP.err=''; LTUP.ok='';
  alFetch(); NF.n=0; nfFetch();
  if(AL.timer) clearTimeout(AL.timer);
  AL.timer=setTimeout(alLoop,5000);
@@ -9077,11 +9408,12 @@ function alWhy(x,fallback){
       （2026-09-09 lab-qa Q9：顯示條件看 `armed` 的話，壞掉的開關檔他關不掉，
         而「關」永遠是安全方向。）
    ⚠️ 關著時右邊那顆是「到開關」——**純導覽**，⛔ 一個請求都不送（只捲到最底下那張卡）。 */
-function alPillHTML(lb,nm,on,live,canOff,offAttr,msg){
+function alPillHTML(lb,nm,on,live,canOff,offAttr,msg,q){
  /* ⭐ 2026-10-01：日盤／夜盤標籤上色（☀ 藍、☾ 紫；⛔ 不用紅綠金） */
  const c=lb==='日盤'?'d':(lb==='夜盤'?'n':'');
+ /* ⭐ 2026-10-14 口數（`q`＝後端 D.lots.pills 那一句：「1 口」／「1 口 → 明天 2 口」；夜盤是今晚的口數） */
  return '<div class="al-pill'+(on?' on':'')+'"><span class="lb '+c+'">'+(c==='d'?'☀ ':(c==='n'?'☾ ':''))+esc(lb)+'</span>'+
-   '<span class="nm">'+esc(nm||'—')+'</span>'+
+   '<span class="nm">'+esc(nm||'—')+'</span>'+(q?'<span class="q">'+esc(q)+'</span>':'')+
    '<span class="st">'+esc(on?(live?'開著・真錢':'開著・演練'):(msg||'關著'))+'</span>'+
    (canOff?('<button class="off" '+offAttr+'>關閉</button>')
           :'<button class="off" data-aljump="1">到開關</button>')+'</div>';
@@ -9104,12 +9436,13 @@ function alBarHTML(D){
  /* 「檔在、但內容看不懂」⇒ 拒絕下單：⛔ 不可以畫成「開著」（那是假話），
     但也不是「關著」（那個檔還在）⇒ 照後端那句話講。 */
  const dayMsg=dayOff?(dayArm?'':(D.arm_msg||alWhy(D.arm_why)||'拒絕下單')):'關著';
+ const LP_=((D&&D.lots&&D.lots.pills)||{});
  let h=alPillHTML('日盤', alDayName(D),
-                  dayArm, !!(D&&D.live), dayOff, 'data-aloff="1"', dayMsg);
+                  dayArm, !!(D&&D.live), dayOff, 'data-aloff="1"', dayMsg, LP_.day);
  /* 夜盤同一套規矩：⛔ 開關檔在不在（x.flag_exists）＝ 那顆「關閉」要不要畫，⛔ 不看 on。 */
  if(x) h+=alPillHTML('夜盤', nfName(x, x.on?x.method:null),
                      !!x.on, !!x.live, !!x.flag_exists, 'data-nfoff="1"',
-                     x.flag_exists?(x.msg||'拒絕下單'):'關著');
+                     x.flag_exists?(x.msg||'拒絕下單'):'關著', LP_.night);
  else h+='<div class="al-pill"><span class="lb">夜盤</span><span class="nm">—</span>'+
    '<span class="st">'+esc(NF.err||'載入中…')+'</span></div>';
  return h;
@@ -9130,7 +9463,7 @@ function alPaint(){
    /* ⛔⛔ 讀不到狀態時「打開」那幾顆更不能留：我們連現在是真錢還是演練都不知道。
       ⛔ 「關閉」也一樣收起來 —— 我們不知道開關檔在不在。 */
    setEl('algates',''); setEl('alcap',''); setEl('alfast',''); setEl('alrisk',''); setEl('altoday','');
-   setEl('alswitch',''); setEl('alpos','');
+   setEl('alswitch',''); setEl('alpos',''); setEl('allots',''); setEl('allotsbar','');
    setEl('alperf',''); setEl('alsparkbox',''); setEl('alperfn','');
    setEl('altbl',''); setEl('alempty',''); setEl('alnotes','');
    setEl('aldayname',''); setEl('alswsum','');
@@ -9195,7 +9528,10 @@ function alPaint(){
      '<div class="v">'+esc(String(D.qty||1))+' 口 · 停利停損 &plusmn;'+
        esc(alPct(D)==null?'—':String(alPct(D)))+'% · 一天最多 1 次</div></div>');
  /* ⭐ 2026-09-24 風控規則 B：本月自動單損益／上限（到上限才有「手動解除」）。 */
- setEl('alcap', alCapHTML(D.risk));
+ setEl('alcap', alCapHTML(D.risk, D.lots));
+ /* ⭐ 2026-10-14 口數卡＋頂部金條（句子全部從後端 D.lots 來） */
+ setEl('allots', ltHTML(D.lots));
+ setEl('allotsbar', ltBarHTML(D.lots));
  /* 今天的門檻與判定（快／不快／歷史不夠）—— 掛在開關區，今天那張卡收起來時也看得到。 */
  setEl('alfast',alFastHTML(D));
 
@@ -9237,7 +9573,7 @@ function alPaint(){
        (!armed&&nOn?('<p><i>&#9888;</i><span>這個開關<b>沒有有效期</b> —— '+
          '每個晚上都會看一次，直到你自己關掉。</span></p>'):'')+
        /* ③④ 夜盤自己的兩句（CLAUDE.md 2026-09-22 那節）。⛔ 夜盤關著時不畫。 */
-       (nOn?('<p><i>&#9888;</i><span>夜盤那一口的停損<b>一樣活在這台面板裡</b>'+
+       (nOn?('<p><i>&#9888;</i><span>夜盤'+ltYi('n')+'的停損<b>一樣活在這台面板裡</b>'+
                '（永豐沒有停損單）。</span></p>'+
              '<p><i>&#9888;</i><span>所以有部位的晚上<b>面板要整晚開著</b> —— '+
                '04:58 才會自動平倉。</span></p>'):'')+
@@ -9285,11 +9621,13 @@ function alPaint(){
  const openedToday=!!(row&&row.rec==='result'&&row.ok);
  setEl('altoday', merged ? ''
    : ((openedToday&&!armed)
-      ? ('<div class="t">日盤已經關掉了，但<b style="color:var(--gold)">今天那一口還在</b></div>'+
+      ? ('<div class="t">日盤已經關掉了，但<b style="color:var(--gold)">今天'+ltYi('d')+'還在</b></div>'+
          '<div class="d">它照樣走完停損停利與 <b>'+esc(D.eod_at||'')+'</b> 的自動平倉。<br>'+
          '關掉生效的是<b>之後的日子</b> —— 明天開始不再送單。</div>'
          + alEodHTML(D,row))
-      : (alTodayHTML(D,row)+alCandsHTML(D,row)+alEodHTML(D,row))));
+      : (alTodayHTML(D,row)+alCandsHTML(D,row)+alEodHTML(D,row)))
+   /* ⭐ 2026-10-14「今天 N 口」（句子＝後端 D.lots.day_line；剛減級那天接「昨天是 N 口」） */
+   + ((D.lots&&D.lots.day_line)?'<div class="lq">'+D.lots.day_line+'</div>':''));
  /* 右半：現在的部位（⛔ 唯讀；⛔ 開關關掉了也照樣畫 —— 部位還在就是還在） */
  setEl('alpos', alPosHTML(D,row));
 
@@ -9327,7 +9665,8 @@ function alNightHTML(){
  if(r&&r.rec==='result'&&r.ok){
    const dir=r.dir==='long'?'做多':(r.dir==='short'?'做空':'—');
    const R=nfReal(x,E), p=R?alN(R.points):null;
-   return '<div class="t">已出手：'+esc(nfName(x,r.method||null))+' → '+esc(dir)+'　1 口</div>'+
+   /* ⭐ 2026-10-14：口數照帳本那一列**實際成交**的口數（舊帳本沒有 ⇒ 1 口），⛔ 不寫死 1 口 */
+   return '<div class="t">已出手：'+esc(nfName(x,r.method||null))+' → '+esc(dir)+'　'+esc(String(alN(r.qty)||1))+' 口</div>'+
      '<div class="d">進場 <b>'+esc(alF(r.entry))+'</b>　'+
      (R?('出場 <b>'+esc(alF(R.exit))+'</b>（'+esc(String(R.exit_time||'').slice(0,5))+'）　<b class="'+sgn(p)+'">'+
           (p==null?'—':pm(p))+' 點</b>')
@@ -9345,7 +9684,10 @@ function alNightPaint(){
  const x=NF.data;
  setEl('alnightname', esc(x?nfName(x,x.on?x.method:null):''));
  setEl('alnightwhen', esc(x&&x.tonight&&x.tonight.look_at?(x.tonight.look_at+' 判定'):''));
- setEl('alnight', alNightHTML());
+ /* ⭐ 2026-10-14「今晚 N 口」（句子＝後端 D.lots.tonight.line：b＝1 只寫「今晚 1 口」；b≥2 講振幅指標與門檻；
+    資料不夠新照實講「照沒偏高算」）。⛔ 判定時刻一律用後端的 look_at，⛔ 前端不寫死。 */
+ const TL=((AL.data||{}).lots||{}).tonight;
+ setEl('alnight', alNightHTML()+((x&&TL&&TL.line)?'<div class="lq">'+TL.line+'</div>':''));
 }
 /* ⭐ ② 「現在的部位」（⛔ 唯讀、⛔ 一顆鈕都沒有）。
    ⛔ 部位那幾個數字來自 /api/state 的 `real`（跟【即時】那張卡、跟停損監控**同一份**）——
@@ -9356,14 +9698,14 @@ function alNightPaint(){
 function alPosHTML(D,row){
  const s=LASTS||{}, R=s.real||{}, P=R.position;
  const nfp=NF.data;
- const nfline='<div class="r2">夜盤那一口：<b>'+
+ const nfline='<div class="r2">夜盤'+ltYi('n')+'：<b>'+
    esc(nfp?(nfp.on?(nfp.tonight?('今晚 '+(nfp.tonight.look_at||'')+' 才看'):'沒有部位'):'關著'):'—')+
    '</b></div>';
  if(!P){
    /* ⛔ 「現在沒有部位」與「最早幾點會有」是兩句不同的話（後者只有開著才成立）。 */
    const when=[];
-   if(D&&D.armed&&D.signal_at) when.push('日盤那一口最早 '+D.signal_at);
-   if(nfp&&nfp.on&&nfp.tonight&&nfp.tonight.look_at) when.push('夜盤那一口最早 '+nfp.tonight.look_at);
+   if(D&&D.armed&&D.signal_at) when.push('日盤'+ltYi('d')+'最早 '+D.signal_at);
+   if(nfp&&nfp.on&&nfp.tonight&&nfp.tonight.look_at) when.push('夜盤'+ltYi('n')+'最早 '+nfp.tonight.look_at);
    return '<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
      '<div class="none">現在沒有部位。'+(when.length?('<br><span style="font-size:13px">'+esc(when.join('、'))+'。</span>'):'')+'</div></div>';
  }
@@ -9380,7 +9722,7 @@ function alPosHTML(D,row){
    const lo=-slP, hi=tpP||Math.max(slP,v*1.4,1);
    const pc=q=>Math.max(0,Math.min(100,100*(q-lo)/(hi-lo))), z=pc(0), c=pc(v);
    gauge='<div class="al-gauge"><div class="dist"><span>離停損還有 <b>'+(fp==null?'—':Math.round(slP+v))+'</b> 點</span><span>'+
-     (tpP!=null?('離停利還差 <b>'+(fp==null?'—':Math.round(tpP-v))+'</b> 點'):('不設停利'+(exitAt?'，抱到 '+esc(exitAt):'')))+'</span></div>'+
+     (tpP!=null?('離停利還差 <b>'+(fp==null?'—':Math.round(tpP-v))+'</b> 點'):('不設停利'+(exitAt&&!P.no_auto_exit?'，抱到 '+esc(exitAt):'')))+'</span></div>'+
      '<div class="track"><i class="lz" style="width:'+z+'%"></i>'+(tpP!=null?'<i class="wz" style="width:'+(100-z)+'%"></i>':'')+
      '<i class="fill '+(v>=0?'up':'down')+'" style="left:'+Math.min(z,c)+'%;width:'+Math.abs(c-z)+'%"></i>'+
      '<i class="entry" style="left:'+z+'%"></i><i class="now" style="left:'+c+'%"><b class="bub '+sgn(fp)+'">'+
@@ -9390,15 +9732,27 @@ function alPosHTML(D,row){
      (tpP!=null?('<span class="r">停利（賺 '+Math.round(tpP)+' 點）▶<b>'+f(tp)+'</b></span>'):'<span class="r">往右＝賺 ▶</span>')+
      '</div></div>';
  }
+ /* ⭐ 2026-10-14 多口（LOTS-UI-SPEC §2.4）：qty>1 時大字單位「點／口」、kv 第一格「N 口合計」、底下一句「N 口一起」。
+    ⛔ qty＝1 時下面每一個字都跟以前一模一樣（mq 是空字串）。合計＝每口點數 × 口數（R.float_pts 是每口）。 */
+ const nq=alN(P.qty), multi=(nq!=null&&nq>1);
+ const mq=multi?('<span>'+esc(String(nq))+' 口合計 <b class="'+sgn(fp)+'">'+(fp==null?'—':pm(fp*nq))+' 點</b>'+
+     (fp==null?'':'（約 '+pm(fp*nq*10)+' 元）')+'</span>'):'';
  return '<div class="al-pos live"><div class="hd"><span>現在的部位</span>'+
-   (exitAt?('<span>沒平掉就 <b>'+esc(exitAt)+' 自動平</b></span>'):'')+'</div>'+
+   /* ⭐ QA r2 必修 2：他自己加碼過／交接成他的手動部位／對不上 ⇒ 收盤／04:58 不會自動平（⛔ 不能再寫「沒平掉就 XX 自動平」） */
+   (P.no_auto_exit?'<span><b>收盤／04:58 不會自動平</b></span>':
+     (exitAt?('<span>沒平掉就 <b>'+esc(exitAt)+' 自動平</b></span>'):''))+'</div>'+
    '<div class="who">'+(night?'<span class="ses n">☾ 夜盤</span>':'<span class="ses d">☀ 日盤</span>')+' '+esc(dir)+' '+qty+' 口</div>'+
-   '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+'<u>點</u></div>'+
-   '<div class="kv"><span>進場 <b>'+f(P.entry)+'</b>'+
+   '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+'<u>'+(multi?'點／口':'點')+'</u></div>'+
+   '<div class="kv">'+mq+'<span>進場 <b>'+f(P.entry)+'</b>'+
      (P.entry_time?'（'+esc(String(P.entry_time).slice(0,8))+'）':'')+'</span>'+
    '<span>現價 <b>'+f(livePx(s))+'</b></span>'+
-   (gauge?'':('<span>停損 / 停利 <b>'+(R.sl==null?'—':f(R.sl))+' / '+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></span>'))+'</div>'+
+   (gauge?'':(P.stop_off?'<span><b style="color:var(--gold)">停損不會執行，請自己處理</b></span>':
+     ('<span>停損 / 停利 <b>'+(R.sl==null?'—':f(R.sl))+' / '+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></span>')))+'</div>'+
    gauge+
+   (multi&&!P.lot_note_kind?'<div class="r2">停損、平倉都是 <b>'+esc(String(nq))+' 口一起</b>。</div>':'')+
+   (P.lot_note_kind==='touched'?'<div class="r2">停損只平程式開的 <b>'+esc(String(P.own_left))+' 口</b>，你自己加的那幾口不動。</div>':'')+
+   /* ⭐ 一句實話（句子＝後端 broker.pos_note；一口的部位沒有這個欄位 ⇒ 畫面跟以前一樣） */
+   (P.lot_note?'<div class="n" style="color:var(--gold)">⚠️ '+esc(P.lot_note)+'。</div>':'')+
    (night?'':nfline)+
    (P.no_tp?'<div class="n" style="color:var(--gold)">'+noTpTag()+'：券商端無掛單 —— '+
      '這一口沒有停利單、永豐又沒有停損單，<b>停損與收盤平倉都靠面板</b>。</div>':'')+
@@ -9415,7 +9769,7 @@ function alPts(D,days){
  for(let i=days.length-1;i>=0;i--){
    const r=days[i]; if(!r||r.rec!=='result'||!r.ok) continue;
    const X=R[r.date]; if(!X||X.state!=='ok'||!alN(X.points)) continue;
-   out.push({date:r.date, k:r.date+' 09', mo:r.date, pts:X.points});
+   out.push({date:r.date, k:r.date+' 09', mo:r.date, pts:X.points, q:(alN(X.qty)||alN(r.qty)||1)});
  }
  /* ⭐ 2026-10-14：夜盤那幾口也算進來（Benson：資料對不起來）——【本月風控】一直是日盤＋夜盤一起算，
     這裡只算日盤的話「本月合計」永遠跟它對不上。排序鍵用那一晚 E 的 21 點；
@@ -9423,7 +9777,7 @@ function alPts(D,days){
  const x=NF.data, NR=(x&&x.real)||{};
  ((x&&x.results)||[]).forEach(o=>{
    const E=String(o.E||''), X=NR[E]; if(!X||X.state!=='ok'||!alN(X.points)) return;
-   out.push({date:E, k:E+' 21', mo:E, pts:X.points, night:true});
+   out.push({date:E, k:E+' 21', mo:E, pts:X.points, q:(alN(X.qty)||alN(o.qty)||1), night:true});
  });
  out.sort((a,b)=>(a.k<b.k?-1:(a.k>b.k?1:0)));
  return out;
@@ -9433,7 +9787,8 @@ function alPerfPaint(D,days){
  const avg=n=>{ const a=P.slice(-n); return a.length?a.reduce((x,y)=>x+y.pts,0)/a.length:null; };
  const mo=(D.today||'').slice(0,7);
  const moRows=P.filter(x=>String(x.mo).slice(0,7)===mo);
- const moSum=moRows.length?moRows.reduce((x,y)=>x+y.pts,0):null;
+ /* ⭐ 2026-10-14 多口：本月合計＝每一筆的**合計**（每口 × 口數，跟本月卡／風控同一把尺）；上面兩個平均照舊用**每口**（看策略品質，⛔ 不被口數灌水）。1 口時 q＝1、數字跟以前一樣 */
+ const moSum=moRows.length?moRows.reduce((x,y)=>x+y.pts*(y.q||1),0):null;
  setEl('alperfn', P.length?(P.length+' 筆算得出點數'):'還沒有算得出點數的紀錄');
  if(!P.length){
    setEl('alperf','');
@@ -9474,13 +9829,16 @@ function nfCard(o){
  const sib=(o.rec==='eod')?(((NF.data&&NF.data.recent)||[]).filter(z=>z.rec==='result'&&String(z.E||'')===E)[0]||null):null;
  const meth=o.method||(sib&&sib.method)||null;
  const cls=(pts==null)?'':(pts>0?' win':' loss');
+ /* ⭐ 2026-10-14 多口：同日盤那一套（×N 小標、右邊合計、meta 前面「N 口・每口」）；⛔ 1 口時一個字都不變 */
+ const nq=(R&&alN(R.qty))||alN(o.qty)||1, multi=sent&&o.ok&&nq>1;
  /* ⚠️ 日期欄寫「那一晚」（E）＋「晚」：出場在隔天清晨，券商成績單記在隔天 —— 寫明是哪一晚才不會跟日盤錯開一天 */
  return '<div class="trade'+cls+'"><div class="tr-top">'+
    '<span class="tr-date">'+esc(E.slice(5))+' 晚</span>'+
    (dir?'<span class="dir '+(o.dir==='long'?'l':'s')+'">'+dir+'</span>':'')+
+   (multi?'<span class="qty">×'+esc(String(nq))+'</span>':'')+
    '<span class="tr-px">'+px+'</span>'+
-   '<span class="tr-res '+(pts==null?'na':(pts>0?'r-win':'r-loss'))+'">'+(pts==null?'—':pm(pts))+'</span></div>'+
-   '<div class="al-meta">'+esc(nfName(NF.data,meth))+
+   '<span class="tr-res '+(pts==null?'na':(pts>0?'r-win':'r-loss'))+'">'+(pts==null?'—':pm(multi?pts*nq:pts))+'</span></div>'+
+   '<div class="al-meta">'+(multi&&pts!=null?'<b>'+esc(String(nq))+' 口・每口 '+pm(pts)+'</b> · ':'')+esc(nfName(NF.data,meth))+
      (R?('・'+esc(String(o.entry_time||'').slice(0,5))+' → '+esc(String(R.exit_date||'').slice(5))+' '+esc(String(R.exit_time||'').slice(0,5)))
        :((sent&&o.ok)?'・04:58 平倉':''))+
      (why&&!R?' · '+esc(why):'')+'</div></div>';
@@ -9520,7 +9878,7 @@ function alSelHead(lb,nm,on,live,canOff,offAttr){
 function alOffNote(scope,entered,eodT){
  if(scope==='day'&&entered)
    return '<div class="n">關掉之後每個交易日就不再送單。'+
-     '<b style="display:block;margin-top:5px;color:var(--gold)">&#9888; 今天已經開出去的那一口不受影響</b>'+
+     '<b style="display:block;margin-top:5px;color:var(--gold)">&#9888; 今天已經開出去的'+ltYi('d')+'不受影響</b>'+
      '<span style="display:block">它照樣走完停損停利與 <b>'+esc(eodT||'')+
      '</b> 的自動平倉。關掉的是<b>之後的日子</b>。</span></div>';
  if(scope==='day')
@@ -9752,6 +10110,19 @@ document.addEventListener('click', function(e){
  /* ⭐ 風控「手動解除」：第一段 ⛔ 零請求；第二段才 POST。 */
  const rc=e.target.closest('[data-rcon]');
  if(rc){ RCAP.step='confirm'; RCAP.err=''; RCAP.ok=''; alPaint(); return; }
+ /* ⭐ 2026-10-14 口數：升級第一段 ⛔ 零請求（只換畫面＋把確認條捲到眼前）；第二段才 POST；撤回一鍵。 */
+ const uo=e.target.closest('[data-upon]');
+ if(uo){ if(uo.disabled) return; LTUP.step='confirm'; LTUP.err=''; LTUP.ok=''; alPaint();
+   const cf=document.querySelector('#allots .lt-act .al-conf'); if(cf) cf.scrollIntoView({behavior:'smooth',block:'nearest'});
+   return; }
+ const un=e.target.closest('[data-upno]');
+ if(un){ if(un.disabled) return; LTUP.step='idle'; LTUP.err=''; alPaint(); return; }
+ const uy=e.target.closest('[data-upyes]');
+ if(uy){ if(uy.disabled) return; ltArm(); return; }
+ const ur=e.target.closest('[data-ltrev]');
+ if(ur){ if(ur.disabled) return; ltRevoke(); return; }
+ const uj=e.target.closest('[data-ltjump]');
+ if(uj){ const c=document.getElementById('allots'); if(c) c.scrollIntoView({behavior:'smooth',block:'start'}); return; }
  const rn=e.target.closest('[data-rcno]');
  if(rn){ if(rn.disabled) return; RCAP.step='idle'; RCAP.err=''; alPaint(); return; }
  const ry=e.target.closest('[data-rcyes]');
@@ -10061,6 +10432,11 @@ function alCard(D,r,isToday){
  else meta=esc(alRecName(D,r)||'—')+(alLeg(D,r)?'・'+esc(alLeg(D,r)):'')+(et?(' · '+et+' 送出'):'')+
    ' · 停利掛 '+esc(alF(r.tp,0))+' · 滑價 '+esc(alSigned(r.slip))+
    ' · '+esc(alSimTxt(D,r));
+ /* ⭐ 2026-10-14 多口（LOTS-UI-SPEC §2.4／待拍板 #5 推薦）：qty>1 才多一個 ×N 小標；右邊＝**合計**點數
+    （跟本月合計、風控同一把尺）；meta 最前面加粗「N 口・每口 ±X」。⛔ qty＝1 時這一列一個字都不變。
+    口數：成績單那一趟的 qty（含停利先成交的那幾口），沒有就用帳本那一列實際成交的口數。 */
+ const nq=(R&&alN(R.qty))||alN(r.qty)||1, multi=sent&&nq>1;
+ if(multi&&done&&pts!=null) meta='<b>'+esc(String(nq))+' 口・每口 '+pm(pts)+'</b> · '+meta;
  /* 今天版：金框、日期欄寫「今天」、點數旁掛「已出場」標（⛔ 標掛在 .tr-res 前面，
     不塞進 157.6px 的 .tr-px —— 塞進去會折行，卡片就跟練習那份不一樣高了）。 */
  return '<div class="trade'+cls+(isToday?' tr-today':'')+'"><div class="tr-top">'+
@@ -10068,10 +10444,11 @@ function alCard(D,r,isToday){
    (sent&&(r.dir==='long'||r.dir==='short')
      ? '<span class="dir '+(r.dir==='long'?'l':'s')+'">'+
        (r.dir==='long'?'▲ 多':'▼ 空')+'</span>' : '')+
+   (multi?'<span class="qty">×'+esc(String(nq))+'</span>':'')+
    '<span class="tr-px">'+px+'</span>'+
    (isToday&&done?'<span class="tr-chip">已出場</span>':'')+
    '<span class="tr-res '+(pts==null?'na':(pts>0?'r-win':'r-loss'))+'">'+
-     (pts==null?'—':pm(pts))+'</span></div>'+
+     (pts==null?'—':pm(multi?pts*nq:pts))+'</span></div>'+
    '<div class="al-meta">'+meta+'</div></div>';
 }
 /* ⚠️ 2026-09-23 v3：舊的 alTblHTML() 併進 alRows()（日盤與夜盤合併成同一份清單）。
@@ -10255,7 +10632,8 @@ class Handler(BaseHTTPRequestHandler):
         # ⛔ 武裝那兩顆只收 POST。沒有 do_HEAD 的話 BaseHTTPRequestHandler 會回 501
         #    （語意上也是拒絕），但這兩顆要回**明確的 405**。
         #    其餘路徑維持原本的行為（這支面板從來不服務 HEAD）。
-        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on", "/api/risk/override"):
+        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on", "/api/risk/override",
+                                         "/api/lots/upgrade", "/api/lots/revoke"):
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
         self.send_error(501, "Unsupported method ('HEAD')")
 
@@ -10411,6 +10789,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._json(500, {"ok": False, "msg": "記不起來：" + str(e)[:150]})
             return self._json(200, {"ok": True, "changed": changed})
+
+        # ⭐ 2026-10-14 口數：升級（⛔ 前端兩段式；只收這個月建議的那一級）／撤回（一鍵，安全方向）。
+        #   ⛔ 路由精確比對；六道防護在 do_POST 入口已經過了（⛔ 這裡不再呼叫第二次）。
+        if self.path == "/api/lots/upgrade":
+            code, out = lots_upgrade(body, who=self.client_address[0] if self.client_address else "?")
+            return self._json(code, out)
+
+        if self.path == "/api/lots/revoke":
+            code, out = lots_revoke(who=self.client_address[0] if self.client_address else "?")
+            return self._json(code, out)
 
         # ⭐ 2026-09-24 風控規則 B 的「手動解除」：⛔ 前端兩段式；⛔ 路由精確比對。
         if self.path == "/api/risk/override":
@@ -10714,7 +11102,8 @@ class Handler(BaseHTTPRequestHandler):
         # ⛔⛔ 武裝那顆**只收 POST**：GET／HEAD 一律 405。
         #    網頁上一個 <img src>、一條他點下去的連結、瀏覽器的預抓
         #    都不可以變成「幫他打開自動下單」（GET 連 CORS 那一關都不用過）。
-        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on", "/api/risk/override"):
+        if self.path.split("?", 1)[0] in ("/api/fire/on", "/api/nightfire/on", "/api/risk/override",
+                                         "/api/lots/upgrade", "/api/lots/revoke"):
             return self._json(405, {"ok": False, "msg": "這個端點只收 POST"})
         # ⭐ 【健檢】（2026-09-23）：⛔ **唯讀**、⛔ 一個位元組都不寫、⛔ 不碰 _lock／部位。
         #   ⛔⛔ **不可以掛在高頻輪詢上**：前端只在切進【健檢】那一頁時打一次；
@@ -10778,7 +11167,7 @@ class Handler(BaseHTTPRequestHandler):
                 #   （畫面「最近做得如何」要日盤夜盤一起算，才會跟【本月風控】同一個數）。⛔ 包 try：算不出來只是留白。
                 try:
                     res = night_results()
-                    out["results"] = [{k: o.get(k) for k in ("E", "method", "dir", "entry", "entry_time", "live")}
+                    out["results"] = [{k: o.get(k) for k in ("E", "method", "dir", "entry", "entry_time", "live", "qty")}
                                       for o in res]
                     out["real"] = night_real_pairs(res)
                 except Exception as e:      # noqa: BLE001
@@ -10849,6 +11238,8 @@ class Handler(BaseHTTPRequestHandler):
                     out["risk"] = risk_view()
                 except Exception as _re:
                     out["risk"] = {"err": "風控算不出來：%s" % str(_re)[:120], "blocked": True}
+                # ⭐ 2026-10-14 口數卡（lots.panel：句子全在後端組好；⛔ 讀不到也只是那一塊寫「讀不到、照 1＋1 送」）
+                out["lots"] = lots_panel_now()
                 # 兩段式確認第二段要帶的 token。跨站讀不到這份 JSON ⇒ 拿不到它。
                 out["token"] = FIRE_TOKEN
                 return self._json(200, out)
@@ -11335,19 +11726,30 @@ def equity_view(now=None):
         held = m.get("initial_margin")
         holding = isinstance(held, (int, float)) and held > 0
         after = float(avail) + (float(held) if holding else 0.0)
-        ok = after >= lot1
-        enough = {"ok": ok, "why": "holding" if holding else None, "need": lot1, "avail": float(avail),
+        # ⭐ 2026-10-14 多口：要壓的保證金 ＝ 一口 × max(a, b)（日夜盤部位不重疊；lots.margin_lots）。
+        #    1＋1 ⇒ n＝1 ⇒ 底下每一個數字、每一句話都跟以前一模一樣。
+        try:
+            n = int(lots.margin_lots())
+        except Exception:                      # noqa: BLE001  ⛔ 讀不到口數 ⇒ 照 1 口算（跟送單那邊同一個退路）
+            n = 1
+        need = float(lot1) * n
+        ok = after >= need
+        unit = "一口要" if n == 1 else ("%d 口要" % n)
+        nxt = "下一口" if n == 1 else ("下一筆（%d 口）" % n)
+        enough = {"ok": ok, "why": "holding" if holding else None, "need": need, "avail": float(avail),
                   "since": EQUITY.get("tfx_at") or EQUITY.get("lot1_at"), "src": lot1_src}
+        if n != 1:
+            enough.update(lots=n, lot1=lot1)
         if holding:
             enough["after"] = round(after, 1)
-            enough["msg"] = ("現在有部位壓著 %s；平倉後約可動用 %s／一口要 %s（%s）—— %s"
+            enough["msg"] = ("現在有部位壓著 %s；平倉後約可動用 %s／%s %s（%s）—— %s"
                              % (format(int(round(held)), ","), format(int(round(after)), ","),
-                                format(int(round(lot1)), ","), lot1_src,
-                                "平倉後夠下一口" if ok else "⚠️ 平倉後也不夠，下一口會被券商退單"))
+                                unit, format(int(round(need)), ","), lot1_src,
+                                ("平倉後夠" + nxt) if ok else ("⚠️ 平倉後也不夠，%s會被券商退單" % nxt)))
         else:
-            enough["msg"] = ("可動用 %s／一口要 %s（%s）—— %s"
-                             % (format(int(round(avail)), ","), format(int(round(lot1)), ","), lot1_src,
-                                "夠下一口" if ok else "⚠️ 不夠，下一口會被券商退單"))
+            enough["msg"] = ("可動用 %s／%s %s（%s）—— %s"
+                             % (format(int(round(avail)), ","), unit, format(int(round(need)), ","), lot1_src,
+                                ("夠" + nxt) if ok else ("⚠️ 不夠，%s會被券商退單" % nxt)))
     fee = float(m.get("fee") or 0) + float(m.get("tax") or 0)
     pl = None
     if isinstance(m.get("future_open_position"), (int, float)) \
@@ -11379,7 +11781,14 @@ def goal_view(now=None):
         m = EQUITY.get("m") or {}
         eq = m.get("equity_amount")
         dep = m.get("deposit_withdrawal") if isinstance(m.get("deposit_withdrawal"), (int, float)) else 0.0
-        return goal.view(equity_hist_read(), eq if isinstance(eq, (int, float)) else None, dep, now, live=m)
+        G = goal.view(equity_hist_read(), eq if isinstance(eq, (int, float)) else None, dep, now, live=m)
+        # ⭐ 2026-10-14：權益夠了 ≠ 已經升級 ⇒ 「現在在跑哪一級」那句、階梯的狀態欄、#lotsline 那一行用口數的正本改
+        #    （⛔ 計畫線照舊是 goal.py 算的；口數讀不到 ⇒ 原封不動）
+        try:
+            G = lots.goal_overlay(G, lots_panel_now(now))
+        except Exception:                  # noqa: BLE001
+            pass
+        return G
     except Exception as e:                 # noqa: BLE001
         return {"ok": False, "msg": "目標算不出來：%s" % str(e)[:100]}
 
@@ -11531,6 +11940,14 @@ def equity_cushion(eq, lot1, px=None, day_on=None, night_on=None):
             night_on = bool(night_fire.arm().get("on"))
     except Exception:
         day_on, night_on = True, True
+    # ⭐ 2026-10-14 多口（QA 建議：口數問 lots）：不是 1＋1 ⇒ 保證金 × max(a, b)、一次停損 × 那一條的口數。
+    #    ⛔ 1＋1（含 lots 讀不到）⇒ 走下面原本那一段，一個字都不差。
+    try:
+        la, lb = lots.base_lots()
+    except Exception:                                  # noqa: BLE001
+        la, lb = 1, 1
+    if (la, lb) != (1, 1):
+        return _equity_cushion_multi(eq, lot1, px, day_on, night_on, la, lb)
     rec = float(lot1) + 2 * risk_cap.DD_PER_LOT * risk_cap.PT_NTD
     cush = float(eq) - float(lot1)
     out = {"cushion": round(cush), "pts": int(cush // risk_cap.PT_NTD), "rec": int(round(rec, -3)),
@@ -11551,6 +11968,35 @@ def equity_cushion(eq, lot1, px=None, day_on=None, night_on=None):
         out["msg"] = ("權益比一口保證金多 %s 元（約 %d 點），撐得住一次停損（約 %d 點）"
                       % (format(int(round(cush)), ","), out["pts"], stop))
     return out
+
+
+def _equity_cushion_multi(eq, lot1, px, day_on, night_on, a, b):
+    """多口版的 equity_cushion：保證金 ＝ 一口 × max(a, b)；一次停損 ＝ 開著的那幾條裡（每口停損點數 × 口數）最大的那個。"""
+    n = max(a, b, 1)
+    margin = float(lot1) * n
+    rec = margin + 2 * risk_cap.DD_PER_LOT * risk_cap.PT_NTD * n
+    cush = float(eq) - margin
+    out = {"cushion": round(cush), "pts": int(cush // risk_cap.PT_NTD), "rec": int(round(rec, -3)),
+           "topup": max(0, int(round(rec - float(eq), -3))), "lots": n}
+    if not isinstance(px, (int, float)) or px <= 0 or not (day_on or night_on):
+        out.update(warn=None, msg="權益比 %d 口保證金多 %s 元（約 %d 點）" % (
+            n, format(int(round(cush)), ","), out["pts"]))
+        return out
+    stop = max(round(px * 0.02) * b if night_on else 0, round(px * 0.005) * a if day_on else 0)
+    out["stop_pts"] = stop
+    out["warn"] = out["pts"] < stop
+    if out["warn"]:
+        out["msg"] = ("⚠️ 權益只比 %d 口保證金多 %s 元（約 %d 點），比一次停損（%s，約 %d 點）還少 —— "
+                      "再停損一次，下一筆自動單會因為保證金不夠被券商退掉。建議本金約 %s 元（還差約 %s 元）"
+                      % (n, format(int(round(cush)), ","), out["pts"], "%d＋%d 口" % (a, b), stop,
+                         format(out["rec"], ","), format(out["topup"], ",")))
+    else:
+        out["msg"] = ("權益比 %d 口保證金多 %s 元（約 %d 點），撐得住一次停損（%d＋%d 口，約 %d 點）"
+                      % (n, format(int(round(cush)), ","), out["pts"], a, b, stop))
+    return out
+
+
+LOTS_ERR = {"err": None}               # 口數每日檢查最近一次的錯（第二階段畫面才端出去）
 
 
 def poll_equity():
@@ -11610,6 +12056,25 @@ def poll_equity():
                     STATE["equity"] = view
             except Exception:
                 pass
+        # ⭐ 2026-10-14 口數（lots.py）每日檢查：equity/ 每多一列（14:00 落地）就跑一次 ——
+        #    自動減級（安全方向）、記本月用過最大口數、已確認的升級到生效日轉正、每月第一個交易日產生升級建議。
+        #    ⛔ 不拿 state_lock、⛔ 不碰下單路徑；沒新的一列時只讀一下狀態檔就回。壞了只記錯、不影響任何事。
+        try:
+            try:
+                _closed = set(closed_days())          # ⭐ 休市平日：不出建議、夜盤振幅「太舊」用交易日算
+            except Exception:                         # noqa: BLE001
+                _closed = set()
+            if _closed:
+                lots.KNOWN_CLOSED = _closed           # ⛔ 只換整個集合（讀的人拿到的是舊的或新的那一份，不會半套）
+            _lr = lots.daily_check(equity_hist_read(), now, closed=_closed,
+                                   busy=broker._state.get("position") is not None)   # 有部位 ⇒ 06:00 那道先不跑
+            if _lr.get("err"):
+                LOTS_ERR["err"] = _lr["err"]
+            _small = lots_state_small()               # ⛔ 讀檔在鎖外面，鎖裡只指派
+            with state_lock:
+                STATE["lots"] = _small
+        except Exception as e:                        # noqa: BLE001
+            LOTS_ERR["err"] = str(e)[:120]
         t = now.time()
         # 盤中（08:45 開盤 ~ 14:30）問密一點；其餘時間 10 分鐘一次就夠
         every = EQUITY_EVERY if (SESSION_OPEN <= t <= EQUITY_BUSY_END) else EQUITY_EVERY_OFF
@@ -11708,6 +12173,9 @@ def real_state(price, quote, age):
             snap["tp"] = None if tpp is None else pos["entry"] + d * tpp
             snap["sl"] = pos["entry"] - d * pos_sl_points(pos)
             snap["tp_pts"], snap["sl_pts"] = tpp, pos_sl_points(pos)
+            if pos.get("stop_off"):
+                # ⭐ QA r3 必修 3：停損不會執行 ⇒ ⛔ 不端停損價／停利價（畫面才不會畫刻度、寫「離停損 N 點」）
+                snap["sl"] = snap["tp"] = snap["tp_pts"] = snap["sl_pts"] = None
         stale = REAL_STALE["since"]
         snap["stale_sec"] = round(time.time() - stale) if stale else None
         ok, why = broker.can_enter(price, quote == "live")

@@ -60,7 +60,11 @@ REAL_PATHS = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.T
               "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
               "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST,
               # ⛔ 2026-09-16：開箱會**寫** orb_hist.jsonl、**讀** tick_logs/ ⇒ 兩個都要導走
-              "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR}
+              "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR,
+              # ⭐ 2026-10-14：口數模組（lots.py）的兩個寫檔出口也導走（不存在 ⇒ 1＋1）
+              "lots.LEVEL_FILE": AF.lots.LEVEL_FILE, "lots.LOG_DIR": AF.lots.LOG_DIR}
+AF.lots.LEVEL_FILE = TMP / "LOTS_LEVEL.json"
+AF.lots.LOG_DIR = TMP / "lots"
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"          # 不存在 → dry run
@@ -4405,7 +4409,8 @@ now_paths = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TR
              "broker.REAL_FLAG": broker.REAL_FLAG, "AF.ARM_FLAG": AF.ARM_FLAG,
              "AF.FIRE_DIR": AF.FIRE_DIR, "LP.AUTO_DIR": LP.AUTO_DIR,
              "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "AF.FAST_HIST": AF.FAST_HIST,
-             "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR}
+             "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR,
+             "lots.LEVEL_FILE": AF.lots.LEVEL_FILE, "lots.LOG_DIR": AF.lots.LOG_DIR}
 say(_hist_fp(REAL_PATHS["AF.FAST_HIST"]) == _REAL_HIST0,
     "  ⛔ 真的 fast_hist.jsonl 全程沒被動過（在不在、大小、修改時間都跟開跑前一樣）",
     str(_REAL_HIST0))
