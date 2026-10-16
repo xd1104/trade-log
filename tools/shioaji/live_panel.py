@@ -6712,7 +6712,7 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .lt-say{margin-top:12px; font-size:14px; font-weight:650; line-height:1.6}
 .lt-say.g{color:var(--gold)}
 .lt-say small{display:block; font-size:12px; font-weight:500; color:var(--dim); margin-top:1px}
-/* ⭐ 10-14 試車進度（五格＋一句）／確認條的停電那一行（目標 ≥ 5 口才有） */
+/* ⭐ 10-14 試車進度（TRIAL_N 格＋一句）／確認條的停電那一行（目標 ≥ 5 口才有） */
 .lt-trial{display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:12px; color:var(--dim); line-height:1.65}
 .lt-trial .pips{display:inline-flex; gap:3px; padding-top:4px; flex:none}
 .lt-trial .pips i{width:10px; height:10px; border-radius:2px; border:1px solid var(--line); background:transparent}
@@ -9149,7 +9149,7 @@ function ltHTML(L){
      '<div class="sc"><span>'+esc(B.lo_txt||'0')+'</span><span>'+esc(B.next_txt||'')+'</span></div></div>')
        :'<div class="lt-next"></div>')+'</div>'+
   '<div class="lt-say'+(att?' g':'')+'">'+esc(V.title||'')+'<small>'+esc(V.sub||'')+'</small></div>';
- /* ⭐ 老闆 10-14：試車進度「試車 3／5 筆」（五格小方塊＋句子；句子＝後端 L.trial.line，⛔ 前端不自己數） */
+ /* ⭐ 老闆 10-14：試車進度「試車 1／2 筆」（格數＝後端 pips 的長度＋句子；句子＝後端 L.trial.line，⛔ 前端不自己數） */
  const TR=L.trial||{};
  if(TR.line) h+='<div class="lt-trial">'+(Array.isArray(TR.pips)?'<span class="pips">'+
    TR.pips.map(x=>'<i'+(x?' class="on"':'')+'></i>').join('')+'</span>':'')+'<span class="t">'+TR.line+'</span></div>';

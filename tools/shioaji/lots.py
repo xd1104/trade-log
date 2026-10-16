@@ -824,8 +824,8 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
 # ⭐ 取代 09-30 的「每月第一個交易日、一次一級、升完冷卻 3 個月」（10-14 起作廢）：
 #   ① 每個交易日收盤後都檢查（daily_check；equity/ 每多一列跑一次）。
 #   ② 試車：在 1＋1、權益 ≥ 2＋1 那一級門檻（10 萬）、其他條件都過 ⇒ 建議「2＋1（試車）」；兩段式確認、下一個交易日生效。
-#   ③ 試車通過：試車生效那天起，**實際成交 ≥ 2 口**的自動真單（日盤或夜盤）滿 5 筆，而且這 5 筆**零下單錯誤**、
-#      平均滑價 ≤ 4 點。試車期間任何一次下單錯誤 ⇒ 筆數從 0 重算。通過之後**記在狀態檔**（`trial.status="passed"`）。
+#   ③ 試車通過：試車生效那天起，**實際成交 ≥ 2 口**的自動真單（日盤或夜盤）滿 TRIAL_N（2）筆，而且最近這 2 筆**零下單錯誤**、
+#      平均滑價 ≤ 4 點（⭐ 老闆 2026-10-16 拍板：5 筆改 2 筆）。試車期間任何一次下單錯誤 ⇒ 筆數從 0 重算。通過之後**記在狀態檔**（`trial.status="passed"`）。
 #   ④ 通過之後：權益撐得到哪一級就直接建議跳到哪一級（可以跳級，照積極版階梯）；兩段式確認、下一個交易日生效。
 #   ⑤ 之後再升：權益跨過更高一級時可以再建議，但離**上一次升級生效**至少 1 個日曆月（11/20 生效 ⇒ 12/20 起）。
 #      ⚠️ 試車通過後的**第一次跳級不受這一條限制**（試車本身就是上一次升級；否則試車跑得快也要乾等一個月）。
@@ -835,7 +835,7 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
 # 其他條件（每一次升級都要）：最近 30 筆自動真單沒有下單錯誤、平均滑價 ≤ 4／兩條策略都「正常」／沒有停損失靈暫停。
 
 TRIAL_TO = 2                # 試車那一級（2＋1）
-TRIAL_N = 5                 # 試車要幾筆「實際成交 ≥ 2 口」的自動真單
+TRIAL_N = 2                 # 試車要幾筆「實際成交 ≥ 2 口」的自動真單（⭐ 老闆 2026-10-16：5 → 2）
 REUP_GAP_MONTHS = 1         # 再升：離上一次升級生效至少幾個日曆月
 PENDING_GUARD_HOUR = 6      # 已確認的升級每天幾點以後重看一次策略（夜盤 05:00 收完、05:30 備份之後）
 
@@ -892,8 +892,8 @@ def trial_events(start):
 def trial_eval(events):
     """
     純函式：試車那幾筆 ⇒ {"n", "total", "slip", "slip_n", "reset", "passed", "why"}。
-    一次下單錯誤 ⇒ 從 0 重算。看「最近 5 筆」：滿 5 筆、5 筆的滑價都算得出來、平均 ≤ SLIP_MAX ⇒ 通過。
-    （前 5 筆平均超過 4 點 ⇒ 不過，繼續看下一筆 —— 用最近 5 筆，⛔ 不是永遠卡死。）
+    一次下單錯誤 ⇒ 從 0 重算。看「最近 TRIAL_N 筆」：滿 TRIAL_N 筆、這幾筆的滑價都算得出來、平均 ≤ SLIP_MAX ⇒ 通過。
+    （平均超過 4 點 ⇒ 不過，繼續看下一筆 —— 滾動看最近 TRIAL_N 筆，⛔ 不是永遠卡死。）
     """
     win, reset = [], None
     for key, kind, val in events or []:
@@ -1664,7 +1664,7 @@ def _panel(now, today, eq, lot1, E):
     chk_next = _d(V["check"]["next"])
     out["check"] = dict(V["check"], next_txt=("今天收盤後" if chk_next == today else dtxt(chk_next) + "收盤後"),
                         head=("今天已經檢查過" if V["check"].get("done_today") else "每個交易日收盤後檢查"))
-    # 試車進度（⭐ 老闆 10-14：口數卡要看得到「試車 3／5 筆」）
+    # 試車進度（⭐ 老闆 10-14：口數卡要看得到「試車 1／2 筆」；格數＝TRIAL_N）
     tr = V.get("trial") or dict(TRIAL_DEFAULT)
     trial = {"status": tr.get("status"), "n": tr.get("n") or 0, "need": TRIAL_N, "line": None, "pips": None}
     if tr.get("status") == "on":

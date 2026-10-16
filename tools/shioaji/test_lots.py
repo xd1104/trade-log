@@ -862,28 +862,36 @@ chk("  11/3 每日檢查：轉正（level 2、up_at 11/3、pending 清掉）、�
     (st["level"], st["up_at"], st["pending"], [e["kind"] for e in _r["events"]], st["trial"]["status"],
      st["trial"]["start"], st["trial"]["n"]),
     (2, "2026-11-03", None, ["upgrade_effective"], "on", "2026-11-03", 1))
-print("  -- 試車進度（帳本：實際成交 ≥ 2 口的自動真單；演練、1 口都不算；下單錯誤 ⇒ 從 0 重算）--")
-led_day([day_res("2026-11-04"), day_res("2026-11-04", qty=1, slip=0.0), day_res("2026-11-04", live_=False, slip=0.0)])
+print("  -- 試車進度（⭐ 10-16 起 2 筆；帳本：實際成交 ≥ 2 口的自動真單；演練、1 口都不算；下單錯誤 ⇒ 從 0 重算）--")
+chk("  試車要幾筆：TRIAL_N ＝ 2（老闆 10-16）", lots.TRIAL_N, 2)
+PT = lots.panel(now=datetime(2026, 11, 3, 15, 0), eq=106000.0, lot1=35050.0)
+say("試車 <b>1／2 筆</b>" in (PT["trial"]["line"] or "") and PT["trial"]["pips"] == [True, False]
+    and PT["verdict"]["kind"] == "trial" and PT["verdict"]["title"] == "試車中：1／2 筆",
+    "  ⭐ 口數卡：「試車 1／2 筆」＋兩格（前一格亮）、結論「試車中：1／2 筆」", (PT["trial"], PT["verdict"]["title"]))
+say(PT["offer"] is None and not PT["alarm"], "  試車中 ⇒ 不出升級建議、不上金條")
+say("跑滿 2 筆" in (PT["trial"]["line"] or "") and "跑滿 2 筆" in PT["rule_foot"] and "5 筆" not in PT["rule_foot"]
+    and "5 筆" not in (PT["trial"]["line"] or ""), "  句子講「跑滿 2 筆」（⛔ 沒有殘留 5 筆）", PT["trial"]["line"])
+led_day([day_res("2026-11-04", ok=False, why="order_failed"), day_res("2026-11-04", qty=1, slip=0.0),
+         day_res("2026-11-04", live_=False, slip=0.0)])
 lots.daily_check([{"date": "2026-11-04", "equity": 106000.0}], now=datetime(2026, 11, 4, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-chk("  11/4：2 筆（1 口那筆、演練那筆不算）", (st["trial"]["n"], st["trial"]["status"]), (2, "on"))
-PT = lots.panel(now=datetime(2026, 11, 4, 15, 0), eq=106000.0, lot1=35050.0)
-say("試車 <b>2／5 筆</b>" in (PT["trial"]["line"] or "") and PT["trial"]["pips"] == [True, True, False, False, False]
-    and PT["verdict"]["kind"] == "trial" and PT["verdict"]["title"] == "試車中：2／5 筆",
-    "  ⭐ 口數卡：「試車 2／5 筆」＋五格（前兩格亮）、結論「試車中：2／5 筆」", (PT["trial"], PT["verdict"]["title"]))
-say(PT["offer"] is None and not PT["alarm"], "  試車中 ⇒ 不出升級建議、不上金條")
-led_day([day_res("2026-11-05", ok=False, why="order_failed")])
+chk("  11/4 一次下單錯誤 ⇒ 筆數從 0 重算、記下哪天（1 口那筆、演練那筆不算）",
+    (st["trial"]["n"], st["trial"]["reset"], st["trial"]["status"]), (0, "2026-11-04", "on"))
+led_day([day_res("2026-11-05", slip=3.0)])
 lots.daily_check([{"date": "2026-11-05", "equity": 106000.0}], now=datetime(2026, 11, 5, 14, 5), ctx=ctx_ok())
-st, _ = lots.read_state()
-chk("  11/5 一次下單錯誤 ⇒ 筆數從 0 重算、記下哪天", (st["trial"]["n"], st["trial"]["reset"]), (0, "2026-11-05"))
-led_day([day_res("2026-11-%02d" % d, slip=3.0) for d in (6, 9, 10, 11)])
-lots.daily_check([{"date": "2026-11-11", "equity": 106000.0}], now=datetime(2026, 11, 11, 14, 5), ctx=ctx_ok())
-chk("  11/11：重算後 4 筆 ⇒ 還沒過", (lots.read_state()[0]["trial"]["n"], lots.read_state()[0]["trial"]["status"]),
-    (4, "on"))
-led_day([day_res("2026-11-12", slip=3.0)])
+chk("  11/5：重算後 1 筆 ⇒ 還沒過", (lots.read_state()[0]["trial"]["n"], lots.read_state()[0]["trial"]["status"]),
+    (1, "on"))
+led_day([day_res("2026-11-06", slip=9.0)])
+lots.daily_check([{"date": "2026-11-06", "equity": 106000.0}], now=datetime(2026, 11, 6, 14, 5), ctx=ctx_ok())
+chk("  11/6：滿 2 筆但這 2 筆平均滑價 (3+9)/2＝6 > 4 ⇒ 還沒過", (lots.read_state()[0]["trial"]["n"],
+                                                       lots.read_state()[0]["trial"]["status"]), (2, "on"))
+led_day([day_res("2026-11-09", slip=0.0)])
+lots.daily_check([{"date": "2026-11-09", "equity": 106000.0}], now=datetime(2026, 11, 9, 14, 5), ctx=ctx_ok())
+chk("  11/9：滾動看最近 2 筆 (9+0)/2＝4.5 > 4 ⇒ 還沒過", lots.read_state()[0]["trial"]["status"], "on")
+led_day([day_res("2026-11-12", slip=1.0)])
 _r = lots.daily_check([{"date": "2026-11-12", "equity": 106000.0}], now=datetime(2026, 11, 12, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-chk("  11/12：第 5 筆、平均滑價 3 ≤ 4、沒有錯誤 ⇒ 試車通過（記在狀態檔）",
+chk("  ⭐ 11/12：最近 2 筆 (0+1)/2＝0.5 ≤ 4、沒有錯誤 ⇒ 試車通過（記在狀態檔）",
     (st["trial"]["status"], st["trial"]["passed_at"], "trial_passed" in [e["kind"] for e in _r["events"]]),
     ("passed", "2026-11-12", True))
 say(not (st["suggest"] or {}).get("ok") or (st["suggest"] or {}).get("withdrawn") or (st["suggest"] or {}).get("confirmed"),
@@ -971,14 +979,20 @@ _r = lots.daily_check([{"date": "2026-11-18", "equity": 105000.0}], now=datetime
 st, _ = lots.read_state()
 chk("  權益回到 10.5 萬 ⇒ 重新建議試車", (st["suggest"]["ok"], st["suggest"]["kind"]), (True, "trial"))
 print("  -- 試車那把尺（純函式）--")
-_E = [(("2026-11-0%d" % i, "a"), "trade", 3.0) for i in range(1, 6)]
-chk("  5 筆、平均 3 ⇒ 通過", lots.trial_eval(_E)["passed"], True)
-chk("  4 筆 ⇒ 不過（還差 1 筆）", (lots.trial_eval(_E[:4])["passed"], lots.trial_eval(_E[:4])["why"]), (False, "還差 1 筆"))
-chk("  中間一次錯誤 ⇒ 從 0 重算", lots.trial_eval(_E[:3] + [(("2026-11-04", "b"), "err", "x")] + _E[3:])["n"], 2)
+_E = [(("2026-11-0%d" % i, "a"), "trade", 3.0) for i in range(1, 3)]
+chk("  2 筆、平均 3 ⇒ 通過", lots.trial_eval(_E)["passed"], True)
+chk("  1 筆 ⇒ 不過（還差 1 筆）", (lots.trial_eval(_E[:1])["passed"], lots.trial_eval(_E[:1])["why"]), (False, "還差 1 筆"))
+chk("  第 1 筆之後一次錯誤、再 1 筆 ⇒ 從 0 重算、只有 1 筆 ⇒ 不過",
+    (lots.trial_eval(_E[:1] + [(("2026-11-03", "b"), "err", "x")] + [(("2026-11-04", "a"), "trade", 3.0)])["n"],
+     lots.trial_eval(_E[:1] + [(("2026-11-03", "b"), "err", "x")] + [(("2026-11-04", "a"), "trade", 3.0)])["passed"]),
+    (1, False))
 chk("  平均滑價 4.4 ⇒ 不過", lots.trial_eval([(k, "trade", 4.4) for k, _t, _v in _E])["passed"], False)
 chk("  剛好 4.0 ⇒ 通過（≤ 4）", lots.trial_eval([(k, "trade", 4.0) for k, _t, _v in _E])["passed"], True)
-chk("  有一筆算不出滑價 ⇒ 不過（⛔ 不拿 4 筆冒充 5 筆）",
-    lots.trial_eval(_E[:4] + [(("2026-11-06", "a"), "trade", None)])["passed"], False)
+chk("  有一筆算不出滑價 ⇒ 不過（⛔ 不拿 1 筆冒充 2 筆）",
+    lots.trial_eval(_E[:1] + [(("2026-11-06", "a"), "trade", None)])["passed"], False)
+chk("  滾動：前 2 筆 (8,8) 不過、再來 (1,1) ⇒ 看最近 2 筆 ⇒ 通過",
+    lots.trial_eval([(("2026-11-0%d" % i, "a"), "trade", v) for i, v in ((1, 8.0), (2, 8.0), (3, 1.0), (4, 1.0))])["passed"],
+    True)
 print("  -- 條件掉了 ⇒ 收回；條件回來 ⇒ 每天檢查，會再出新的 --")
 clear_state()
 write_state(level=1, checked="2026-10-30")
