@@ -1876,12 +1876,98 @@ def _panel(now, today, eq, lot1, E):
     elif notice and notice.get("kind") != "lifted":      # 解除暫停是好消息，⛔ 不進「要注意的事」
         warn = notice.get("text")
     out["phone"] = {"label": plabel, "line": _strip(vd["title"] + "。" + vd["sub"]), "att": bool(warn), "warn": warn}
+    # ⭐ 2026-10-19 手機減字版（老闆：字太多、看不懂術語）：一句白話＋「要你處理」那幾則（⛔ 手機只照畫、不自己判斷）。
+    #    舊的 label／line／warn 照留（電腦面板與舊手機相容）。
+    try:
+        out["phone"]["short"] = _phone_short(today, vd, pend, offer, notice, nxt, tr, trial, L, st, (a, b), is_trial)
+        out["phone"]["todo"] = _phone_todo(offer, pend, per, (a, b), is_trial)
+    except Exception:                           # noqa: BLE001  ⛔ 白話句組不出來不可以把整份口數帶掉
+        out["phone"]["short"], out["phone"]["todo"] = None, []
     out["hist"] = [dict(h, date_txt=dtxt(h.get("date"), False), who=("你按的" if h.get("by") == "you" else "自動"))
                    for h in (V.get("hist") or [])]
     out["rule_foot"] = ("每個交易日收盤後檢查；升級要你按確認才生效。先在 1＋1 試車 2＋1：跑滿 %d 筆 2 口以上的真單、"
                         "沒有下單錯誤、平均滑價 ≤ %g 點就算通過；通過之後權益撐得到哪一級就直接建議跳到哪一級，"
                         "之後每次升級至少隔一個月。減級是自動的（權益低於這一級門檻的 85%%，隔天就退）。"
                         "⛔ 不看最近賺不賺。" % (TRIAL_N, SLIP_MAX))
+    return out
+
+
+# ══ 手機減字版（2026-10-19）：G「升級」那一列＋「要你處理」（⛔ 不出現術語；正本規格見 phone-demo SPEC §3 §4）══
+# 升級條件卡住時的白話（≤ 12 字；⛔ 不寫「停損失靈」「滑價」這類術語）
+_COND_PLAIN = {"err": "最近下單有失敗", "slip": "成交價差太多", "strat": "策略表現還在觀察",
+               "trial": "試車還沒跑完", "cool": "離上次升級不到一個月", "pause": "暫停升級中"}
+
+
+def _md_plain(d, today):
+    """'2027-04-19' ⇒「明年 4/19」；同一年 ⇒「4/19」。"""
+    try:
+        d = _d(d)
+    except Exception:                           # noqa: BLE001
+        return str(d or "")
+    return ("明年 " if d.year == today.year + 1 else ("%d 年 " % d.year if d.year > today.year + 1 else "")) + \
+        "%d/%d" % (d.month, d.day)
+
+
+def _pause_inc_day(st):
+    """停損失靈暫停是哪一天那筆造成的（從紀錄尾巴找最近一筆 pause）；找不到 ⇒ None。"""
+    try:
+        for o in read_log(80):
+            if o.get("kind") == "pause" and isinstance(o.get("inc"), dict) and o["inc"].get("d"):
+                if str(o.get("until") or "") == str(st.get("pause_until") or ""):
+                    return o["inc"]["d"]
+    except Exception:                           # noqa: BLE001
+        pass
+    return None
+
+
+def _phone_short(today, vd, pend, offer, notice, nxt, tr, trial, L, st, ab, is_trial):
+    """手機【帳戶】「升級」那一列（一句，≤ 22 字）。"""
+    k = vd.get("kind")
+    if pend:
+        return "%s 起改 %s%s" % (dtxt(pend["eff"], False), pend["to"]["label"],
+                                "（試車）" if pend.get("kind") == "trial" else "")
+    if offer:
+        return ("可以試車 %s（等你按確認）" if is_trial else "可以升到 %s（等你按確認）") % offer["to"]["label"]
+    if k == "down" and notice:
+        return "%s 起自動退回 %s（權益變少）" % (dtxt(notice.get("date"), False), label(ab))
+    if k == "void":
+        return "已確認的升級作廢了"
+    if k == "top":
+        return "已經到最高一級"
+    if k == "trial":
+        return "試車中：%d／%d 筆，跑完才會再談升級" % (trial.get("n") or 0, trial.get("need") or TRIAL_N)
+    pu = st.get("pause_until")
+    if pu and str(today) < str(pu):
+        inc = _pause_inc_day(st)
+        md = _md_plain(pu, today)
+        return "升級暫停到" + (md if md[:1] in ("明",) or "年" in md else " " + md) + \
+            (("（%s 那筆賠得比停損多）" % dtxt(inc, False)) if inc else "（有一筆賠得比停損多）")
+    if k == "blocked":
+        bad = [_COND_PLAIN.get(c.get("k"), c.get("name")) for c in L if c.get("ok") is False and c.get("k") not in ("eq", "ops")]
+        return "先不升：" + ("、".join(x for x in bad if x) or "條件還沒過")
+    if nxt:
+        what = ("試車 2＋1" if tr.get("status") != "passed" else "升到 %s" % nxt["label"])
+        gap = nxt.get("gap")
+        return "權益到 %s可以%s" % (wan(nxt["eq"]), what) + (("（還差 %s）" % wan(gap)) if _num(gap) and gap > 0 else "")
+    return None
+
+
+def _phone_todo(offer, pend, per, ab, is_trial):
+    """手機「要你處理」裡跟口數有關的那幾則 ⇒ [{lvl, text, act}]（lvl：now／decide／later）。"""
+    out = []
+    if offer and not pend:
+        to = offer["to"]
+        out.append({"lvl": "decide",
+                    "text": ("可以先試車 %s 了（日盤 %d 口、夜盤 %d 口）" if is_trial else "可以升到 %s 了（日盤 %d 口、夜盤 %d 口）")
+                    % (to["label"], to["a"], to["b"]),
+                    "act": "想升就到電腦面板按確認；不按就維持 %s" % label(ab)})
+    for lane in LANES:
+        p = per.get(lane) or {}
+        if p.get("text") and (p.get("state") == "retire" or p.get("cap") == 0):
+            who = "日盤" if lane == "union" else "夜盤"
+            out.append({"lvl": "decide",
+                        "text": "%s表現掉到退休線，%s" % (who, "已停掉不送" if RETIRE_ZERO else "已自動壓到 1 口"),
+                        "act": "要不要關掉，到電腦面板決定"})
     return out
 
 

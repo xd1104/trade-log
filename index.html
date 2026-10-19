@@ -1,28 +1,37 @@
 <!DOCTYPE html>
 <!-- ⭐ 2026-09-24 改版：交易日誌 ⇒ 【早盤儀表板・手機監控】（Benson：晚上不在電腦前，只要看面板還活著沒、有沒有自動下單）。
      ⛔ 純看、一顆會動到交易的按鈕都沒有。資料 ＝ 面板每 2 分鐘推到 GitHub `monitor` 分支的**加密**快照，
-     輸入密碼才解得開（repo 是公開的 ⇒ 沒密碼只看得到亂碼）。舊的練習日誌功能已拿掉。 -->
+     輸入密碼才解得開（repo 是公開的 ⇒ 沒密碼只看得到亂碼）。舊的練習日誌功能已拿掉。
+     ⭐ 2026-10-19 減字版（老闆試玩 lab-ux demo 後同意）：打開 3 秒看懂「面板活著沒、有沒有部位、今天做了沒、賺賠、本月」；
+     要他動手的事才跳出「要你處理」。色系＝夜航；字型跟電腦面板一樣（Inter＋Noto Sans TC）。 -->
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#0F1218" media="(prefers-color-scheme: dark)">
-  <meta name="theme-color" content="#F3F5F8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0D131D" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#0D131D" media="(prefers-color-scheme: light)">
+  <meta name="color-scheme" content="dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="儀表板監控">
   <title>儀表板監控</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <!-- ⭐ 2026-10-19 字型跟電腦面板同一組（live_panel.py 那兩行）。⛔ 只有字型檔、不載任何程式；display=swap ⇒ 載不到就是系統字。
+       ⚠️ QA r1 必修 3：一般 <link rel=stylesheet> 會擋第一次畫面 ⇒ Google 連線卡住時整頁空白約 24 秒。
+          改成 media=print 先載（不擋畫面）、載完才切成 all ⇒ 先用系統字畫出來，字型到了再換。 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet"></noscript>
   <link rel="stylesheet" href="css/monitor.css">
 </head>
 <body>
   <div class="app">
+    <!-- A 頂列：狀態燈＋一句（手機自己算面板幾分鐘沒回報）＋週報信件 -->
     <header class="top">
-      <div class="brand"><span class="mark">📈</span><div><h1>早盤儀表板</h1><div class="sub">手機監控・只看不動</div></div></div>
-      <div class="tr"><div class="upd" id="upd"></div>
-        <!-- ⭐ 2026-09-24【交易分析師】週報信件（未讀＝金色＋數字）。⛔ 只看，不動交易。 -->
-        <button class="mailbtn" id="anMail" hidden aria-label="分析師週報"></button></div>
+      <div id="stat" class="stat"><span class="brand">早盤儀表板</span></div>
+      <!-- ⭐ 2026-09-24【交易分析師】週報信件（未讀＝金色＋數字）。⛔ 只看，不動交易。 -->
+      <button class="mailbtn" id="anMail" hidden aria-label="分析師週報"></button>
     </header>
 
     <!-- 【交易分析師】列表／全文（打開時蓋掉主畫面；返回就回到監控） -->
@@ -31,7 +40,6 @@
     <!-- 解鎖 -->
     <section id="lock" class="card lock" hidden>
       <h2>輸入監控密碼</h2>
-      <p class="dim">就是你在電腦上跑 monitor_setup.py 設的那一組。</p>
       <form id="lockForm" autocomplete="off">
         <input id="pw" type="password" placeholder="密碼" autocomplete="current-password" required>
         <label class="rem"><input id="remember" type="checkbox" checked> 記住這台手機</label>
@@ -40,20 +48,14 @@
       </form>
     </section>
 
-    <!-- 主畫面 -->
+    <!-- 主畫面（B 要你處理／C 現在／D 今天／E 本月 ＋ 收起來的 F～I）。⛔ 一顆會動到交易的按鈕都沒有。 -->
     <main id="main" hidden>
-      <section id="alive" class="card alive"></section>
+      <div id="board"></div>
       <!-- ⭐ 2026-09-24【斷線通知】還沒開啟時才出現；開好就收起來 -->
       <section id="pushCard" class="card" hidden></section>
-      <section id="pos" class="card"></section>
-      <section id="risk" class="card" hidden></section>
-      <section id="day" class="card"></section>
-      <section id="night" class="card"></section>
-      <section id="acct" class="card"></section>
-      <section id="warn" class="card warn" hidden></section>
+      <div id="more"></div>
       <footer class="foot">
-        <div id="footInfo" class="dim"></div>
-        <button id="logout" class="link">登出（清掉這台手機記住的密碼）</button>
+        <button id="logout" class="link">登出這台手機</button>
       </footer>
     </main>
 

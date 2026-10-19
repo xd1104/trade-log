@@ -87,7 +87,6 @@
   function ago(s) { s = Math.max(0, Math.round(s)); if (s < 60) return s + ' 秒前'; if (s < 3600) return Math.floor(s / 60) + ' 分鐘前';
     var h = Math.floor(s / 3600); return h + ' 小時 ' + Math.floor((s % 3600) / 60) + ' 分前'; }
   function dirTxt(d) { return d === 'long' ? '做多' : d === 'short' ? '做空' : (d || ''); }
-  function modeTxt(on, live) { return on ? (live ? '開著・真錢' : '開著・演練') : '關著'; }
 
   // ══ 【交易分析師】週報信件（2026-09-24）══════════════════════════════
   // 列表跟著快照來（s.analyst：週次、結論、讀過沒）；全文在 monitor 分支的 analyst.json（加密，點開才抓）。
@@ -252,10 +251,10 @@
     if (pushSupported() && pushOn() && Notification.permission === 'granted') { c.hidden = true; return; }
     c.hidden = false;
     if (!pushSupported()) {
-      c.innerHTML = '<h2>斷線通知</h2><div class="msg">這樣打開收不到通知：請用 Safari「分享 → 加入主畫面」，之後從主畫面的圖示打開（iOS 16.4 以上）。</div>';
+      c.innerHTML = '<h2>斷線通知</h2><div class="msg">要從主畫面的圖示打開才收得到（Safari「分享 → 加入主畫面」）。</div>';
       return;
     }
-    c.innerHTML = '<h2>斷線通知</h2><div class="msg">面板超過 10 分鐘沒回報（關機、斷網、當機）時手機會響，恢復時再響一次。</div>' +
+    c.innerHTML = '<h2>斷線通知</h2><div class="msg">面板斷線時手機會響</div>' +
       '<button class="pushbtn" id="pushBtn"' + (PUSH.busy ? ' disabled' : '') + '>' + (PUSH.busy ? '設定中…' : '開啟斷線通知') + '</button>' +
       (PUSH.msg ? '<div class="err">' + esc(PUSH.msg) + '</div>' : '');
   }
@@ -315,161 +314,278 @@
       var sec = $('an-s-' + j.getAttribute('data-anjump')); if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   });
 
+  // ══ ⭐ 2026-10-19 減字版畫面（照 lab-ux phone-demo；老闆試玩後同意）══════════════════════
+  // 目標：打開 3 秒看懂「面板活著沒、有沒有部位、今天／今晚做了沒、賺賠、本月」；要他動手的事才跳出「要你處理」。
+  // ⛔ 句子與等級一律後端組好（monitor_push.py：s.todo、days[i].short、recent[i].short、lots.short、cushion.short、position.short）；
+  //    手機只自己算一件事：面板幾分鐘沒回報（只有手機知道）。
+  // ⛔ 賺賠只看「點」（老闆 10-19 拍板，⛔ 不換算成元；只有帳戶的權益／今天損益本來就是元）。
+  // ⛔ 持有中不顯示停損價／停利價／進場價（老闆 10-19 拍板：不是收起來，是不放）。
+  // ⚠️ 舊快照（面板還沒重啟、沒有新欄位）要退回合理畫面：短句沒有就只寫結果、todo 沒有就用舊的「要注意的事」湊（legacyTodo）。
+  var LV = { now: '現在', decide: '要你決定', later: '有空再看' };
+  var WK = '日一二三四五六';
+  var EXIT_WORD = { sl: '停損出場', tp: '停利出場', eod: '收盤平倉', night_eod: '04:58 平倉', manual: '手動平倉',
+    closed_elsewhere: '已經平掉', legs: '分段出場' };
+  var DETAILS_OPEN = {};    // 他正在展開的細節（重畫前記下、畫完補回；⛔ 不存 localStorage：每次打開 App 都是收起）
+  function md(iso) { var p = String(iso || '').split('-'); if (p.length < 3) return esc(iso);
+    var d = new Date(+p[0], +p[1] - 1, +p[2]); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + WK[d.getDay()]; }
+  function wkday(iso) { var p = String(iso || '').split('-'); return p.length < 3 ? null : new Date(+p[0], +p[1] - 1, +p[2]).getDay(); }
+  function minOf(age) { return Math.floor(age / 60); }
+  function qtyOf(x) { return (typeof x === 'number' && x > 0) ? x : 1; }
+  function totalOf(R) { return R.total != null ? R.total : (R.points == null ? null : R.points * qtyOf(R.qty)); }
+  function qtyTxt(q) { return q > 1 ? '・' + q + ' 口' : ''; }
+  function hhmm(t) { return String(t || '').slice(0, 5); }
+
+  // ⭐ QA r1 建議 9：舊快照（面板還沒重啟）的長句 ⇒ 手機端先把已知術語換成白話、拿掉 ⚠️⛔，過渡期不嚇到他
+  var PLAIN = [[/[⚠⛔]️?/g, ''], [/停損失靈/g, '賠得比停損多'], [/風控上限/g, '每月上限'], [/風控/g, '每月上限'],
+    [/對帳/g, '核對'], [/滑價/g, '成交價差'], [/\s*——\s*/g, '，'], [/^\s+|\s+$/g, '']];
+  function plain(t) { t = String(t || ''); PLAIN.forEach(function (x) { t = t.replace(x[0], x[1]); }); return t; }
+
+  // 舊快照沒有 s.todo ⇒ 用舊的那幾個欄位湊（句子是舊的長句、沒有「→ 要做什麼」；術語先換白話）
+  function legacyTodo(s) {
+    var T = [], e = s.equity || {}, rk = s.risk || {}, r = s.real || {}, pn = s.panel || {}, d = s.day || {};
+    function add(l, t) { if (t) T.push({ lvl: l, text: plain(t), act: '' }); }
+    if ((s.errs || []).length) add('now', '面板有一部分讀不到');
+    if (r.position && r.stale_sec != null) add('now', '報價斷了 ' + r.stale_sec + ' 秒，手上的單現在沒人顧');
+    var t0 = (d.days || [])[0];
+    if (t0 && t0.date === d.today && t0.eod && t0.eod.alarm) add('now', t0.eod.why_msg || t0.eod.msg || '收盤平倉有狀況');
+    if (e.cushion && e.cushion.warn) add('now', e.cushion.msg);
+    if (rk.err) add('now', '算不出本月賺賠，自動單先不送');
+    else if (rk.blocked) add('decide', rk.msg || '本月虧到上限，日盤、夜盤先停到月底');
+    if (pn.conn && pn.conn.ok === false) add('now', '面板連不上券商');
+    if (s.lots && s.lots.warn) add('decide', s.lots.warn);
+    if (e.backup && e.backup.warn) add('later', e.backup.msg);
+    if (e.depth && e.depth.warn) add('later', e.depth.msg);
+    return T;
+  }
+
+  function skipTxt(sh) { return sh === '本月停單中' ? { v: '停單中', n: 1, m: '本月到上限' } : { v: '沒做', n: 1, m: sh || '' }; }
+  function posKnown(s) { return !!(s.real && ('position' in s.real)); }
+  function floatTotal(r, p) { return r.float_total != null ? r.float_total : (r.float_pts == null ? null : r.float_pts * qtyOf(p.qty)); }
+  // ⭐ QA r1 建議 7：持有中 ⇒ 右邊寫「持有中 ±N」（⛔ 不要跟已出場的點數長得一樣）
+  function holdRow(r, p) { var ft = floatTotal(r, p); return { v: '持有中 ' + pm(ft), c: cls(ft), m: qtyOf(p.qty) > 1 ? qtyOf(p.qty) + ' 口' : '', hold: 1 }; }
+  // ⭐ QA r1 建議 7：00:00～05:00 以交易日為準 ⇒ 「今天」＝今晚那一晚開盤的那天（夜盤 E 比日曆的今天早）
+  // ⭐ QA r2：這一口部位是不是那一筆自動單（方向＋進場時刻到分，跟後端收盤平倉同一組認法）
+  function matchPos(p, tr) { return !!(p && tr && p.dir && p.dir === tr.dir && hhmm(p.entry_time) && hhmm(p.entry_time) === hhmm(tr.entry_time)); }
+  // ⛔ QA r2 原則：部位還在（或不知道）的時候，任何一列都不准寫「已出場」
+  function notExited(s, m) {
+    var p = (s.real || {}).position;
+    if (!posKnown(s)) return { v: '不知道', n: 1, m: '部位還讀不到', gold: 1 };
+    if (p) return { v: '還在算', n: 1, m: m || '點數還在算' };
+    return null;
+  }
+  function tradeDay(s) {
+    var d = s.day || {}, tE = ((s.night || {}).tonight || {}).E;
+    return (tE && d.today && tE < d.today) ? tE : d.today;
+  }
+
+  // D 今天：日盤那一列（D＝交易日）
+  function dayRow(s, D) {
+    var d = s.day || {}, r = s.real || {}, p = r.position, isToday = D === d.today;
+    var t = (d.days || []).filter(function (x) { return x.date === D; })[0];
+    if (!s.day) return { v: '讀不到', n: 1, m: '' };
+    if ((d.closed || []).indexOf(D) >= 0 || wkday(D) === 0 || wkday(D) === 6) return { v: '休市', n: 1, m: '' };
+    if (t && t.trade) {
+      var tr = t.trade, R = t.real || {}, q = qtyOf(R.qty || tr.qty);
+      if (!tr.ok) return { v: '沒送成', n: 1, m: '', gold: 1 };
+      if (R.state === 'ok') { var tot = totalOf(R), xw = (EXIT_WORD[R.why] || '出場') + ' ' + hhmm(R.exit_time);
+        return tot == null ? (notExited(s, xw) || { v: '已出場', n: 1, m: xw })
+          : { v: pm(tot) + ' 點', c: cls(tot), m: xw + qtyTxt(q) }; }
+      if (R.state === 'drill') return { v: '演練', n: 1, m: '不是真單' };
+      // ⭐ QA r2 必修 1：那一口還在（13:43 沒平掉、過了午夜也一樣）⇒ 持有中（⛔ 不看是不是今天）
+      if (matchPos(p, tr) || (isToday && p && !p.entry_time && (p.sess ? p.sess === 'day' : true))) return holdRow(r, p);
+      // ⭐ QA r1 必修 1：部位讀不到 ⇒ 講不知道（⛔ 不寫已出場：可能根本還沒平掉）
+      return notExited(s) || { v: '已出場', n: 1, m: '點數還在算' };
+    }
+    if (!d.armed) return { v: '關著', n: 1, m: '' };
+    if ((s.risk || {}).blocked) return { v: '停單中', n: 1, m: '本月到上限' };
+    if (!t) return isToday ? { v: hhmm(d.signal_at || '09:03') + ' 看', n: 1, m: '還沒開始' } : { v: '—', n: 1, m: '' };
+    if (t.wait) return { v: '還在看', n: 1, m: t.short || '' };
+    return skipTxt(t.short);
+  }
+  // D 今天：某一晚夜盤那一列（E＝開盤那晚的日期）
+  function nightRow(s, E) {
+    var n = s.night || {}, R = (n.real || {})[E], r = s.real || {}, p = r.position, tE = (n.tonight || {}).E;
+    if (!s.night) return { v: '讀不到', n: 1, m: '' };
+    if ((n.closed || []).indexOf(E) >= 0) return { v: '休市', n: 1, m: '' };
+    var rows = (n.recent || []).filter(function (x) { return x.E === E; });
+    var res = rows.filter(function (x) { return x.rec === 'result'; })[0];
+    var sk = rows.filter(function (x) { return x.rec === 'skip'; })[0];
+    if (res && res.ok) {
+      if (R && R.state === 'ok') { var tot = totalOf(R), w = R.why === 'sl' || R.why === 'tp' || R.why === 'manual' ? EXIT_WORD[R.why] + ' ' + hhmm(R.exit_time) : '04:58 平倉';
+        return tot == null ? (notExited(s, w) || { v: '已出場', n: 1, m: w }) : { v: pm(tot) + ' 點', c: cls(tot), m: w + qtyTxt(qtyOf(R.qty)) }; }
+      if (R && R.state === 'drill') return { v: '演練', n: 1, m: '不是真單' };
+      // ⭐ QA r2 必修 2：04:58 沒平掉、過了 05:00 那一晚變成「上一晚」也一樣 ⇒ 持有中
+      if (matchPos(p, res) || (p && E === tE && !p.entry_time && (p.sess ? p.sess === 'night' : true))) return holdRow(r, p);
+      return notExited(s) || { v: '已出場', n: 1, m: '點數還在算' };
+    }
+    if (res && !res.ok) return { v: '沒送成', n: 1, m: '', gold: 1 };
+    if (sk) return skipTxt(sk.short);
+    if (E === tE && (s.risk || {}).blocked) return { v: '停單中', n: 1, m: '本月到上限' };
+    if (E === tE) return n.on ? { v: (n.tonight.look_at || '') + ' 看', n: 1, m: '還沒開始' } : { v: '關著', n: 1, m: '' };
+    return { v: '—', n: 1, m: '' };
+  }
+  function prevNightE(s, D) {
+    var n = s.night || {}, best = null;
+    (n.recent || []).forEach(function (x) { var E = String(x.E || ''); if (E && (!D || E < D) && (!best || E > best)) best = E; });
+    return best;
+  }
+  function tlRow(k, sub, r) {
+    return '<div class="ln"><div class="k"><b>' + k + '</b><span>' + esc(sub) + '</span></div><div class="m">' + esc(r.m) + '</div>' +
+      '<div class="v num' + (r.n ? ' n' : '') + (r.c ? ' ' + r.c : '') + (r.gold ? ' gold' : '') + '">' + esc(r.v) + '</div></div>';
+  }
+
+  function statHTML(age, s) {
+    var dead = age > DEAD_S, slow = age > SLOW_S;
+    if (fetchErr) return { cls: 'slow', t: '手機連不到網路，顯示的是 ' + Math.max(1, minOf(age)) + ' 分鐘前的資料' };
+    if (dead) return { cls: 'dead', t: '面板 ' + minOf(age) + ' 分鐘沒回報' };
+    if (slow) return { cls: 'slow', t: minOf(age) + ' 分鐘沒回報，再等等' };
+    if ((s.errs || []).length) return { cls: 'warn', t: '面板有一部分讀不到' };
+    return { cls: 'ok', t: '面板正常・' + ago(age) };
+  }
+
   function render(box, s) {
     var age = Date.now() / 1000 - box.t;
-    var dead = age > DEAD_S, slow = age > SLOW_S;
-    var errs = (s.errs || []).slice();
-    var st = dead ? 'dead' : (slow || errs.length ? 'slow' : 'ok');
-    var title = dead ? '面板沒有回報了' : errs.length ? '面板有狀況' : slow ? '有點久沒回報' : '面板正常運作中';
-    var sub = dead ? '已經 ' + ago(age).replace('前', '') + '沒收到 —— 可能是電腦睡著、斷網或面板關掉了'
-      : '最後回報 ' + ago(age) + '（' + esc((s.at || '').slice(11, 16)) + '）';
-    $('alive').className = 'card alive ' + st;
-    $('alive').innerHTML = '<span class="dot"></span><div><div class="t">' + title + '</div><div class="s">' + sub + '</div></div>';
-    $('upd').innerHTML = '更新 ' + (lastFetchOk ? ago((Date.now() - lastFetchOk) / 1000) : '—');
+    var dead = age > DEAD_S;
+    var st = statHTML(age, s);
+    $('stat').className = 'stat ' + st.cls;
+    $('stat').innerHTML = '<span class="dot"></span><span>' + esc(st.t) + '</span>';
 
-    // 部位
-    var r = s.real || {}, p = r.position;
-    if (p) {
-      var fp = r.float_pts;
-      $('pos').innerHTML = '<h2>現在的部位</h2><div class="big ' + cls(fp) + ' num">' + pm(fp) + ' <small class="dim" style="font-size:14px">點</small></div>' +
-        row('方向', '<b>' + dirTxt(p.dir) + ' ' + (p.qty || 1) + ' 口</b>') +
-        row('進場', '<span class="num">' + esc(p.entry) + '</span>' + (p.entry_time ? '（' + esc(String(p.entry_time).slice(0, 8)) + '）' : '')) +
-        row('停損 / 停利', '<span class="num">' + esc(r.sl == null ? '—' : r.sl) + ' / ' + (p.no_tp ? '不設停利' : esc(r.tp == null ? '—' : r.tp)) + '</span>') +
-        (r.stale_sec != null ? '<div class="err">⚠️ 報價已中斷 ' + esc(r.stale_sec) + ' 秒 —— 停損現在沒人在看</div>' : '');
-    } else if (!s.real || !('position' in r)) {
-      // ⛔ 面板沒回應、或剛啟動還沒問到券商 ≠ 沒有部位：不知道就講不知道
-      $('pos').innerHTML = '<h2>現在的部位</h2><div class="big gold" style="font-size:20px">還不知道</div><div class="msg">' +
-        (s.real ? '面板剛啟動，還在跟券商確認部位（下一次回報就會有）。' : '這一次面板沒回應，讀不到部位。') + '</div>';
-    } else {
-      $('pos').innerHTML = '<h2>現在的部位</h2><div class="big dim" style="font-size:20px">沒有部位</div>';
-    }
-
-    // ⭐ 2026-09-24 風控規則 B：日盤＋夜盤**共用**的本月額度 ⇒ 自己一張卡（⛔ 不放在日盤或夜盤裡）
-    var rk0 = s.risk || {};
-    $('risk').hidden = !(rk0.cap || rk0.err);
-    if (rk0.err) {
-      $('risk').innerHTML = '<h2>本月風控（日盤＋夜盤共用）</h2><div class="err">⚠️ 算不出本月損益：' + esc(rk0.err) + '（算不出來時不送單）</div>';
-    } else if (rk0.cap) {
-      var used = rk0.pnl < 0 ? Math.min(100, Math.round(-rk0.pnl * 100 / rk0.cap)) : 0;
-      $('risk').innerHTML = '<h2>本月風控（日盤＋夜盤共用）' + (rk0.blocked ? ' <span class="pill on">已停單</span>' : (rk0.override ? ' <span class="pill on">已手動解除</span>' : '')) + '</h2>' +
-        row('本月自動單', '<span class="num ' + (rk0.hit ? 'gold' : cls(rk0.pnl)) + '">' + pm(rk0.pnl) + ' 點</span>') +
-        row('上限', '<span class="num">−' + Math.round(rk0.cap).toLocaleString() + ' 點</span>') +
-        '<div class="bar"><i style="width:' + used + '%"></i></div>' +
-        '<div class="msg">' + (rk0.blocked ? '到了上限：這個月日盤、夜盤都不送，下個月自動恢復。' :
-          (rk0.override ? '超過上限，但你已經手動解除，這個月照常送。' : '虧到上限 ⇒ 這個月日盤、夜盤都停，下個月自動恢復。')) +
-          (rk0.since ? '（' + esc(String(rk0.since).slice(5)) + ' 起算）' : '') + '</div>';
-    }
-
-    // 日盤
-    var d = s.day;
-    if (d) {
-      var h = '<h2>日盤自動下單 <span class="pill ' + (d.armed ? 'on' : '') + '">' + esc(modeTxt(d.armed, d.live)) + '</span></h2>' +
-        row('做法', esc(d.method_name || d.method || '—') + (s.lots && s.lots.day ? '・' + esc(s.lots.day) : '')) + row('今天', esc(d.today || ''));
-      var today = (d.days || [])[0];
-      if (today && today.date === d.today) {
-        if (today.trade) {
-          var t = today.trade;
-          h += '<div class="msg"><b>' + (t.ok ? '已送出' : '沒送成') + '：' + dirTxt(t.dir) + '</b> 進場 <span class="num">' + esc(t.entry) + '</span>（' + esc(t.entry_time || '') + '）' +
-            (t.ok ? '　停損 <span class="num">' + esc(t.sl) + '</span>　停利 ' + (t.no_tp ? '不設' : '<span class="num">' + esc(t.tp) + '</span>') : '　' + esc(t.why_msg || '')) + '</div>';
-        }
-        (today.cands || []).forEach(function (m) { h += '<div class="msg">' + esc(m) + '</div>'; });
-        if (today.note) h += '<div class="msg">' + esc(today.note) + '</div>';
-        if (today.real && today.real.state === 'ok') h += '<div class="msg">出場 ' + esc(today.real.exit_time || '') + '　<b class="' + cls(today.real.points) + '">' + pm(today.real.points) + ' 點</b></div>';
-        if (today.eod && today.eod.alarm) h += '<div class="err">⚠️ ' + esc(today.eod.why_msg || today.eod.msg || '收盤平倉有狀況') + '</div>';
-      } else {
-        h += '<div class="msg">今天還沒有紀錄（' + esc(d.signal_at || '09:03:30') + ' 才開始看）</div>';
-      }
-      var hist = (d.days || []).filter(function (x) { return x.date !== d.today; }).slice(0, 4);
-      var dClosed = d.closed || [];
-      if (hist.length) {
-        h += '<div class="hist">' + hist.map(function (x) {
-          // ⭐ 2026-10-14：國定假日寫「休市」（面板判斷好的 closed，⛔ 手機不自己猜）
-          var v = x.trade ? (x.real && x.real.state === 'ok' ? '<b class="' + cls(x.real.points) + '">' + pm(x.real.points) + ' 點</b>' : dirTxt(x.trade.dir) + '・點數對不到')
-            : (dClosed.indexOf(x.date) >= 0 ? '<span class="faint">休市</span>' : '<span class="faint">沒做</span>');
-          return row(x.date.slice(5), v);
-        }).join('') + '</div>';
-      }
-      if (d.err_n) h += '<div class="err">⚠️ 日盤背景出錯 ' + esc(d.err_n) + ' 次：' + esc(d.err || '') + '</div>';
-      $('day').innerHTML = h;
-    } else { $('day').innerHTML = '<h2>日盤自動下單</h2><div class="msg">讀不到</div>'; }
-
-    // 夜盤
-    var n = s.night;
-    if (n) {
-      var hn = '<h2>夜盤自動下單 <span class="pill ' + (n.on ? 'on' : '') + '">' + esc(modeTxt(n.on, n.live)) + '</span></h2>' +
-        row('做法', esc(n.method_name || n.method || '—') + (s.lots && s.lots.night ? '・今晚 ' + esc(s.lots.night) : '')) +
-        (n.tonight ? row('今晚幾點看', esc(n.tonight.look_at || '')) : '');
-      // ⭐ 2026-10-14：送出了的那一晚，出場價與點數一起列（面板唯讀比對券商成績單的結果；對不到就照舊不寫點數）。
-      //    同一晚的「04:58 平倉完成」那一列在有點數時就不再重複列。日期寫「那一晚」＋「晚」。
-      var nReal = n.real || {}, nClosed = n.closed || [], shown = 0;
-      (n.recent || []).forEach(function (x) {
-        if (shown >= 4) return;
-        var R = nReal[x.E] && nReal[x.E].state === 'ok' ? nReal[x.E] : null;
-        if (x.rec === 'eod' && R) return;
-        var what, val = null;
-        if (x.rec === 'result') {
-          what = (x.ok ? '已送出 ' : '沒送成 ') + dirTxt(x.dir) + (x.entry ? ' 進場 ' + x.entry : '') + (x.err ? '：' + x.err : '');
-          if (x.ok && R) { what = dirTxt(x.dir) + ' ' + x.entry + ' → ' + R.exit + '（' + String(R.exit_time || '').slice(0, 5) + '）'; val = R.points; }
-        } else if (x.rec === 'eod') what = x.msg || '04:58 平倉';
-        else what = nClosed.indexOf(x.E) >= 0 ? '休市' : (x.msg || x.why || '');
-        hn += row((x.E || '').slice(5) + ' 晚', '<span class="dim" style="font-size:13px">' + esc(what) + '</span>' +
-          (val != null ? ' <b class="' + cls(val) + '">' + pm(val) + ' 點</b>' : ''));
-        shown++;
-      });
-      if (n.errors) hn += '<div class="err">⚠️ 夜盤背景出錯 ' + esc(n.errors) + ' 次：' + esc(n.last_err || '') + '</div>';
-      $('night').innerHTML = hn;
-    } else { $('night').innerHTML = '<h2>夜盤自動下單</h2><div class="msg">讀不到</div>'; }
-
-    // 帳戶
-    var e = s.equity || {};
-    $('acct').innerHTML = '<h2>帳戶（券商端）</h2>' +
-      row('權益總值', '<span class="num">' + (e.equity != null ? Math.round(e.equity).toLocaleString() + ' 元' : '—') + '</span>') +
-      row('今日損益', '<span class="num ' + cls(e.day_pl) + '">' + (e.day_pl != null ? pm(e.day_pl) + ' 元' : '—') + '</span>') +
-      row('查詢時間', esc(e.at || '—')) +
-      // ⭐ 2026-10-14 口數：一行＋一句（整句面板算好的；⛔ 手機不自己判斷、⛔ 一顆按鈕都沒有）
-      (s.lots && s.lots.label ? row('口數', '<b>' + esc(s.lots.label) + '</b>') +
-        (s.lots.line ? '<div class="msg' + (s.lots.att ? ' gold' : '') + '">' + esc(s.lots.line) + '</div>' : '') : '') +
-      // ⭐ 2026-09-24：保證金還撐得住幾次停損（整句面板算好的）
-      (e.cushion && e.cushion.msg ? '<div class="msg' + (e.cushion.warn ? ' gold' : '') + '">' + esc(e.cushion.msg) + '</div>' : '');
-
-    // 警示
-    var pn = s.panel || {}, w = errs.slice();
-    // ⭐ 2026-09-24 風控規則 B 與保證金提醒：到了就放進「要注意的事」
-    var rk = s.risk || {};
-    if (rk.blocked) w.push(rk.msg || '本月自動單到了風控上限，這個月不送');
-    if (rk.err) w.push('風控算不出本月損益：' + rk.err);
-    if (e.cushion && e.cushion.warn) w.push(e.cushion.msg);
-    if (e.backup && e.backup.warn) w.push(e.backup.msg);
-    if (e.depth && e.depth.warn) w.push(e.depth.msg);   // ⭐ 2026-10-14 五檔停了（成交還在）
-    // ⭐ 2026-10-14 口數：只有「可以升級」「剛被減級」才進來（面板決定、手機只照抄；卡在條件不算事）
-    if (s.lots && s.lots.warn) w.push(s.lots.warn);
-    if (pn.conn && pn.conn.ok === false) w.push('跟永豐的連線有問題：' + (pn.conn.last_error || ''));
-    // ⚠️ 券商的 last_error 沒有時間、而且背景對帳偶發失敗也會寫進來（跟真單無關）⇒ 不當警示，放最底下小字
     // ⭐ 分析師信件：列表跟著快照更新（打開中的全文不重畫，免得他看到一半跳掉）
     AN.snap = s.analyst || null;
     anPaintBtn();
     if (AN.view === 'list') anPaintList();
-    $('warn').hidden = !w.length;
-    $('warn').innerHTML = '<h2>要注意的事</h2>' + w.map(function (x) { return '<div class="item">⚠️ ' + esc(x) + '</div>'; }).join('');
 
-    $('footInfo').innerHTML = '面板每 2 分鐘回報一次，手機最慢約 3 分鐘看到。電腦：' + esc(s.host || '') +
-      (r.started ? '・面板 ' + esc(r.started) + ' 啟動' : '') +
-      (r.last_error ? '<br><span class="faint">券商最後一次錯誤訊息（不一定是現在）：' + esc(String(r.last_error).slice(0, 60)) + '</span>' : '') + (fetchErr ? '<br><span class="gold">上一次更新失敗：' + esc(fetchErr) + '</span>' : '');
+    var h = '';
+    // B 要你處理（沒事就整張不出現；排序 now → decide → later，later 一定最後）
+    var todo = Array.isArray(s.todo) ? s.todo.slice() : legacyTodo(s);
+    var ORD = { now: 0, decide: 1, later: 2 };
+    todo = todo.filter(function (x) { return x && x.text; }).map(function (x, i) { return { x: x, i: i }; })
+      .sort(function (a, b) { return ((ORD[a.x.lvl] == null ? 1 : ORD[a.x.lvl]) - (ORD[b.x.lvl] == null ? 1 : ORD[b.x.lvl])) || (a.i - b.i); })
+      .map(function (o) { return o.x; });
+    if (dead && !fetchErr) todo.unshift({ lvl: 'now', text: '面板 ' + minOf(age) + ' 分鐘沒回報', act: '看一下電腦是不是當機、睡著或斷網' });
+    if (todo.length) {
+      h += '<section class="card todo"><div class="lbl">要你處理（' + todo.length + '）</div>' + todo.map(function (x) {
+        var lv = LV[x.lvl] ? x.lvl : 'decide';
+        return '<div class="it"><div class="t"><span class="lv ' + lv + '">' + LV[lv] + '</span>' + esc(x.text) + '</div>' +
+          (x.act ? '<div class="a"><b>→</b><span>' + esc(x.act) + '</span></div>' : '') + '</div>';
+      }).join('') + '</section>';
+    }
+
+    // C 現在（主角）
+    var r = s.real || {}, p = r.position, rk = s.risk || {}, d = s.day || {}, n = s.night || {};
+    var D = tradeDay(s);
+    var hero = '<section class="card hero"><div class="row1"><span class="lbl">現在</span>';
+    if (p) {
+      var night = p.sess ? p.sess === 'night' : (String(p.entry_time || '') >= '15:00' || String(p.entry_time || '') < '05:00');
+      var ft = floatTotal(r, p);
+      var dw = dirTxt(p.dir);
+      // ⭐ QA r1 建議 10：方向空白 ⇒「1 口（方向不明）」
+      var sub = p.short || ((dw ? dw + ' ' + qtyOf(p.qty) + ' 口' : qtyOf(p.qty) + ' 口（方向不明）') + (p.entry_time ? '・' + hhmm(p.entry_time) + ' 進場' : ''));
+      hero += '<span class="chip hold">' + (night ? '夜盤' : '日盤') + '持有中</span></div>' +
+        '<div class="big num ' + cls(ft) + '">' + pm(ft) + '<small>點</small></div>' +
+        '<div class="sub">' + esc(sub) + (dead ? '（' + minOf(age) + ' 分鐘前的資料）' : '') + '</div>';
+    } else if (!posKnown(s)) {
+      // ⛔ 面板沒回應、或剛啟動還沒問到券商 ≠ 沒有部位：不知道就講不知道
+      hero += '</div><div class="big unk">還不知道</div><div class="sub">' + (s.real ? '面板剛開，下一次回報就會有' : '這一次面板沒回應，讀不到部位') + '</div>';
+    } else {
+      var next = '', t0 = (d.days || []).filter(function (x) { return x.date === d.today; })[0], wd = wkday(d.today);
+      var dayOpen = d.armed && wd >= 1 && wd <= 5 && (d.closed || []).indexOf(d.today) < 0 && D === d.today;
+      var tonightE = (n.tonight || {}).E;
+      if (rk.blocked) next = '本月停單中，不會下單';
+      // ⭐ QA r1 建議 6：09:30 前還在等訊號 ⇒ 講日盤還在等（⛔ 不跳去講夜盤）
+      else if (dayOpen && t0 && t0.wait) next = '日盤還在等訊號（' + esc(t0.wait_until || '09:30') + ' 前）';
+      else if (dayOpen && !t0) next = '下一次：' + hhmm(d.signal_at || '09:03') + ' 日盤';
+      // ⭐ QA r1 必修 5：今晚休市 ⇒ ⛔ 不寫「下一次：今晚夜盤」
+      else if (n.on && tonightE && tonightE === d.today && (n.closed || []).indexOf(tonightE) < 0 &&
+               !(n.recent || []).some(function (x) { return x.E === tonightE; })) next = '下一次：今晚 ' + esc(n.tonight.look_at) + ' 夜盤';
+      hero += '</div><div class="big flat">沒有部位</div>' + (dead ? '<div class="sub">這是 ' + minOf(age) + ' 分鐘前的資料</div>' : next ? '<div class="sub">' + next + '</div>' : '');
+    }
+    h += hero + '</section>';
+
+    // D 今天（上一晚 → 今天日盤 → 今晚；00:00～05:00 以交易日為準）
+    var pE = prevNightE(s, D), tE = (n.tonight || {}).E;
+    h += '<section class="card"><div class="lbl">今天</div><div class="tl">' +
+      (pE ? tlRow('夜盤', md(pE) + ' 晚', nightRow(s, pE)) : '') +
+      tlRow('日盤', '今天', dayRow(s, D)) +
+      (tE ? tlRow('夜盤', '今晚', nightRow(s, tE)) : '') + '</div></section>';
+
+    // E 本月（只看點）
+    var side, big, bc = '';
+    if (rk.err) { big = '—'; side = '<span class="gold">算不出來</span>'; }
+    else if (rk.pnl == null) { big = '—'; side = '讀不到'; }
+    else {
+      big = pm(rk.pnl); bc = rk.blocked ? 'loss' : cls(rk.pnl);
+      if (rk.blocked) side = '<span class="gold">到上限了，停到月底</span>';
+      else if (rk.override) side = '超過上限，你已手動解除';
+      // ⭐ QA r1 建議 10：剩下的額度是負的 ⇒「已超過上限」（⛔ 不寫「再虧 −N 點」）
+      else if (rk.pnl < 0 && rk.cap) side = rk.cap + rk.pnl <= 0 ? '<span class="gold">已超過上限</span>' : '再虧 ' + Math.round(rk.cap + rk.pnl).toLocaleString() + ' 點就先停';
+      else side = '日盤＋夜盤合計';
+    }
+    h += '<section class="card"><div class="lbl">本月</div><div class="mon"><div class="big num ' + bc + '">' + big + '<small>點</small></div><div class="side">' + side + '</div></div>' +
+      (!rk.err && rk.pnl < 0 && rk.cap && !rk.blocked ? '<div class="bar"><i style="width:' + Math.min(100, Math.round(-rk.pnl * 100 / rk.cap)) + '%"></i></div>' : '') + '</section>';
+    $('board').innerHTML = h;
+
+    // F～I 收起來的細節（⚠️ 重畫前記下他展開的、畫完補回）
+    var ds = $('more').querySelectorAll('details[id]');
+    for (var i = 0; i < ds.length; i++) DETAILS_OPEN[ds[i].id] = ds[i].open;
+    var m = '';
+    // F 最近幾天（單位：點；⛔ 不含交易日「今天」）
+    var hist = (d.days || []).filter(function (x) { return x.date !== d.today && x.date !== D; }).slice(0, 4);
+    m += '<details class="hist" id="dHist"><summary>最近幾天<span class="r">單位：點</span></summary><div class="db">' + (hist.map(function (x) {
+      var dv;
+      if (x.trade && x.trade.ok) {
+        var dr = dayRow(s, x.date);
+        dv = dr.hold ? '<span class="faint">持有中</span>' : dr.c !== undefined ? '<b class="num ' + dr.c + '">' + esc(String(dr.v).replace(' 點', '')) + '</b>'
+          : '<span class="faint">' + esc(dr.v === '已出場' ? '還在算' : dr.v) + '</span>';
+      } else dv = '<span class="faint">' + ((d.closed || []).indexOf(x.date) >= 0 ? '休市' : (x.trade ? '沒送成' : '沒做')) + '</span>';
+      var nr = nightRow(s, x.date);
+      var nv = nr.hold ? '<span class="faint">持有中</span>' : nr.c !== undefined ? '<b class="num ' + nr.c + '">' + esc(String(nr.v).replace(' 點', '')) + '</b>'
+        : '<span class="faint">' + esc(nr.v) + '</span>';
+      return '<div class="rw"><span class="k">' + md(x.date) + '</span><span class="v"><span><em>日</em>' + dv + '</span><span><em>夜</em>' + nv + '</span></span></div>';
+    }).join('') || '<div class="rw"><span class="k">還沒有紀錄</span></div>') + '</div></details>';
+
+    // G 帳戶（摘要＝權益，元）
+    var e = s.equity || {}, L = s.lots || {};
+    var lab = String(L.label || '').replace('（起始級）', '');
+    m += '<details id="dAcct"><summary>帳戶<span class="r num">' + (e.equity != null ? Math.round(e.equity).toLocaleString() + ' 元' : '—') + '</span></summary><div class="db">' +
+      '<div class="rw"><span class="k">今天損益</span><span class="v num ' + cls(e.day_pl) + '">' + (e.day_pl == null ? '—' : e.day_pl ? pm(e.day_pl) + ' 元' : '0 元') + '</span></div>' +
+      (lab ? '<div class="rw"><span class="k">口數</span><span class="v">' + esc(lab) + (L.day || L.night ? '（日盤 ' + esc(L.day || '—') + '・夜盤 ' + esc(L.night || '—') + '）' : '') + '</span></div>' : '') +
+      (L.short ? '<div class="rw"><span class="k">升級</span><span class="v">' + esc(L.short) + '</span></div>' : '') +
+      (e.cushion && e.cushion.short ? '<div class="rw"><span class="k">保證金</span><span class="v' + (e.cushion.warn ? ' gold' : '') + '">' + esc(e.cushion.short) + '</span></div>' : '') +
+      '</div></details>';
+
+    // H 自動下單（摘要＝開關狀態）
+    var onTxt = function (on, live) { return on ? (live ? '開著' : '演練中') : '關著'; };
+    var setSum = rk.blocked ? '本月停單中' : (d.armed && n.on ? '日盤、夜盤都開著' : (d.armed ? '只開日盤' : n.on ? '只開夜盤' : '都關著'));
+    m += '<details id="dAuto"><summary>自動下單<span class="r">' + setSum + '</span></summary><div class="db">' +
+      '<div class="rw"><span class="k">日盤</span><span class="v">' + (s.day ? esc(d.method_name || d.method || '—') + '・' + onTxt(d.armed, d.live) + (L.day ? '・' + esc(L.day) : '') : '讀不到') + '</span></div>' +
+      '<div class="rw"><span class="k">夜盤</span><span class="v">' + (s.night ? esc(String(n.method_name || n.method || '—').replace('夜盤', '')) + '・' + onTxt(n.on, n.live) + (L.night ? '・' + esc(L.night) : '') : '讀不到') + '</span></div>' +
+      '</div></details>';
+
+    // I 系統（摘要＝正常／沒回報）
+    m += '<details id="dSys"><summary>系統<span class="r">' + (dead ? '<span class="gold">沒回報</span>' : (s.errs || []).length ? '<span class="gold">有一部分讀不到</span>' : '正常') + '</span></summary><div class="db">' +
+      '<div class="rw"><span class="k">面板最後回報</span><span class="v">' + ago(age) + '（' + esc(String(s.at || '').slice(11, 16)) + '）</span></div>' +
+      '<div class="rw"><span class="k">電腦</span><span class="v">' + esc(s.host || '—') + (r.started ? '・' + esc(String(r.started).replace('-', '/')) + ' 開' : '') + '</span></div>' +
+      '</div></details>';
+    $('more').innerHTML = m;
+    for (var id in DETAILS_OPEN) { if (DETAILS_OPEN[id] && $(id)) $(id).open = true; }
   }
 
   // ⛔ 畫面出錯 ≠ 密碼錯：解開之後的錯一律走這裡，照實講（第一版把畫面的錯誤誤報成「密碼不對」）。
   function safeRender(box, s) {
     try { render(box, s); }
     catch (e) {
-      $('alive').className = 'card alive slow';
-      $('alive').innerHTML = '<span class="dot"></span><div><div class="t">畫面出錯了</div><div class="s">' +
-        esc(e && e.message || e) + '（資料有收到、密碼是對的）</div></div>';
+      $('stat').className = 'stat warn';
+      $('stat').innerHTML = '<span class="dot"></span><span>畫面出錯了</span>';
+      $('board').innerHTML = '<section class="card"><div class="err">' + esc(e && e.message || e) + '（資料有收到、密碼是對的）</div></section>';
     }
   }
 
   function showLock(msg) {
-    $('loading').hidden = true; $('main').hidden = true; $('lock').hidden = false;
+    $('loading').hidden = true; $('main').hidden = true; $('lock').hidden = false; $('anView').hidden = true; AN.view = null;
     $('lockErr').hidden = !msg; $('lockErr').textContent = msg || '';
+    // 解鎖畫面：頂列只剩名字（⛔ 沒解開就不知道面板狀態，不畫燈）、信件藏起來
+    $('stat').className = 'stat'; $('stat').innerHTML = '<span class="brand">早盤儀表板</span>'; $('anMail').hidden = true;
   }
   // ⚠️ 正在看週報的時候，每 90 秒的更新 ⛔ 不可以把監控主畫面疊回來
   function showMain() { $('loading').hidden = true; $('lock').hidden = true; $('main').hidden = !!AN.view; pushPaint(); }
