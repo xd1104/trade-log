@@ -24,7 +24,7 @@
     ① 權益 < 目前這一級門檻 × 0.85 ⇒ 退到權益符合的那一級（goal.level_of）。
     ② 某一條在退休標準的「降級」⇒ 那條最多 1 口（`cap`）；「退休」⇒ 0 口
        ⚠️ 退休 ⇒ 0 口預設**不做**（`RETIRE_ZERO=False`，見下面那段）。
-    ③ 停損失靈事故（每口賠超過自己的停損 + INCIDENT_TOL）⇒ 暫停升級 6 個月。
+    ③ 停損失靈事故（停損沒被執行：出場不是停損卻賠超過停損，或每口賠超過停損 × INCIDENT_MULT）⇒ 暫停升級 6 個月。
 ・**升級要 Benson 在面板上兩段式確認**（10-14 拍板；同一天晚上老闆再改規則 ⇒ 見下面「升級（試車 → 跳級）」那一段）：
     ⛔ 09-30 的「每月第一個交易日、一次一級、冷卻 3 個月」**10-14 起作廢**。
     每個交易日收盤後（daily_check）重算：在 1＋1 ⇒ 建議試車 2＋1；試車通過 ⇒ 建議跳到權益撐得起的那一級；
@@ -71,9 +71,13 @@ RECENT_N = 30               # 升級看「最近幾筆自動單」（不滿就�
 SLIP_MAX = 4.0              # 平均滑價上限（點）
 CAP_PER_LEG = 400           # 風控 B：每一條每口（＝ risk_cap.CAP_PER_LEG）
 NOTICE_DAYS = 3             # 減級／降級／暫停的提示顯示幾個交易日（UI 規格建議 3）
-# ⚠️ 「賠超過原停損」要扣掉正常滑價：市價停損本來就會多吃幾點。
-#    ⛔ 這個數是 **PM 2026-10-14 定的**（「自己的停損＋20 點」），⛔ 不是研究算出來的數字。單位：點／口。
-INCIDENT_TOL = 20.0
+# ⭐⭐ 2026-10-19 改（Benson 同意）：舊版「每口賠超過停損＋20 點」把 10/19 急跌的正常停損判成失靈
+#    （09:57:29.67 買價 46450 → 0.13 秒後 46424，一口氣跳過停損價 46437；面板 0.5 秒內停損成交 46402，多賠 35 點）
+#    ⇒ 暫停升級到 2027-04 是誤判。「失靈」要抓的是**停損沒被執行**（停電、面板當掉、抱到收盤才平），不是急跌滑價。
+#    新判法（任一條）：① 出場原因不是停損／停利，而且每口賠超過自己的停損點數；② 每口賠超過停損點數 × INCIDENT_MULT。
+#    ⛔ 1.5 這個數是 **PM 2026-10-19 定的**，⛔ 不是研究算出來的。
+INCIDENT_MULT = 1.5
+INCIDENT_EXEC = ("sl", "tp")     # 這兩種出場＝停損／停利有被執行
 # ⚠️ 退休 ⇒ 0 口：09-30 的加碼規則寫「退休 ⇒ 0 口」，但 09-29 退休標準寫「開關一律 Benson 自己按」。
 #    ⭐ PM 2026-10-14 拍板：**維持不自動歸零**（退休也只壓到 1 口），要不要關掉由他自己按；
 #       畫面要講清楚「已退休：自動壓到 1 口，要不要關掉由你按」。
@@ -714,7 +718,7 @@ def retire_status():
 
 def incidents():
     """
-    停損失靈事故 ⇒ [{"d", "sess", "pts", "sl"}]：自動單真單那一口**每口**賠超過「它自己的停損點數 ＋ INCIDENT_TOL」。
+    停損失靈事故 ⇒ [{"d", "sess", "pts", "sl"}]：見 INCIDENT_MULT 上面那段（停損沒被執行，或每口賠超過停損 × 1.5）。
     ⛔ 認人沿用 risk_cap（帳本 × 成績單：進場時間＋進場價）；停損點數讀帳本那一列的 sl_points。
     """
     import risk_cap
@@ -733,7 +737,9 @@ def incidents():
             sl = e.get("sl_points")
             if t is None or not risk_cap._num(t.get("points")) or not risk_cap._num(sl):
                 continue
-            if float(t["points"]) < -(float(sl) + INCIDENT_TOL):
+            loss, slp = -float(t["points"]), float(sl)
+            not_exec = str(t.get("reason") or "") not in INCIDENT_EXEC and loss > slp
+            if not_exec or loss > slp * INCIDENT_MULT:
                 out.append({"d": e["d"], "sess": e["sess"], "pts": float(t["points"]), "sl": float(sl)})
     return out
 
@@ -753,7 +759,7 @@ def _gather(ctx):
         ret, rerr = ctx.get("retire") or {}, ctx.get("retire_err")
     else:
         ret, rerr = retire_status()
-    incs = ctx["incidents"] if "incidents" in ctx else _safe(incidents, [])
+    incs = ctx["incidents"] if "incidents" in ctx else _safe(incidents, None)   # None＝算不出來 ⇒ 暫停不動
     q = ctx["quality"] if "quality" in ctx else _safe(exec_quality, {"ok": False, "why": "算不出來"})
     return q, ret, rerr, incs
 
@@ -802,6 +808,21 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
                        "msg": ("%s 進入退休標準的「降級」⇒ 自動壓到 1 口。" % LANE_NAME[lane]) if lvl == "down"
                        else ("%s 已退休：自動壓到 1 口，要不要關掉由你按。" % LANE_NAME[lane]
                              if not RETIRE_ZERO else "%s 已退休 ⇒ 0 口（不送）。" % LANE_NAME[lane])})
+    if incs is not None:
+        want = None
+        for inc in incs:
+            try:
+                u = str(_add_months(date.fromisoformat(inc["d"]), PAUSE_MONTHS))
+            except (KeyError, ValueError):
+                continue
+            want = u if (want is None or u > want) else want
+        old = st.get("pause_until")
+        # ⭐ 2026-10-19：判法改了之後，以前誤判的暫停要能解除（⛔ 只在「算得出事故清單」時才動）
+        if old and (want is None or want < old):
+            st["pause_until"] = want
+            ev.append({"kind": "pause_lifted", "from": old, "to": want,
+                       "msg": "停損失靈的判法更正（急跌滑價不算失靈）⇒ 原本暫停升級到 %s 已解除%s。" % (
+                           old, ("，改成 %s" % want) if want else "")})
     for inc in incs or []:
         try:
             until = str(_add_months(date.fromisoformat(inc["d"]), PAUSE_MONTHS))
@@ -1369,7 +1390,7 @@ def _safe(fn, dflt):
 # ══ 給畫面的一份（唯讀、便宜：只讀狀態檔＋紀錄尾巴；⛔ 不算升級條件）══════════════
 
 _NOTICE_KINDS = {"down_equity": "down", "cap": "demote", "pause": "pause", "pending_void": "void",
-                 "trial_void": "void"}
+                 "trial_void": "void", "pause_lifted": "lifted"}
 
 
 def view(now=None, E=None, eq=None):
@@ -1852,7 +1873,7 @@ def _panel(now, today, eq, lot1, E):
     if offer and not pend:
         warn = "可以%s %s 了 —— 要在電腦面板【自動下單】按確認才會生效" % (
             "先試車" if is_trial else "升到", offer["to"]["label"])
-    elif notice:
+    elif notice and notice.get("kind") != "lifted":      # 解除暫停是好消息，⛔ 不進「要注意的事」
         warn = notice.get("text")
     out["phone"] = {"label": plabel, "line": _strip(vd["title"] + "。" + vd["sub"]), "att": bool(warn), "warn": warn}
     out["hist"] = [dict(h, date_txt=dtxt(h.get("date"), False), who=("你按的" if h.get("by") == "you" else "自動"))
