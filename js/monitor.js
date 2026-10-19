@@ -160,7 +160,7 @@
     var cal = (R.calendar || []).map(function (c) { return row(c.when, anTag(c.tag) + ' ' + esc(c.event) + (c.history ? '<div class="faint" style="font-size:12px">' + esc(c.history) + '</div>' : '')); }).join('') || '<div class="msg">這週沒有特別要注意的事。</div>';
     var env = (R.env || []).map(function (e) { return '<div class="an-nw"><div class="tp">' + anTag(e.tag) + (e.status ? ' ' + anLamp('', e.status) : '') + '</div><h3>' + esc(e.title) + '</h3><p>' + esc(e.text) + '</p></div>'; }).join('');
     var st = (F.strategies || []).map(function (s) {
-      return '<div class="an-nw"><div class="tp">' + anLamp(s.lamp === 'ok' ? 'ok' : 'wn', s.lamp_word) + '</div><h3>' + esc(s.name) + '</h3>' +
+      return '<div class="an-nw"><div class="tp">' + anLamp((s.lamp === 'ok' || s.lamp === 'g') ? 'ok' : ((s.lamp === 'r' || s.lamp === 'rr' || s.lamp === 'bd') ? 'bd' : 'wn'), s.lamp_word) + '</div><h3>' + esc(s.name) + '</h3>' +
         row('本週模擬', '<span class="num ' + cls(s.week_sim_pts) + '">' + pm(s.week_sim_pts) + '</span>（' + s.week_sim_n + ' 筆）') +
         row('本週真單', '<span class="num ' + cls(s.week_real_pts) + '">' + pm(s.week_real_pts) + '</span>（' + s.week_real_n + ' 筆）') +
         row('近 15 筆每筆／歷史', '<span class="num">' + pm(s.avg15) + ' / ' + pm(s.avg_all) + '</span>') + '</div>';

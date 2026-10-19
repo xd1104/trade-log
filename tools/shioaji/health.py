@@ -36,7 +36,7 @@ import json
 import math
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -65,14 +65,21 @@ STRATS = (
     # ⚠️ 2026-09-23 起夜盤跟勢可以在【自動下單】選來下真單（跟台積電快攻擇一）⇒ 真單欄照實接上。
     {"key": "trend", "sub": "夜盤・美股開盤後 10 分鐘・1 口（夜盤選它才下單）", "real": "night"},
 )
-# ⛔ 燈號的門檻（PM 2026-09-23 定）。⛔ 前端不准自己算一份。
-LAMP_WORD = {"ok": "正常", "wn": "明顯變差", "bd": "連 15 筆為負", "na": "資料不足"}
+# ⭐⭐ 2026-10-19 Benson：「這個標籤是讓我看兩個策略目前狀況如何的，放綠燈、黃燈、紅燈，紅燈就表示建議退休，
+#    黃燈就是需要注意。」⇒ 燈號**改接退休標準**（analyst_facts.retire()，週報與口數升級用的同一份；⛔ 不另寫一把尺）。
+#    舊版看「近 15 筆平均」，標籤寫「連 15 筆為負」被讀成連輸 15 次（其實是 7 賺 8 賠、平均 −1.4）⇒ 作廢。
+#    對照：正常／可升回 ⇒ 綠；觀察（近 30 筆平均變負，低波動期不算）⇒ 黃；降級（回落 > 歷史最壞×1.5 或聯軍近 18 個月合計變負）
+#    ／退休（降級後模擬 50 筆平均仍負）⇒ 紅。近 15／30 筆平均照舊列出來，只當參考、⛔ 不再決定燈號。
+LAMP_WORD = {"g": "正常", "y": "需要注意", "r": "該關真單了", "rr": "該退休了", "na": "資料不足", "wait": "判斷中"}
 LAMP_NOTE = {
-    "ok": "近 %d 筆每筆平均沒有低到全部平均的一半" % W15,
-    "wn": "近 %d 筆每筆平均 < 全部平均的一半" % W15,
-    "bd": "近 %d 筆每筆平均 < 0" % W15,
-    "na": "定論還不到 %d 筆，這裡留白" % NEED,
+    "g": "綠燈：退休標準都沒碰到",
+    "y": "黃燈：近 30 筆平均變負（先看，不動；低波動期不算）",
+    "r": "紅燈：回落超過歷史最壞的 1.5 倍、或近 18 個月合計變負 ⇒ 先關真單、模擬照跑",
+    "na": "資料不足：模擬定論不到 30 筆",
 }
+RETIRE_TO_LAMP = {"ok": "g", "back": "g", "watch": "y", "down": "r", "retire": "rr"}
+_RET = {"key": None, "data": None, "busy": False, "err": None}
+RET_ASYNC = True        # 測試設 False ⇒ 當場算（⛔ 背景執行緒會跟測試寫檔撞到）
 
 # ── 市場狀態 ─────────────────────────────────────────────────────────
 VOL_WIN = 20            # 夜盤波動度：最近幾晚
@@ -164,8 +171,40 @@ def _lamp(pts):
     return lamp, round(a_all, 1), round(a30, 1), round(a15, 1)
 
 
-def strategies(now=None):
-    """策略健檢那一區。⛔ 唯讀（只讀 sim_lanes/ 與注入的真單函式）。"""
+def _ret_key():
+    d = sim_lanes.SIM_DIR
+    fs = sorted(d.glob("*.jsonl"))[-2:] if d.exists() else []
+    return (date.today().isoformat(), tuple((f.name, _sig(f)) for f in fs))
+
+
+def _ret_worker(key):
+    try:
+        import analyst_facts as AF
+        mk = AF.market()
+        rows = AF.retire(AF._sim_rows(), ((mk.get("regime") or {}).get("level")))
+        data, err = {r["key"]: r for r in rows}, None
+    except Exception as e:                          # noqa: BLE001
+        data, err = None, "算不出退休標準（%s）" % str(e)[:80]
+    with _LOCK:
+        _RET.update(key=key, data=data, err=err, busy=False)
+
+
+def _retire_cached():
+    """⇒ ({lane: 退休標準那一列} 或 None, 還在算嗎, 錯誤)。⛔ 約 2.5 秒 ⇒ 一律背景算（跟市場狀態同一招），一天／模擬檔變了才重算。"""
+    key = _ret_key()
+    with _LOCK:
+        if _RET["key"] == key and (_RET["data"] is not None or _RET["err"]):
+            return _RET["data"], False, _RET["err"]
+        if _RET["busy"]:
+            return _RET["data"], True, None
+        _RET["busy"] = True
+    threading.Thread(target=_ret_worker, args=(key,), daemon=True, name="health-retire").start()
+    return _RET["data"], True, None
+
+
+def strategies(now=None, sync=False):
+    """策略健檢那一區。⛔ 唯讀（只讀 sim_lanes/ 與注入的真單函式）。
+    sync=True（週報用）⇒ 退休標準當場算完再回（週報本來就在背景跑，等得起）；畫面一律走背景快取。"""
     now = now or datetime.now()
     rows, fst = sim_lanes.read_rows()
     real = {}
@@ -183,6 +222,9 @@ def strategies(now=None):
             armed_note = ("只顯示現在開著的自動真單：" + names) if keys else "目前沒有開著的自動真單"
         except Exception as e:                      # ⛔ 讀不到開關 ⇒ 照舊三條、講出來
             armed_note = "讀不到自動下單開關（%s），先照舊顯示三條" % str(e)[:60]
+    if sync or not RET_ASYNC:
+        _ret_worker(_ret_key())
+    ret, ret_busy, ret_err = _retire_cached()
     out = []
     for S in STRATS:
         k = S["key"]
@@ -190,7 +232,16 @@ def strategies(now=None):
             continue
         pts = _lane_points(rows, k)
         vals = [p for _d, p in pts]
-        lamp, a_all, a30, a15 = _lamp(vals)
+        lamp15, a_all, a30, a15 = _lamp(vals)
+        RT = (ret or {}).get(k)
+        if RT and RT.get("level") in RETIRE_TO_LAMP:
+            lamp, why = RETIRE_TO_LAMP[RT["level"]], list(RT.get("why") or [])
+        elif RT:                                    # 退休標準說資料不足
+            lamp, why = "na", list(RT.get("why") or [])
+        elif ret_busy:
+            lamp, why = "wait", ["退休標準在背景算，幾秒後重新整理"]
+        else:
+            lamp, why = "na", [ret_err or "這一條沒有退休標準（不是真單）"]
         R = real.get(k) if isinstance(real, dict) else None
         out.append({
             "key": k,
@@ -200,9 +251,10 @@ def strategies(now=None):
             "src_note": "【模擬】每天事後照規則算一次的定論（%s）" % sim_lanes.SRC_NAME.get(k, ""),
             "n": len(vals),
             "need": NEED,
-            "ready": lamp != "na",
+            "ready": lamp15 != "na",
             "avg_all": a_all, "avg30": a30, "avg15": a15,
-            "lamp": lamp, "lamp_word": LAMP_WORD[lamp], "lamp_note": LAMP_NOTE[lamp],
+            "lamp": lamp, "lamp_word": LAMP_WORD[lamp], "lamp_note": LAMP_NOTE.get(lamp, ""),
+            "lamp_why": why,
             "recent": [round(v, 1) for _d, v in pts[-W30:]],
             "d0": pts[0][0] if pts else None,
             "d1": pts[-1][0] if pts else None,
@@ -532,7 +584,7 @@ def market():
         c["why"] = CARD_WHY.get(c.get("key"))
         c["now"] = _now_line(c)
     return {"market": cards,
-            "market_note": "數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。"}
+            "market_note": "數字來源是歷史資料，不代表明天會怎樣。策略燈號照退休標準判斷（開關由你按）；這一頁不給任何買賣建議。"}
 
 
 

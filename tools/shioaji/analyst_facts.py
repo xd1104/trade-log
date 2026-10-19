@@ -90,7 +90,7 @@ def _real_week(mon, fri):
 def strategies(mon, fri, sim):
     try:
         import health
-        hs = {s["key"]: s for s in health.strategies()["strategies"]}
+        hs = {s["key"]: s for s in health.strategies(sync=True)["strategies"]}
     except Exception as e:
         hs, herr = {}, str(e)[:120]
     else:

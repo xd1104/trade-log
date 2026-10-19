@@ -6632,6 +6632,13 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .hc-lamp.na{color:var(--faint); background:var(--surface-2); border-color:var(--line)}
 .hc-lamp.wn{color:var(--gold); background:var(--gold-soft); border-color:var(--gold-line)}
 .hc-lamp.bd{color:#12161C; background:var(--gold); border-color:var(--gold)}
+/* ⭐ 2026-10-19 策略燈號改紅黃綠（Benson：綠＝正常、黃＝要注意、紅＝建議退休），接退休標準。
+   ⚠️ 這個面板的漲跌色是紅漲綠跌；燈號一律配字（正常／需要注意／建議關掉），⛔ 不單靠顏色。 */
+.hc-lamp.g{color:#2FBF71; background:rgba(47,191,113,.12); border-color:rgba(47,191,113,.45)}
+.hc-lamp.y{color:#12161C; background:#F2C14E; border-color:#F2C14E}
+.hc-lamp.r,.hc-lamp.rr{color:#fff; background:#E5484D; border-color:#E5484D}
+.hc-lamp.wait{color:var(--faint); background:var(--surface-2); border-color:var(--line)}
+.hc-why{margin:-2px 0 10px; font-size:12px; color:var(--dim); line-height:1.6}
 .hc-nums{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line-soft);
   border:1px solid var(--line-soft); border-radius:var(--r-md); overflow:hidden; margin-top:13px}
 @media(max-width:520px){ .hc-nums{grid-template-columns:repeat(2,minmax(0,1fr))} }
@@ -8932,7 +8939,9 @@ function hcNum(v,dp){ return v==null?'—':Number(v).toFixed(dp==null?2:dp); }
 /* 一張策略卡。⛔ 筆數不足 ⇒ **留白**，⛔ 不准用比較少的筆數硬算一個數字。 */
 function hcCard(S){
   const head='<div class="hc-top"><div class="hc-nm">'+esc(S.name||'')+'<i>'+esc(S.sub||'')+'</i></div>'+
-    '<span class="hc-lamp '+esc(S.lamp||'na')+'"><b></b>'+esc(S.lamp_word||'')+'</span></div>';
+    '<span class="hc-lamp '+esc(S.lamp||'na')+'"><b></b>'+esc(S.lamp_word||'')+'</span></div>'+
+    /* 燈號的原因（退休標準那幾句，後端給） */
+    ((S.lamp_why||[]).length?'<div class="hc-why">'+(S.lamp_why||[]).map(esc).join('<br>')+'</div>':'');
   /* 真單那一半：⛔ 跟模擬**分開寫**，⛔ 不准混成一個數字。 */
   const R=S.real||null;
   const real=R
@@ -8944,7 +8953,7 @@ function hcCard(S){
         esc(String(S.need||15))+' 筆</b>才算得出來。<br>'+
       '在那之前這裡<b>留白</b>，⛔ 不用比較少的筆數硬算一個數字給你看。</div>'+real+'</div>';
   const half=(S.avg_all==null)?null:S.avg_all/2;
-  return '<div class="hc-card'+(S.lamp!=='ok'?' warn':'')+'">'+head+
+  return '<div class="hc-card'+((S.lamp==='y'||S.lamp==='r'||S.lamp==='rr')?' warn':'')+'">'+head+
     '<div class="hc-nums">'+
       '<div class="c"><div class="hc-k">全部平均</div>'+
         '<div class="hc-v '+hcCls(S.avg_all)+'">'+hcPts(S.avg_all)+'<small>點</small></div>'+
@@ -9005,12 +9014,12 @@ function hcPaint(){
   setEl('hccards',(D.strategies||[]).length?(D.strategies||[]).map(hcCard).join(''):
     '<div class="hc-na">'+esc(D.armed_note||'目前沒有開著的自動真單')+'</div>');
   const W=D.lamp_words||{}, N=D.lamp_notes||{};
-  setEl('hcleg',['ok','wn','bd'].map(k=>'<span><em class="hc-lamp '+k+'"><b></b>'+
+  setEl('hcleg',['g','y','r'].map(k=>'<span><em class="hc-lamp '+k+'"><b></b>'+
     esc(W[k]||'')+'</em>'+esc(N[k]||'')+'</span>').join(''));
   setEl('hcmkt', D.market_ready
     ? (D.market||[]).map(hcMktCard).join('')
     : '<div class="hc-na">'+esc(D.market_note||'還在算…')+'</div>');
-  setEl('hcfoot','數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。'+
+  setEl('hcfoot','數字來源是歷史資料，不代表明天會怎樣。策略燈號照退休標準判斷（開關由你按）；這一頁不給任何買賣建議。'+
     (D.real_err?'　⚠️ 真單那一半讀不出來：'+esc(D.real_err):''));
 }
 function hcFetch(){
@@ -10539,7 +10548,7 @@ function anReport(R){
    anTag(c.tag)+' '+esc(c.event)+(c.who?'（'+esc(c.who)+'）':'')+(c.history?'<small>'+esc(c.history)+'</small>':'')+'</span></div>').join('')+'</div>':'<div class="an-empty">這週沒有特別要注意的事。</div>';
  const env=(R.env||[]).map(e=>'<div class="an-nw"><div class="top">'+anTag(e.tag)+(e.status?'<span class="an-lamp">'+esc(e.status)+'</span>':'')+'</div><h3>'+esc(e.title)+'</h3><p>'+esc(e.text)+'</p></div>').join('');
  const recs=(R.recs||[]).length?R.recs.map(r=>'<div class="an-rec"><div>'+anTag(r.tag)+'</div><h3>'+esc(r.title)+'</h3><p>'+esc(r.body)+'</p><div class="ask">要你決定：'+esc(r.ask)+'</div></div>').join(''):'<div class="an-empty">這週沒有建議。</div>';
- const st=(F.strategies||[]).map(s=>'<div class="an-st"><div class="hd"><b>'+esc(s.name)+' <small class="an-note">'+esc(s.sub||'')+'</small></b>'+anLamp(s.lamp==='ok'?'ok':(s.lamp==='na'?'':'wn'),s.lamp_word)+'</div>'+
+ const st=(F.strategies||[]).map(s=>'<div class="an-st"><div class="hd"><b>'+esc(s.name)+' <small class="an-note">'+esc(s.sub||'')+'</small></b>'+anLamp((s.lamp==='ok'||s.lamp==='g')?'ok':((s.lamp==='na'||s.lamp==='wait')?'':((s.lamp==='r'||s.lamp==='rr'||s.lamp==='bd')?'bd':'wn')),s.lamp_word)+'</div>'+
    '<div class="an-rail"><div><div class="k">本週模擬</div><div class="v">'+anPts(s.week_sim_pts)+' <small class="an-note">'+s.week_sim_n+' 筆</small></div></div>'+
    '<div><div class="k">本週真單</div><div class="v">'+anPts(s.week_real_pts)+' <small class="an-note">'+s.week_real_n+' 筆</small></div></div>'+
    '<div><div class="k">近 15 筆每筆／歷史</div><div class="v">'+anPts(s.avg15)+' / '+anPts(s.avg_all)+'</div></div></div>'+
@@ -12390,20 +12399,23 @@ def _health_real():
         days = st.get("days") or []
         real = fire_real_pairs(days, today=st.get("today"), now=st.get("now"),
                                eod_at=st.get("eod_at"))
-        pts = [v["points"] for v in real.values()
-               if isinstance(v, dict) and v.get("state") == "ok"
-               and isinstance(v.get("points"), (int, float))
-               and not isinstance(v.get("points"), bool)]
-        avg = round(sum(pts) / len(pts), 1) if pts else None
-        out["union"] = {"n": len(pts), "avg": avg,
-                        "msg": ("最近 %d 天有 %d 筆算得出點數，每筆平均 %s 點"
-                                % (FIRE_REAL_DAYS, len(pts),
-                                   ("%+.1f" % avg) if avg is not None else "—")
-                                if pts else
-                                "最近 %d 天還沒有算得出點數的真單" % FIRE_REAL_DAYS)}
+        # ⭐ 2026-10-19（Benson 截圖）：舊版把 09-17 換成多方聯軍之前的快攻回馬槍（A）也算進「多方聯軍」⇒ −57.1 是混出來的。
+        #    ⇒ 照帳本那一列的做法分開算（U＝多方聯軍、A＝快攻回馬槍；舊列沒有 method 的一律算 A）。
+        meth = {r.get("date"): (r.get("method") or "A") for r in days
+                if isinstance(r, dict) and r.get("rec") == "result" and r.get("ok")}
+        for lane, m, nm in (("union", "U", "多方聯軍"), ("hmq", "A", "快攻回馬槍")):
+            pts = [v["points"] for d, v in real.items()
+                   if meth.get(d) == m and isinstance(v, dict) and v.get("state") == "ok"
+                   and isinstance(v.get("points"), (int, float))
+                   and not isinstance(v.get("points"), bool)]
+            avg = round(sum(pts) / len(pts), 1) if pts else None
+            out[lane] = {"n": len(pts), "avg": avg,
+                         "msg": ("最近 %d 天用%s下的真單有 %d 筆，每筆平均 %s 點"
+                                 % (FIRE_REAL_DAYS, nm, len(pts), ("%+.1f" % avg) if avg is not None else "—")
+                                 if pts else "最近 %d 天還沒有用%s下的真單" % (FIRE_REAL_DAYS, nm))}
     except Exception as e:
         out["union"] = {"n": None, "avg": None, "msg": "讀不出來：" + str(e)[:80]}
-    out["hmq"] = out.get("union")          # ⭐ 快攻回馬槍跟多方聯軍讀同一本日盤帳
+        out["hmq"] = out["union"]
     # ⭐ 2026-09-23 夜盤有兩條了（T 台積電快攻／R 夜盤跟勢）⇒ 依帳本那一列的 `method` 分開數；
     #    ⚠️ 2026-09-23 以前的列沒有 `method`，那時只有 T ⇒ 算 T。⛔ 不可以兩條混成一張卡。
     # ⭐ 2026-10-14：點數從 `night_real_pairs()` 拿（唯讀比對 real_trades/，跟【自動下單】那一頁同一把尺）。

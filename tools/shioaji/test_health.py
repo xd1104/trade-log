@@ -38,7 +38,8 @@ sys.path.insert(0, str(HERE))
 import numpy as np                  # noqa: E402
 import pandas as pd                 # noqa: E402
 
-import health as H                  # noqa: E402
+import health as H
+H.RET_ASYNC = False                 # ⭐ 退休標準當場算，不開背景執行緒                  # noqa: E402
 import live_panel as LP             # noqa: E402
 import sim_lanes as SL              # noqa: E402
 
@@ -112,7 +113,7 @@ def lane_rows(lane, pts, start="2025-01-01"):
             # ⚠️ `sim_lanes._valid_row()` 要求有定論的那幾列一定要有 `exit_reason`
             #    （⛔ 少了就整列算「讀不出來」⇒ 這支測試會量到 0 筆卻不知道為什麼）。
             out.append({"lane": lane, "date": d, "decision": "做多", "points": float(v),
-                        "exit_reason": "收盤"})
+                        "exit_reason": "收盤", "entry": 20000.0})
     return out
 
 
@@ -128,26 +129,30 @@ chk("  全部平均", u["avg_all"], 66.2)          # round(66.25,1) ⇒ banker's
 chk("  最近 30 筆每筆平均", u["avg30"], 55.0)
 chk("  最近 15 筆每筆平均", u["avg15"], 10.0)
 # 10 < 66.25/2 ＝ 33.1 ⇒ 「明顯變差」
-chk("  燈號：近 15 筆平均 < 全部平均的一半 ⇒ wn", (u["lamp"], u["lamp_word"]), ("wn", "明顯變差"))
+chk("  燈號：近 15 筆變差但沒碰退休標準 ⇒ 綠燈 g（近 15 筆只當參考）", (u["lamp"], u["lamp_word"]), ("g", "正常"))
 chk("  近 30 筆那一串是**最後 30 筆**、左舊右新", (len(u["recent"]), u["recent"][0], u["recent"][-1]),
     (30, 100.0, 10.0))
 chk("  端得出資料的起訖", (u["d0"], u["d1"]), ("2025-01-01", "2025-02-09"))
 
 print("\n  ── 燈號三態（⛔ 門檻是 PM 2026-09-23 定的那一組）──")
-sim_write(lane_rows("union", [100.0] * 25 + [90.0] * 15))
+print("  ── ⭐ 2026-10-19 改紅黃綠、接退休標準 analyst_facts.retire ──")
+sim_write(lane_rows("union", [100.0] * 40))
 u = {x["key"]: x for x in H.strategies()["strategies"]}["union"]
-chk("  近 15 筆平均沒有低到一半 ⇒ ok", (u["lamp"], u["lamp_word"]), ("ok", "正常"))
-sim_write(lane_rows("union", [100.0] * 25 + [-5.0] * 15))
+chk("  一路賺 ⇒ 綠燈", (u["lamp"], u["lamp_word"]), ("g", "正常"))
+sim_write(lane_rows("union", [100.0] * 10 + [-5.0] * 30))
 u = {x["key"]: x for x in H.strategies()["strategies"]}["union"]
-chk("  近 15 筆平均 < 0 ⇒ bd（⛔ 比「變差」更前面判）", (u["lamp"], u["lamp_word"]),
-    ("bd", "連 15 筆為負"))
-# ⛔ 邊界：剛好等於一半 ⇒ **不算變差**（`<` 不是 `<=`）
-sim_write(lane_rows("union", [100.0] * 15 + [0.0] * 15))
+chk("  近 30 筆平均變負、回落 150 < 3000 ⇒ 黃燈（觀察）", (u["lamp"], u["lamp_word"]), ("y", "需要注意"))
+say(any("近 30 筆" in w for w in u["lamp_why"]), "  原因那句講得出近 30 筆", str(u["lamp_why"]))
+sim_write(lane_rows("union", [100.0] * 10 + [-150.0] * 30))
 u = {x["key"]: x for x in H.strategies()["strategies"]}["union"]
-say(u["avg_all"] == 50.0 and u["avg15"] == 0.0 and u["lamp"] == "ok",
-    "  邊界：近 15 筆平均 0、全部平均 50 ⇒ 0 不小於 25？⛔ 這裡應該是 wn",
-    f"{u['avg_all']} / {u['avg15']} / {u['lamp']}") if False else None
-chk("  邊界：0 < 25 ⇒ wn（⛔ 0 不是負的，所以不是 bd）", u["lamp"], "wn")
+chk("  回落 4500 > 降級門檻 3000 ⇒ 紅燈（建議關掉）", (u["lamp"], u["lamp_word"]), ("r", "該關真單了"))
+say(any("降級門檻" in w for w in u["lamp_why"]), "  原因那句講得出降級門檻", str(u["lamp_why"]))
+sim_write(lane_rows("union", [100.0] * 10 + [-150.0] * 25 + [-10.0] * 55))
+u = {x["key"]: x for x in H.strategies()["strategies"]}["union"]
+chk("  降級後模擬又 50 筆以上平均仍負 ⇒ 紅燈（建議退休）", (u["lamp"], u["lamp_word"]), ("rr", "該退休了"))
+sim_write(lane_rows("union", [100.0] * 20))
+u = {x["key"]: x for x in H.strategies()["strategies"]}["union"]
+chk("  模擬不到 30 筆 ⇒ 資料不足（不亂判）", u["lamp"], "na")
 
 # ══ ② 筆數不足 ⇒ ⛔ 留白 ══════════════════════════════════════════
 print("\n=== ② 筆數不足（< 15 筆）⇒ ⛔ 真的留白 ===")
@@ -377,7 +382,7 @@ _txt = json.dumps(s2, ensure_ascii=False) + json.dumps(H.LAMP_NOTE, ensure_ascii
 # ⚠️⚠️ 那一句**免責**本身含「明天／建議」（規格 §3.2 指定逐字要有）——
 #    它講的正是「這一頁不做那件事」。⛔ 不可以因為字面命中就把它刪掉 ⇒
 #    先斷言它逐字都在，再把它挖掉才跑禁詞掃描（⛔ 不是放寬禁詞）。
-_DISC = "數字來源是歷史資料，不代表明天會怎樣。這一頁不下任何判斷、不給任何建議。"
+_DISC = "數字來源是歷史資料，不代表明天會怎樣。策略燈號照退休標準判斷（開關由你按）；這一頁不給任何買賣建議。"
 say(_txt.count(_DISC) >= 1, "  免責那一句逐字都在（後端端出去的那一份）")
 _txt_w = _txt.replace(_DISC, " ")
 for w in ("建議", "推薦", "會賺", "應該進場", "最佳", "預測", "期望值", "訊號強度", "勝率"):
