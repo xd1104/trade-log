@@ -521,6 +521,8 @@ _POSTS = ["/api/real/enter", "/api/real/close", "/api/fire/on", "/api/fire/off",
           "/api/lots/upgrade", "/api/lots/revoke",
           # ⭐ 2026-09-24【交易分析師】面板上讀過（只寫讀過狀態，但一樣要過六道防護）
           "/api/analyst/read",
+          # ⭐ 2026-10-20 重啟鈕：會讓面板結束（重開那一分鐘停損沒人顧）⇒ 同一排攻擊一樣要擋
+          "/api/app/restart",
           "/api/enter", "/api/close", "/api/note", "/api/replay",
           "/api/sync", "/api/undo"]
 # ⛔ 名單要跟原始碼對得起來 —— 少列一條就等於那條沒被驗到（而它照樣對外開著）。
@@ -582,6 +584,10 @@ say(c == 409 and "找不到" in (b or ""),
 c, ct, b = post("/api/fire/off")
 say(c == 200 and (as_json(b) or {}).get("ok") is True, "    /api/fire/off：真的關得掉",
     f"{c} {b[:50]}")
+# ⭐ 2026-10-20 重啟鈕：治具裡沒有看門狗在顧 ⇒ 走到路由自己的條件檢查、回 409，⛔ 而且沒有真的要求重啟
+c, ct, b = post("/api/app/restart")
+say(c == 409 and "現在不能重啟" in (b or "") and not LP.RESTART["at"],
+    "    /api/app/restart：走到路由自己的條件檢查（沒人顧 ⇒ 不重啟）", f"{c} {b[:60]}")
 # ⛔ `/api/real/close` 沒有「先驗欄位」那一段 —— 它一進去就送平倉單。
 #    所以尺的自證改成「暫時換一個會記帳的替身」，⛔ 這樣上面那條 SENT==[] 的鐵律不受影響。
 _close_seen = []

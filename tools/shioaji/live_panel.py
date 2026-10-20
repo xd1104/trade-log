@@ -5088,6 +5088,15 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .an-mail{position:relative; width:38px; height:38px; border-radius:11px; border:1px solid var(--line);
   background:var(--surface-2); color:var(--dim); display:grid; place-items:center; cursor:pointer; flex:none; padding:0}
 .an-mail:hover{color:var(--text)}
+.an-rst.off{opacity:.45}
+.rst-pop .t{font-weight:700; padding:2px 4px 8px}
+.rst-pop .b{font-size:12.5px; color:var(--dim); line-height:1.7; padding:0 4px 10px}
+.rst-pop .b b{color:var(--text)}
+.rst-pop .row{display:flex; gap:8px; justify-content:flex-end}
+.rst-pop .row button{border:1px solid var(--line); background:var(--surface-2); color:var(--text); border-radius:999px;
+  padding:7px 14px; font:600 12.5px var(--font-sans); cursor:pointer; min-height:34px}
+.rst-pop .row button.go{border-color:var(--gold-line); color:var(--gold)}
+.rst-pop .row button:disabled{opacity:.5; cursor:default}
 .an-mail.has{color:var(--gold); border-color:var(--gold-line)}
 .an-mail svg{width:19px; height:19px}
 .an-mail .bdg{position:absolute; top:-6px; right:-6px; min-width:18px; height:18px; border-radius:9px;
@@ -6833,10 +6842,13 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   <div class="an-tr">
    <div class="clock"><div class="d" id="clk">--:--</div><div class="w" id="ph"></div></div>
    <!-- ⭐ 2026-09-24【交易分析師】每週報告的信件（未讀＝金色＋數字）。⛔ 唯讀：點開只看報告。 -->
+   <!-- ⭐ 2026-10-20 重啟鈕：效果＝關掉 App 再從桌面捷徑開。前端兩段式；有部位／關鍵時刻／沒人顧 ⇒ 灰掉（原因＝後端 s.restart.why）。 -->
+   <button class="an-mail an-rst off" id="anrst" aria-label="重啟面板" title="重啟面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
    <button class="an-mail" id="anmail" aria-label="分析師週報" title="分析師週報"></button>
   </div>
 </div>
 <div class="an-pop" id="anpop" hidden></div>
+<div class="an-pop rst-pop" id="rstpop" hidden></div>
 <div class="an-sheet" id="ansheet" hidden></div>
 
 <div id="tab-live">
@@ -7493,6 +7505,7 @@ async function tick(nf){
     ⛔ 少了這一行，重啟之後他的「平倉」鈕會 403 按不動，而畫面上看不出原因。 */
  if(s&&s.token) PTOK=s.token;
  LASTS=s;
+ try{ rstPaint(); }catch(e){}
  /* ⭐ 2026-10-14 口數：「可以升級／剛被減級」⇒ 分頁「自動下單」右上一個小金點（跟信件未讀同一個語彙）。
     ⛔ 旗子是後端算的（s.lots.dot），⛔ 前端不自己判斷；只換 class，⛔ 不動按鈕上的字。 */
  { const fb=document.querySelector('.tabs button[data-tab="fire"]');
@@ -10639,6 +10652,58 @@ document.addEventListener('click',function(e){
 document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ document.getElementById('ansheet').hidden=true; document.getElementById('anpop').hidden=true; } });
 anPaintBtn(); anFetch(); setInterval(anFetch,60000);
 
+/* ⭐ 2026-10-20【重啟鈕】效果＝關掉 App 再從桌面捷徑開（面板自己結束、看門狗用最新程式重開）。
+   ・第一段：⛔ 只換畫面，一個請求都不送。第二段才 pfetch('/api/app/restart')（後端會再驗一次條件）。
+   ・能不能按＝後端 s.restart（有部位／單子在送／關鍵時刻／不是捷徑開的 ⇒ 不能，並說原因），⛔ 前端不自己判斷。
+   ・送出後：等面板先斷線、再回來 ⇒ 自己重新整理（⛔ 不自動重送任何東西）。 */
+const RST={step:'idle',busy:false,msg:'',down:false,t0:0};
+function rstPaint(){
+ const b=document.getElementById('anrst'), p=document.getElementById('rstpop'); if(!b||!p) return;
+ const R=(LASTS&&LASTS.restart)||null, ok=!!(R&&R.ok);
+ b.classList.toggle('off',!ok&&RST.step!=='going');
+ b.title=ok?'重啟面板':('現在不能重啟：'+((R&&R.why)||'判斷中'));
+ if(RST.step==='idle'){ p.hidden=true; RST.last=''; return; }
+ const r=b.getBoundingClientRect();
+ p.style.top=(r.bottom+10)+'px'; p.style.right=Math.max(12,window.innerWidth-r.right)+'px';
+ let h;
+ if(RST.step==='going'){
+  h='<div class="t">面板重啟中…</div><div class="b">'+esc(RST.msg||'')+'<br>要重新連永豐，大約 <b>1 分鐘</b>；好了這個畫面會<b>自己重新整理</b>。</div>';
+ }else if(RST.step==='err'){
+  h='<div class="t">沒有重啟</div><div class="b">'+esc(RST.msg||'')+'</div><div class="row"><button data-rstno="1">知道了</button></div>';
+ }else if(!ok){
+  h='<div class="t">現在不能重啟</div><div class="b">'+esc((R&&R.why)||'還在判斷，等幾秒再試')+'</div><div class="row"><button data-rstno="1">知道了</button></div>';
+ }else{
+  h='<div class="t">重啟面板？</div><div class="b">效果跟<b>關掉再從桌面捷徑開</b>一樣：會載入最新的程式。<br>'+
+    '重開要 <b>約 1 分鐘</b>（重新連永豐），這段時間畫面不會動；自動下單的開關、口數、紀錄都不受影響。</div>'+
+    '<div class="row"><button data-rstno="1"'+(RST.busy?' disabled':'')+'>取消</button>'+
+    '<button class="go" data-rstyes="1"'+(RST.busy?' disabled':'')+'>'+(RST.busy?'送出中…':'確定，重啟')+'</button></div>';
+ }
+ if(RST.last!==h||p.hidden){ p.innerHTML=h; RST.last=h; }   /* ⛔ 每 0.5 秒都會叫：內容一樣就不重畫（不然按到一半按鈕被換掉、點不到） */
+ p.hidden=false;
+}
+function rstWait(){
+ /* 先等它斷線（舊面板收工）、再等它回來（新面板起來）⇒ 重新整理。3 分鐘都沒斷 ⇒ 也重新整理，讓畫面講真話。 */
+ fetch('/api/state',{cache:'no-store'}).then(r=>{ if(!r.ok) throw 0; return r.json(); }).then(s=>{
+   if(RST.down&&s&&s.restart){ location.reload(); return; }
+   if(Date.now()-RST.t0>180000){ location.reload(); return; }
+   setTimeout(rstWait,2000);
+ }).catch(()=>{ RST.down=true; setTimeout(rstWait,2000); });
+}
+document.addEventListener('click',function(e){
+ if(e.target.closest('#anrst')){ if(RST.step==='going') return; RST.step=(RST.step==='idle'?'ask':'idle'); RST.msg=''; rstPaint(); return; }
+ if(e.target.closest('[data-rstno]')){ RST.step='idle'; rstPaint(); return; }
+ const y=e.target.closest('[data-rstyes]');
+ if(y){ if(y.disabled||RST.busy) return; RST.busy=true; rstPaint();
+  pfetch('/api/app/restart').then(r=>r.json().catch(()=>({ok:false,msg:'面板回了看不懂的東西（HTTP '+r.status+'）'})))
+   .then(r=>{ RST.busy=false;
+     if(r&&r.ok){ RST.step='going'; RST.msg=r.msg||''; RST.down=false; RST.t0=Date.now(); setTimeout(rstWait,1500); }
+     else { RST.step='err'; RST.msg=(r&&r.msg)||'重啟不了'; } rstPaint(); })
+   .catch(()=>{ RST.busy=false; RST.step='err'; RST.msg='連不上面板'; rstPaint(); });
+  return; }
+ const p=document.getElementById('rstpop');
+ if(p&&!p.hidden&&RST.step!=='going'&&!e.target.closest('#rstpop')){ RST.step='idle'; rstPaint(); }
+});
+
 tick(); setInterval(tick,500);
 </script></body></html>"""
 
@@ -10784,6 +10849,12 @@ class Handler(BaseHTTPRequestHandler):
         #     ・已經開著再按 ⇒ 409（⛔ 不覆蓋、不當成換做法）
         #   ⛔ 路由是精確比對（`==`），⛔ 不可以 startswith／in ——
         #      放寬＝多開一批沒人審過的入口（`test_fire_routes.py` ④ 在守）。
+        # ⭐ 2026-10-20【重啟鈕】前端兩段式；這裡再驗一次條件（有部位／單子在送／關鍵時刻／沒人顧 ⇒ 409）。
+        #    ⛔ 六道防護在入口已經過了（同上）。
+        if self.path == "/api/app/restart":
+            code, out = request_restart()
+            return self._json(code, out)
+
         if self.path == "/api/fire/on":
             # ⚠️ 六道防護在 `do_POST` 的入口就過了（每一個 POST 都過），
             #    ⛔ 這裡不再呼叫第二次 —— 兩個地方各呼叫一次 ＝ 有一天會有一邊被拿掉。
@@ -11344,9 +11415,13 @@ class Handler(BaseHTTPRequestHandler):
             if not ok:
                 return self._json(code, {"ok": False, "msg": msg})
             LAST_CLIENT["at"] = time.time()      # 有人在看（桌面 App 靠這個判斷關窗）
+            try:
+                _rs = restart_info()             # ⭐ 2026-10-20 重啟鈕（⛔ 鎖外面算；便宜）
+            except Exception as e:               # noqa: BLE001
+                _rs = {"ok": False, "why": "判斷不了能不能重啟：%s" % str(e)[:80]}
             with state_lock:
                 try:
-                    payload = json.dumps(dict(STATE, token=FIRE_TOKEN),
+                    payload = json.dumps(dict(STATE, token=FIRE_TOKEN, restart=_rs),
                                          ensure_ascii=False).encode()
                 except TypeError as e:
                     # 【最後一道】STATE 裡混進不能序列化的東西時，舊版整支端點會炸掉、
@@ -11364,6 +11439,7 @@ class Handler(BaseHTTPRequestHandler):
                     #    `pfetch()` 就沒有 token ⇒ **他的「平倉」鈕當場按不動**。
                     #    「寧可少一塊資料也不要讓面板瞎掉」在這裡的意思包含「按鈕還要能按」。
                     safe["token"] = FIRE_TOKEN
+                    safe["restart"] = _rs
                     payload = json.dumps(safe, ensure_ascii=False, default=str).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -12189,6 +12265,98 @@ def code_stamp():
             "stale": newest > BOOT_AT.timestamp() + 2}
 
 
+# ══ 重啟按鈕（2026-10-20 Benson 要的）══════════════════════════════════════════════
+# 效果＝關掉 App 再從桌面捷徑開：這個行程**自己結束**，外面的看門狗（panel_app.pyw／start-panel.bat）
+# 看到它結束就用硬碟上最新的程式重開（10 秒後）。⛔ 這裡不自己開新行程（兩個面板搶同一個埠＋同一個永豐帳號）。
+# ⛔ 離開碼用 1：start-panel.bat 是 `if errorlevel 2 goto already`（≥2 就停）、panel_app 只有 2 才停。
+# ⛔ 擋的情況（他 10-20 選的）：手上有部位（重開那一分鐘停損沒人顧）、單子正在送、自動下單的關鍵時刻、
+#    不是被看門狗顧著（例如從終端機直接跑）⇒ 結束了就不會回來。
+RESTART_EXIT = 1
+RESTART_BLOCK = (                      # (起, 迄, 原因)；含頭不含尾，時刻都是 HH:MM
+    ("08:58", "09:31", "開盤自動下單判斷中（09:00～09:30）"),
+    ("13:27", "13:31", "結算日收盤平倉前後"),
+    ("13:42", "13:46", "收盤平倉前後（13:43:30）"),
+    ("21:33", "21:43", "夜盤自動下單判斷中（21:35～21:40）"),
+    ("04:56", "05:01", "夜盤收盤平倉前後（04:58）"),
+)
+RESTART = {"at": None}                 # 已經要求重啟的時間（主迴圈看到就收工）
+SUPERVISOR = {"who": None, "done": False}
+
+
+def _find_supervisor():
+    """
+    往上找兩三層父行程，看是不是被看門狗顧著。⛔ 只在開機時背景跑一次（PowerShell 要好幾秒）。
+    venv 的 python.exe 是個轉接器：真正的行程 → venv python.exe → panel_app.pyw（或 cmd.exe 跑 bat）。
+    """
+    try:
+        import subprocess
+        ps = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine "
+              "| ConvertTo-Json -Compress")
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             creationflags=0x08000000, timeout=60)
+        rows = json.loads(out.stdout or "[]")
+        rows = [rows] if isinstance(rows, dict) else rows
+        by = {r.get("ProcessId"): r for r in rows}
+        pid = os.getpid()
+        for _ in range(4):
+            r = by.get(pid)
+            if not r:
+                break
+            pid = r.get("ParentProcessId")
+            cl = ((by.get(pid) or {}).get("CommandLine") or "").lower()
+            if "panel_app.pyw" in cl:
+                SUPERVISOR["who"] = "app"
+                break
+            if "start-panel.bat" in cl or "start-morning.bat" in cl:
+                SUPERVISOR["who"] = "bat"
+                break
+    except Exception as e:                  # noqa: BLE001  ⛔ 找不到就當沒人顧（按鈕不給按，安全方向）
+        print("⚠️ 【重啟鈕】看不出是誰開的面板：%s" % str(e)[:120])
+    SUPERVISOR["done"] = True
+
+
+def restart_check(now=None):
+    """能不能按重啟 ⇒ (ok, 原因)。⛔ 便宜（/api/state 每 0.5 秒會叫）：不碰磁碟、不拿 state_lock。"""
+    now = now or datetime.now()
+    if RESTART["at"]:
+        return False, "重啟中…"
+    if not SUPERVISOR["done"]:
+        return False, "面板剛開，還在確認是誰開的（約半分鐘）"
+    if not SUPERVISOR["who"]:
+        return False, "這次面板不是用桌面捷徑開的，關掉不會自己開回來 —— 請手動重開"
+    if broker._state.get("position") is not None:
+        return False, "現在有部位，平倉後才能重啟（重開那一分鐘停損沒人顧）"
+    if ENTER_LOCK.locked():
+        return False, "單子正在送，等一下再按"
+    hm = now.strftime("%H:%M")
+    for a, b, why in RESTART_BLOCK:
+        if a <= hm < b:
+            return False, "%s～%s %s，先不要重啟" % (a, b, why)
+    return True, None
+
+
+def restart_info():
+    ok, why = restart_check()
+    return {"ok": ok, "why": why, "who": SUPERVISOR["who"], "pending": bool(RESTART["at"])}
+
+
+def request_restart():
+    """⇒ (http 狀態, 回應)。條件再驗一次（前端看到的可能是 0.5 秒前的）；過了就記下來，主迴圈收工。"""
+    ok, why = restart_check()
+    if not ok:
+        return 409, {"ok": False, "msg": "現在不能重啟：" + str(why)}
+    RESTART["at"] = time.time()
+    print("[重啟] 他在面板上按了重啟 —— 收工後由看門狗重開", flush=True)
+
+    def _hard():
+        # 主迴圈 20 秒內還沒收完（例如卡在永豐的呼叫）⇒ 直接結束，看門狗照樣會重開
+        time.sleep(20)
+        os._exit(RESTART_EXIT)
+    threading.Thread(target=_hard, daemon=True).start()
+    return 200, {"ok": True, "msg": "收到，面板正在重啟，大約一分鐘後會自己接回來"}
+
+
 def real_state(price, quote, age):
     """真實下單那張卡要的資料。順便在這裡跑停損監控 —— 兩者看的是同一組數字。"""
     try:
@@ -12835,9 +13003,14 @@ def main():
         print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
+    threading.Thread(target=_find_supervisor, daemon=True).start()   # ⭐ 重啟鈕：誰在顧這個面板
+
     last_retry = 0.0
     try:
         while True:
+            if RESTART["at"] and time.time() - RESTART["at"] > 1.5:   # 先讓「收到」那個回應送回畫面
+                print("[重啟] 主迴圈收工", flush=True)
+                break
             now = datetime.now()
             today, t = now.date(), now.time()
 
@@ -12951,6 +13124,8 @@ def main():
                 session["api"].logout()
             except Exception:
                 pass
+    if RESTART["at"]:
+        os._exit(RESTART_EXIT)          # ⭐ 重啟鈕：已登出 ⇒ 結束，看門狗重開（⛔ os._exit：別等背景執行緒）
 
 
 def session_contract():
