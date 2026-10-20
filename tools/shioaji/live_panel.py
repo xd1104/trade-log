@@ -9192,7 +9192,7 @@ function ltHTML(L){
      '<div class="sc"><span>'+esc(B.lo_txt||'0')+'</span><span>'+esc(B.next_txt||'')+'</span></div></div>')
        :'<div class="lt-next"></div>')+'</div>'+
   '<div class="lt-say'+(att?' g':'')+'">'+esc(V.title||'')+(att?'<small>'+esc(V.sub||'')+'</small>':tipI(esc(V.sub||'')))+'</div>';
- /* ⭐ 老闆 10-14：試車進度「試車 1／2 筆」（格數＝後端 pips 的長度＋句子；句子＝後端 L.trial.line，⛔ 前端不自己數） */
+ /* ⭐ 老闆 10-14：試車進度「試車 0／1 筆」（格數＝後端 pips 的長度＋句子；句子＝後端 L.trial.line，⛔ 前端不自己數） */
  const TR=L.trial||{};
  if(TR.line) h+='<div class="lt-trial">'+(Array.isArray(TR.pips)?'<span class="pips">'+
    TR.pips.map(x=>'<i'+(x?' class="on"':'')+'></i>').join('')+'</span>':'')+'<span class="t">'+TR.line+'</span></div>';

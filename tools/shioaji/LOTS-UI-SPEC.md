@@ -273,7 +273,7 @@ dev 開工前 #1、#3、#5、#11 一定要先有答案。
 | 欄位 | 現在 | 說明 |
 |---|---|---|
 | `check` | `check{next, next_txt, today, done_today, head}` | 每個交易日收盤後檢查（`done_this_month` 拿掉）；head「每個交易日收盤後檢查」／「今天已經檢查過」 |
-| `trial` | `trial{status, n, need, line, pips}` | status：none／on／passed；試車中 `pips`＝TRIAL_N 格（2026-10-16 起 2 格；前 n 格亮）＋`line`「試車 **1／2 筆**：…」 |
+| `trial` | `trial{status, n, need, line, pips}` | status：none／on／passed；試車中 `pips`＝TRIAL_N 格（2026-10-21 起 1 格；前 n 格亮）＋`line`「試車 **0／1 筆**：…」 |
 | `verdict.kind` | 多了 `trial`（試車中）、`void`（已確認的升級作廢） | 其餘同上 |
 | `offer` | 多了 `kind`（trial／jump）、`arm_txt`（「先試車 2＋1」／「升到 4＋2」）、`keep_txt`、`power{line, remind}`、`made` | `until`／`until_txt` 改成 None（建議沒有期限，條件掉了就收回）；`id`＝「建議那天:從>到」；`power` 只在目標日盤 ≥ 5 口時有 |
 | `pending` | 多了 `kind` | |

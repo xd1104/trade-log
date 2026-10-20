@@ -160,7 +160,7 @@ F2 = {
                         "lots": {"alarm": [{"kind": "pos_touched", "text": "部位：你在這一筆上自己加碼過"}, {"kind": "pos_fill", "text": "x"}],
                                  "pills": {"day": "2 口", "night": "1 口"},
                                  "phone": {"label": "2＋1（試車）", "line": "長句", "att": True, "warn": "部位：…",
-                                           "short": "試車中：4／10 筆，跑完才會再談升級",
+                                           "short": "試車中：0／1 筆，跑完才會再談升級",
                                            "todo": [{"lvl": "decide", "text": "夜盤表現掉到退休線，已自動壓到 1 口",
                                                      "act": "要不要關掉，到電腦面板決定"}]}}},
     "/api/nightfire/state": {"on": True, "method": "R", "live": True, "methods": [{"k": "R", "name": "夜盤跟勢"}], "errors": 1,
@@ -256,7 +256,7 @@ N6 = S6["night"]["recent"]
 say([x.get("short") for x in N6 if x["rec"] == "skip"] == ["走勢不夠強", "資料怪怪的", "沒有送單"], "  夜盤沒送那幾晚的短句",
     [x.get("short") for x in N6 if x["rec"] == "skip"])
 say(S6["night"]["real"]["2026-10-16"]["total"] == 172, "  夜盤點數合計＝每口 86 × 2 口")
-say(S6["lots"]["short"] == "試車中：4／10 筆，跑完才會再談升級" and S6["equity"]["cushion"]["short"] == "不夠再停損 1 次",
+say(S6["lots"]["short"] == "試車中：0／1 筆，跑完才會再談升級" and S6["equity"]["cushion"]["short"] == "不夠再停損 1 次",
     "  帳戶：升級那一列、保證金那一列", (S6["lots"]["short"], S6["equity"]["cushion"]["short"]))
 say(all(clean(v) for v in list(MP.DAY_SHORT.values()) + list(MP.NIGHT_SHORT.values())), "  短句對照表沒有術語")
 say(MP._cushion_short({"warn": False, "pts": 1209, "stop_pts": 537}) == "還撐得住 2 次停損"

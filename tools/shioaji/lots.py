@@ -110,7 +110,7 @@ LANES = ("union", "trend")  # 聯軍（日盤，a）／跟勢（夜盤，b）—
 LANE_NAME = {"union": "多方聯軍", "trend": "夜盤跟勢"}
 # 試車（10-14 新規則）：none＝還沒試／on＝試車中（start＝試車生效那天）／passed＝通過（記住，減級之後不必重試）
 TRIAL_DEFAULT = {"status": "none", "start": None, "n": 0, "slip": None, "reset": None, "passed_at": None,
-                 "jumped": False}
+                 "jumped": False, "miss": None}
 DEFAULT = {"v": 1, "level": 0, "cap": {"union": None, "trend": None},
            "pause_until": None, "up_at": None, "checked": None, "up_month": None,
            "suggest": None, "pending": None, "month_max": None, "conds": None, "since": None,
@@ -215,6 +215,8 @@ def _trial_of(o):
         t["n"] = o["n"]
     if _num(o.get("slip")):
         t["slip"] = o["slip"]
+    if isinstance(o.get("miss"), str):
+        t["miss"] = o["miss"][:120]
     t["jumped"] = o.get("jumped") is True
     if t["status"] == "on" and not t["start"]:
         t["status"] = "none"
@@ -845,8 +847,8 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
 # ⭐ 取代 09-30 的「每月第一個交易日、一次一級、升完冷卻 3 個月」（10-14 起作廢）：
 #   ① 每個交易日收盤後都檢查（daily_check；equity/ 每多一列跑一次）。
 #   ② 試車：在 1＋1、權益 ≥ 2＋1 那一級門檻（10 萬）、其他條件都過 ⇒ 建議「2＋1（試車）」；兩段式確認、下一個交易日生效。
-#   ③ 試車通過：試車生效那天起，**實際成交 ≥ 2 口**的自動真單（日盤或夜盤）滿 TRIAL_N（2）筆，而且最近這 2 筆**零下單錯誤**、
-#      平均滑價 ≤ 4 點（⭐ 老闆 2026-10-16 拍板：5 筆改 2 筆）。試車期間任何一次下單錯誤 ⇒ 筆數從 0 重算。通過之後**記在狀態檔**（`trial.status="passed"`）。
+#   ③ 試車通過：試車生效那天起，**實際成交 ≥ 2 口**的自動真單（日盤或夜盤）有 TRIAL_N（1）筆、**零下單錯誤**、
+#      滑價 ≤ 4 點（⭐ 老闆 2026-10-16：5 筆改 2 筆；2026-10-21：再改 1 筆）。只成交 1 口、滑價 > 4 ⇒ 不算、等下一筆。試車期間任何一次下單錯誤 ⇒ 筆數從 0 重算。通過之後**記在狀態檔**（`trial.status="passed"`）。
 #   ④ 通過之後：權益撐得到哪一級就直接建議跳到哪一級（可以跳級，照積極版階梯）；兩段式確認、下一個交易日生效。
 #   ⑤ 之後再升：權益跨過更高一級時可以再建議，但離**上一次升級生效**至少 1 個日曆月（11/20 生效 ⇒ 12/20 起）。
 #      ⚠️ 試車通過後的**第一次跳級不受這一條限制**（試車本身就是上一次升級；否則試車跑得快也要乾等一個月）。
@@ -856,7 +858,12 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
 # 其他條件（每一次升級都要）：最近 30 筆自動真單沒有下單錯誤、平均滑價 ≤ 4／兩條策略都「正常」／沒有停損失靈暫停。
 
 TRIAL_TO = 2                # 試車那一級（2＋1）
-TRIAL_N = 2                 # 試車要幾筆「實際成交 ≥ 2 口」的自動真單（⭐ 老闆 2026-10-16：5 → 2）
+TRIAL_N = 1                 # 試車要幾筆「實際成交 ≥ 2 口」的自動真單（⭐ 老闆 10-16：5 → 2；10-21：2 → 1）
+
+
+def _tslip():
+    """試車那幾句的「滑價」用字：只看 1 筆 ⇒「滑價」；多筆 ⇒「平均滑價」（跟著 TRIAL_N，⛔ 不寫死）。"""
+    return "滑價" if TRIAL_N == 1 else "平均滑價"
 REUP_GAP_MONTHS = 1         # 再升：離上一次升級生效至少幾個日曆月
 PENDING_GUARD_HOUR = 6      # 已確認的升級每天幾點以後重看一次策略（夜盤 05:00 收完、05:30 備份之後）
 
@@ -933,9 +940,30 @@ def trial_eval(events):
         elif len(slips) < TRIAL_N:
             why = "最近 %d 筆有 %d 筆算不出滑價" % (TRIAL_N, TRIAL_N - len(slips))
         else:
-            why = "最近 %d 筆平均滑價 %.1f 點，超過 %g 點" % (TRIAL_N, avg, SLIP_MAX)
-    return {"n": min(len(win), TRIAL_N), "total": len(win), "slip": avg, "slip_n": len(slips),
-            "reset": reset, "passed": passed, "why": why}
+            why = "最近 %d 筆%s %.1f 點，超過 %g 點" % (TRIAL_N, _tslip(), avg, SLIP_MAX)
+    # ⭐ QA 10-21：畫面的筆數只算「會計入通過」的 —— 窗口滿了卻沒過（滑價太大／算不出來）⇒ 最新那幾筆不算，
+    #    最多顯示 TRIAL_N−1（1 筆制 ⇒ 0／1），⛔ 不可以寫成「1／1 筆」讓人以為跑完了。
+    n_ok = TRIAL_N if passed else min(len(win), TRIAL_N - 1 if len(last) >= TRIAL_N else TRIAL_N)
+    return {"n": n_ok, "total": len(win), "slip": avg, "slip_n": len(slips),
+            "reset": reset, "passed": passed, "why": why, "miss": why if len(last) >= TRIAL_N and not passed else None}
+
+
+def _trial_miss(tr):
+    """
+    ⭐ QA 10-21：試車中、最近那幾筆沒算進去（滑價超過／算不出來）⇒ 給人看的一句。沒有 ⇒ None。
+    1 筆制：「上一筆滑價 9.0 點超過 4 點，不算，等下一筆。」
+    """
+    if not isinstance(tr, dict) or tr.get("status") != "on":
+        return None
+    sl = tr.get("slip")
+    if _num(sl) and sl > SLIP_MAX:
+        if TRIAL_N == 1:
+            return "上一筆滑價 %.1f 點超過 %g 點，不算，等下一筆。" % (sl, SLIP_MAX)
+        return "最近 %d 筆平均滑價 %.1f 點超過 %g 點，還不算，等下一筆。" % (TRIAL_N, sl, SLIP_MAX)
+    if tr.get("miss") and "算不出滑價" in str(tr["miss"]):
+        return ("上一筆算不出滑價，不算，等下一筆。" if TRIAL_N == 1
+                else "最近 %d 筆有算不出滑價的，還不算，等下一筆。" % TRIAL_N)
+    return None
 
 
 def _target(st, eq):
@@ -987,7 +1015,7 @@ def upgrade_check(st, eq, eq_date, today, quality, retire, retire_err=None, to=N
         conds.append({"k": "trial", "name": "試車", "ok": False, "status": "on", "n": tr.get("n"), "need": TRIAL_N,
                       "slip": tr.get("slip"), "start": tr.get("start"), "reset": tr.get("reset")})
         res["conds"] = conds
-        res["why"] = ["試車中（%d／%d 筆）：跑滿 %d 筆 2 口以上的真單才看下一步" % (tr.get("n") or 0, TRIAL_N, TRIAL_N)]
+        res["why"] = ["試車中（%d／%d 筆）：有 %d 筆 2 口以上的真單才看下一步" % (tr.get("n") or 0, TRIAL_N, TRIAL_N)]
         return res
     if not _is_int(tgt) or not (lv < tgt <= len(lad)):
         res["why"].append("要升的那一級不合理（%r）" % (tgt,))
@@ -1319,11 +1347,11 @@ def daily_check(rows, now=None, ctx=None, path=None, closed=None, busy=False):
             # ⑤ 試車進度
             if tr["status"] == "on" and tev is not None:
                 te = trial_eval([e for e in tev if e[0][0] >= str(tr["start"])])
-                tr.update(n=te["n"], slip=te["slip"], reset=te["reset"])
+                tr.update(n=te["n"], slip=te["slip"], reset=te["reset"], miss=te.get("miss"))
                 if te["passed"]:
                     tr.update(status="passed", passed_at=str(today))
-                    ev.append({"kind": "trial_passed", "msg": "試車通過：%d 筆 2 口以上的真單、沒有下單錯誤、平均滑價 %.1f 點"
-                                                              % (TRIAL_N, te["slip"])})
+                    ev.append({"kind": "trial_passed", "msg": "試車通過：%d 筆 2 口以上的真單、沒有下單錯誤、%s %.1f 點"
+                                                              % (TRIAL_N, _tslip(), te["slip"])})
             st["trial"] = tr
             # ⑥ 已確認還沒生效 ⇒ 策略掉了就作廢
             if st.get("pending"):
@@ -1581,7 +1609,7 @@ def _cond_html(c):
         n, need = c.get("n") or 0, c.get("need") or TRIAL_N
         t = "2＋1 試車中：<b>%d／%d 筆</b>（2 口以上的真單）" % (n, need)
         if _num(c.get("slip")):
-            t += "，平均滑價 %.1f 點" % c["slip"]
+            t += "，%s %.1f 點" % (_tslip(), c["slip"])
         if c.get("reset"):
             t += "；%s 有一次下單錯誤，從那之後重算" % dtxt(c["reset"], False)
         return t
@@ -1685,15 +1713,18 @@ def _panel(now, today, eq, lot1, E):
     chk_next = _d(V["check"]["next"])
     out["check"] = dict(V["check"], next_txt=("今天收盤後" if chk_next == today else dtxt(chk_next) + "收盤後"),
                         head=("今天已經檢查過" if V["check"].get("done_today") else "每個交易日收盤後檢查"))
-    # 試車進度（⭐ 老闆 10-14：口數卡要看得到「試車 1／2 筆」；格數＝TRIAL_N）
+    # 試車進度（⭐ 老闆 10-14：口數卡要看得到「試車 0／1 筆」；格數＝TRIAL_N）
     tr = V.get("trial") or dict(TRIAL_DEFAULT)
     trial = {"status": tr.get("status"), "n": tr.get("n") or 0, "need": TRIAL_N, "line": None, "pips": None}
     if tr.get("status") == "on":
         trial["pips"] = [i < (tr.get("n") or 0) for i in range(TRIAL_N)]
-        trial["line"] = ("試車 <b>%d／%d 筆</b>：2＋1 跑滿 %d 筆 2 口以上的真單、中間沒有下單錯誤、平均滑價 ≤ %g 點，"
-                         "就可以直接跳到權益撐得起的那一級。" % (trial["n"], TRIAL_N, TRIAL_N, SLIP_MAX))
-        if _num(tr.get("slip")):
-            trial["line"] += "目前平均滑價 %.1f 點。" % tr["slip"]
+        trial["line"] = ("試車 <b>%d／%d 筆</b>：2＋1 有 %d 筆 2 口以上的真單、沒有下單錯誤、%s ≤ %g 點，"
+                         "就可以直接跳到權益撐得起的那一級。" % (trial["n"], TRIAL_N, TRIAL_N, _tslip(), SLIP_MAX))
+        miss = _trial_miss(tr)
+        if miss:
+            trial["line"] += miss
+        elif _num(tr.get("slip")):
+            trial["line"] += "目前%s %.1f 點。" % (_tslip(), tr["slip"])
         if tr.get("reset"):
             trial["line"] += "（%s 有一次下單錯誤，筆數從那之後重算。）" % dtxt(tr["reset"], False)
     elif tr.get("status") == "passed":
@@ -1736,7 +1767,7 @@ def _panel(now, today, eq, lot1, E):
               "sub": "50 萬以上要再用同一把尺往上算。", "att": False}
     elif tr.get("status") == "on":
         vd = {"kind": "trial", "title": "試車中：%d／%d 筆" % (trial["n"], TRIAL_N),
-              "sub": "試車跑完之前不會出升級建議。", "att": False}
+              "sub": (_trial_miss(tr) or "") + "試車跑完之前不會出升級建議。", "att": False}
     elif _num(eqv) and eqv >= nxt["eq"]:
         vd = {"kind": "blocked", "title": "先不升：卡在%s" % ("、".join("「%s」" % x for x in bad) or "條件"),
               "sub": "權益已經夠 %s 了；%s會再檢查一次。" % (nxt["label"], out["check"]["next_txt"]), "att": False}
@@ -1791,8 +1822,8 @@ def _panel(now, today, eq, lot1, E):
                              "after": "−%s 點" % _money(CAP_PER_LEG * sum(ab1))}],
                      fine=["<b>%s日盤起</b>生效，今天照舊 %s；手上已經有的部位不受影響。" % (dtxt(offer["eff"]), label((a, b))),
                            "權益掉到 <b>%s</b> 以下，隔天自動退回權益撐得起的那一級。" % wan(offer["floor_after"])] +
-                          (["試車：跑滿 %d 筆 2 口以上的真單、沒有下單錯誤、平均滑價 ≤ %g 點就算通過；"
-                            "試車中被退回 1＋1 的話，這次試車作廢。" % (TRIAL_N, SLIP_MAX)] if offer.get("kind") == "trial" else []) +
+                          (["試車：有 %d 筆 2 口以上的真單、沒有下單錯誤、%s ≤ %g 點就算通過；"
+                            "試車中被退回 1＋1 的話，這次試車作廢。" % (TRIAL_N, _tslip(), SLIP_MAX)] if offer.get("kind") == "trial" else []) +
                           [
                            "停損失靈最壞一次＝白天斷線沒處理、留到 13:43:30 才平的那一次（2025-04-09）。",
                            "以上回落與機率是<b>回測推估、不是保證</b>（優勢打折到 65%、重抽樣 2 萬次）。"],
@@ -1889,10 +1920,10 @@ def _panel(now, today, eq, lot1, E):
         out["phone"]["short"], out["phone"]["todo"] = None, []
     out["hist"] = [dict(h, date_txt=dtxt(h.get("date"), False), who=("你按的" if h.get("by") == "you" else "自動"))
                    for h in (V.get("hist") or [])]
-    out["rule_foot"] = ("每個交易日收盤後檢查；升級要你按確認才生效。先在 1＋1 試車 2＋1：跑滿 %d 筆 2 口以上的真單、"
-                        "沒有下單錯誤、平均滑價 ≤ %g 點就算通過；通過之後權益撐得到哪一級就直接建議跳到哪一級，"
+    out["rule_foot"] = ("每個交易日收盤後檢查；升級要你按確認才生效。先在 1＋1 試車 2＋1：有 %d 筆 2 口以上的真單、"
+                        "沒有下單錯誤、%s ≤ %g 點就算通過；通過之後權益撐得到哪一級就直接建議跳到哪一級，"
                         "之後每次升級至少隔一個月。減級是自動的（權益低於這一級門檻的 85%%，隔天就退）。"
-                        "⛔ 不看最近賺不賺。" % (TRIAL_N, SLIP_MAX))
+                        "⛔ 不看最近賺不賺。" % (TRIAL_N, _tslip(), SLIP_MAX))
     return out
 
 
@@ -1939,6 +1970,13 @@ def _phone_short(today, vd, pend, offer, notice, nxt, tr, trial, L, st, ab, is_t
     if k == "top":
         return "已經到最高一級"
     if k == "trial":
+        if _trial_miss(tr):
+            # ⭐ QA 10-21：上一筆沒算進去 ⇒ 手機那一列也要講（⛔ 不能只寫筆數讓人以為跑完了）
+            sl = tr.get("slip")
+            if _num(sl) and sl > SLIP_MAX:
+                return ("上一筆滑價 %.1f 點不算，試車等下一筆" if TRIAL_N == 1
+                        else "最近%d筆平均滑價 %.1f 點，還不算") % ((sl,) if TRIAL_N == 1 else (TRIAL_N, sl))
+            return "上一筆算不出滑價，試車等下一筆"
         return "試車中：%d／%d 筆，跑完才會再談升級" % (trial.get("n") or 0, trial.get("need") or TRIAL_N)
     pu = st.get("pause_until")
     if pu and str(today) < str(pu):
