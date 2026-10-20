@@ -6692,6 +6692,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .lt-alarm .g{flex:1 1 300px}
 .lt-alarm .go{flex:none; border:1px solid var(--gold-line); background:transparent; color:var(--gold); font:600 12px var(--font-sans);
   border-radius:999px; padding:6px 12px; cursor:pointer; min-height:32px}
+.lt-alarm .x{flex:none; border:0; background:transparent; color:var(--dim); font-size:15px; line-height:1; width:32px; height:32px;
+  border-radius:50%; cursor:pointer}
+.lt-alarm .x:hover{color:var(--text); background:var(--surface)}
 .al-today .lq{margin-top:8px; font-size:12px; color:var(--dim); line-height:1.6; padding-top:8px; border-top:1px solid var(--line-soft)}
 .al-today .lq b{color:var(--text); font-family:var(--font-mono)}
 .trade .qty{font-size:10.5px; font-weight:700; padding:1px 6px; border-radius:var(--r-xs); flex:none; color:var(--text);
@@ -7493,7 +7496,9 @@ async function tick(nf){
  /* ⭐ 2026-10-14 口數：「可以升級／剛被減級」⇒ 分頁「自動下單」右上一個小金點（跟信件未讀同一個語彙）。
     ⛔ 旗子是後端算的（s.lots.dot），⛔ 前端不自己判斷；只換 class，⛔ 不動按鈕上的字。 */
  { const fb=document.querySelector('.tabs button[data-tab="fire"]');
-   if(fb) fb.classList.toggle('ltdot', !!(s&&s.lots&&s.lots.dot)); }
+   /* 2026-10-20：金條都被他按 ✕ 關掉了 ⇒ 小金點也收起來（還沒拿到金條清單 ⇒ 照後端旗子） */
+   const dot=!!(s&&s.lots&&s.lots.dot) && !(LTALARM && ltVisible(LTALARM).length===0);
+   if(fb) fb.classList.toggle('ltdot', dot); }
  /* ⚠️ 2026-09-23 v3：練習成績那一區從【即時】拿掉了 ⇒ 每 5 秒一次的 /api/stats 輪詢
     也跟著拿掉（它會讀所有紀錄檔，留著就是白白在 HTTP 執行緒上做磁碟 I/O）。
     ⛔ **後端 /api/stats 與 /api/export 一個字都沒拆** —— 手機 App 與下載那條路照舊。 */
@@ -9207,10 +9212,27 @@ function ltActHTML(L){
 }
 /* 頂部金條：只有「可以升級」「剛被減級／單條降級退休／事故暫停」才有（句子＝後端 D.lots.alarm）。
    「看口數 ↓」⛔ 純導覽，⛔ 一個請求都不送。 */
+/* ⭐ 2026-10-20 老闆要的「✕ 知道了」：只記在這台瀏覽器（localStorage，⛔ 一個請求都不送、⛔ 不碰後端狀態）。
+   記的是「種類＋整句話」⇒ 新的一則（句子不同）照樣會跳出來。「可以升級」要他去按確認，⛔ 不給關。 */
+const LTSEEN_KEY='lt_seen';
+let LTSEEN=(()=>{ try{ const v=JSON.parse(localStorage.getItem(LTSEEN_KEY)||'[]'); return Array.isArray(v)?v:[]; }catch(e){ return []; } })();
+let LTALARM=null;                 // 最近一次拿到的金條清單（小金點要看還有沒有沒關掉的）
+function ltKey(a){ return String(a.kind||'')+'|'+String(a.text||''); }
+function ltCanHide(a){ return a.kind!=='offer'; }
+function ltVisible(A){ return A.filter(a=>!(ltCanHide(a)&&LTSEEN.includes(ltKey(a)))); }
+function ltHide(i){
+ const a=(LTALARM||[])[i]; if(!a||!ltCanHide(a)) return;
+ const k=ltKey(a); if(!LTSEEN.includes(k)) LTSEEN.push(k);
+ LTSEEN=LTSEEN.slice(-30);
+ try{ localStorage.setItem(LTSEEN_KEY,JSON.stringify(LTSEEN)); }catch(e){}
+}
 function ltBarHTML(L){
  const A=(L&&Array.isArray(L.alarm))?L.alarm:[];
- return A.map(a=>'<div class="al-alarm lt-alarm"><span class="g">'+esc(a.text||'')+'</span>'+
-   '<button class="go" data-ltjump="1">看口數 ↓</button></div>').join('');
+ LTALARM=A;
+ return A.map((a,i)=>(ltCanHide(a)&&LTSEEN.includes(ltKey(a)))?'':
+   '<div class="al-alarm lt-alarm"><span class="g">'+esc(a.text||'')+'</span>'+
+   '<button class="go" data-ltjump="1">看口數 ↓</button>'+
+   (ltCanHide(a)?'<button class="x" data-ltseen="'+i+'" title="知道了，不再顯示這則">✕</button>':'')+'</div>').join('');
 }
 function ltArm(){
  const L=(AL.data||{}).lots||{}, O=L.offer;
@@ -10132,6 +10154,10 @@ document.addEventListener('click', function(e){
  if(ur){ if(ur.disabled) return; ltRevoke(); return; }
  const uj=e.target.closest('[data-ltjump]');
  if(uj){ const c=document.getElementById('allots'); if(c) c.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+ const us=e.target.closest('[data-ltseen]');
+ if(us){ ltHide(+us.getAttribute('data-ltseen')); alPaint();
+   if(LTALARM && ltVisible(LTALARM).length===0){ const fb=document.querySelector('.tabs button[data-tab="fire"]'); if(fb) fb.classList.remove('ltdot'); }
+   return; }
  const rn=e.target.closest('[data-rcno]');
  if(rn){ if(rn.disabled) return; RCAP.step='idle'; RCAP.err=''; alPaint(); return; }
  const ry=e.target.closest('[data-rcyes]');
