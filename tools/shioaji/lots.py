@@ -1845,24 +1845,28 @@ def _panel(now, today, eq, lot1, E):
                 yday = h["from"].split("＋")[0]
     out["day_line"] = "今天 <b>%d 口</b>" % a + (("（昨天是 %s 口）" % yday) if (yday and yday != str(a)) else "")
     # 【帳戶】目標卡那一行
+    # ⭐ 2026-10-20：通知那一句可以被他按 ✕ 關掉（前端記在瀏覽器）⇒ 平常那一句一律算好放 plain，關掉後改顯示它
+    bits = ["現在做 <b>%s</b>" % label((a, b))]
+    if pend:
+        bits.append("（<b>%s</b> 起 %s）" % (dtxt(pend["eff"], False), pend["to"]["label"]))
+    if vd["kind"] == "blocked":
+        bits.append("・卡在" + ("、".join("「%s」" % x for x in bad) or "條件"))
+    if tr.get("status") == "on":
+        bits.append("・試車 %d／%d 筆" % (trial["n"], TRIAL_N))
+    bits.append("・下次檢查 " + out["check"]["next_txt"])
+    if V.get("floor"):
+        bits.append("・掉到 %s 會自動退一級" % wan(V["floor"]))
+    plain = {"text": "".join(bits), "att": False}
     if offer and not pend:
         al = {"text": "口數：可以%s <b>%s</b> 了，要到【自動下單】按確認。" % ("先試車" if is_trial else "升到",
                                                                     offer["to"]["label"]),
               "att": True}
     elif notice:
-        al = {"text": "口數：" + str(notice.get("text") or ""), "att": True}
+        # seen_key ＝ 跟【自動下單】頂部金條同一把鑰匙（種類｜那句話）⇒ 任何一邊按 ✕，兩邊都收
+        al = {"text": "口數：" + str(notice.get("text") or ""), "att": True,
+              "seen_key": "%s|%s" % (notice.get("kind"), notice.get("text") or ""), "plain": plain}
     else:
-        bits = ["現在做 <b>%s</b>" % label((a, b))]
-        if pend:
-            bits.append("（<b>%s</b> 起 %s）" % (dtxt(pend["eff"], False), pend["to"]["label"]))
-        if vd["kind"] == "blocked":
-            bits.append("・卡在" + ("、".join("「%s」" % x for x in bad) or "條件"))
-        if tr.get("status") == "on":
-            bits.append("・試車 %d／%d 筆" % (trial["n"], TRIAL_N))
-        bits.append("・下次檢查 " + out["check"]["next_txt"])
-        if V.get("floor"):
-            bits.append("・掉到 %s 會自動退一級" % wan(V["floor"]))
-        al = {"text": "".join(bits), "att": False}
+        al = plain
     out["lots_line"] = al
     # 手機（⛔ 零按鈕；可以升級／剛被減級才進「要注意的事」）
     plabel = label((a, b)) + ("（起始級）" if lv <= 1 else ("（試車）" if tr.get("status") == "on" else ""))

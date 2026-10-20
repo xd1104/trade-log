@@ -6704,6 +6704,9 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .lt-alarm .x{flex:none; border:0; background:transparent; color:var(--dim); font-size:15px; line-height:1; width:32px; height:32px;
   border-radius:50%; cursor:pointer}
 .lt-alarm .x:hover{color:var(--text); background:var(--surface)}
+.gl-lots .x{flex:none; border:0; background:transparent; color:var(--dim); font-size:15px; line-height:1; width:32px; height:32px;
+  border-radius:50%; cursor:pointer}
+.gl-lots .x:hover{color:var(--text); background:var(--surface)}
 .al-today .lq{margin-top:8px; font-size:12px; color:var(--dim); line-height:1.6; padding-top:8px; border-top:1px solid var(--line-soft)}
 .al-today .lq b{color:var(--text); font-family:var(--font-mono)}
 .trade .qty{font-size:10.5px; font-weight:700; padding:1px 6px; border-radius:var(--r-xs); flex:none; color:var(--text);
@@ -7405,9 +7408,13 @@ function goalHTML(G){
    '<td>'+esc(st.done?('已到 '+st.done.slice(5).replace('-','/')):(st.safe_at||'—'))+'</td>'+
    '<td>'+esc(st.done?'':(st.target_at||'—'))+'</td>'+
    (hasSt?'<td>'+(st.state?'<span class="mk '+esc(st.state)+'">'+esc(st.state_txt||'')+'</span>':'')+'</td>':'')+'</tr>').join('');
- const LL=G.lots_line;
+ let LL=G.lots_line;
+ /* ⭐ 2026-10-20 通知那一句跟【自動下單】頂部金條共用「✕ 知道了」（同一把鑰匙）；關掉 ⇒ 顯示平常那一句（後端 plain） */
+ let lseen=false; try{ lseen=!!(LL&&LL.seen_key&&LTSEEN.includes(LL.seen_key)); }catch(e){}
+ if(lseen) LL=LL.plain||null;
  const lline=(LL&&LL.text)?('<div class="gl-lots'+(LL.att?' att':'')+'" id="lotsline"><span>'+LL.text+'</span>'+
-   '<button class="go" data-tab="fire">'+(LL.att?'到自動下單':'看口數')+'</button></div>'):'';
+   '<button class="go" data-tab="fire">'+(LL.att?'到自動下單':'看口數')+'</button>'+
+   (LL.seen_key?'<button class="x" data-glseen="1" title="知道了，不再顯示這則">✕</button>':'')+'</div>'):'';
  const mon=(G.months||[]).map(m=>'<tr><td>'+esc(m.ym)+(m.live?'（到現在）':'')+'</td>'+
    '<td>'+acctMoney(m.dep)+'</td><td>'+acctPM(m.net)+'</td><td>+'+acctMoney(m.goal)+'</td></tr>').join('');
  return '<div class="ac gl"><div class="hd"><span class="t">'+esc(G.title||'目標')+'</span>'+
@@ -10651,6 +10658,16 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ document.getElementById('ansheet').hidden=true; document.getElementById('anpop').hidden=true; } });
 anPaintBtn(); anFetch(); setInterval(anFetch,60000);
+
+/* ⭐ 2026-10-20【帳戶】目標卡那一句口數通知的 ✕（跟【自動下單】金條同一把鑰匙；⛔ 不送請求）。
+   ⛔ 不能放進【自動下單】那個監聽（它開頭就 `if(TAB!=='fire') return`）。 */
+document.addEventListener('click',function(e){
+ const gs=e.target.closest('[data-glseen]'); if(!gs) return;
+ const L0=((ACCT&&ACCT.goal)||{}).lots_line;
+ if(L0&&L0.seen_key&&!LTSEEN.includes(L0.seen_key)){
+   LTSEEN.push(L0.seen_key); LTSEEN=LTSEEN.slice(-30); try{ localStorage.setItem(LTSEEN_KEY,JSON.stringify(LTSEEN)); }catch(e2){} }
+ setEl('acctgoal', goalHTML(ACCT.goal));
+});
 
 /* ⭐ 2026-10-20【重啟鈕】效果＝關掉 App 再從桌面捷徑開（面板自己結束、看門狗用最新程式重開）。
    ・第一段：⛔ 只換畫面，一個請求都不送。第二段才 pfetch('/api/app/restart')（後端會再驗一次條件）。
