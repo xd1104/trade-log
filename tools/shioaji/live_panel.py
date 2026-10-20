@@ -5089,6 +5089,15 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
   background:var(--surface-2); color:var(--dim); display:grid; place-items:center; cursor:pointer; flex:none; padding:0}
 .an-mail:hover{color:var(--text)}
 .an-rst.off{opacity:.45}
+.ti{position:relative; display:inline-flex; vertical-align:middle; margin-left:6px; cursor:help; outline:none}
+.ti .ic{width:15px; height:15px; border-radius:50%; border:1px solid var(--line); color:var(--dim); display:grid; place-items:center;
+  font:italic 700 10px/1 Georgia,serif}
+.ti:hover .ic,.ti:focus .ic{color:var(--text); border-color:var(--dim)}
+.ti .tb{display:block; visibility:hidden; position:fixed; z-index:200; top:0; left:0; width:max-content; max-width:340px; pointer-events:none;
+  background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:8px 11px; box-shadow:0 12px 34px rgba(0,0,0,.5);
+  font:400 12.5px/1.65 var(--font-sans); color:var(--text); white-space:normal; text-align:left; letter-spacing:0}
+.ti .tb b{font-weight:700}
+.ti:hover .tb,.ti:focus .tb{visibility:visible}
 .rst-pop .t{font-weight:700; padding:2px 4px 8px}
 .rst-pop .b{font-size:12.5px; color:var(--dim); line-height:1.7; padding:0 4px 10px}
 .rst-pop .b b{color:var(--text)}
@@ -8085,8 +8094,7 @@ function chartSVG(s){
        '<span>高 <b>'+b.h.toFixed(0)+'</b></span>'+
        '<span>低 <b>'+b.l.toFixed(0)+'</b></span>'+
        '<span>收 <b style="color:'+col+'">'+b.c.toFixed(0)+'</b></span>'+
-       '<span>量 <b>'+vol+'</b></span>'+
-       (hv?'':'<span class="lt">（最新）</span>');
+       '<span>量 <b>'+vol+'</b></span>';   /* 2026-10-20 拿掉「（最新）」：長得像按鈕、他看不懂 */
    })(legendBar,hovering),
    info:B.length+' / '+G.all.length+' 根'+
         (Math.abs(VIEW.vz-1)>0.02?'　直向 '+VIEW.vz.toFixed(1)+'x':'')+
@@ -9114,7 +9122,7 @@ function alCapHTML(R,L){
    '<table><tr><td><span class="ses d">☀ 日盤</span> '+esc(alDayName(AL.data||{}))+'</td><td class="p">'+sp(gd[0])+' 點</td><td class="n">'+gd[1]+' 筆</td></tr>'+
    '<tr><td><span class="ses n">☾ 夜盤</span> '+esc(nx?nfName(nx,nx.method):'—')+'</td><td class="p">'+sp(gn[0])+' 點</td><td class="n">'+gn[1]+' 筆</td></tr></table>';
  let h='<div class="cap al-mon'+(R.hit?' hit':'')+'">'+mon+
-   '<div class="hd"><span class="k">本月風控・日盤＋夜盤共用（'+esc(String(R.month||''))+
+   '<div class="hd"><span class="k">本月風控'+tipI('日盤＋夜盤共用。虧到上限 ⇒ 當月兩條都停、下個月自動恢復。<br>只算自動下的真單；夜盤算開盤那晚的月份。')+'（'+esc(String(R.month||''))+
      (R.since?'，'+esc(String(R.since).slice(5))+' 起算':'')+'）</span>'+
    '<span class="v">'+fmt(pnl)+' 點　/　上限 −'+Math.round(cap).toLocaleString()+'</span></div>'+
    '<div class="bar"><i style="width:'+Math.max(0,Math.min(100,used))+'%"></i></div>';
@@ -9123,9 +9131,10 @@ function alCapHTML(R,L){
  else if(R.hit&&R.override)
    h+='<div class="t">超過上限，但你已經<b>手動解除</b> —— 這個月照常送單，下個月恢復規則。</div>';
  else
-   h+='<div class="n">虧到上限 ⇒ 當月兩條都停、下個月自動恢復。只算自動下的真單；夜盤算開盤那晚的月份。'+
-     (R.open?'　有 '+esc(String(R.open))+' 口還沒平（不算）。':'')+
-     (R.unknown?'　有 '+esc(String(R.unknown))+' 口平了但問不到出場價（不算）。':'')+'</div>';
+   /* 2026-10-20：規則那句收進標題旁的 ⓘ；「有幾口沒算進去」是資料，留在畫面上 */
+   h+=((R.open||R.unknown)?'<div class="n">'+
+     (R.open?'有 '+esc(String(R.open))+' 口還沒平（不算）。':'')+
+     (R.unknown?'　有 '+esc(String(R.unknown))+' 口平了但問不到出場價（不算）。':'')+'</div>':'');
  if(R.blocked){
    if(RCAP.step==='confirm')
      h+='<div class="al-conf"><div class="q">確定要解除這個月的風控嗎？<br>'+
@@ -9182,7 +9191,7 @@ function ltHTML(L){
      '<div class="bar"><i style="width:'+Number(B.pct||0).toFixed(1)+'%"></i></div>'+
      '<div class="sc"><span>'+esc(B.lo_txt||'0')+'</span><span>'+esc(B.next_txt||'')+'</span></div></div>')
        :'<div class="lt-next"></div>')+'</div>'+
-  '<div class="lt-say'+(att?' g':'')+'">'+esc(V.title||'')+'<small>'+esc(V.sub||'')+'</small></div>';
+  '<div class="lt-say'+(att?' g':'')+'">'+esc(V.title||'')+(att?'<small>'+esc(V.sub||'')+'</small>':tipI(esc(V.sub||'')))+'</div>';
  /* ⭐ 老闆 10-14：試車進度「試車 1／2 筆」（格數＝後端 pips 的長度＋句子；句子＝後端 L.trial.line，⛔ 前端不自己數） */
  const TR=L.trial||{};
  if(TR.line) h+='<div class="lt-trial">'+(Array.isArray(TR.pips)?'<span class="pips">'+
@@ -9192,13 +9201,13 @@ function ltHTML(L){
  /* 還沒算過（剛上線、面板還沒過 14:00）⇒ 照實講（⛔ 不寫「0／0 過・全部通過」那種假話）；句子是後端的 */
  if(L.conds_note) h+='<div class="lt-foot">'+esc(L.conds_note)+'</div>';
  else h+='<details class="lt-cd"'+(L.conds_open?' open':'')+'><summary>升級條件 <b>'+okN+'／'+tot+'</b> 過'+
-   (bad.length?'・卡在：'+bad.map(c=>esc(c.name)).join('、'):'・全部通過')+'</summary>'+
+   (bad.length?'・卡在：'+bad.map(c=>esc(c.name)).join('、'):'・全部通過')+tipI(esc(L.rule_foot||''))+'</summary>'+
    '<div class="lt-conds">'+cs.map(c=>'<div class="lt-c'+(c.ok===false?' no':(c.ok===null?' na':''))+'">'+
      '<span class="i">'+(c.ok===false?'✕':(c.ok===null?'·':'✓'))+'</span>'+
      '<div class="w"><div class="k">'+esc(c.name||'')+'</div><div class="v">'+(c.html||'')+'</div></div></div>').join('')+'</div>'+
-   '<div class="lt-foot">'+esc(L.rule_foot||'')+'</div></details>';
+   '</details>';
  if(P) h+='<div class="lt-done"><span class="g">已確認：<b>'+esc(P.eff_txt||'')+'起</b>做 '+esc((P.to||{}).label||'')+
-     '（'+esc(P.at_txt||'')+' 你按的）。在那之前改主意可以撤回，撤回不用再確認。</span>'+
+     '（'+esc(P.at_txt||'')+' 你按的）'+tipI('在那之前改主意可以撤回，撤回不用再確認。')+'</span>'+
      '<button class="btn" data-ltrev="1"'+(LTUP.busy?' disabled':'')+'>'+(LTUP.busy?'撤回中…':'撤回，維持 '+esc(R.label||''))+'</button></div>';
  else if(O) h+=ltActHTML(L);
  if(LTUP.err) h+='<div class="lt-msg err">'+esc(LTUP.err)+'</div>';
@@ -9369,17 +9378,20 @@ function alRuleTxt(D){
 function alFastHTML(D){
  const F=D&&D.fast; if(!F) return '';
  const r=(D.rule)||{}, pct=v=>(alN(v)==null?'—':v.toFixed(2)+'%'), pts=v=>(alN(v)==null?'':'（約 '+v+' 點）');
+ const ptn=(n,v)=>(alN(n)!=null?'約 '+n+' 點':pct(v));
  const how='過去 '+esc(String(r.window||F.window||''))+' 個交易日開盤走幅的第 '+esc(String(r.pctl||F.pctl||''))+' 百分位';
  let h;
  if(F.verdict==='no_hist')
    h='<b>歷史不夠</b> —— 開盤走幅只記到 '+esc(String(alN(F.n)||0))+' 天（至少要 '+esc(String(r.min_n||F.min_n||''))+
      ' 天），算不出門檻，照規則不做';
  else if(F.verdict==='fast')
-   h='<b>快</b> —— 今天走 '+pct(F.move_pct)+pts(F.move_pts)+'，門檻 '+pct(F.thr_pct)+pts(F.thr_pts)+'（'+how+'）';
+   h='<b>快</b>　今天走 '+ptn(F.move_pts,F.move_pct)+'，門檻 '+ptn(F.thr_pts,F.thr_pct)+
+     tipI('今天走 '+pct(F.move_pct)+'，門檻 '+pct(F.thr_pct)+'。<br>門檻＝'+how+'。');
  else if(F.verdict==='slow')
    /* ⚠️ 2026-09-15 晚上：不夠快 ⛔ 不再是「今天不做」—— 要等回馬槍那一刻（D.rev_at）看反轉 */
-   h='<b>不夠快</b> —— 今天走 '+pct(F.move_pct)+pts(F.move_pts)+'，門檻 '+pct(F.thr_pct)+pts(F.thr_pts)+
-     '（'+how+'）—— 等 '+esc(D.rev_at||'—')+' 看有沒有反轉';
+   h='<b>不夠快</b>　今天走 '+ptn(F.move_pts,F.move_pct)+'，門檻 '+ptn(F.thr_pts,F.thr_pct)+
+     tipI('今天走 '+pct(F.move_pct)+'，門檻 '+pct(F.thr_pct)+'。<br>門檻＝'+how+'。')+
+     '　等 '+esc(D.rev_at||'—')+' 看有沒有反轉';
  else
    h='今天的門檻 '+pct(F.thr_pct)+'（'+how+'，用了 '+esc(String(alN(F.n)||0))+' 天）· '+
      esc(D.signal_at||'')+' 才判定快不快';
@@ -9729,7 +9741,7 @@ function alNightHTML(){
  if(!x.on) return '<div class="t off">關著</div><div class="d">夜盤自動下單沒開，一張單都不會送出去。</div>';
  if(!T) return '<div class="t off">今晚沒有夜盤</div>';
  return '<div class="t off">還沒到 '+esc(T.look_at||'')+'</div>'+
-   '<div class="d">開關是開著的（'+esc(nfName(x,x.method))+'），'+esc(T.look_at||'')+' 一到看要不要做。</div>';
+   '<div class="d">開關開著'+tipI('開關是開著的（'+esc(nfName(x,x.method))+'），'+esc(T.look_at||'')+' 一到看要不要做。')+'</div>';
 }
 function alNightPaint(){
  const x=NF.data;
@@ -9758,7 +9770,7 @@ function alPosHTML(D,row){
    if(D&&D.armed&&D.signal_at) when.push('日盤'+ltYi('d')+'最早 '+D.signal_at);
    if(nfp&&nfp.on&&nfp.tonight&&nfp.tonight.look_at) when.push('夜盤'+ltYi('n')+'最早 '+nfp.tonight.look_at);
    return '<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
-     '<div class="none">現在沒有部位。'+(when.length?('<br><span style="font-size:13px">'+esc(when.join('、'))+'。</span>'):'')+'</div></div>';
+     '<div class="none">現在沒有部位。'+(when.length?tipI(esc(when.join('、'))+'。'):'')+'</div></div>';
  }
  const fp=alN(R.float_pts), night=isNightNow();
  const sgnDir=P.dir==='long'?1:(P.dir==='short'?-1:0);
@@ -10331,6 +10343,9 @@ function alEodHTML(D,r){
    (alN(e.exit)!=null?'　出場 <b>'+esc(alF(e.exit))+'</b>':'')+
    (alN(e.points)!=null?'　<b>'+esc(alSigned(e.points))+'</b> 點':'');
  if(e.alarm) return '<div class="al-alarm">'+body+'</div>';
+ /* 2026-10-20：沒出事、也沒有平倉成交的那幾種（本來就沒部位／已經平掉了）⇒ 一行就好，原句收進 ⓘ */
+ if(alN(e.exit)==null&&alN(e.points)==null)
+   return '<div class="d">收盤前檢查'+(e.at?'　<b>'+esc(e.at)+'</b>':'')+'　沒有要平的'+tipI(esc(e.why_msg||alWhy(e.why)))+'</div>';
  return '<div class="d">'+body+'</div>';
 }
 /* ⭐⭐ 2026-09-16「多方聯軍」：今天**三個候選各一列**（PM 裁示 4 的帳本形狀直接上畫面）。
@@ -10364,7 +10379,7 @@ function alCandRow(D,r,c){
  }else if(c.k==='rev'){
    const f=rows.filter(x=>x.cand==='fast')[0]||null;
    txt=(f&&f.why==='not_fast')?('等 '+esc((D.rule||{}).rev_at||D.rev_at||'')+' 看有沒有反轉')
-       :(f?'今天沒有這個候選（只有 09:03:30 判定「不快」的日子才有）':'等 '+esc(D.signal_at||''));
+       :(f?'今天沒有這個候選 —— 只有 09:03:30 判定「不快」的日子才有':'等 '+esc(D.signal_at||''));
  }else{
    txt='等 '+esc(D.signal_at||'');
  }
@@ -10375,7 +10390,7 @@ function alCandRow(D,r,c){
  const G=(D.gap||{})[c.k];
  const gap=(G&&G.msg)?'<span class="gap">'+esc(String(G.msg))+'</span>':'';
  return '<div class="al-cand'+(tone?' '+tone:'')+'"><span class="k">'+esc(c.name||'')+
-   '</span><span class="w">'+emb(String(txt))+gap+'</span></div>';
+   '</span><span class="w">'+(function(){ const sp=tipSplit(txt); return emb(sp[0])+(sp[1]?tipI(emb(sp[1])):''); })()+gap+'</span></div>';
 }
 function alCandsHTML(D,r){
  /* ⛔⛔ 2026-09-17：**只有「多方聯軍」才有三個候選**（Benson 裁示：真單繼續跑
@@ -10384,7 +10399,7 @@ function alCandsHTML(D,r){
  if(!(D&&D.union)) return '';
  const cs=(D&&D.cands)||[];
  if(!cs.length) return '';
- return '<div class="al-cands"><div class="hd">今天三個候選（只做多，取最早觸發的那一個）</div>'+
+ return '<div class="al-cands"><div class="hd">今天三個候選'+tipI('只做多；三個裡面<b>最早觸發</b>的那一個去送單，一天最多一口。')+'</div>'+
    cs.map(c=>alCandRow(D,r,c)).join('')+'</div>';
 }
 function live_word(r){ return r.live?'已送出委託單':'演練（沒有真的送出去）'; }
@@ -10658,6 +10673,27 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ document.getElementById('ansheet').hidden=true; document.getElementById('anpop').hidden=true; } });
 anPaintBtn(); anFetch(); setInterval(anFetch,60000);
+
+/* ⭐ 2026-10-20 老闆：「說明性文字太多 ⇒ 收進 i 圖示，滑鼠移過去再顯示」。
+   ・畫面上留：數字、現在的狀態、要他處理的事；ⓘ 裡放：名詞解釋、怎麼算的、規則。
+   ・⛔ 警示（.warn／al-alarm）一律留在畫面上，⛔ 不准收進 ⓘ。
+   ・純 CSS hover／focus 顯示；靠右邊會超出畫面時由下面那個 mouseover 往左翻。 */
+function tipI(html){ return html?'<span class="ti" tabindex="0" aria-label="說明"><span class="ic">i</span><span class="tb">'+html+'</span></span>':''; }
+function tipSplit(t){ t=String(t||''); const i=t.indexOf(' —— '); return i<0?[t,'']:[t.slice(0,i),t.slice(i+4)]; }
+function tipPlace(t){
+ /* ⛔ 卡片多半是 overflow:hidden ⇒ 說明框用 position:fixed 浮在最上層，位置照圖示算（左右夾在畫面內、下面放不下就放上面） */
+ const b=t.querySelector('.tb'); if(!b) return;
+ const r=t.getBoundingClientRect(), w=b.offsetWidth, h=b.offsetHeight, W=window.innerWidth, Hh=window.innerHeight;
+ let x=Math.max(8,Math.min(r.left-10,W-w-8)), y=r.bottom+6;
+ if(y+h>Hh-8) y=Math.max(8,r.top-h-6);
+ b.style.left=x+'px'; b.style.top=y+'px';
+}
+document.addEventListener('mouseover',function(e){ const t=e.target.closest&&e.target.closest('.ti'); if(t) tipPlace(t); });
+document.addEventListener('focusin',function(e){ const t=e.target.closest&&e.target.closest('.ti'); if(t) tipPlace(t); });
+document.addEventListener('click',function(e){
+ /* ⓘ 放在可以展開的標題（<summary>）裡 ⇒ 點 ⓘ 不要順便把整區展開／收起 */
+ if(e.target.closest&&e.target.closest('.ti')&&e.target.closest('summary')) e.preventDefault();
+});
 
 /* ⭐ 2026-10-20【帳戶】目標卡那一句口數通知的 ✕（跟【自動下單】金條同一把鑰匙；⛔ 不送請求）。
    ⛔ 不能放進【自動下單】那個監聽（它開頭就 `if(TAB!=='fire') return`）。 */
