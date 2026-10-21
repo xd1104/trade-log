@@ -107,6 +107,16 @@ o3 = C.build(rows, {}, {}, [], G.eff_deposit, live=live, today="2026-10-05")
 d3 = {d["date"]: d for d in o3["months"]["2026-10"]["days"]}["2026-10-05"]
 chk("結餘用現在的權益", d3["bal"], 17000)
 
+print("\n  ── 手機要的形狀（to_phone，同一份結果換樣子） ──")
+P = C.to_phone(out)["months"][0]
+chk("月：key／dep／pl／fee／net", (P["key"], P["dep"], P["pl"], P["fee"], P["net"]), ("2026-10", 5000, 2800, -276, M["net"]))
+chk("月：start＝第一筆前一天的日期與結餘", P["start"], ["09-30", 10000])
+pd = {d["d"]: d for d in P["days"]}
+chk("日：d／w／bal／diff", (pd["10-05"]["w"], pd["10-05"]["bal"], pd["10-05"]["diff"]), ("一", 17524, None))
+pn = pd["10-03"]["items"][0]
+chk("夜盤：why 是代碼、why_txt 是中文、night_of＝那一晚", (pn["why"], pn["why_txt"], pn["night_of"]), ("night_eod", "04:58 平", "10-02"))
+chk("日盤 night_of＝None", pd["10-02"]["items"][0]["night_of"], None)
+
 print("\n  ── 守門：面板有接、前端只畫 ──")
 src = (Path(__file__).parent / "live_panel.py").read_text(encoding="utf-8")
 chk("/api/account/hist 端出 cash", '"cash": cashflow_view()' in src, True)

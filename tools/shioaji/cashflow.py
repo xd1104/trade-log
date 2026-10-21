@@ -126,7 +126,8 @@ def build(rows, trades, day_res, night_res, eff_deposit, live=None, today=None):
             wd = ""
         days.append({"date": d, "wd": wd, "bal": round(float(r["equity"])), "items": items,
                      "dep": round(dep), "trade": round(tsum), "fee": -round(fee),
-                     "diff": unexp or None, "start_bal": round(float(prev["equity"]))})
+                     "diff": unexp or None, "start_bal": round(float(prev["equity"])),
+                     "start_date": str(prev["date"])})
     months = {}
     for dd in days:
         ym = dd["date"][:7]
@@ -151,8 +152,40 @@ def _trade_item(t, day_res, night_res):
             "pts": round(pts), "qty": q, "amt": round(pts * q * PT_VALUE),
             "entry": _num(t.get("entry")), "entry_time": str(t.get("entry_time") or "")[:8],
             "exit": _num(t.get("exit")), "exit_time": str(t.get("exit_time") or "")[:8],
-            "why": WHY.get(t.get("reason"), t.get("reason") or ""),
+            "why": WHY.get(t.get("reason"), t.get("reason") or ""), "why_code": t.get("reason") or "",
             "night": _night_label(t) if sess == "夜盤" else None}
+
+
+def to_phone(out):
+    """
+    ⭐ 2026-10-21 手機 App 要的形狀（同一份 build() 結果換個樣子，⛔ 不重算）：
+    {"months":[{"key","dep","pl","fee","diff","net","start":[MM-DD, 結餘],
+                "days":[{"d","w","bal","diff","items":[{k:dep,amt[,inferred]}|{k:trade,…,why(代碼),why_txt,night_of}|{k:fee,amt}]}]}]}
+    months 舊到新；days 新到舊。night_of＝夜盤那一晚的 MM-DD（日盤 None）。
+    """
+    res = []
+    for ym in out.get("keys") or []:
+        M = out["months"][ym]
+        days = M.get("days") or []
+        first = min(days, key=lambda x: x["date"]) if days else None
+        pd = []
+        for d in days:
+            items = []
+            for x in d["items"]:
+                if x["k"] == "trade":
+                    nt = x.get("night")
+                    items.append({"k": "trade", "sess": x["sess"], "name": x["name"], "dir": x["dir"],
+                                  "pts": x["pts"], "qty": x["qty"], "amt": x["amt"],
+                                  "entry": x["entry"], "entry_time": x["entry_time"],
+                                  "exit": x["exit"], "exit_time": x["exit_time"],
+                                  "why": x.get("why_code") or "", "why_txt": x.get("why") or "",
+                                  "night_of": nt.split(" ")[0] if nt else None})
+                else:
+                    items.append(dict(x))
+            pd.append({"d": d["date"][5:], "w": d["wd"], "bal": d["bal"], "diff": d["diff"], "items": items})
+        res.append({"key": ym, "dep": M["dep"], "pl": M["trade"], "fee": M["fee"], "diff": M["diff"], "net": M["net"],
+                    "start": [first["start_date"][5:], first["start_bal"]] if first else None, "days": pd})
+    return {"months": res}
 
 
 # ── 讀檔（面板呼叫；⛔ 任何一份讀壞只少那一份） ──────────────────────
@@ -189,6 +222,22 @@ def load_day_res(fire_dir):
             if r.get("rec") == "result" and r.get("ok") and r.get("date"):
                 out.setdefault(str(r["date"]), []).append(r)
     return out
+
+
+def build_from_dir(shioaji_dir, eff_deposit, live=None, today=None):
+    """⇒ build() 的結果；直接讀 tools/shioaji 底下那幾份（equity／real_trades／autofire／nightfire）。"""
+    from pathlib import Path
+    h = Path(shioaji_dir)
+    rows = []
+    for p in sorted((h / "equity").glob("*.jsonl")) if (h / "equity").exists() else []:
+        rows += [r for r in read_jsonl(p) if r.get("date")]
+    seen, uniq = set(), []
+    for r in sorted(rows, key=lambda r: str(r["date"])):
+        if str(r["date"]) not in seen:
+            seen.add(str(r["date"]))
+            uniq.append(r)
+    return build(uniq, load_trades(h / "real_trades"), load_day_res(h / "autofire"),
+                 load_night_res(h / "nightfire"), eff_deposit, live=live, today=today)
 
 
 def load_night_res(nf_dir):
