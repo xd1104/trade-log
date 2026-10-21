@@ -6484,6 +6484,49 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-pos .r span{color:var(--faint)}
 .al-pos .n{font-size:11px; color:var(--faint); line-height:1.6; margin-top:7px}
 .al-pos .none{font-size:13px; color:var(--dim); margin-top:8px; line-height:1.6}
+/* ══ ⭐ 2026-10-21【即時】右欄改版（Benson 看過 demo v6 定案）══
+   三張卡（今天的部位／程式下單／帳戶）都可以摺疊：點標題那一列收起、收起後標題右邊留一句摘要；
+   收起狀態記在瀏覽器 localStorage（lv_fold），⛔ 不送請求。
+   「程式下單」卡：日盤三候選＋夜盤走勢／波動，一條進度條＋白線門檻，右邊只給 ✕／✔。
+   ⛔ 紅綠只給損益；過門檻＝金、還沒到＝灰。點數一律是**每口**。 */
+.lvf-hd{cursor:pointer; user-select:none; gap:10px}
+.lvf-hd h2{margin-right:auto !important}
+.lvf-hd .sum{display:none; font-size:12.5px; color:var(--dim); font-weight:600; white-space:nowrap}
+.lvf-hd .sum .up{color:var(--up)} .lvf-hd .sum .down{color:var(--down)}
+.lvf-hd .chev{color:var(--faint); font-size:15px; line-height:1; display:inline-block;
+  transform:translateY(-3px); transition:transform .2s var(--ease)}
+.card.lvclosed .lvf-hd{margin-bottom:0}
+.card.lvclosed .lvf-bd{display:none}
+.card.lvclosed .lvf-hd .sum{display:inline}
+.card.lvclosed .lvf-hd .chev{transform:rotate(-90deg)}
+.lp-sess{border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden}
+.lp-sess+.lp-sess{margin-top:10px}
+.lp-sh{display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--surface-2)}
+.lp-sh .nm{font-size:13px; font-weight:700; color:var(--text)}
+.lp-sh .lots{margin-left:auto; font-size:12px; color:var(--dim)}
+.lp-sh .lots b{color:var(--text)}
+.lp-st{padding:9px 12px 7px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.lp-st+.lp-st{padding-top:0}
+.lp-st .big{font-size:18px; font-weight:700; font-family:var(--font-mono)}
+.lp-st .big.wait{color:var(--dim); font-size:15px}
+.lp-st .sub{font-size:12px; color:var(--faint); font-family:var(--font-mono)}
+.lp-st .sub b{color:var(--dim); font-weight:600}
+.lp-ind{display:grid; grid-template-columns:48px 1fr 40px; column-gap:10px; align-items:center;
+  padding:7px 12px; border-top:1px solid var(--line-soft); font-size:12px}
+.lp-ind .k{font-weight:700; color:var(--text)}
+.lp-ind .t{color:var(--dim)}
+.lp-ind.fired{background:var(--gold-soft)}
+.lp-ind.fired .k{color:var(--gold)}
+.lp-bar{position:relative; height:6px; background:var(--line); border-radius:3px}
+.lp-bar i{position:absolute; left:0; top:0; bottom:0; border-radius:3px; background:var(--dim)}
+.lp-bar.ok i{background:var(--gold)}
+.lp-bar u{position:absolute; top:-4px; bottom:-4px; width:2px; margin-left:-1px; background:var(--text);
+  border-radius:1px; opacity:.75}
+.lp-ind .nums{grid-column:2; font-size:11px; color:var(--faint); margin-top:3px; font-family:var(--font-mono)}
+.lp-ind .v{font-size:15px; font-weight:700; text-align:right; white-space:nowrap}
+.lp-ind .v.no{color:var(--faint)} .lp-ind .v.ok{color:var(--gold)}
+.lp-ind .v.q{font-size:13px}
+.lp-err{font-size:12px; color:var(--faint); padding:9px 12px}
 /* ══ ⭐⭐ 2026-10-01【自動下單】改版（Benson 看過預覽：上半一眼看完、下半收起來） ══ */
 #tab-fire .al-top{margin-bottom:14px}
 #tab-fire .al-top .at-head:has(.s:empty){display:none}
@@ -6897,6 +6940,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
            #lvacct 帳戶摘要（⛔ 唯讀、⛔ 零按鈕；金額一律標「券商端」） -->
     <div id="xal"></div>
     <div class="card" id="lvpos"></div>
+    <!-- ⭐ 2026-10-21：程式下單（日盤三候選＋夜盤），資料只讀 GET /api/fire/state 與 /api/nightfire/state -->
+    <div class="card" id="lvprog"></div>
     <div class="card" id="lvacct"></div>
   </div></div>
 </div>
@@ -7229,16 +7274,17 @@ function xalHTML(R){
       判不出來就照實寫「手上有一口」，⛔ 不猜是誰開的。 */
 function lvPosHTML(s){
   const R=s.real||{}, P=R.position;
-  const head='<div class="sec-head"><h2>今天的部位</h2><span class="count">唯讀</span></div>';
-  if(R.error) return head+'<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
-    '<div class="none">'+esc(R.error)+'</div></div>';
+  if(R.error) return lvfHead('今天的部位','讀不到')+'<div class="lvf-bd"><div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
+    '<div class="none">'+esc(R.error)+'</div></div></div>';
   if(!P)
-    return head+'<div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
-      '<div class="none">現在沒有部位。<br>自動下單與你自己下的單都會出現在這裡。</div></div>';
+    return lvfHead('今天的部位','沒有部位')+'<div class="lvf-bd"><div class="al-pos"><div class="hd"><span>現在的部位</span></div>'+
+      '<div class="none">現在沒有部位。<br>自動下單與你自己下的單都會出現在這裡。</div></div></div>';
   const dir=P.dir==='long'?'▲ 做多':(P.dir==='short'?'▼ 做空':'方向不明');
   const fp=R.float_pts;
   const who=(P.sl_points!=null)?'自動下單那一口':'手上有一口';
-  return head+
+  const head=lvfHead('今天的部位',esc(dir.slice(2)+' '+(P.qty==null?1:P.qty)+' 口')+
+    (fp==null?'':'　<span class="'+sgn(fp)+'">'+pm(fp)+'</span>'));
+  return head+'<div class="lvf-bd">'+
     '<div class="al-pos live"><div class="hd"><span>'+who+'</span>'+
       '<span style="color:var(--gold)">'+dir+' '+esc(String(P.qty==null?1:P.qty))+' 口</span></div>'+
     '<div class="big '+sgn(fp)+'">'+(fp==null?'—':pm(fp))+
@@ -7251,7 +7297,7 @@ function lvPosHTML(s){
     ('<div class="r"><span>停損</span><b>'+(R.sl==null?'—':f(R.sl))+'</b></div>'+
     '<div class="r"><span>停利</span><b>'+(P.no_tp?'不設停利':(R.tp==null?'—':f(R.tp)))+'</b></div>'))+
     (P.no_tp?'<div class="r"><span>券商端</span><b style="color:var(--gold)">無掛單</b></div>':'')+
-    '</div>';
+    '</div></div>';
 }
 
 /* ---------------- ② 帳戶（唯讀小卡）----------------
@@ -7262,25 +7308,216 @@ function lvPosHTML(s){
    ⛔ 金額一律標「券商端」——它含手續費、稅與其他部位，⛔ 不是策略績效。 */
 function lvAcctHTML(s){
   const E=s&&s.equity;
-  const head='<div class="sec-head"><h2>帳戶（券商端）</h2><span class="count">'+
-    esc(E&&E.at?String(E.at).slice(0,5)+' 更新':'唯讀')+'</span></div>';
   if(!E) return '';                       /* 後端還沒有這一份 ⇒ 整張卡不畫（⛔ 不寫假的） */
   if(!E.ok)
-    return head+'<div class="al-pos" style="border:0;background:transparent;padding:0">'+
-      '<div class="none">'+esc(E.err||'問不到帳戶餘額')+'</div></div>';
+    return lvfHead('帳戶（券商端）','讀不到')+'<div class="lvf-bd"><div class="al-pos" style="border:0;background:transparent;padding:0">'+
+      '<div class="none">'+esc(E.err||'問不到帳戶餘額')+'</div></div></div>';
   const en=E.enough||{};
-  return head+'<div class="al-pos" style="border:0;background:transparent;padding:0">'+
+  /* ⭐ 2026-10-21 Benson：「還下得了一口」與那兩行保證金說明拿掉；
+     ⛔ 但**不夠的時候一定要講**（不講＝明天那一口靜靜送失敗）⇒ 只有 en.ok===false 或 cushion.warn 才出一行金字。 */
+  const warns=[];
+  if(en.ok===false) warns.push(en.msg||'保證金不夠下一口');
+  if(E.cushion&&E.cushion.warn&&E.cushion.msg) warns.push(E.cushion.msg);
+  return lvfHead('帳戶（券商端）',acctMoney(E.equity))+'<div class="lvf-bd"><div class="al-pos" style="border:0;background:transparent;padding:0">'+
     '<div class="r" style="margin-top:0"><span>權益總值</span>'+
       '<b style="font-size:17px;color:var(--text)">'+acctMoney(E.equity)+'</b></div>'+
     '<div class="r"><span>今日損益</span><b class="'+sgn(E.day_pl)+'" style="font-size:14px">'+
       acctPM(E.day_pl)+'</b></div>'+
-    '<div class="r"><span>還下得了一口</span><b style="color:var(--text)">'+
-      (en.ok===true?'可以':(en.ok===false?'不夠':'判不出來'))+'</b></div>'+
-    '<div class="n">'+esc(en.msg||'')+'</div>'+
-    /* ⭐ 2026-09-24：還撐得住幾次停損（⛔ 整句後端算，warn 才用金色） */
-    ((E.cushion&&E.cushion.msg)?'<div class="n"'+(E.cushion.warn?' style="color:var(--gold)"':'')+'>'+
-      esc(E.cushion.msg)+'</div>':'')+'</div>';
+    warns.map(w=>'<div class="n" style="color:var(--gold)">⚠️ '+esc(w)+'</div>').join('')+'</div></div>';
 }
+
+/* ══ ⭐ 2026-10-21【即時】右欄：三張卡可摺疊（Benson 看過 demo v6 定案）══
+   ⛔ 收起狀態只記在這台瀏覽器（localStorage lv_fold）、⛔ 不送請求；讀寫失敗（無痕、被擋）一律當作全部展開。 */
+const LVF_KEY='lv_fold';
+function lvfGet(){ try{ const o=JSON.parse(localStorage.getItem(LVF_KEY)||'{}'); return (o&&typeof o==='object')?o:{}; }catch(e){ return {}; } }
+function lvfSet(k,on){ try{ const o=lvfGet(); if(on) o[k]=1; else delete o[k]; localStorage.setItem(LVF_KEY,JSON.stringify(o)); }catch(e){} }
+function lvfApply(){
+ const o=lvfGet();
+ ['lvpos','lvprog','lvacct'].forEach(id=>{ const e=document.getElementById(id); if(e) e.classList.toggle('lvclosed',!!o[id]); });
+}
+/* 標題列：左標題、右摘要（只有收起時看得到）＋箭頭。⛔ sum 是已經 esc 過的 HTML。 */
+function lvfHead(title,sum){
+ return '<div class="sec-head lvf-hd"><h2>'+esc(title)+'</h2><span class="sum">'+(sum||'')+'</span><span class="chev">⌄</span></div>';
+}
+document.addEventListener('click',function(e){
+ const h=e.target.closest('.lvf-hd'); if(!h) return;
+ const c=h.closest('.card'); if(!c||!c.id) return;
+ const on=!c.classList.contains('lvclosed');
+ c.classList.toggle('lvclosed',on); lvfSet(c.id,on);
+});
+
+/* ══ ⭐ 2026-10-21【即時】「程式下單」卡（日盤三候選＋夜盤走勢／波動）══
+   ⛔⛔ **唯讀**、零按鈕。資料只讀既有兩支 GET（/api/fire/state、/api/nightfire/state），⛔ 不新開端點。
+   ⛔ 判定一律照後端帳本的定論（rec／why），前端只負責畫：進度條＝現在的數字、白線＝門檻。
+      判定前的「現在走多少」只用後端 D.gap（fire_gap，08:45~09:30 才有）；沒有就不畫條子（⛔ 不自己拿現價算）。
+   ⚠️ 開箱定案後的「需要幾點」＝過去中位數% × 箱子上緣，**只是畫條子用的換算**，判定照舊看後端 why。
+   ⛔ 輪詢：只在【即時】前景時 10 秒一次（夜盤那支每 30 秒），離開即時就停。 */
+const LP={fire:null,nf:null,err:'',nferr:'',timer:null,n:0};
+function lpFetch(){
+ fetch('/api/fire/state',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+   if(x&&typeof x==='object'&&('armed' in x)){ LP.fire=x; LP.err=''; }
+   else { LP.fire=null; LP.err='讀不到自動下單狀態'; }
+ }).catch(()=>{ LP.fire=null; LP.err='連不上面板'; });
+ if((LP.n++)%3) return;
+ fetch('/api/nightfire/state',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+   if(x&&x.ok){ LP.nf=x; LP.nferr=''; } else { LP.nf=null; LP.nferr=(x&&x.msg)||'讀不到夜盤狀態'; }
+ }).catch(()=>{ LP.nf=null; LP.nferr='連不上面板'; });
+}
+function lpLoop(){
+ if(TAB!=='live'){ LP.timer=null; return; }
+ lpFetch(); LP.timer=setTimeout(lpLoop,10000);
+}
+function lpSec(hms){
+ const m=/^(\d\d):(\d\d)(?::(\d\d))?/.exec(String(hms||''));
+ return m?(+m[1]*3600+ +m[2]*60+ +(m[3]||0)):null;
+}
+function lpLeft(nowS,atS){
+ if(nowS==null||atS==null||atS<=nowS) return '';
+ const d=atS-nowS, h=Math.floor(d/3600), mi=Math.floor(d%3600/60), se=d%60;
+ return '還有 '+(h?h+' 小時 '+mi+' 分':(mi?mi+' 分 '+se+' 秒':se+' 秒'));
+}
+const lpN=v=>{ const n=Number(v); return (v==null||v===''||!isFinite(n))?null:n; };
+const lpHM=t=>esc(String(t||'').slice(0,5));
+function lpBar(now,need,ok){
+ if(now==null||!(need>0)) return '<span></span>';
+ const max=need*1.7, w=Math.max(0,Math.min(Math.abs(now)/max*100,100)), t=need/max*100;
+ return '<div class="lp-bar'+(ok?' ok':'')+'"><i style="width:'+w.toFixed(1)+'%"></i><u style="left:'+t.toFixed(1)+'%"></u></div>';
+}
+/* 一列指標。v：'ok'＝✔、'no'＝✕、其他字串＝原樣（口數）、''＝留白。 */
+function lpInd(k,mid,v,nums,fired){
+ const vh=v==='ok'?'<span class="v ok">✔</span>':(v==='no'?'<span class="v no">✕</span>':
+   (v?'<span class="v ok q">'+v+'</span>':'<span></span>'));
+ return '<div class="lp-ind'+(fired?' fired':'')+'"><span class="k">'+esc(k)+'</span>'+mid+vh+
+   (nums?'<span></span><span class="nums">'+nums+'</span><span></span>':'')+'</div>';
+}
+const lpTxt=t=>'<span class="t">'+esc(t)+'</span>';
+function lpSess(cls,icon,name,lots,body){
+ return '<div class="lp-sess"><div class="lp-sh"><span class="ses '+cls+'">'+icon+'</span><span class="nm">'+esc(name)+'</span>'+
+   (lots!=null?'<span class="lots"><b>'+esc(String(lots))+'</b> 口</span>':'')+'</div>'+body+'</div>';
+}
+function lpPts(p){ return '<span class="big '+sgn(p)+'">'+pm(p)+' 點</span>'; }
+
+/* 日盤。⇒ {html, sum} */
+function lpDay(D,s){
+ if(!D) return {html:lpSess('d','☀','日盤',null,'<div class="lp-err">'+esc(LP.err||'讀取中…')+'</div>'), sum:'—'};
+ const name=((D.method_names||{})[D.method])||'自動下單';
+ const qty=lpN(D.qty);
+ if(!D.armed) return {html:lpSess('d','☀','日盤・'+name,qty,'<div class="lp-st"><span class="big wait">沒開</span></div>'), sum:'沒開'};
+ const today=D.today, row=(D.days||[]).filter(r=>r.date===today)[0]||null;
+ const R=((D.real||{})[today])||null;
+ const rows=(row&&row.cand_rows)||[], cr=k=>rows.filter(x=>x.cand===k)[0]||null;
+ const nowS=lpSec(s&&s.clock);
+ let st='', sum='';
+ const fired=row&&(row.rec==='result'&&row.ok);
+ if(fired&&R&&R.state==='ok'&&lpN(R.points)!=null){
+   st='<div class="lp-st">'+lpPts(R.points)+'</div>'+
+      '<div class="lp-st"><span class="sub"><b>'+f(row.entry)+'</b> '+lpHM(row.entry_time)+' → <b>'+f(R.exit)+'</b> '+lpHM(R.exit_time)+'</span></div>';
+   sum='日 <span class="'+sgn(R.points)+'">'+pm(R.points)+'</span>';
+ }else if(fired){
+   const P=(s&&s.real&&s.real.position)||null, fp=P?lpN(s.real.float_pts):null;
+   st='<div class="lp-st">'+(fp!=null?lpPts(fp):'<span class="big wait">持有中</span>')+'<span class="sub">持有中</span></div>'+
+      '<div class="lp-st"><span class="sub">進 <b>'+f(row.entry)+'</b> '+lpHM(row.entry_time)+(row.sl!=null?'　停損 <b>'+f(row.sl)+'</b>':'')+'</span></div>';
+   sum='日 '+(fp!=null?'<span class="'+sgn(fp)+'">'+pm(fp)+'</span>':'持有中');
+ }else if(row&&row.rec==='fire'){
+   st='<div class="lp-st"><span class="big wait">送出去了</span><span class="sub">還不知道結果</span></div>'; sum='日 送出中';
+ }else{
+   const cf=cr('fast'), co=cr('orb'), cv=cr('rev');
+   const done=!!(cf&&co&&(cv||(cf.why&&cf.why!=='not_fast')));
+   if(done){ st='<div class="lp-st"><span class="big wait">今天不做</span></div>'; sum='日 不做'; }
+   else{
+     let at='', lab='';
+     if(!cf){ at=D.signal_at; lab=esc(String(at||''))+' 判定'; }
+     else if(!cv&&cf.why==='not_fast'){ at=D.rev_at; lab=esc(String(at||''))+' 判定'; }
+     else { at=(D.orb||{}).break_by; lab='等突破'; }
+     const atS=lpSec(at), left=(nowS!=null&&atS!=null&&nowS>atS+60&&!row)?'':lpLeft(nowS,atS);
+     if(!row&&nowS!=null&&atS!=null&&nowS>atS+60){
+       /* 休市／面板那時沒開 ⇒ 一列都沒有 ⇒ 只講這一句，⛔ 不畫三個候選（畫了會像還在等） */
+       return {html:lpSess('d','☀','日盤・'+name,qty,'<div class="lp-st"><span class="big wait">今天沒有判定</span></div>'), sum:'日 —'};
+     }
+     else { st='<div class="lp-st"><span class="big wait">'+(lab||'判定中')+'</span>'+(left?'<span class="sub">'+left+'</span>':'')+'</div>'; sum='日 '+esc(String(at||'').slice(0,5)); }
+   }
+ }
+ if(!D.union) return {html:lpSess('d','☀','日盤・'+name,qty,st), sum:sum};
+ const G=D.gap||{}, firedK=row&&row.rec==='result'&&row.ok?row.cand:null;
+ let ind='';
+ /* 快攻 */
+ { const c=cr('fast');
+   if(c){ const F=c.fast||{}, ok=(c.rec==='result'&&c.ok)||c.rec==='fire', mv=lpN(F.move_pts), th=lpN(F.thr_pts);
+     const down=(F.verdict==='fast'&&c.d===-1)?'・往下':'';
+     ind+=lpInd('快攻',lpBar(mv,th,F.verdict==='fast'),ok?'ok':'no',(mv!=null&&th!=null)?mv+' ／ 要 '+th+' 點'+down:'',firedK==='fast'); }
+   else if(G.fast&&lpN(G.fast.now_pts)!=null){ const a=lpN(G.fast.now_pts), b=lpN(G.fast.need_pts);
+     ind+=lpInd('快攻',lpBar(a,b,a>=b),'',Math.abs(a)+' ／ 要 '+b+' 點'); }
+   else { const th=lpN((D.fast||{}).thr_pts);
+     ind+=lpInd('快攻',lpTxt(th!=null?'要 '+th+' 點':'等 '+String(D.signal_at||'').slice(0,5)),''); } }
+ /* 開箱 */
+ { const c=cr('orb'), O=D.orb||{};
+   if(c){ const ok=(c.rec==='result'&&c.ok)||c.rec==='fire', w=lpN(c.box_w), mp=lpN(c.box_med_pct), hi=lpN(c.box_hi);
+     const need=(mp!=null&&hi!=null)?Math.round(mp/100*hi):null;
+     ind+=lpInd('開箱',(w!=null&&need!=null)?lpBar(w,need,w>=need):lpTxt(''),ok?'ok':'no',
+       (w!=null&&need!=null)?Math.round(w)+' ／ 要 '+need+' 點':'',firedK==='orb'); }
+   else if(firedK){ ind+=lpInd('開箱',lpTxt(''),''); }   /* 別的候選已經送了 ⇒ 開箱今天不會再判 */
+   else if(O.hist_ok===false){ ind+=lpInd('開箱',lpTxt('歷史不夠'),'no'); }
+   else if(G.orb&&G.orb.stage==='box'&&lpN(G.orb.now_pts)!=null){ const a=lpN(G.orb.now_pts), b=lpN(G.orb.need_pts);
+     ind+=lpInd('開箱',lpBar(a,b,a>=b),'',a+' ／ 要 '+b+' 點'); }
+   else if(O.stage==='wait'&&O.hi!=null){ ind+=lpInd('開箱',lpTxt('上緣 '+f(O.hi)),''); }
+   else { ind+=lpInd('開箱',lpTxt(String(O.box_at||'09:00~09:05')+' 畫箱'),''); } }
+ /* 純回馬 */
+ { const c=cr('rev'), cf=cr('fast');
+   if(c){ const ok=(c.rec==='result'&&c.ok)||c.rec==='fire';
+     ind+=lpInd('純回馬',lpTxt(ok?String(D.rev_at||'').slice(0,5)+' 有反轉':'沒做'),ok?'ok':'no','',firedK==='rev'); }
+   else if(cf&&cf.why!=='not_fast'){ ind+=lpInd('純回馬',lpTxt('今天沒有'),''); }
+   else if(G.rev&&lpN(G.rev.ref)!=null&&G.rev.dir===-1){ ind+=lpInd('純回馬',lpTxt('要過 '+f(G.rev.ref)),''); }
+   else if(G.rev&&G.rev.dir===1){ ind+=lpInd('純回馬',lpTxt('只做多，做不成'),''); }
+   else { ind+=lpInd('純回馬',lpTxt('快攻不成立才有'),''); } }
+ return {html:lpSess('d','☀','日盤・'+name,qty,st+ind), sum:sum};
+}
+
+/* 夜盤。⇒ {html, sum} */
+function lpNight(N,D,s){
+ const L=(D&&D.lots&&D.lots.tonight)||null, qty=L?lpN(L.qty):null;
+ if(!N) return {html:lpSess('n','☾','夜盤',qty,'<div class="lp-err">'+esc(LP.nferr||'讀取中…')+'</div>'), sum:'—'};
+ const M=(N.methods||[]).filter(x=>x.k===N.method)[0]||null, name=N.on&&M?String(M.name||'').replace(/^夜盤/,''):'自動下單';
+ if(!N.on) return {html:lpSess('n','☾','夜盤',qty,'<div class="lp-st"><span class="big wait">沒開</span></div>'), sum:'沒開'};
+ const T=N.tonight||{}, E=T.E, look=T.look_at||'';
+ const dec=(N.recent||[]).filter(x=>x.E===E)[0]||null, res=(N.results||[]).filter(x=>x.E===E)[0]||null;
+ const R=((N.real||{})[E])||null, nowS=lpSec(s&&s.clock), lookS=lpSec(look);
+ let st='', sum='';
+ if(res){
+   const dw=res.dir==='long'?'做多':(res.dir==='short'?'做空':'');
+   if(R&&R.state==='ok'&&lpN(R.points)!=null){
+     st='<div class="lp-st">'+lpPts(R.points)+'</div>'+
+        '<div class="lp-st"><span class="sub">'+dw+' <b>'+f(res.entry)+'</b> '+lpHM(res.entry_time)+' → <b>'+f(R.exit)+'</b> '+lpHM(R.exit_time)+'</span></div>';
+     sum='夜 <span class="'+sgn(R.points)+'">'+pm(R.points)+'</span>';
+   }else{
+     const P=(s&&s.real&&s.real.position)||null, fp=P?lpN(s.real.float_pts):null;
+     st='<div class="lp-st">'+(fp!=null?lpPts(fp):'<span class="big wait">持有中</span>')+'<span class="sub">持有中</span></div>'+
+        '<div class="lp-st"><span class="sub">'+dw+' 進 <b>'+f(res.entry)+'</b> '+lpHM(res.entry_time)+
+        ((P&&s.real.sl!=null)?'　保護停損 <b>'+f(s.real.sl)+'</b>':'')+'</span></div>';
+     sum='夜 '+(fp!=null?'<span class="'+sgn(fp)+'">'+pm(fp)+'</span>':'持有中');
+   }
+ }else if(dec&&dec.rec==='skip'){
+   st='<div class="lp-st"><span class="big wait">今晚不做</span></div>'; sum='夜 不做';
+ }else{
+   const left=(nowS!=null&&nowS>=5*3600)?lpLeft(nowS,lookS):'';
+   st='<div class="lp-st"><span class="big wait">'+esc(look)+' 判定</span>'+(left?'<span class="sub">'+left+'</span>':'')+'</div>';
+   sum='夜 '+esc(look);
+ }
+ let ind='';
+ const dd=dec||null;
+ if(dd&&lpN(dd.mv)!=null&&lpN(dd.thr)!=null){
+   const mv=lpN(dd.mv), th=Math.round(lpN(dd.thr));
+   ind+=lpInd('走勢',lpBar(mv,th,Math.abs(mv)>=th),res?'ok':'no',(mv>0?'+':'')+Math.round(mv)+' ／ 要 '+th+' 點',!!res);
+ }else if(res){ ind+=lpInd('走勢',lpTxt(''),'ok','',true); }
+ if(L&&lpN(L.vol)!=null&&lpN(L.thr)!=null)
+   ind+=lpInd('波動',lpBar(lpN(L.vol),lpN(L.thr),!!L.high),(qty!=null?qty+' 口':''),lpN(L.vol).toFixed(2)+'% ／ 要 '+lpN(L.thr).toFixed(2)+'%');
+ return {html:lpSess('n','☾','夜盤・'+name,qty,st+ind), sum:sum};
+}
+
+function lvProgHTML(s){
+ const d=lpDay(LP.fire,s), n=lpNight(LP.nf,LP.fire,s);
+ return lvfHead('程式下單',d.sum+'　'+n.sum)+'<div class="lvf-bd">'+d.html+n.html+'</div>';
+}
+
 
 
 /* ══════════ 【帳戶總覽】（2026-09-21 Benson 交辦）══════════
@@ -7449,7 +7686,10 @@ function paintRight(s,nf){
   setEl('xalsec', R.stale_sec==null?'':String(R.stale_sec));
   // ② 今天的部位（唯讀）　③ 帳戶（唯讀）
   setEl('lvpos', lvPosHTML(s));
+  // ⭐ 2026-10-21 程式下單（try 隔離：它壞掉不可以拖垮部位／帳戶那兩張）
+  try{ setEl('lvprog', lvProgHTML(s)); }catch(e){ setEl('lvprog', lvfHead('程式下單','')+'<div class="lvf-bd"><div class="lp-err">畫不出來：'+esc(String(e&&e.message||e))+'</div></div>'); }
   setEl('lvacct', lvAcctHTML(s));
+  lvfApply();
 }
 
 /* ---------------- 心得：跟手機 App 同一個 note 欄位 ----------------
@@ -8508,6 +8748,8 @@ function setTab(t){
  if(t!=='sim'&&SM.timer){ clearTimeout(SM.timer); SM.timer=null; }
  // 離開【健檢】就把「等市場狀態算完」那條重試停掉（⛔ 它不是輪詢，只是等第一次算完）
  if(t!=='hc'&&HC.timer){ clearTimeout(HC.timer); HC.timer=null; }
+ // 離開【即時】就把「程式下單」那張卡的輪詢停掉（10 秒一次，只在即時頁前景跑）
+ if(t!=='live'&&LP.timer){ clearTimeout(LP.timer); LP.timer=null; }
  document.getElementById('tab-live').hidden=(t!=='live');
  document.getElementById('tab-acct').hidden=(t!=='acct');
  document.getElementById('tab-sim').hidden=(t!=='sim');
@@ -8528,7 +8770,7 @@ function setTab(t){
  else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); setEl('acctgoal', goalHTML(ACCT.goal)); }
  // 切回即時時立刻呼叫一次 tick()（後端的報價、持倉監控、±100 自動停利停損
  // 全程都在跑，切分頁完全不影響那一條路）
- else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); }
+ else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); if(!LP.timer) lpLoop(); }
 }
 /* 分頁切換。⛔ 這一段要留著 —— 它原本寄生在【回顧】那個 click 監聽器的第一行。 */
 document.addEventListener('click',function(e){
@@ -10759,6 +11001,7 @@ document.addEventListener('click',function(e){
 });
 
 tick(); setInterval(tick,500);
+lpLoop();
 </script></body></html>"""
 
 # 下單規則的數字注入前端（⛔ 前端不准自己寫死 ±100／09:03:30 —— 2026-09-14 改規則時就是散在 4 個地方）。
