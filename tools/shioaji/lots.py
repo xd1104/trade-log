@@ -30,7 +30,7 @@
     每個交易日收盤後（daily_check）重算：在 1＋1 ⇒ 建議試車 2＋1；試車通過 ⇒ 建議跳到權益撐得起的那一級；
     之後再升至少隔一個日曆月。建議有 `id`＝「建議那天:從>到」；條件掉了就**收回**（`withdrawn`）。⛔ 不自己升。
     `apply_upgrade(offer_id)`（面板 POST /api/lots/upgrade 呼叫；過 fire_post_guard、前端兩段式）：**只接受現在建議的那一級**，
-    而且當下**重驗一次條件**（品質／策略用每日檢查存好的那一份）⇒ 寫成 `pending`，**下一個交易日**起生效；
+    而且當下**重驗一次條件**（品質／策略用每日檢查存好的那一份）⇒ ⭐ 10-21 起**確認後立刻生效**（見 apply_upgrade）；
     生效前 `revoke_pending()` 可以撤回；策略在生效前掉到觀察／降級 ⇒ 自動作廢。
 ・風控 B 上限 ＝ 400 ×（**本月用過的最大** a＋b）—— ⛔ 不跟著月中減級掉（不然減級那天就立刻停單到月底）。
 
@@ -846,10 +846,11 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
 #
 # ⭐ 取代 09-30 的「每月第一個交易日、一次一級、升完冷卻 3 個月」（10-14 起作廢）：
 #   ① 每個交易日收盤後都檢查（daily_check；equity/ 每多一列跑一次）。
-#   ② 試車：在 1＋1、權益 ≥ 2＋1 那一級門檻（10 萬）、其他條件都過 ⇒ 建議「2＋1（試車）」；兩段式確認、下一個交易日生效。
+#   ② 試車：在 1＋1、權益 ≥ 2＋1 那一級門檻（10 萬）、其他條件都過 ⇒ 建議「2＋1（試車）」；兩段式確認、確認後立刻生效（10-21）。
 #   ③ 試車通過：試車生效那天起，**實際成交 ≥ 2 口**的自動真單（日盤或夜盤）有 TRIAL_N（1）筆、**零下單錯誤**、
 #      滑價 ≤ 4 點（⭐ 老闆 2026-10-16：5 筆改 2 筆；2026-10-21：再改 1 筆）。只成交 1 口、滑價 > 4 ⇒ 不算、等下一筆。試車期間任何一次下單錯誤 ⇒ 筆數從 0 重算。通過之後**記在狀態檔**（`trial.status="passed"`）。
-#   ④ 通過之後：權益撐得到哪一級就直接建議跳到哪一級（可以跳級，照積極版階梯）；兩段式確認、下一個交易日生效。
+#   ④ 通過之後：權益撐得到哪一級就直接建議跳到哪一級（可以跳級，照積極版階梯）；兩段式確認、確認後立刻生效（10-21）。
+#      試車通過的同一次每日檢查就出建議。
 #   ⑤ 之後再升：權益跨過更高一級時可以再建議，但離**上一次升級生效**至少 1 個日曆月（11/20 生效 ⇒ 12/20 起）。
 #      ⚠️ 試車通過後的**第一次跳級不受這一條限制**（試車本身就是上一次升級；否則試車跑得快也要乾等一個月）。
 #   ⑥ 減級照舊（自動）。已經試車通過的人減級之後**不必再試車**；試車還沒過就被退回 1＋1 ⇒ 這一次試車作廢、之後重來。
@@ -1147,7 +1148,11 @@ def apply_upgrade(offer_id, now=None, rows=None, ctx=None, path=None):
       ・已經確認過（有 pending）⇒ 拒絕（連按兩下不會升兩次）。
       ・**當下重驗一次全部條件**：權益用 `rows` 最新那一列；品質／策略狀態用每日檢查存下來的那一份
         （⭐ QA 建議：⛔ 不在這裡重算退休標準，那會讓主迴圈變慢；策略之後掉了由 _pending_guard 作廢）。
-    成功 ⇒ 寫 `pending`：**下一個交易日**起生效（日盤＝那天、夜盤＝那天晚上起）；生效前 `revoke_pending()` 可以撤回。
+    ⭐⭐ 2026-10-21 老闆拍板：**確認後立刻生效**（取代「下一個交易日」與「生效前撤回」）：
+       成功當下就把新的級寫進狀態檔（level／since／up_at＝今天、單條降級上限解除、本月最大 a＋b 跟著更新）。
+       送單那一刻才讀口數（auto_fire._send／night_fire._decide 問 lots）⇒ 只影響**之後的新單**：
+       今晚夜盤起、下一筆日盤起；⛔ 已經送出的單、手上的部位照實際口數處理（broker 用部位自己的 entry_qty，不追加、不平）。
+       夜盤 b ≥ 2 ⇒ 順手在背景把振幅讀好（warm_night），21:40 之前確認也來得及用規則 B。
     """
     now = now or datetime.now()
     today = now.date()
@@ -1177,12 +1182,20 @@ def apply_upgrade(offer_id, now=None, rows=None, ctx=None, path=None):
         chk = upgrade_check(st, eq, eq_d, today, q, ret, rerr, to=sug["to"])
         if not chk["ok"] or chk["to"] != sug["to"] or chk["kind"] != sug.get("kind"):
             return False, "條件現在沒有全部通過，不升：" + "；".join(chk["why"] or ["級數對不上"])
-        eff = next_weekday(today)
-        st["pending"] = {"to": sug["to"], "from": sug["from"], "eff": str(eff), "kind": sug.get("kind"),
-                         "at": now.isoformat(timespec="seconds"), "id": offer_id}
-        if used_cache and (st.get("conds") or {}).get("at") == str(today):
-            # 重驗用的是**今天**每日檢查算好的策略狀態 ⇒ 今天的「每天看一次」已經等於做過（⛔ 不再花 2.5 秒重算一次）
-            st["pending"]["vchk"] = str(today)
+        eff = today
+        tr = _trial(st)
+        st["level"] = sug["to"]
+        st["since"] = str(today)
+        if sug["to"] >= 2:
+            st["up_at"] = str(today)                  # ⭐ 「隔一個月」從**生效那天**（＝確認那天）算
+        st["cap"] = {k: None for k in LANES}          # 升級要兩條都正常 ⇒ 單條降級的上限一併解除
+        st["pending"] = None
+        if tr["status"] == "passed":
+            tr["jumped"] = True
+        elif ladder_lots(sug["to"]) != (1, 1):
+            tr = dict(TRIAL_DEFAULT, status="on", start=str(today))
+        st["trial"] = tr
+        st["month_max"] = _bump_month_max(st, today)  # 風控 B 上限：本月最大 a＋b 跟著更新（400 × 本月最大）
         st["suggest"] = dict(sug, confirmed=now.isoformat(timespec="seconds"))
         st["void"] = None
         try:
@@ -1190,10 +1203,14 @@ def apply_upgrade(offer_id, now=None, rows=None, ctx=None, path=None):
         except OSError as e:
             return False, "口數狀態檔寫不進去（%s）—— 沒有升，請再按一次" % str(e)[:60]
     before, after = ladder_lots(sug["from"]), ladder_lots(sug["to"])
-    msg = "已確認：%s 起改成 %s%s（現在 %s，在那之前可以撤回）" % (
-        eff, label(after), "（試車）" if sug.get("kind") == "trial" else "", label(before))
+    msg = "已確認：現在起改成 %s%s（原本 %s）—— 今晚夜盤起／下一筆日盤起照新口數；手上已經有的部位照原本口數處理" % (
+        label(after), "（試車）" if sug.get("kind") == "trial" else "", label(before))
     _log("upgrade_confirmed", {"from": sug["from"], "to": sug["to"], "eff": str(eff), "kind": sug.get("kind"),
                                "from_ab": list(before), "to_ab": list(after), "by": "you", "msg": msg}, now)
+    _log("upgrade_effective", {"to": sug["to"], "to_ab": list(after), "by": "you",
+                               "msg": "%s 起改成 %s（確認後立刻生效）" % (eff, label(after))}, now)
+    if after[1] >= 2:
+        warm_night()                                  # 今晚 21:40 用得到振幅（⛔ 背景執行緒，不擋這裡）
     return True, msg
 
 
@@ -1453,7 +1470,7 @@ def view(now=None, E=None, eq=None):
         offer = {"id": sug["id"], "kind": sug.get("kind"),
                  "to": {"lvl": sug["to"], "a": ab[0], "b": ab[1], "label": label(ab),
                         "eq": lad[sug["to"] - 1][0] if lad else None},
-                 "until": None, "made": sug.get("made"), "eff": str(next_weekday(today)),
+                 "until": None, "made": sug.get("made"), "eff": str(today),
                  "floor_after": (lad[sug["to"] - 1][0] * DOWN_FRAC) if lad else None,
                  "cap_after": CAP_PER_LEG * sum(ab), "cap_now": CAP_PER_LEG * sum(cap_lots(st, today))}
     pend = st.get("pending")
@@ -1803,7 +1820,7 @@ def _panel(now, today, eq, lot1, E):
                      "remind": "升到這一級之前要再確認停電備援"}
         offer = dict(offer, to=dict(offer["to"], eq_txt=wan(offer["to"]["eq"])),
                      until_txt=None, keep_txt="條件還在就一直有效（每個交易日收盤後重新檢查）",
-                     eff_txt=dtxt(offer["eff"]) + "日盤", power=power,
+                     eff_txt="確認後立刻生效", power=power,
                      arm_txt=("先試車 %s" % label(ab1)) if offer.get("kind") == "trial" else ("升到 %s" % label(ab1)),
                      q=((("確定從 <b>%s</b> 先試車 <b>%s</b>？" % (label(ab0), label(ab1))) if offer.get("kind") == "trial"
                         else ("確定從 <b>%s</b> 直接跳到 <b>%s</b>（跳 %d 級）？" % (label(ab0), label(ab1), jump_n))
@@ -1820,7 +1837,8 @@ def _panel(now, today, eq, lot1, E):
                              "after": ("約 %s%%（%s）" % (p1, wan(offer["to"]["eq"]))) if p1 is not None else "沒算過"},
                             {"k": "本月風控上限", "now": "−%s 點" % _money(CAP_PER_LEG * sum(ab0)),
                              "after": "−%s 點" % _money(CAP_PER_LEG * sum(ab1))}],
-                     fine=["<b>%s日盤起</b>生效，今天照舊 %s；手上已經有的部位不受影響。" % (dtxt(offer["eff"]), label((a, b))),
+                     fine=["<b>確認後立刻生效：今晚夜盤起／下一筆日盤起</b>照新口數；手上已經有的部位照原本口數處理（不追加、不平）。"
+                           "確認之後不能撤回（要降只能等自動減級）。",
                            "權益掉到 <b>%s</b> 以下，隔天自動退回權益撐得起的那一級。" % wan(offer["floor_after"])] +
                           (["試車：有 %d 筆 2 口以上的真單、沒有下單錯誤、%s ≤ %g 點就算通過；"
                             "試車中被退回 1＋1 的話，這次試車作廢。" % (TRIAL_N, _tslip(), SLIP_MAX)] if offer.get("kind") == "trial" else []) +

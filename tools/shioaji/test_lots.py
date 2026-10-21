@@ -794,9 +794,9 @@ chk("  11/2 在 1＋1、權益 10.5 萬、條件都過 ⇒ 建議「2＋1（試�
 chk("  ⛔ 只建議：級數沒變、今天明天都還是 1 口", (st["level"], lots.day_lots(st, date(2026, 11, 2)),
                                      lots.day_lots(st, date(2026, 11, 3))), (1, 1, 1))
 v = lots.view(now=datetime(2026, 11, 2, 15, 0), eq=105000.0)
-chk("  view 端得出 offer（id、試車、生效日 11/3、升級後風控 1,200）",
+chk("  view 端得出 offer（id、試車、生效日＝今天 11/2〔確認後立刻生效〕、升級後風控 1,200）",
     ((v["offer"] or {}).get("id"), (v["offer"] or {}).get("kind"), (v["offer"] or {}).get("eff"),
-     (v["offer"] or {}).get("cap_after")), ("2026-11-02:1>2", "trial", "2026-11-03", 1200))
+     (v["offer"] or {}).get("cap_after")), ("2026-11-02:1>2", "trial", "2026-11-02", 1200))
 for bad_id, why in (("2026-11-02:1>3", "跳級"), ("2026-11-02:2>3", "建議以外的級"), ("2026-10-30:1>2", "舊的建議"),
                     ("", "空的"), (2, "數字")):
     ok, msg = lots.apply_upgrade(bad_id, now=datetime(2026, 11, 2, 15, 0), ctx=ctx_ok())
@@ -837,31 +837,28 @@ finally:
     lots.retire_status = _orig_rs
     lots.exec_quality = _orig_eq
 st, _ = lots.read_state()
-chk("  正確的 id ＋ 條件都過 ⇒ 確認成功、pending 下一個交易日 11/3 生效（試車）",
-    (ok, (st["pending"] or {}).get("eff"), (st["pending"] or {}).get("kind")), (True, "2026-11-03", "trial"))
+chk("  ⭐ 10-21：正確的 id ＋ 條件都過 ⇒ 確認成功、**立刻生效**（level 2、沒有 pending、試車從今天 11/2 開始）",
+    (ok, st["level"], st["pending"], st["since"], st["up_at"], st["trial"]["status"], st["trial"]["start"]),
+    (True, 2, None, "2026-11-02", "2026-11-02", "on", "2026-11-02"))
 chk("  ⭐ apply 重驗用存好的那一份：退休標準／執行品質 0 次重算", _rs_calls["n"], 0)
 print("        （apply 本身花 %.1f ms）" % _apply_ms)
-chk("  確認當天（11/2）日盤／夜盤照舊 1 口；11/3 起 2＋1",
+chk("  ⭐ 確認後**立刻**回新口數：今天（11/2）的日盤 day_lots ＝ 2、今晚夜盤 b ＝ 1、風控上限 1,200（本月最大 2＋1）",
     (lots.day_lots(st, date(2026, 11, 2)), lots.base_lots(st, date(2026, 11, 2))[1],
-     lots.base_lots(st, date(2026, 11, 3))), (1, 1, (2, 1)))
+     risk_cap.cap_of(lots=lots.cap_lots(st, date(2026, 11, 2))), st["month_max"]),
+    (2, 1, 1200.0, {"month": "2026-11", "ab": [2, 1]}))
+say("立刻" in str(msg) or "現在起" in str(msg), "  回的那句話講「現在起／今晚夜盤起」", msg)
 ok2, msg2 = lots.apply_upgrade("2026-11-02:1>2", now=datetime(2026, 11, 2, 15, 1), ctx=ctx_ok())
-say(not ok2 and (lots.read_state()[0]["pending"] or {}).get("to") == 2, "  ⛔ 連按兩下 ⇒ 第二次拒絕（不會升兩次）", msg2)
+say(not ok2 and lots.read_state()[0]["level"] == 2, "  ⛔ 連按兩下 ⇒ 第二次拒絕（不會升兩次）", msg2)
 ok, msg = lots.revoke_pending(now=datetime(2026, 11, 2, 20, 0))
-chk("  生效前撤回 ⇒ 成功、回到 1＋1", (ok, lots.read_state()[0]["pending"], lots.day_lots(d=date(2026, 11, 3))),
-    (True, None, 1))
-ok, msg = lots.apply_upgrade("2026-11-02:1>2", now=datetime(2026, 11, 2, 21, 0),
-                             rows=[{"date": "2026-11-02", "equity": 105000.0}], ctx=ctx_ok())
-say(ok, "  撤回後可以再確認一次", msg)
-ok, msg = lots.revoke_pending(now=datetime(2026, 11, 3, 8, 0))
-say(not ok and lots.read_state()[0]["pending"], "  ⛔ 生效日當天起撤不回來", msg)
+say(not ok and lots.read_state()[0]["level"] == 2, "  ⭐ 立刻生效 ⇒ 沒有「生效前撤回」可用（撤回端點回失敗、級數不變）", msg)
 # 11/3 試車生效：這一天日盤只成交 1 口（⛔ 不算試車）
 led_day([day_res("2026-11-03", qty=1, slip=0.0)])
 _r = lots.daily_check([{"date": "2026-11-03", "equity": 106000.0}], now=datetime(2026, 11, 3, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-chk("  11/3 每日檢查：轉正（level 2、up_at 11/3、pending 清掉）、試車開始；⭐ 只成交 1 口那筆不算 ⇒ 0 筆",
+chk("  11/3 每日檢查：已經是 2＋1（確認那天就生效、不再有轉正事件）、試車中；⭐ 只成交 1 口那筆不算 ⇒ 0 筆",
     (st["level"], st["up_at"], st["pending"], [e["kind"] for e in _r["events"]], st["trial"]["status"],
      st["trial"]["start"], st["trial"]["n"]),
-    (2, "2026-11-03", None, ["upgrade_effective"], "on", "2026-11-03", 0))
+    (2, "2026-11-02", None, [], "on", "2026-11-02", 0))
 print("  -- 試車進度（⭐ 10-21 起 1 筆；實際成交 ≥ 2 口、滑價 ≤ 4、零下單錯誤；演練、1 口都不算；下單錯誤 ⇒ 歸零）--")
 chk("  試車要幾筆：TRIAL_N ＝ 1（老闆 10-21）", lots.TRIAL_N, 1)
 PT = lots.panel(now=datetime(2026, 11, 3, 15, 0), eq=106000.0, lot1=35050.0)
@@ -911,55 +908,43 @@ chk("  11/13 權益 21.2 萬 ⇒ 建議直接跳到 4＋2（跳 2 級；11/3 才
 PJ = lots.panel(now=datetime(2026, 11, 13, 15, 0), eq=212000.0, lot1=35050.0)
 say("直接跳到 <b>4＋2</b>（跳 2 級）" in PJ["offer"]["q"] and PJ["offer"]["power"] is None,
     "  確認條問句「直接跳到 4＋2（跳 2 級）」；目標日盤 4 口 ⇒ 沒有停電那一行", PJ["offer"]["q"])
+# ⭐ 10-21：有部位（今晚夜盤 2＋1 的 1 口還開著）時確認 ⇒ 現有部位照原本口數處理，之後的新單照新口數
+broker._state["position"] = {"dir": "long", "entry": 12000.0, "qty": 1, "entry_time": "21:40:02", "target_trade": None,
+                             "recovered": False, "sl_points": 240.0, "no_tp": True}
 ok, msg = lots.apply_upgrade("2026-11-13:2>4", now=datetime(2026, 11, 13, 15, 0),
                              rows=[{"date": "2026-11-13", "equity": 212000.0}], ctx=ctx_ok())
 st, _ = lots.read_state()
-chk("  確認 ⇒ pending 4（下一個交易日 11/16 一）", (ok, (st["pending"] or {}).get("to"), (st["pending"] or {}).get("eff")),
-    (True, 4, "2026-11-16"))
-print("  -- ⭐ 已確認還沒生效：策略掉到觀察 ⇒ 作廢（隔天開盤前那次就看）--")
+chk("  ⭐ 確認跳級 ⇒ 立刻是 4＋2（沒有 pending、up_at 11/13、記下試車後已跳過一次）",
+    (ok, st["level"], st["pending"], st["up_at"], st["trial"]["jumped"], lots.base_lots(st, date(2026, 11, 13))),
+    (True, 4, None, "2026-11-13", True, (4, 2)))
+chk("  ⭐ 手上那口部位 ⛔ 不被改動（口數 1、平倉每張最多 1 口）", (broker._state["position"]["qty"], broker._own_qty(broker._state["position"])),
+    (1, 1))
+chk("  風控上限跟著本月最大更新：400 ×（4＋2）＝ 2,400", (st["month_max"], risk_cap.cap_of(lots=lots.cap_lots(st, date(2026, 11, 13)))),
+    ({"month": "2026-11", "ab": [4, 2]}, 2400.0))
+broker._state["position"] = None
+print("  -- 舊狀態檔留下的「已確認還沒生效」（10-21 以前確認的）：照舊每天看策略、掉了就作廢 --")
+_sv = lots.read_state()[0]
+write_state(level=2, checked="2026-11-13", trial={"status": "passed", "start": "2026-11-02", "n": 1, "passed_at": "2026-11-12"},
+            pending={"to": 4, "from": 2, "eff": "2026-11-16", "kind": "jump", "at": "x", "id": "2026-11-13:2>4"})
 _r = lots.daily_check([{"date": "2026-11-13", "equity": 212000.0}], now=datetime(2026, 11, 14, 7, 0),
                       ctx=ctx_ok(retire={"union": "watch", "trend": "ok"}))
 st, _ = lots.read_state()
-chk("  11/14 07:00（沒有新權益列）⇒ 作廢：pending 清掉、記下原因、建議收回",
-    (st["pending"], (st["void"] or {}).get("to"), "多方聯軍" in str((st["void"] or {}).get("why")),
-     bool((st["suggest"] or {}).get("withdrawn")), [e["kind"] for e in _r["events"]]),
-    (None, 4, True, True, ["pending_void"]))
-chk("  作廢之後 11/16 照舊 2＋1", lots.base_lots(st, date(2026, 11, 16)), (2, 1))
-PV = lots.panel(now=datetime(2026, 11, 14, 8, 0), eq=212000.0, lot1=35050.0)
-say(PV["verdict"]["kind"] == "void" and "作廢" in PV["verdict"]["sub"] and "多方聯軍" in PV["verdict"]["sub"]
-    and PV["offer"] is None and PV["alarm"],
-    "  畫面講為什麼作廢（結論 void、金條、⛔ 不再端出確認鈕）", PV["verdict"])
-_r = lots.daily_check([{"date": "2026-11-13", "equity": 212000.0}], now=datetime(2026, 11, 14, 8, 0), ctx=ctx_ok())
-chk("  同一天再跑一次（沒有 pending）⇒ 不做事", (_r["ran"], _r["events"]), (False, []))
-_r = lots.daily_check([{"date": "2026-11-16", "equity": 212000.0}], now=datetime(2026, 11, 16, 14, 5), ctx=ctx_ok())
-st, _ = lots.read_state()
-chk("  11/16 策略回到正常 ⇒ 每天檢查 ⇒ 重新出跳級建議（新 id）", (st["suggest"]["ok"], st["suggest"]["id"]),
-    (True, "2026-11-16:2>4"))
-ok, msg = lots.apply_upgrade("2026-11-13:2>4", now=datetime(2026, 11, 16, 15, 0), ctx=ctx_ok())
-say(not ok, "  ⛔ 舊的 id（11/13 那一份）⇒ 拒絕", msg)
-ok, msg = lots.apply_upgrade("2026-11-16:2>4", now=datetime(2026, 11, 16, 15, 0),
-                             rows=[{"date": "2026-11-16", "equity": 212000.0}], ctx=ctx_ok())
-_g = lots.daily_check([{"date": "2026-11-16", "equity": 212000.0}], now=datetime(2026, 11, 17, 7, 0), ctx=ctx_ok())
-st, _ = lots.read_state()
-chk("  生效日開盤前看一次：策略都正常 ⇒ 不作廢（記下看過）", ((st["pending"] or {}).get("vchk"), _g["events"]),
-    ("2026-11-17", []))
-_r = lots.daily_check([{"date": "2026-11-17", "equity": 213000.0}], now=datetime(2026, 11, 17, 14, 5), ctx=ctx_ok())
-st, _ = lots.read_state()
-chk("  11/17 轉正：4＋2、up_at 11/17、記下「試車後已經跳過一次」",
-    (st["level"], lots.base_lots(st, date(2026, 11, 18)), st["up_at"], st["trial"]["jumped"]),
-    (4, (4, 2), "2026-11-17", True))
-print("  -- 之後再升：離上一次升級生效至少 1 個日曆月（11/17 ⇒ 12/17）--")
+chk("  11/14 07:00 策略掉到觀察 ⇒ 舊的 pending 作廢、11/16 照舊 2＋1",
+    (st["pending"], (st["void"] or {}).get("to"), [e["kind"] for e in _r["events"]], lots.base_lots(st, date(2026, 11, 16))),
+    (None, 4, ["pending_void"], (2, 1)))
+lots.LEVEL_FILE.write_text(json.dumps(_sv, ensure_ascii=False), encoding="utf-8")
+print("  -- 之後再升：離上一次升級生效至少 1 個日曆月（11/13 ⇒ 12/13）--")
 _r = lots.daily_check([{"date": "2026-12-01", "equity": 262000.0}], now=datetime(2026, 12, 1, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-say(not st["conds"]["ok"] and any("12-17" in w for w in st["conds"]["why"]),
-    "  12/1 權益夠 25 萬級（5＋2），但 11/17 才生效 ⇒ 12/17 以前不升", st["conds"]["why"])
-_r = lots.daily_check([{"date": "2026-12-16", "equity": 262000.0}], now=datetime(2026, 12, 16, 14, 5), ctx=ctx_ok())
-say(not lots.read_state()[0]["conds"]["ok"], "  12/16 還差一天 ⇒ 不升")
-_r = lots.daily_check([{"date": "2026-12-17", "equity": 262000.0}], now=datetime(2026, 12, 17, 14, 5), ctx=ctx_ok())
+say(not st["conds"]["ok"] and any("12-13" in w for w in st["conds"]["why"]),
+    "  12/1 權益夠 25 萬級（5＋2），但 11/13 才生效 ⇒ 12/13 以前不升", st["conds"]["why"])
+_r = lots.daily_check([{"date": "2026-12-11", "equity": 262000.0}], now=datetime(2026, 12, 11, 14, 5), ctx=ctx_ok())
+say(not lots.read_state()[0]["conds"]["ok"], "  12/11 還沒滿 ⇒ 不升")
+_r = lots.daily_check([{"date": "2026-12-14", "equity": 262000.0}], now=datetime(2026, 12, 14, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-chk("  12/17 滿一個月 ⇒ 建議升到 5＋2", (st["suggest"]["ok"], st["suggest"]["to"], st["suggest"]["kind"]),
+chk("  12/14 滿一個月 ⇒ 建議升到 5＋2", (st["suggest"]["ok"], st["suggest"]["to"], st["suggest"]["kind"]),
     (True, 5, "jump"))
-P5 = lots.panel(now=datetime(2026, 12, 17, 15, 0), eq=262000.0, lot1=35050.0)
+P5 = lots.panel(now=datetime(2026, 12, 14, 15, 0), eq=262000.0, lot1=35050.0)
 _pw = P5["offer"]["power"] or {}
 say("停電沒人處理時最壞一次約 <b>11.9 萬</b>" == _pw.get("line") and _pw.get("remind") == "升到這一級之前要再確認停電備援",
     "  ⭐ 目標日盤 5 口 ⇒ 確認條多一行「停電沒人處理時最壞一次約 11.9 萬」＋「升到這一級之前要再確認停電備援」", _pw)
@@ -1259,10 +1244,10 @@ chk("  ⛔ 目標卡的計畫線沒被動到（overlay 不改 line）", _GO["lin
 lots.apply_upgrade(PO["offer"]["id"], now=datetime(2026, 11, 2, 15, 1),
                    rows=[{"date": "2026-11-02", "equity": 106480.0}], ctx=ctx_ok())
 PP = lots.panel(now=datetime(2026, 11, 2, 15, 2), eq=106480.0, lot1=35050.0)
-chk("  確認後：藥丸「1 口 → 明天 2 口」、手機標籤、沒有金條", (PP["pills"]["day"], PP["phone"]["label"], PP["alarm"]),
-    ("1 口 → 明天 2 口", "1＋1（11/3 起試車 2＋1）", []))
-chk("  確認後：目標卡 10 萬那一列「已確認・11/3 起」",
-    [s["state_txt"] for s in lots.goal_overlay(_GV, PP)["steps"]][1], "已確認・11/3 起")
+chk("  ⭐ 確認後立刻生效：藥丸「2 口」、手機標籤「2＋1（試車）」、沒有金條", (PP["pills"]["day"], PP["phone"]["label"], PP["alarm"]),
+    ("2 口", "2＋1（試車）", []))
+chk("  確認後：目標卡 10 萬那一列「現在在跑」（立刻生效）",
+    [s["state_txt"] for s in lots.goal_overlay(_GV, PP)["steps"]][1], "現在在跑")
 clear_state()
 write_state(level=2, checked="2026-11-16", up_month="2026-11")
 lots.daily_check([{"date": "2026-11-17", "equity": 83100.0}], now=datetime(2026, 11, 17, 14, 5), ctx=ctx_ok())
@@ -2494,6 +2479,86 @@ try:
 finally:
     broker.realized_today = _RT0
     broker._realized_day = _RD0
+
+print("\n=== ㉑ 老闆 10-21：試車通過同一輪就出跳級建議；確認後立刻生效 ===")
+print("  -- 10-21 真實情境：10-20 確認試車（舊規則留下 pending 10-21 生效）、10-21 09:15 日盤 2 口滑價 −3、權益 251,561 --")
+clear_state()
+shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)
+shutil.rmtree(NF.NF_DIR, ignore_errors=True)
+write_state(level=1, checked="2026-10-20",
+            suggest={"ok": True, "id": "2026-10-20:1>2", "kind": "trial", "from": 1, "to": 2, "lots": "2＋1",
+                     "why": [], "made": "2026-10-20", "confirmed": "2026-10-20T15:00:00"},
+            pending={"to": 2, "from": 1, "eff": "2026-10-21", "kind": "trial", "at": "2026-10-20T15:00:00",
+                     "id": "2026-10-20:1>2"})
+_o = day_res("2026-10-21", qty=2, slip=-3.0)
+_o["entry_time"] = "09:15:01"
+led_day([_o])
+_r = lots.daily_check([{"date": "2026-10-21", "equity": 251561.0}], now=datetime(2026, 10, 21, 14, 5), ctx=ctx_ok())
+st, _ = lots.read_state()
+chk("  ⭐ 14:00 同一輪：轉正 → 試車計入今天那筆 → 通過 → 跳級建議（25.1 萬 ⇒ 5＋2）",
+    ([e["kind"] for e in _r["events"]], st["level"], st["trial"]["status"], (st["suggest"] or {}).get("ok"),
+     (st["suggest"] or {}).get("kind"), (st["suggest"] or {}).get("to"), (st["suggest"] or {}).get("id")),
+    (["upgrade_effective", "trial_passed", "suggest"], 2, "passed", True, "jump", 5, "2026-10-21:2>5"))
+P21 = lots.panel(now=datetime(2026, 10, 21, 14, 10), eq=251561.0, lot1=35050.0)
+say(P21["offer"] and P21["offer"]["to"]["label"] == "5＋2" and "確認後立刻生效" in " ".join(P21["offer"]["fine"])
+    and "今晚夜盤起" in " ".join(P21["offer"]["fine"]) and P21["offer"]["eff_txt"] == "確認後立刻生效",
+    "  確認條：升到 5＋2、寫「確認後立刻生效：今晚夜盤起／下一筆日盤起」", P21["offer"]["fine"][:1] if P21["offer"] else None)
+print("  -- 14:10 確認 ⇒ 立刻生效：今晚夜盤 b＝2（規則 B）、下一筆日盤 5 口、風控上限 2,800 --")
+ok, msg = lots.apply_upgrade("2026-10-21:2>5", now=datetime(2026, 10, 21, 14, 10),
+                             rows=[{"date": "2026-10-21", "equity": 251561.0}])
+st, _ = lots.read_state()
+chk("  確認成功、立刻是第 5 級、up_at 今天、試車記成已跳過一次",
+    (ok, st["level"], st["pending"], st["up_at"], st["trial"]["jumped"]), (True, 5, None, "2026-10-21", True))
+_hi = [("2026-09-%02d" % (i + 1), 2.0) for i in range(22)] + [("2026-10-20", 2.0)]
+_lo = [("2026-09-%02d" % (i + 1), 0.5) for i in range(22)] + [("2026-10-20", 0.5)]
+chk("  ⭐ day_lots（下一筆日盤）＝ 5；今晚夜盤 b＝2：振幅偏高 2 口／不偏高 1 口（規則 B）",
+    (lots.day_lots(st, date(2026, 10, 22)), lots.night_plan(date(2026, 10, 21), st, rows=_hi)["qty"],
+     lots.night_plan(date(2026, 10, 21), st, rows=_lo)["qty"], lots.night_plan(date(2026, 10, 21), st, rows=_hi)["b"]),
+    (5, 2, 1, 2))
+chk("  風控上限：本月最大跟著變 5＋2 ⇒ 400 × 7 ＝ 2,800",
+    (st["month_max"], risk_cap.cap_of(lots=lots.cap_lots(st, date(2026, 10, 21)))), ({"month": "2026-10", "ab": [5, 2]}, 2800.0))
+print("  -- 21:39 確認 ⇒ 21:40 夜盤真的用新口數（只讀 lots；night_fire 一行沒改）--")
+clear_state()
+write_state(level=2, checked="2026-06-09", trial={"status": "passed", "start": "2026-06-01", "n": 1, "passed_at": "2026-06-05"},
+            suggest={"ok": True, "id": "2026-06-10:2>5", "kind": "jump", "from": 2, "to": 5, "lots": "5＋2", "why": [],
+                     "made": "2026-06-10"})
+_W0 = lots.warm_night
+_WC = {"n": 0}
+lots.warm_night = lambda E=None: _WC.__setitem__("n", _WC["n"] + 1)
+try:
+    ok, msg = lots.apply_upgrade("2026-06-10:2>5", now=datetime(2026, 6, 10, 21, 39),
+                                 rows=[{"date": "2026-06-10", "equity": 251561.0}], ctx=ctx_ok())
+finally:
+    lots.warm_night = _W0
+chk("  確認成功、順手叫背景預熱振幅（夜盤 b ≥ 2）", (ok, _WC["n"]), (True, 1))
+shutil.rmtree(NF.NF_DIR, ignore_errors=True)
+NF.ARM_FLAG.write_text("R", encoding="ascii")
+NF.TREND_CTX.write_text(json.dumps({"sig": {str(E_N - timedelta(days=i + 1)): (100.0 if i % 2 else -50.0)
+                                            for i in range(40)}}), encoding="utf-8")
+NF.configure(quote_fn=lambda: (12000.0, 1.0), session_fn=lambda now: "night",
+             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0}.get(m))
+lots._AMP.update(key="x", rows=[("2026-05-%02d" % (i + 1), 2.0) for i in range(25)] + [("2026-06-09", 2.0)], err=None)
+_oe, _oc = broker.enter, broker.can_enter
+broker.enter, broker.can_enter = _fake_enter, (lambda *a, **k: (True, None))
+try:
+    NF._ST["tried"] = None
+    _CALL.clear()
+    NF._decide(E_N, NF.trend_at(E_N) + timedelta(seconds=1))
+finally:
+    broker.enter, broker.can_enter = _oe, _oc
+    lots._AMP.update(key=None, rows=None, err=None)
+chk("  ⭐ 21:40 夜盤送 2 口（5＋2 的 b＝2、振幅偏高）", _CALL.get("qty"), 2)
+if _CALL.get("qty") is None:
+    print("     夜盤帳本：", [(o.get("rec"), o.get("why"), o.get("msg")) for o in NF.rows_of(E_N)])
+NF.ARM_FLAG.unlink()
+print("  -- 下單模組只讀 lots：broker／auto_fire／night_fire／主迴圈 跟 HEAD 一字不差 --")
+_mods = {}
+for _f in ("broker.py", "auto_fire.py", "night_fire.py"):
+    _h = subprocess.run(["git", "-C", str(HERE), "show", "HEAD:tools/shioaji/" + _f], capture_output=True).stdout
+    _mods[_f] = bool(_h) and _h == (HERE / _f).read_bytes()
+chk("  broker.py／auto_fire.py／night_fire.py 跟 HEAD 逐位元相同", _mods,
+    {"broker.py": True, "auto_fire.py": True, "night_fire.py": True})
+clear_state()
 
 # ══ 收尾：全程沒有指回真的資料夾 ═════════════════════════════════════════
 print("\n=== 收尾：全程沒有寫到他真的資料夾 ===")

@@ -889,23 +889,22 @@ _GATHER["v"] = _GOOD
 # 正確的那一個 ⇒ 200、pending 下一個交易日
 c, ct, b = post("/api/lots/upgrade", json.dumps({"offer_id": _oid}).encode())
 _st = _lots_state()
-say(c == 200 and (as_json(b) or {}).get("ok") and (_st["pending"] or {}).get("to") == 2,
-    "  ✔ 這個月建議的那一級 ⇒ 200、寫成 pending（下一個交易日生效）", f"{c} {(b or '')[:70]}")
-chk("    生效日 ＝ 下一個平日", (_st["pending"] or {}).get("eff"), str(_L.next_weekday(_today)))
-chk("    ⛔ 級數本身還沒變（今天照舊）", _st["level"], 1)
+say(c == 200 and (as_json(b) or {}).get("ok") and _st["level"] == 2 and _st["pending"] is None,
+    "  ✔ 建議的那一級 ⇒ 200、⭐ 確認後立刻生效（level 2、沒有 pending）", f"{c} {(b or '')[:70]}")
+chk("    生效那天 ＝ 今天（since／up_at）", (_st["since"], _st["up_at"]), (str(_today), str(_today)))
 # 連按兩下（同時兩個請求）⇒ 只升一級
 import concurrent.futures as _cf  # noqa: E402
 _lots_seed()
 with _cf.ThreadPoolExecutor(4) as _ex:
     _rs = list(_ex.map(lambda _i: post("/api/lots/upgrade", json.dumps({"offer_id": _oid}).encode())[0], range(4)))
 _st = _lots_state()
-say(sorted(_rs).count(200) == 1 and (_st["pending"] or {}).get("to") == 2 and _st["level"] == 1,
+say(sorted(_rs).count(200) == 1 and _st["level"] == 2,
     "  ⛔ 四個請求同時打（連按）⇒ 只有一個成功、只升一級", str(sorted(_rs)))
-# 撤回：一鍵
+# 撤回：立刻生效之後沒有「生效前撤回」⇒ 端點回 409、級數不變
 c, ct, b = post("/api/lots/revoke")
-say(c == 200 and _lots_state()["pending"] is None, "  撤回 ⇒ 200、pending 清掉", f"{c} {(b or '')[:60]}")
-c, ct, b = post("/api/lots/revoke")
-say(c == 409 and "沒有等著生效" in (b or ""), "  再撤一次 ⇒ 409（沒有東西可撤）", f"{c} {(b or '')[:60]}")
+say(c == 409 and "沒有等著生效" in (b or "") and _lots_state()["level"] == 2,
+    "  撤回 ⇒ 409（確認後立刻生效，沒有東西可撤）、級數不變", f"{c} {(b or '')[:60]}")
+_lots_seed()
 # 只收 POST；路由精確比對
 for m in ("GET", "HEAD"):
     for p in ("/api/lots/upgrade", "/api/lots/revoke"):

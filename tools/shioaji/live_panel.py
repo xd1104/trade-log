@@ -9207,8 +9207,7 @@ function ltHTML(L){
      '<div class="w"><div class="k">'+esc(c.name||'')+'</div><div class="v">'+(c.html||'')+'</div></div></div>').join('')+'</div>'+
    '</details>';
  if(P) h+='<div class="lt-done"><span class="g">已確認：<b>'+esc(P.eff_txt||'')+'起</b>做 '+esc((P.to||{}).label||'')+
-     '（'+esc(P.at_txt||'')+' 你按的）'+tipI('在那之前改主意可以撤回，撤回不用再確認。')+'</span>'+
-     '<button class="btn" data-ltrev="1"'+(LTUP.busy?' disabled':'')+'>'+(LTUP.busy?'撤回中…':'撤回，維持 '+esc(R.label||''))+'</button></div>';
+     '（'+esc(P.at_txt||'')+' 你按的）'+tipI('2026-10-21 起確認後立刻生效，不提供撤回（要降只能等自動減級）。')+'</span></div>';
  else if(O) h+=ltActHTML(L);
  if(LTUP.err) h+='<div class="lt-msg err">'+esc(LTUP.err)+'</div>';
  if(LTUP.ok&&!P) h+='<div class="lt-msg">'+esc(LTUP.ok)+'</div>';   /* 已確認那一塊自己會講，⛔ 不重複 */
