@@ -7661,6 +7661,11 @@ function lpNight(N,D,s){
    const mv=lpN(dd.mv), th=Math.round(lpN(dd.thr));
    ind+=lpInd('走勢',lpBar(mv,th,Math.abs(mv)>=th),res?'ok':'no',(mv>0?'+':'')+Math.round(mv)+' ／ 要 '+th+' 點',!!res);
  }else if(res){ ind+=lpInd('走勢',lpTxt(''),'ok','',true); }
+ /* ⭐ 2026-10-21 判定前（21:10~21:40）即時跑：後端 night_fire.trend_gap（⛔ 前端不自己算） */
+ else if(N.gap&&lpN(N.gap.now_pts)!=null&&lpN(N.gap.need_pts)!=null){
+   const mv=lpN(N.gap.now_pts), th=Math.round(lpN(N.gap.need_pts));
+   ind+=lpInd('走勢',lpBar(mv,th,Math.abs(mv)>=th),'',(mv>0?'+':'')+Math.round(mv)+' ／ 要 '+th+' 點');
+ }
  if(L&&lpN(L.vol)!=null&&lpN(L.thr)!=null)
    ind+=lpInd('波動',lpBar(lpN(L.vol),lpN(L.thr),!!L.high),(qty!=null?qty+' 口':''),lpN(L.vol).toFixed(2)+'% ／ 要 '+lpN(L.thr).toFixed(2)+'%');
  return {html:lpSess('n','☾','夜盤・'+name,qty,st+ind), sum:sum};

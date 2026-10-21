@@ -755,6 +755,39 @@ RULE_LINE = {
              trend_rule.PCTL / 10, R_SL_PCT * 100)),
 }
 
+_GAP_THR = {"E": None, "thr": None}
+
+
+def trend_gap(E, now, a, recent):
+    """
+    ⭐ 2026-10-21（Benson）：夜盤跟勢 21:40 判定**之前**，「走勢」那一行即時跑 ——
+    現在走了幾點／門檻幾點（像日盤快攻 09:03:30 前那樣）。⇒ dict 或 None。
+    ⛔ **唯讀、零寫檔**：門檻、參考價、現價都走 `_decide_trend` 同一組函式（⛔ 不准第二把尺）；
+       門檻每晚只讀一次 trend_ctx.json（記在記憶體）。
+    ⛔ 只是「目前的數字」，⛔ 定論照舊在判定那一刻寫進帳本；有定論以後這裡就不端。
+    """
+    if not E or not a.get("on") or a.get("method") != "R":
+        return None
+    if any(str(o.get("E")) == str(E) for o in recent):
+        return None                                   # 已經判過了，定論在帳本那一列
+    t_at = trend_at(E)
+    t0 = t_at - timedelta(minutes=trend_rule.LOOKBACK)
+    if not (t0 <= now < t_at):
+        return None
+    if _GAP_THR["E"] != E:
+        past, _ = past_sigs(E)
+        _GAP_THR.update(E=E, thr=trend_rule.threshold(past) if len(past) >= trend_rule.MIN_N else None)
+    thr = _GAP_THR["thr"]
+    p0, p0_at = ref_price(E)
+    qf = _CFG["quote_fn"]
+    px, age = qf() if qf else (None, None)
+    if thr is None or p0 is None or px is None or age is None or age > max(QUOTE_MAX_AGE, 15):   # 畫面用 ⇒ 放寬到 15 秒
+        return None
+    mv = float(px) - p0
+    return {"now_pts": round(mv, 1), "need_pts": round(thr, 1), "ref": p0, "ref_at": p0_at,
+            "at": t_at.strftime("%H:%M")}
+
+
 def state(now=None):
     now = now or datetime.now()
     a = arm()
@@ -791,4 +824,12 @@ def state(now=None):
             "warn": "⚠️ 停損靠面板：夜盤有部位時面板要整晚開著、電腦不能睡",
             "how_on": "要開：在【自動下單】最底下的「開關」選一條做法（或在 tools\\shioaji 建 "
                       "NIGHT_ORDERS_ON，內容寫 T 或 R）",
-            "recent": recent[-10:][::-1], "errors": _ST["errors"], "last_err": _ST["last_err"]}
+            "recent": recent[-10:][::-1], "errors": _ST["errors"], "last_err": _ST["last_err"],
+            "gap": _gap_safe(E, now, a, recent)}
+
+
+def _gap_safe(E, now, a, recent):
+    try:
+        return trend_gap(E, now, a, recent)
+    except Exception:                       # noqa: BLE001 —— 畫面用的數字，壞了就不端（⛔ 不拖垮 state）
+        return None

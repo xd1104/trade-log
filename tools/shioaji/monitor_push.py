@@ -746,6 +746,10 @@ def _prog_night(n, f, s):
         out["rows"].append(_row_bar("走勢", mv, th, "ok" if res else "no", "%s ／ 要 %d 點" % (_pm(mv), th), bool(res)))
     elif res:
         out["rows"].append(_row_text("走勢", "", "ok", True))
+    elif _fin((n.get("gap") or {}).get("now_pts")) and _fin((n.get("gap") or {}).get("need_pts")):
+        # ⭐ 2026-10-21 判定前（21:10~21:40）即時跑：面板 night_fire.trend_gap（⛔ 手機不自己算）
+        mv, th = n["gap"]["now_pts"], int(round(n["gap"]["need_pts"]))
+        out["rows"].append(_row_bar("走勢", mv, th, "", "%s ／ 要 %d 點" % (_pm(mv), th)))
     if _fin(L.get("vol")) and _fin(L.get("thr")):
         out["rows"].append(_row_bar("波動", L["vol"], L["thr"], ("%d 口" % qty) if qty else "",
                                     "%.2f%% ／ 要 %.2f%%" % (L["vol"], L["thr"]), ok=bool(L.get("high"))))
