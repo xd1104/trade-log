@@ -443,6 +443,105 @@
     return { cls: 'ok', t: '面板正常・' + ago(age) };
   }
 
+  // ══ ⭐ 2026-10-21 三頁（首頁／金流明細／系統）＋「今天」＝程式下單卡（Benson 看過 demo 定案）══════════
+  //   分頁只活在記憶體（⛔ 不記：每次打開都是首頁）。看週報時整個 #main 收起來，分頁列跟著收。
+  var PAGE = 'home', CASH_M = null;
+  function pagePaint() {
+    ['home', 'cash', 'sys'].forEach(function (k) { var el = $('pg-' + k); if (el) el.hidden = PAGE !== k; });
+    var bs = document.querySelectorAll('#tabbar [data-pg]');
+    for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-pg') === PAGE ? 'on' : '';
+  }
+  // 一盤（日盤 d／夜盤 n）。資料 monitor_push._prog_day／_prog_night。
+  function progSess(cls0, P) {
+    var icon = cls0 === 'd' ? '☀' : '☾', title = cls0 === 'd' ? '日盤' : '夜盤';
+    P = P || {};
+    var head = '<div class="ps"><div class="ps-h"><span>' + icon + '</span><span class="nm">' + title + (P.name ? '・' + esc(P.name) : '') + '</span>' +
+      (P.qty != null ? '<span class="lots"><b class="num">' + esc(String(P.qty)) + '</b> 口</span>' : '') + '</div>';
+    if (P.err) return head + '<div class="ps-st"><span class="sub">' + esc(P.err) + '</span></div></div>';
+    var S = P.state || {}, st = '';
+    if (S.kind === 'pts') st = '<div class="ps-st"><span class="big num ' + cls(S.pts) + '">' + pm(S.pts) + ' 點</span></div>' +
+      (S.line ? '<div class="ps-st"><span class="sub num">' + esc(S.line) + '</span></div>' : '');
+    else if (S.kind === 'hold') st = '<div class="ps-st">' + (S.pts != null ? '<span class="big num ' + cls(S.pts) + '">' + pm(S.pts) + ' 點</span>' : '<span class="big w">持有中</span>') +
+      '<span class="sub">持有中</span></div>' + (S.line ? '<div class="ps-st"><span class="sub num">' + esc(S.line) + '</span></div>' : '');
+    else if (S.kind === 'wait') st = '<div class="ps-st"><span class="big w">' + esc(S.label || '') + '</span>' + (leftTo(S.at, S.night) ? '<span class="sub">' + leftTo(S.at, S.night) + '</span>' : '') + '</div>';
+    else st = '<div class="ps-st"><span class="big w">' + esc(S.label || '—') + '</span>' + (S.sub ? '<span class="sub">' + esc(S.sub) + '</span>' : '') + '</div>';
+    var rows = (P.rows || []).map(function (r) {
+      var mid = (r.need > 0 && r.now != null)
+        ? '<div class="pb' + (r.ok ? ' ok' : '') + '"><i style="width:' + Math.min(100, r.now / (r.need * 1.7) * 100).toFixed(1) + '%"></i><u style="left:' + (100 / 1.7).toFixed(1) + '%"></u></div>'
+        : '<span class="t">' + esc(r.text || '') + '</span>';
+      var v = r.v === 'ok' ? '<span class="v ok">✔</span>' : r.v === 'no' ? '<span class="v no">✕</span>' : r.v ? '<span class="v ok q">' + esc(r.v) + '</span>' : '<span></span>';
+      return '<div class="pi' + (r.fired ? ' fired' : '') + '"><span class="k">' + esc(r.k) + '</span>' + mid + v +
+        (r.nums ? '<span></span><span class="nums num">' + esc(r.nums) + '</span><span></span>' : '') + '</div>';
+    }).join('');
+    return head + st + rows + '</div>';
+  }
+  // 「還有幾分」：手機自己的時鐘（⚠️ 夜盤 21:40 在凌晨 05:00 前不倒數，那是明天的事）
+  function leftTo(at, night) {
+    var mm = /^(\d\d):(\d\d)(?::(\d\d))?/.exec(String(at || '')); if (!mm) return '';
+    var d = new Date(), now = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+    if (night && now < 5 * 3600) return '';
+    var x = (+mm[1]) * 3600 + (+mm[2]) * 60 + (+(mm[3] || 0)) - now; if (x <= 0) return '';
+    var h = Math.floor(x / 3600), mi = Math.floor(x % 3600 / 60), se = x % 60;
+    return '還有 ' + (h ? h + ' 小時 ' + mi + ' 分' : mi ? mi + ' 分 ' + se + ' 秒' : se + ' 秒');
+  }
+  // 第二頁：金流明細（資料＝電腦帳戶頁同一份，後端算好 ⇒ s.cash）。⛔ 手機不自己算錢。
+  var WHY_WORD = { tp: '停利', sl: '停損', eod: '收盤平', night_eod: '04:58 平' };
+  function money(x) { return x == null || isNaN(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(Math.round(x)).toLocaleString(); }
+  function cashHTML(C) {
+    var ms = (C && C.months) || [];
+    if (!ms.length) return '<h1 class="pgt">金流明細</h1><section class="card"><div class="msg">還沒有資料（電腦面板更新後就會有）。</div></section>';
+    var keys = ms.map(function (x) { return x.key; }); if (keys.indexOf(CASH_M) < 0) CASH_M = keys[keys.length - 1];
+    var i = keys.indexOf(CASH_M), M = ms[i];
+    var h = '<h1 class="pgt">金流明細</h1><div class="msw">' +
+      (i > 0 ? '<button data-cm="' + esc(keys[i - 1]) + '">‹</button>' : '<button disabled>‹</button>') +
+      '<b>' + esc(CASH_M.slice(0, 4)) + ' 年 ' + (+CASH_M.slice(5)) + ' 月</b>' +
+      (i < keys.length - 1 ? '<button data-cm="' + esc(keys[i + 1]) + '">›</button>' : '<button disabled>›</button>') + '</div>' +
+      '<div class="csum"><div><span>入金</span><b class="num">' + money(M.dep) + '</b></div>' +
+      '<div><span>交易損益</span><b class="num ' + cls(M.pl) + '">' + money(M.pl) + '</b></div>' +
+      '<div><span>手續費＋稅</span><b class="num dim">' + money(M.fee) + '</b></div>' +
+      '<div><span>本月實際賺賠</span><b class="num ' + cls(M.net) + '">' + money(M.net) + '</b></div></div>';
+    h += (M.days || []).map(function (d) {
+      return '<div class="cday"><div class="cdh"><b>' + esc(d.d) + '</b><span>週' + esc(d.w || '') + '</span><span class="bal">結餘<b class="num">' + (d.bal == null ? '—' : Math.round(d.bal).toLocaleString()) + '</b>' +
+        (d.diff ? '<em class="gold">⚠ 差 ' + money(d.diff) + '</em>' : '') + '</span></div>' +
+        (d.items || []).map(function (x) {
+          if (x.k === 'dep') return '<div class="cit"><span class="tg gold">入金</span><span>' + (x.inferred ? '<small>券商沒寫，照權益推算</small>' : '') + '</span><span class="amt num">' + money(x.amt) + '</span></div>';
+          if (x.k === 'fee') return '<div class="cit fee"><span></span><span>手續費＋稅</span><span class="amt num">' + money(x.amt) + '</span></div>';
+          return '<details class="ctr"><summary class="cit"><span class="tg">' + esc(x.sess || '') + '</span><span><b>' + esc((x.name || '') + ' ' + (x.dir || '')) + '</b>' +
+            '<small>' + money(x.pts) + ' 點 × ' + esc(String(x.qty || 1)) + ' 口' + (x.night_of ? '・' + esc(x.night_of) + ' 晚' : '') + '</small></span>' +
+            '<span class="amt num ' + cls(x.amt) + '">' + money(x.amt) + '</span></summary>' +
+            '<div class="cdet">進場 <b class="num">' + esc(String(x.entry == null ? '—' : x.entry)) + '</b>　' + esc(x.entry_time || '') +
+            '<br>出場 <b class="num">' + esc(String(x.exit == null ? '—' : x.exit)) + '</b>　' + esc(x.exit_time || '') + '　' + esc(x.why_txt || WHY_WORD[x.why] || x.why || '') + '</div></details>';
+        }).join('') + '</div>';
+    }).join('');
+    return h;
+  }
+  // 第三頁：系統（原本首頁「系統」那格＋跟電腦系統分頁一樣的四件事）
+  function sysHTML(s, age, dead) {
+    var r = s.real || {}, P = s.panel || {}, c = P.conn || {}, e = s.equity || {}, u = e.usage || {}, dp = e.depth || {}, bk = e.backup || {};
+    var ok = !dead && !(s.errs || []).length;
+    var h = '<h1 class="pgt">系統</h1>' +
+      '<section class="card"><div class="lbl">面板</div><div class="sbig"><span class="sdot' + (ok ? '' : ' bad') + '"></span>' + (dead ? '沒回報' : (s.errs || []).length ? '有一部分讀不到' : '正常') + '</div>' +
+      '<div class="rw"><span class="k">面板最後回報</span><span class="v">' + ago(age) + '（' + esc(String(s.at || '').slice(11, 16)) + '）</span></div>' +
+      '<div class="rw"><span class="k">電腦</span><span class="v">' + esc(s.host || '—') + (r.started ? '・' + esc(String(r.started).replace('-', '/')) + ' 開' : '') + '</span></div></section>' +
+      '<section class="card"><div class="lbl">券商連線</div>' +
+      '<div class="rw"><span class="k">合約</span><span class="v">' + esc(c.contract_name || '—') + '</span></div>' +
+      '<div class="rw"><span class="k">報價</span><span class="v' + (P.quote === 'nodata' ? ' gold' : '') + '">' + (({ live: '正常', closed: '休市中', nodata: '盤中收不到' })[P.quote] || esc(P.quote || '—')) + '</span></div>' +
+      '<div class="rw"><span class="k">今天重連</span><span class="v">' + (c.retries == null ? '—' : c.retries + ' 次') + '</span></div></section>';
+    if (u.mb != null) h += '<section class="card"><div class="lbl">券商流量</div><div class="sbig num">' + Math.round(u.mb) + ' MB <small>／ ' + esc(String(u.limit_mb || '—')) + ' MB</small></div>' +
+      '<div class="ubar"><i style="width:' + Math.min(100, +u.pct || 0) + '%"></i></div></section>';
+    h += '<section class="card"><div class="lbl">五檔錄製・資料備份</div>' +
+      '<div class="rw"><span class="k">五檔錄製</span><span class="v' + (dp.warn ? ' gold' : '') + '">' + (dp.msg ? (dp.warn ? '有問題' : '正常') : '—') + '</span></div>' +
+      '<div class="rw"><span class="k">資料備份</span><span class="v' + (bk.warn ? ' gold' : '') + '">' + esc(String(bk.msg || '—').replace(/^資料備份：/, '')) + '</span></div></section>';
+    return h;
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    var pg = t.closest('#tabbar [data-pg]');
+    if (pg) { PAGE = pg.getAttribute('data-pg'); pagePaint(); window.scrollTo(0, 0); return; }
+    var cm = t.closest('[data-cm]');
+    if (cm) { CASH_M = cm.getAttribute('data-cm'); if (lastBox && keys) open(lastBox, keys).then(function (s) { safeRender(lastBox, s); }); }
+  });
+
   function render(box, s) {
     var age = Date.now() / 1000 - box.t;
     var dead = age > DEAD_S;
@@ -477,7 +576,7 @@
     var hero = '<section class="card hero"><div class="row1"><span class="lbl">現在</span>';
     if (p) {
       var night = p.sess ? p.sess === 'night' : (String(p.entry_time || '') >= '15:00' || String(p.entry_time || '') < '05:00');
-      var ft = floatTotal(r, p);
+      var ft = r.float_pts;   // ⭐ 2026-10-21：點數一律每口（Benson 拍板；錢看帳戶）
       var dw = dirTxt(p.dir);
       // ⭐ QA r1 建議 10：方向空白 ⇒「1 口（方向不明）」
       var sub = p.short || ((dw ? dw + ' ' + qtyOf(p.qty) + ' 口' : qtyOf(p.qty) + ' 口（方向不明）') + (p.entry_time ? '・' + hhmm(p.entry_time) + ' 進場' : ''));
@@ -502,73 +601,38 @@
     }
     h += hero + '</section>';
 
-    // D 今天（上一晚 → 今天日盤 → 今晚；00:00～05:00 以交易日為準）
-    var pE = prevNightE(s, D), tE = (n.tonight || {}).E;
-    h += '<section class="card"><div class="lbl">今天</div><div class="tl">' +
-      (pE ? tlRow('夜盤', md(pE) + ' 晚', nightRow(s, pE)) : '') +
-      tlRow('日盤', '今天', dayRow(s, D)) +
-      (tE ? tlRow('夜盤', '今晚', nightRow(s, tE)) : '') + '</div></section>';
-
-    // E 本月（只看點）
-    var side, big, bc = '';
-    if (rk.err) { big = '—'; side = '<span class="gold">算不出來</span>'; }
-    else if (rk.pnl == null) { big = '—'; side = '讀不到'; }
+    // D 今天 ⭐ 2026-10-21 改成電腦即時頁「程式下單」那張卡（Benson 看過 demo 定案）：日盤三候選＋夜盤走勢／波動。
+    //   資料全部後端組好（monitor_push._prog ⇒ s.prog），手機只畫；點數一律每口。
+    //   舊快照（面板還沒重啟、沒有 s.prog）⇒ 退回舊的三列（上一晚 → 今天日盤 → 今晚）。
+    if (s.prog) h += '<section class="card"><div class="lbl">今天</div>' + progSess('d', s.prog.day) + progSess('n', s.prog.night) + '</section>';
     else {
-      big = pm(rk.pnl); bc = rk.blocked ? 'loss' : cls(rk.pnl);
-      if (rk.blocked) side = '<span class="gold">到上限了，停到月底</span>';
-      else if (rk.override) side = '超過上限，你已手動解除';
-      // ⭐ QA r1 建議 10：剩下的額度是負的 ⇒「已超過上限」（⛔ 不寫「再虧 −N 點」）
-      else if (rk.pnl < 0 && rk.cap) side = rk.cap + rk.pnl <= 0 ? '<span class="gold">已超過上限</span>' : '再虧 ' + Math.round(rk.cap + rk.pnl).toLocaleString() + ' 點就先停';
-      else side = '日盤＋夜盤合計';
+      var pE = prevNightE(s, D), tE = (n.tonight || {}).E;
+      h += '<section class="card"><div class="lbl">今天</div><div class="tl">' +
+        (pE ? tlRow('夜盤', md(pE) + ' 晚', nightRow(s, pE)) : '') +
+        tlRow('日盤', '今天', dayRow(s, D)) +
+        (tE ? tlRow('夜盤', '今晚', nightRow(s, tE)) : '') + '</div></section>';
     }
-    h += '<section class="card"><div class="lbl">本月</div><div class="mon"><div class="big num ' + bc + '">' + big + '<small>點</small></div><div class="side">' + side + '</div></div>' +
-      (!rk.err && rk.pnl < 0 && rk.cap && !rk.blocked ? '<div class="bar"><i style="width:' + Math.min(100, Math.round(-rk.pnl * 100 / rk.cap)) + '%"></i></div>' : '') + '</section>';
     $('board').innerHTML = h;
 
-    // F～I 收起來的細節（⚠️ 重畫前記下他展開的、畫完補回）
+    // 帳戶（收起來；⚠️ 重畫前記下他展開的、畫完補回）
+    // ⭐ 2026-10-21：拿掉「本月」「最近幾天」「自動下單」三塊；「系統」搬到第三頁；保證金那一行只有不夠的時候才出現。
     var ds = $('more').querySelectorAll('details[id]');
     for (var i = 0; i < ds.length; i++) DETAILS_OPEN[ds[i].id] = ds[i].open;
-    var m = '';
-    // F 最近幾天（單位：點；⛔ 不含交易日「今天」）
-    var hist = (d.days || []).filter(function (x) { return x.date !== d.today && x.date !== D; }).slice(0, 4);
-    m += '<details class="hist" id="dHist"><summary>最近幾天<span class="r">單位：點</span></summary><div class="db">' + (hist.map(function (x) {
-      var dv;
-      if (x.trade && x.trade.ok) {
-        var dr = dayRow(s, x.date);
-        dv = dr.hold ? '<span class="faint">持有中</span>' : dr.c !== undefined ? '<b class="num ' + dr.c + '">' + esc(String(dr.v).replace(' 點', '')) + '</b>'
-          : '<span class="faint">' + esc(dr.v === '已出場' ? '還在算' : dr.v) + '</span>';
-      } else dv = '<span class="faint">' + ((d.closed || []).indexOf(x.date) >= 0 ? '休市' : (x.trade ? '沒送成' : '沒做')) + '</span>';
-      var nr = nightRow(s, x.date);
-      var nv = nr.hold ? '<span class="faint">持有中</span>' : nr.c !== undefined ? '<b class="num ' + nr.c + '">' + esc(String(nr.v).replace(' 點', '')) + '</b>'
-        : '<span class="faint">' + esc(nr.v) + '</span>';
-      return '<div class="rw"><span class="k">' + md(x.date) + '</span><span class="v"><span><em>日</em>' + dv + '</span><span><em>夜</em>' + nv + '</span></span></div>';
-    }).join('') || '<div class="rw"><span class="k">還沒有紀錄</span></div>') + '</div></details>';
-
-    // G 帳戶（摘要＝權益，元）
     var e = s.equity || {}, L = s.lots || {};
     var lab = String(L.label || '').replace('（起始級）', '');
-    m += '<details id="dAcct"><summary>帳戶<span class="r num">' + (e.equity != null ? Math.round(e.equity).toLocaleString() + ' 元' : '—') + '</span></summary><div class="db">' +
+    var m = '<details id="dAcct"><summary>帳戶<span class="r num">' + (e.equity != null ? Math.round(e.equity).toLocaleString() + ' 元' : '—') + '</span></summary><div class="db">' +
       '<div class="rw"><span class="k">今天損益</span><span class="v num ' + cls(e.day_pl) + '">' + (e.day_pl == null ? '—' : e.day_pl ? pm(e.day_pl) + ' 元' : '0 元') + '</span></div>' +
       (lab ? '<div class="rw"><span class="k">口數</span><span class="v">' + esc(lab) + (L.day || L.night ? '（日盤 ' + esc(L.day || '—') + '・夜盤 ' + esc(L.night || '—') + '）' : '') + '</span></div>' : '') +
       (L.short ? '<div class="rw"><span class="k">升級</span><span class="v">' + esc(L.short) + '</span></div>' : '') +
-      (e.cushion && e.cushion.short ? '<div class="rw"><span class="k">保證金</span><span class="v' + (e.cushion.warn ? ' gold' : '') + '">' + esc(e.cushion.short) + '</span></div>' : '') +
-      '</div></details>';
-
-    // H 自動下單（摘要＝開關狀態）
-    var onTxt = function (on, live) { return on ? (live ? '開著' : '演練中') : '關著'; };
-    var setSum = rk.blocked ? '本月停單中' : (d.armed && n.on ? '日盤、夜盤都開著' : (d.armed ? '只開日盤' : n.on ? '只開夜盤' : '都關著'));
-    m += '<details id="dAuto"><summary>自動下單<span class="r">' + setSum + '</span></summary><div class="db">' +
-      '<div class="rw"><span class="k">日盤</span><span class="v">' + (s.day ? esc(d.method_name || d.method || '—') + '・' + onTxt(d.armed, d.live) + (L.day ? '・' + esc(L.day) : '') : '讀不到') + '</span></div>' +
-      '<div class="rw"><span class="k">夜盤</span><span class="v">' + (s.night ? esc(String(n.method_name || n.method || '—').replace('夜盤', '')) + '・' + onTxt(n.on, n.live) + (L.night ? '・' + esc(L.night) : '') : '讀不到') + '</span></div>' +
-      '</div></details>';
-
-    // I 系統（摘要＝正常／沒回報）
-    m += '<details id="dSys"><summary>系統<span class="r">' + (dead ? '<span class="gold">沒回報</span>' : (s.errs || []).length ? '<span class="gold">有一部分讀不到</span>' : '正常') + '</span></summary><div class="db">' +
-      '<div class="rw"><span class="k">面板最後回報</span><span class="v">' + ago(age) + '（' + esc(String(s.at || '').slice(11, 16)) + '）</span></div>' +
-      '<div class="rw"><span class="k">電腦</span><span class="v">' + esc(s.host || '—') + (r.started ? '・' + esc(String(r.started).replace('-', '/')) + ' 開' : '') + '</span></div>' +
+      (e.cushion && e.cushion.warn && e.cushion.short ? '<div class="rw"><span class="k">保證金</span><span class="v gold">' + esc(e.cushion.short) + '</span></div>' : '') +
       '</div></details>';
     $('more').innerHTML = m;
     for (var id in DETAILS_OPEN) { if (DETAILS_OPEN[id] && $(id)) $(id).open = true; }
+
+    // 第二頁：金流明細　第三頁：系統（各自包 try：一頁壞掉不拖垮首頁）
+    try { $('cash').innerHTML = cashHTML(s.cash); } catch (x) { $('cash').innerHTML = '<section class="card"><div class="err">金流明細畫不出來：' + esc(x && x.message || x) + '</div></section>'; }
+    try { $('sys').innerHTML = sysHTML(s, age, dead); } catch (x) { $('sys').innerHTML = '<section class="card"><div class="err">系統頁畫不出來：' + esc(x && x.message || x) + '</div></section>'; }
+    pagePaint();
   }
 
   // ⛔ 畫面出錯 ≠ 密碼錯：解開之後的錯一律走這裡，照實講（第一版把畫面的錯誤誤報成「密碼不對」）。

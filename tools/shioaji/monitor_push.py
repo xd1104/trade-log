@@ -447,8 +447,10 @@ def snapshot(port):
     """⇒ 一張快照（⛔ 永遠不丟例外：拿不到的那一塊寫進 errs）。"""
     snap = {"at": datetime.now().isoformat(timespec="seconds"), "host": socket.gethostname(), "errs": []}
     _lots_alarm, _lots_todo = [], []
+    _raw = {}                                   # ⭐ 10-21 手機「今天」卡要原始三份（⛔ 只在這支函式裡用）
     try:
         s = _get(port, "/api/state")
+        _raw["s"] = s
         r = s.get("real") or {}
         snap["panel"] = dict(_pick(s, ("status", "msg", "quote", "market", "phase", "clock", "age_sec")),
                              conn=_pick(s.get("conn") or {}, ("ok", "retries", "last_error", "contract_name")))
@@ -464,7 +466,8 @@ def snapshot(port):
         snap["equity"]["backup"] = _pick((s.get("equity") or {}).get("backup") or {}, ("ok", "warn", "msg"))
         # ⭐ 2026-10-14 五檔看門狗：五檔停了（成交還在）⇒ 手機「要注意的事」
         snap["equity"]["depth"] = _pick((s.get("equity") or {}).get("depth") or {}, ("warn", "msg"))
-        snap["equity"]["usage"] = _pick((s.get("equity") or {}).get("usage") or {}, ("pct",))
+        # ⭐ 2026-10-21 手機系統頁：券商流量
+        snap["equity"]["usage"] = _pick((s.get("equity") or {}).get("usage") or {}, ("ok", "mb", "limit_mb", "pct", "at"))
         snap["real"] = dict(_pick(r, ("live", "position", "stale_sec", "entries_today", "can_enter", "why",
                                       "last_error", "ca_ok")),
                             float_pts=r.get("float_pts"), sl=r.get("sl"), tp=r.get("tp"),
@@ -473,6 +476,7 @@ def snapshot(port):
         snap["errs"].append("面板沒回應（/api/state）：%s" % str(e)[:120])
     try:
         f = _get(port, "/api/fire/state")
+        _raw["f"] = f
         names = f.get("method_names") or {}
         snap["day"] = dict(_pick(f, ("armed", "method", "live", "flag_exists", "arm_msg", "err", "err_n",
                                      "entries_today", "eod_at", "signal_at", "today", "eod_expiry")),
@@ -493,6 +497,7 @@ def snapshot(port):
         snap["errs"].append("日盤自動下單讀不到：%s" % str(e)[:120])
     try:
         n = _get(port, "/api/nightfire/state")
+        _raw["n"] = n
         mname = {m.get("k"): m.get("name") for m in (n.get("methods") or [])}
         snap["night"] = dict(_pick(n, ("on", "method", "live", "msg", "tonight", "errors", "last_err", "flag_exists")),
                              method_name=mname.get(n.get("method")),
@@ -523,6 +528,16 @@ def snapshot(port):
         _pos_extra(snap, snap.get("day"), snap.get("night"))
     except Exception as e:                      # noqa: BLE001
         _phone_err(snap, "持有中那一句", e)          # ⛔ 不進 errs（那會讓手機說面板有一部分讀不到）
+    # ⭐ 2026-10-21 手機「今天」＝程式下單卡（⛔ 包 try：組不出來只少這一塊）
+    try:
+        snap["prog"] = _prog(_raw.get("f"), _raw.get("n"), _raw.get("s"))
+    except Exception as e:                      # noqa: BLE001
+        _phone_err(snap, "今天那張卡", e)
+    # ⭐ 2026-10-21 手機第二頁「金流明細」：跟電腦帳戶頁同一份計算（cashflow.py），⛔ 手機不自己算錢
+    try:
+        snap["cash"] = _cash()
+    except Exception as e:                      # noqa: BLE001
+        _phone_err(snap, "金流明細", e)
     try:
         snap["todo"] = _todo(snap, _lots_alarm, _lots_todo)
     except Exception as e:                      # noqa: BLE001
@@ -545,6 +560,226 @@ def notice(port, max_age=NOTICE_MAX_AGE):
         if LAST["todo"] is None or time.time() - LAST["at"] > max_age:
             snapshot(port)
         return list(LAST["todo"] or []), list(LAST["lots_alarm"] or [])
+
+
+# ── ⭐ 2026-10-21 手機「今天」＝電腦即時頁「程式下單」那張卡（Benson 看過 demo 定案）────────────
+#   日盤三候選＋夜盤走勢／波動：每列一條進度條（現在 vs 門檻）、右邊只給 ✕／✔、波動只寫口數。
+#   ⛔ 判定一律照後端帳本的定論（rec／why）；判定前的「現在走多少」只用面板的 gap（fire_gap）。
+#   ⛔ 點數一律**每口**（10-21 拍板：評估看每口、錢看帳戶）。
+#   ⚠️ 這份是照 live_panel.py 的 lpDay／lpNight 搬過來的；兩邊要一起改。
+
+def _hms_s(x):
+    m = re.match(r"^(\d\d):(\d\d)(?::(\d\d))?", str(x or ""))
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3) or 0) if m else None
+
+
+def _pos_state(s):
+    """⛔ QA r2 原則照搬：部位還在 ⇒ 持有中；確定沒有 ⇒ 才可以寫「已出場」；問不到 ⇒ 不知道（⛔ 不猜）。"""
+    real = (s or {}).get("real") if isinstance(s, dict) else None
+    if not isinstance(real, dict) or "position" not in real:
+        return "unk", {}
+    return ("yes" if real.get("position") else "no"), real
+
+
+def _row_bar(k, now, need, v="", nums="", fired=False, ok=None):
+    if not (_fin(now) and _fin(need) and need > 0):
+        return {"k": k, "text": "", "v": v, "fired": fired}
+    return {"k": k, "now": abs(now), "need": need, "ok": (abs(now) >= need) if ok is None else bool(ok),
+            "v": v, "nums": nums, "fired": fired}
+
+
+def _row_text(k, text, v="", fired=False):
+    return {"k": k, "text": text, "v": v, "fired": fired}
+
+
+def _pm(x):
+    return ("+" if x > 0 else "−" if x < 0 else "") + format(abs(int(round(x))), ",")
+
+
+def _prog_day(f, s):
+    if not isinstance(f, dict) or "armed" not in f:
+        return {"err": "讀不到日盤自動下單"}
+    names = f.get("method_names") or {}
+    out = {"name": names.get(f.get("method")) or "自動下單", "qty": f.get("qty") if _fin(f.get("qty")) else None,
+           "rows": []}
+    if not f.get("armed"):
+        out["state"] = {"kind": "text", "label": "沒開"}
+        return out
+    today = f.get("today")
+    row = next((r for r in (f.get("days") or []) if r.get("date") == today), None)
+    R = (f.get("real") or {}).get(today) if isinstance(f.get("real"), dict) else None
+    rows = (row or {}).get("cand_rows") or []
+    cr = lambda k: next((x for x in rows if x.get("cand") == k), None)
+    fired = bool(row and row.get("rec") == "result" and row.get("ok"))
+    real = (s or {}).get("real") or {}
+    hm = lambda t: str(t or "")[:5]
+    if fired and isinstance(R, dict) and R.get("state") == "ok" and _fin(R.get("points")):
+        out["state"] = {"kind": "pts", "pts": R["points"],
+                        "line": "%s %s → %s %s" % (int(row.get("entry") or 0), hm(row.get("entry_time")),
+                                                   int(R.get("exit") or 0), hm(R.get("exit_time")))}
+    elif fired:
+        ps, real = _pos_state(s)
+        line = "進 %s %s" % (int(row.get("entry") or 0), hm(row.get("entry_time")))
+        if ps == "yes":
+            fp = real.get("float_pts")
+            out["state"] = {"kind": "hold", "pts": fp if _fin(fp) else None, "line": line}
+        elif ps == "no":
+            out["state"] = {"kind": "text", "label": "已出場", "sub": "點數還在對", "line": line}
+        else:
+            out["state"] = {"kind": "text", "label": "不知道", "sub": "還沒問到部位", "line": line}
+    elif row and row.get("rec") == "fire":
+        out["state"] = {"kind": "text", "label": "送出去了", "sub": "還不知道結果"}
+    else:
+        cf, co, cv = cr("fast"), cr("orb"), cr("rev")
+        done = bool(cf and co and (cv or (cf.get("why") and cf.get("why") != "not_fast")))
+        if done:
+            out["state"] = {"kind": "text", "label": "今天不做"}
+        else:
+            if not cf:
+                at, lab = f.get("signal_at"), "%s 判定" % (f.get("signal_at") or "")
+            elif not cv and cf.get("why") == "not_fast":
+                at, lab = f.get("rev_at"), "%s 判定" % (f.get("rev_at") or "")
+            else:
+                at, lab = (f.get("orb") or {}).get("break_by"), "等突破"
+            now_s, at_s = _hms_s(f.get("now")), _hms_s(at)
+            if not row and now_s is not None and at_s is not None and now_s > at_s + 60:
+                out["state"] = {"kind": "text", "label": "今天沒有判定"}
+                return out
+            out["state"] = {"kind": "wait", "label": lab if at else "等訊號", "at": str(at or "")}
+    if not f.get("union"):
+        return out
+    G = f.get("gap") or {}
+    fk = row.get("cand") if fired else None
+    # 快攻
+    c = cr("fast")
+    if c:
+        F = c.get("fast") or {}
+        ok = (c.get("rec") == "result" and c.get("ok")) or c.get("rec") == "fire"
+        mv, th = F.get("move_pts"), F.get("thr_pts")
+        down = "・往下" if (F.get("verdict") == "fast" and c.get("d") == -1) else ""
+        out["rows"].append(_row_bar("快攻", mv, th, "ok" if ok else "no",
+                                    ("%s ／ 要 %s 點%s" % (mv, th, down)) if _fin(mv) and _fin(th) else "",
+                                    fk == "fast", ok=F.get("verdict") == "fast"))
+    elif _fin((G.get("fast") or {}).get("now_pts")):
+        a, b = G["fast"]["now_pts"], G["fast"].get("need_pts")
+        out["rows"].append(_row_bar("快攻", a, b, "", "%s ／ 要 %s 點" % (abs(a), b)))
+    else:
+        th = (f.get("fast") or {}).get("thr_pts")
+        out["rows"].append(_row_text("快攻", ("要 %s 點" % th) if _fin(th) else "等 %s" % str(f.get("signal_at") or "")[:5]))
+    # 開箱
+    c, O = cr("orb"), (f.get("orb") or {})
+    if c:
+        ok = (c.get("rec") == "result" and c.get("ok")) or c.get("rec") == "fire"
+        w, mp, hi = c.get("box_w"), c.get("box_med_pct"), c.get("box_hi")
+        need = int(round(mp / 100.0 * hi)) if _fin(mp) and _fin(hi) else None
+        out["rows"].append(_row_bar("開箱", w, need, "ok" if ok else "no",
+                                    ("%d ／ 要 %d 點" % (round(w), need)) if _fin(w) and need else "", fk == "orb"))
+    elif fk:
+        out["rows"].append(_row_text("開箱", ""))
+    elif O.get("hist_ok") is False:
+        out["rows"].append(_row_text("開箱", "歷史不夠", "no"))
+    elif (G.get("orb") or {}).get("stage") == "box" and _fin(G["orb"].get("now_pts")):
+        a, b = G["orb"]["now_pts"], G["orb"].get("need_pts")
+        out["rows"].append(_row_bar("開箱", a, b, "", "%s ／ 要 %s 點" % (a, b)))
+    elif O.get("stage") == "wait" and _fin(O.get("hi")):
+        out["rows"].append(_row_text("開箱", "上緣 %d" % O["hi"]))
+    else:
+        out["rows"].append(_row_text("開箱", "%s 畫箱" % (O.get("box_at") or "09:00~09:05")))
+    # 純回馬
+    c, cf = cr("rev"), cr("fast")
+    if c:
+        ok = (c.get("rec") == "result" and c.get("ok")) or c.get("rec") == "fire"
+        out["rows"].append(_row_text("純回馬", ("%s 有反轉" % str(f.get("rev_at") or "")[:5]) if ok else "沒做",
+                                     "ok" if ok else "no", fk == "rev"))
+    elif cf and cf.get("why") != "not_fast":
+        out["rows"].append(_row_text("純回馬", "今天沒有"))
+    elif (G.get("rev") or {}).get("dir") == -1 and _fin(G["rev"].get("ref")):
+        out["rows"].append(_row_text("純回馬", "要過 %d" % G["rev"]["ref"]))
+    elif (G.get("rev") or {}).get("dir") == 1:
+        out["rows"].append(_row_text("純回馬", "只做多，做不成"))
+    else:
+        out["rows"].append(_row_text("純回馬", "快攻不成立才有"))
+    return out
+
+
+def _prog_night(n, f, s):
+    L = ((f or {}).get("lots") or {}).get("tonight") if isinstance(f, dict) else None
+    L = L if isinstance(L, dict) else {}
+    qty = L.get("qty") if _fin(L.get("qty")) else None
+    if not isinstance(n, dict) or not n.get("ok"):
+        return {"err": "讀不到夜盤自動下單", "qty": qty}
+    M = next((x for x in (n.get("methods") or []) if x.get("k") == n.get("method")), None)
+    out = {"name": str((M or {}).get("name") or "自動下單").replace("夜盤", "", 1) if n.get("on") else "自動下單",
+           "qty": qty, "rows": []}
+    if not n.get("on"):
+        out["state"] = {"kind": "text", "label": "沒開"}
+        return out
+    T = n.get("tonight") or {}
+    E, look = T.get("E"), T.get("look_at") or ""
+    dec = next((x for x in (n.get("recent") or []) if x.get("E") == E), None)
+    res = next((x for x in (n.get("results") or []) if x.get("E") == E), None)
+    R = (n.get("real") or {}).get(E) if isinstance(n.get("real"), dict) else None
+    hm = lambda t: str(t or "")[:5]
+    real = (s or {}).get("real") or {}
+    if res:
+        dw = {"long": "做多", "short": "做空"}.get(res.get("dir"), "")
+        if isinstance(R, dict) and R.get("state") == "ok" and _fin(R.get("points")):
+            out["state"] = {"kind": "pts", "pts": R["points"],
+                            "line": "%s %s %s → %s %s" % (dw, int(res.get("entry") or 0), hm(res.get("entry_time")),
+                                                          int(R.get("exit") or 0), hm(R.get("exit_time")))}
+        else:
+            ps, real = _pos_state(s)
+            line = "%s 進 %s %s" % (dw, int(res.get("entry") or 0), hm(res.get("entry_time")))
+            if ps == "yes":
+                fp = real.get("float_pts")
+                out["state"] = {"kind": "hold", "pts": fp if _fin(fp) else None, "line": line}
+            elif ps == "no":
+                out["state"] = {"kind": "text", "label": "已出場", "sub": "點數還在對", "line": line}
+            else:
+                out["state"] = {"kind": "text", "label": "不知道", "sub": "還沒問到部位", "line": line}
+    elif dec and dec.get("rec") == "skip":
+        out["state"] = {"kind": "text", "label": "今晚不做"}
+    else:
+        out["state"] = {"kind": "wait", "label": "%s 判定" % look, "at": look, "night": True}
+    if dec and _fin(dec.get("mv")) and _fin(dec.get("thr")):
+        mv, th = dec["mv"], int(round(dec["thr"]))
+        out["rows"].append(_row_bar("走勢", mv, th, "ok" if res else "no", "%s ／ 要 %d 點" % (_pm(mv), th), bool(res)))
+    elif res:
+        out["rows"].append(_row_text("走勢", "", "ok", True))
+    if _fin(L.get("vol")) and _fin(L.get("thr")):
+        out["rows"].append(_row_bar("波動", L["vol"], L["thr"], ("%d 口" % qty) if qty else "",
+                                    "%.2f%% ／ 要 %.2f%%" % (L["vol"], L["thr"]), ok=bool(L.get("high"))))
+    elif L:
+        out["rows"].append(_row_text("波動", "還沒算好", ("%d 口" % qty) if qty else ""))
+    return out
+
+
+_CASH = {"at": 0.0, "day": None, "v": None}
+CASH_TTL = 600.0                                # 一天才多一列 ⇒ 10 分鐘重算一次就夠（⛔ 不要每 2 分鐘讀一次帳本）
+
+
+def _cash():
+    """⇒ cashflow.to_phone(...)（months 舊到新、days 新到舊）。換日或過了 10 分鐘才重算。"""
+    import cashflow
+    import goal
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _CASH["v"] is None or _CASH["day"] != today or time.time() - _CASH["at"] > CASH_TTL:
+        _CASH.update(v=cashflow.to_phone(cashflow.build_from_dir(HERE, goal.eff_deposit)), day=today, at=time.time())
+    return _CASH["v"]
+
+
+def _prog(f, n, s):
+    """⇒ {"day":{…}, "night":{…}}（各自包 try：一邊壞掉只少那一邊）。"""
+    out = {}
+    try:
+        out["day"] = _prog_day(f, s)
+    except Exception as e:                      # noqa: BLE001
+        out["day"] = {"err": "日盤組不出來：%s" % str(e)[:60]}
+    try:
+        out["night"] = _prog_night(n, f, s)
+    except Exception as e:                      # noqa: BLE001
+        out["night"] = {"err": "夜盤組不出來：%s" % str(e)[:60]}
+    return out
 
 
 # ── 推送（git plumbing，⛔ 不 checkout）────────────────────────────────

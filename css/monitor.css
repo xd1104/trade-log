@@ -170,3 +170,66 @@ details[open] summary::after{transform:rotate(-135deg); margin-top:3px}
 [id^="an-s-"]{scroll-margin-top:12px}
 .an-totop{text-align:center; padding:6px 0 24px}
 .an-totop button{border:1px solid var(--line); background:var(--surface); color:var(--dim); border-radius:12px; padding:10px 20px; font-size:14px; font-family:var(--font-sans)}
+
+/* ══ ⭐ 2026-10-21 三頁（首頁／金流明細／系統）＋「今天」＝程式下單卡（Benson 看過 demo 定案）══ */
+.app{padding-bottom:calc(96px + var(--safe-b))}
+.tabbar{position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:480px; z-index:20;
+  display:grid; grid-template-columns:repeat(3,1fr); background:rgba(21,29,41,.96); border-top:1px solid var(--line);
+  padding:8px 0 calc(8px + var(--safe-b)); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px)}
+.tabbar button{display:flex; flex-direction:column; align-items:center; gap:3px; border:0; background:none; color:var(--faint);
+  font-size:11.5px; font-family:var(--font-sans); padding:4px 0; min-height:48px}
+.tabbar button svg{width:22px; height:22px}
+.tabbar button.on{color:var(--gold)}
+.pgt{font-size:20px; margin:6px 2px 12px}
+/* 今天：一盤一塊 */
+.ps{border:1px solid var(--line); border-radius:12px; overflow:hidden; margin-top:10px}
+.ps-h{display:flex; align-items:center; gap:8px; padding:9px 12px; background:var(--surface-2)}
+.ps-h .nm{font-size:14px; font-weight:700}
+.ps-h .lots{margin-left:auto; font-size:13px; color:var(--dim)} .ps-h .lots b{color:var(--text)}
+.ps-st{padding:10px 12px 6px; display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.ps-st + .ps-st{padding-top:0}
+.ps-st .big{font-size:22px; font-weight:750}
+.ps-st .big.w{color:var(--dim); font-size:17px; font-family:var(--font-sans)}
+.ps-st .sub{font-size:13px; color:var(--faint)}
+.pi{display:grid; grid-template-columns:52px 1fr 40px; column-gap:10px; align-items:center; padding:9px 12px; border-top:1px solid var(--line); font-size:13px}
+.pi .k{font-weight:700}
+.pi .t{color:var(--dim)}
+.pi.fired{background:var(--gold-soft)} .pi.fired .k{color:var(--gold)}
+.pb{position:relative; height:6px; background:var(--line); border-radius:3px}
+.pb i{position:absolute; left:0; top:0; bottom:0; border-radius:3px; background:var(--dim)}
+.pb.ok i{background:var(--gold)}
+.pb u{position:absolute; top:-4px; bottom:-4px; width:2px; margin-left:-1px; background:var(--text); border-radius:1px; opacity:.8}
+.pi .nums{grid-column:2; font-size:11.5px; color:var(--faint); margin-top:3px}
+.pi .v{font-size:17px; font-weight:700; text-align:right; white-space:nowrap}
+.pi .v.no{color:var(--faint)} .pi .v.ok{color:var(--gold)} .pi .v.q{font-size:14px}
+/* 金流明細 */
+.msw{display:flex; align-items:center; justify-content:center; gap:6px; margin:0 0 12px}
+.msw button{width:40px; height:36px; border-radius:10px; border:0; background:none; color:var(--dim); font-size:20px}
+.msw button:disabled{opacity:.25}
+.msw b{font-size:16px; min-width:120px; text-align:center}
+.csum{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); border-radius:12px; overflow:hidden}
+.csum div{background:var(--surface-2); padding:10px 12px}
+.csum span{display:block; font-size:11.5px; color:var(--faint)}
+.csum b{font-size:19px; font-weight:700}
+.cday{margin-top:14px}
+.cdh{display:flex; align-items:baseline; gap:8px; padding:6px 2px; border-bottom:1px solid var(--line)}
+.cdh > b{font-size:14px} .cdh > span{font-size:12px; color:var(--faint)}
+.cdh .bal{margin-left:auto} .cdh .bal b{color:var(--text); font-size:14px; margin-left:5px}
+.cdh .bal em{font-style:normal; margin-left:6px}
+.cit{display:grid; grid-template-columns:34px 1fr auto; gap:8px; align-items:baseline; padding:9px 2px; border-bottom:1px solid var(--line); font-size:14px}
+.cit .tg{font-size:11px; color:var(--faint)} .cit .tg.gold{color:var(--gold)}
+.cit small{display:block; color:var(--faint); font-size:12px}
+.cit .amt{font-weight:700; text-align:right}
+.cit.fee, .cit.fee .amt{color:var(--faint); font-weight:500}
+details.ctr{background:none; border:0; border-radius:0; margin:0}
+details.ctr > summary.cit{padding:9px 2px; min-height:0; font-weight:400; font-size:14px}
+details.ctr > summary::after{display:none}
+.cdet{margin:0 0 6px 42px; padding:8px 10px; background:var(--surface-2); border-radius:8px; font-size:12.5px; color:var(--dim); line-height:1.8}
+.cdet b{color:var(--text)}
+/* 系統 */
+.sbig{font-size:20px; font-weight:700; margin:6px 0 4px}
+.sbig small{font-size:13px; color:var(--faint); font-weight:500}
+.sdot{display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--ok); margin-right:7px; vertical-align:1px}
+.sdot.bad{background:var(--gold)}
+.ubar{height:6px; background:var(--line); border-radius:3px; margin:8px 0 4px; overflow:hidden}
+.ubar i{display:block; height:100%; background:var(--dim)}
