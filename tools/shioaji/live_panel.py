@@ -2318,6 +2318,28 @@ EOD_DAY = {"date": None, "expiry": False, "sure": True,
            "at": EOD_CLOSE_AT, "sec": EOD_CLOSE_SEC, "end": None, "err": None}
 
 
+def contract_alive(c, now=None):
+    """
+    ⭐ 2026-10-21：這個期貨合約**現在**還有沒有在交易。⇒ True／False（判不出來 ⇒ True）。
+
+    【踩到的坑】結算日（10-21）傍晚他重啟面板 ⇒ `pick_live_contract` 用「成交量最大」挑，
+    挑到**今天 13:30 已經到期**的 202610（它白天量最大）⇒ 夜盤一筆報價都沒有、
+    畫面整晚「盤中卻收不到報價」，⛔ 而且真單（broker.configure）也綁在那個已到期的合約上。
+    ⇒ 到期日已過、或今天到期且已過 13:30 的，一律不要。
+    ⚠️ 永豐的 delivery_date 可能是字串（"2026/10/21"）或 date ⇒ 只取數字比，⛔ 不假設型別。
+    """
+    now = now or datetime.now()
+    ds = re.sub(r"\D", "", str(getattr(c, "delivery_date", "") or ""))[:8]
+    if len(ds) < 8:
+        return True
+    today = now.strftime("%Y%m%d")
+    if ds < today:
+        return False
+    if ds == today and now.hour * 3600 + now.minute * 60 + now.second >= DAY_END_SEC_EXPIRY:
+        return False
+    return True
+
+
 def eod_plan(d):
     """
     今天的收盤平倉時刻。回 `EOD_DAY`（同一天只算一次，之後都讀記憶體）。
@@ -13075,6 +13097,8 @@ def main():
                  if not c.code.startswith(PRODUCT + "R")
                  and getattr(c, "delivery_month", "")]
         cands.sort(key=lambda c: c.delivery_month)
+        # ⭐ 2026-10-21：先剔掉已到期的（結算日 13:30 後重啟會挑到舊月，見 contract_alive）
+        cands = [c for c in cands if contract_alive(c)] or cands
         near = cands[:3]
         try:
             snaps = api.snapshots(near)
