@@ -150,7 +150,21 @@ def infer_deposit(prev, cur):
         return None
     rz = s1 - float(cur.get("fee") or 0) - float(cur.get("tax") or 0)
     f0, f1 = _num(prev.get("float_pl")) or 0.0, _num(cur.get("float_pl")) or 0.0
-    return e1 - e0 - rz - (f1 - f0)
+    inf = e1 - e0 - rz - (f1 - f0)
+    # ⭐ 2026-10-21：週六凌晨收的夜盤單，券商算在**下一個交易日（週一）**的帳上 ⇒
+    #    週六那列已經記了一次，週日那列又原封不動給一次、週一那列再含一次 ⇒ 舊版把 10-18、10-19
+    #    各推成「出金 8,006」（帳戶卡本月因此多算 16,012）。
+    #    ⇒ 前一列是週末、而且把前一列的已實現扣回來就對得起來 ⇒ 那是同一筆被重算，⛔ 不是出入金。
+    try:
+        p_wd = date.fromisoformat(str(prev["date"])).weekday()
+    except (KeyError, TypeError, ValueError):
+        p_wd = None
+    s0 = _num(prev.get("settle_pl"))
+    if p_wd is not None and p_wd >= 5 and s0:
+        alt = inf + (s0 - float(prev.get("fee") or 0) - float(prev.get("tax") or 0))
+        if abs(alt) <= DEP_TOL:
+            return alt
+    return inf
 
 
 def eff_deposit(prev, cur):

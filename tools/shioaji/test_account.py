@@ -291,7 +291,8 @@ say("document.getElementById('tab-acct').hidden" in SRC, "  切分頁時會跟�
 say(SRC.count('id="acct"') == 1, "  ⛔ 那張卡只有一個地方畫（⛔ 不可以同時掛在即時右欄）",
     str(SRC.count('id="acct"')))
 # ⚠️ 2026-09-30 目標卡上線後同一行多畫一張 `acctgoal`（字串跟著改；⛔ 仍然是同一個 tick、沒有另開輪詢）
-say("if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); setEl('acctgoal', goalHTML(ACCT.goal)); }" in SRC,
+# ⚠️ 2026-10-21 同一行再多畫一張金流明細（cashRepaint ＝ setEl('acctcash', …) ＋ 保住捲動位置；⛔ 仍然沒有另開輪詢）
+say("if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); cashRepaint(); setEl('acctgoal', goalHTML(ACCT.goal)); }" in SRC,
     "  在 500ms 的 tick 裡畫（⛔ 不另開一條輪詢問同一份資料）")
 
 print("\n=== ⑫ 問到的餘額不會被清掉（2026-09-29 真的發生過）===")

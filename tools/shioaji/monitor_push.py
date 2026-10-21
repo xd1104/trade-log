@@ -44,6 +44,7 @@ BRANCH = "monitor"
 FILE = "monitor.json"
 HC_FILE = HERE / "HC_PING_URL.txt"   # ⭐ 2026-10-14 斷線通知的心跳網址（Healthchecks.io；gitignore／本機 exclude，⛔ 不上傳）
 AN_FILE = "analyst.json"      # ⭐ 2026-09-24【交易分析師】週報全文（加密）；內容沒變就沿用同一份密文（同一個 blob，不重傳）
+USAGE_WARN_PCT = 80            # 券商流量用到幾 % 進「要注意的事」
 EVERY_S = 120                # 每 2 分鐘一張（手機超過 6 分鐘沒更新就亮紅燈）
 HTTP_TIMEOUT = 10
 MAGIC = b"tlmon1"
@@ -425,6 +426,10 @@ def _todo(snap, lots_alarm, lots_todo, now_ts=None):
         n_err = _int(day.get("err_n")) + _int(night.get("errors"))
         if n_err:
             add("later", "自動下單程式出錯 %d 次" % n_err, "回電腦時看一下")
+        # ⭐ 2026-10-21 券商流量快用完（電腦面板的鈴鐺跟手機同一份）
+        pct = (eq.get("usage") or {}).get("pct")
+        if _fin(pct) and pct >= USAGE_WARN_PCT:
+            add("later", "券商流量快用完了（今天用了 %d%%）" % int(pct), "回電腦時看一下")
         m = _DEPTH_RE.search(str((eq.get("depth") or {}).get("msg") or ""))
         if m and int(m.group(1)) >= 60:
             add("later", "五檔已經 %s 分鐘沒進來" % m.group(1), "回電腦時重開面板")
@@ -459,6 +464,7 @@ def snapshot(port):
         snap["equity"]["backup"] = _pick((s.get("equity") or {}).get("backup") or {}, ("ok", "warn", "msg"))
         # ⭐ 2026-10-14 五檔看門狗：五檔停了（成交還在）⇒ 手機「要注意的事」
         snap["equity"]["depth"] = _pick((s.get("equity") or {}).get("depth") or {}, ("warn", "msg"))
+        snap["equity"]["usage"] = _pick((s.get("equity") or {}).get("usage") or {}, ("pct",))
         snap["real"] = dict(_pick(r, ("live", "position", "stale_sec", "entries_today", "can_enter", "why",
                                       "last_error", "ca_ok")),
                             float_pts=r.get("float_pts"), sl=r.get("sl"), tp=r.get("tp"),
@@ -522,7 +528,23 @@ def snapshot(port):
     except Exception as e:                      # noqa: BLE001
         snap["todo"] = [{"lvl": "later", "text": "要你處理的清單組不出來", "act": "回電腦時看一下"}]
         _phone_err(snap, "要你處理", e)
+    LAST.update(at=time.time(), todo=list(snap.get("todo") or []), lots_alarm=list(_lots_alarm or []))
     return snap
+
+
+# ⭐ 2026-10-21 電腦面板右上角的鈴鐺「要注意的事」：⛔ 不寫第二份規則 —— 跟手機用**同一張快照的同一份 todo**。
+#    手機那條每 2 分鐘本來就會算一次 ⇒ 鈴鐺優先拿那一份；太舊（或手機監控沒開）才當場算一張（⛔ 不推上 GitHub）。
+LAST = {"at": 0.0, "todo": None, "lots_alarm": []}
+_NLOCK = threading.Lock()
+NOTICE_MAX_AGE = 150.0
+
+
+def notice(port, max_age=NOTICE_MAX_AGE):
+    """⇒ (todo, lots_alarm)。⛔ 永遠不丟例外（snapshot 自己就不丟）。"""
+    with _NLOCK:
+        if LAST["todo"] is None or time.time() - LAST["at"] > max_age:
+            snapshot(port)
+        return list(LAST["todo"] or []), list(LAST["lots_alarm"] or [])
 
 
 # ── 推送（git plumbing，⛔ 不 checkout）────────────────────────────────

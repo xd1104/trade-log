@@ -83,6 +83,12 @@ try:
 except Exception as _gl_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
     goal = None
     print("⚠️ 【目標】載入失敗（其他功能不受影響）：%s" % _gl_err, flush=True)
+# ⭐ 2026-10-21【帳戶】金流明細。⛔ 純計算、只讀檔；包 try 同上理由。
+try:
+    import cashflow
+except Exception as _cf_err:           # noqa: BLE001  ⛔ 刻意接住所有例外
+    cashflow = None
+    print("⚠️ 【金流明細】載入失敗（其他功能不受影響）：%s" % _cf_err, flush=True)
 # 【策略實驗室】歷史逐筆回測（唯讀）。⛔ 不 import broker、不碰任何下單路徑。
 # ⛔⛔ 一定要包 try（2026-09-14 lab-qa 退件 R1）：這是研究功能，它載入失敗（少一個套件、
 #    檔案壞掉）絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
@@ -6550,6 +6556,78 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
 .al-pos .r span{color:var(--faint)}
 .al-pos .n{font-size:11px; color:var(--faint); line-height:1.6; margin-top:7px}
 .al-pos .none{font-size:13px; color:var(--dim); margin-top:8px; line-height:1.6}
+/* ══ ⭐ 2026-10-21【帳戶】左欄（總覽＋金流明細）、【系統】分頁、右上角鈴鐺（Benson 看過 demo v2 定案）══
+   ⛔ 紅綠只給賺賠；入金與「要注意」用金色。 */
+#tab-acct .acol{display:flex; flex-direction:column; gap:16px; min-width:0}
+.cf .cf-hd{display:flex; align-items:center; gap:10px; margin-bottom:10px}
+.cf .cf-hd .t{font-size:13px; font-weight:700; color:var(--text); margin-right:auto}
+.cf .mon{display:flex; align-items:center; gap:2px; font-size:12.5px}
+.cf .mon b{color:var(--text); min-width:92px; text-align:center}
+.cf .mon button{background:none; border:1px solid transparent; color:var(--dim); font:inherit; font-size:16px; line-height:1;
+  width:28px; height:26px; border-radius:7px; cursor:pointer}
+.cf .mon button:hover:not(:disabled){border-color:var(--line); color:var(--text)}
+.cf .mon button:disabled{opacity:.2; cursor:default}
+.cf .sum{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line-soft); border-radius:var(--r-md); overflow:hidden}
+.cf .sum .c{background:var(--surface-2); padding:9px 11px; min-width:0}
+.cf .sum .k{font-size:10.5px; color:var(--faint)}
+.cf .sum .v{font-size:15.5px; font-weight:700; margin-top:2px; font-family:var(--font-mono)}
+.cf .scroll{max-height:380px; overflow-y:auto; margin-top:10px; padding-right:6px; border-top:1px solid var(--line);
+  scrollbar-width:thin; scrollbar-color:var(--ghost) transparent}
+.cf .scroll::-webkit-scrollbar{width:6px}
+.cf .scroll::-webkit-scrollbar-thumb{background:var(--ghost); border-radius:3px}
+.cf .day{margin-top:8px}
+.cf .dh{display:flex; align-items:baseline; gap:8px; padding:5px 2px; border-bottom:1px solid var(--line);
+  position:sticky; top:0; background:var(--surface); z-index:1}
+.cf .dh .d{font-size:12.5px; font-weight:700; font-family:var(--font-mono)}
+.cf .dh .w{font-size:11px; color:var(--faint)}
+.cf .dh .bal{margin-left:auto; font-size:11.5px; color:var(--faint)}
+.cf .dh .bal b{color:var(--text); font-size:13px; font-weight:650; margin-left:5px; font-family:var(--font-mono)}
+.cf .dh .df{font-size:11px; color:var(--gold); font-weight:650}
+.cf .it{display:grid; grid-template-columns:40px 1fr auto 12px; gap:8px; align-items:baseline;
+  padding:6px 2px 6px 6px; border-bottom:1px solid var(--line-soft); font-size:12.5px; width:100%;
+  background:none; border-left:0; border-right:0; border-top:0; color:inherit; font-family:inherit; text-align:left}
+button.it{cursor:pointer} button.it:hover{background:rgba(255,255,255,.025)}
+.cf .it .tg{font-size:10.5px; color:var(--faint)}
+.cf .it .tg.dep{color:var(--gold)}
+.cf .it .wh{color:var(--dim); min-width:0}
+.cf .it .wh b{color:var(--text); font-weight:600}
+.cf .it .wh small{color:var(--faint); font-size:11px; margin-left:5px}
+.cf .it .amt{font-weight:650; text-align:right; min-width:72px; font-family:var(--font-mono)}
+.cf .it .amt.up{color:var(--up)} .cf .it .amt.down{color:var(--down)}
+.cf .it .ar{color:var(--faint); font-size:11px; transition:transform .15s}
+.cf .it.open .ar{transform:rotate(90deg)}
+.cf .it.fee .amt,.cf .it.fee .wh{color:var(--faint); font-weight:500}
+.cf .det{margin:0 0 4px 54px; padding:7px 10px; background:var(--surface-2); border-radius:8px; font-size:11.5px;
+  color:var(--dim); line-height:1.8; font-family:var(--font-mono)}
+.cf .det b{color:var(--text); font-weight:600}
+.cf .empty{padding:16px 4px; font-size:12px; color:var(--faint)}
+/* 【系統】分頁 */
+#sys .sysgrid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; max-width:1100px}
+@media(max-width:900px){ #sys .sysgrid{grid-template-columns:1fr} }
+.sc .k{font-size:11px; color:var(--faint); letter-spacing:1px; margin-bottom:6px}
+.sc .big{font-size:19px; font-weight:700; color:var(--text)}
+.sc .big small{font-size:12.5px; color:var(--faint); font-weight:500; margin-left:6px}
+.sc .big.warn{color:var(--gold)}
+.sc .row{display:flex; justify-content:space-between; gap:12px; font-size:12.5px; color:var(--dim); padding:7px 0; border-top:1px solid var(--line-soft)}
+.sc .row b{color:var(--text); font-weight:600; text-align:right}
+.sc .msg{font-size:12px; color:var(--dim); line-height:1.6; margin-top:8px}
+.sc .pbar{height:6px; background:var(--line); border-radius:3px; margin:10px 0 4px; overflow:hidden}
+.sc .pbar i{display:block; height:100%; background:var(--dim); border-radius:3px}
+.sc .pbar.warn i{background:var(--gold)}
+.sc .ldot{display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; vertical-align:1px; background:var(--dim)}
+.sc .ldot.ok{background:var(--down)} .sc .ldot.bad{background:var(--gold)}
+/* 鈴鐺彈出清單（外框沿用 .an-pop） */
+.bl-grp{font-size:10.5px; letter-spacing:1px; color:var(--faint); padding:8px 4px 4px}
+.bl-n{display:grid; grid-template-columns:8px 1fr auto; gap:10px; padding:9px 6px; border-top:1px solid var(--line-soft); align-items:start}
+.bl-n i{width:8px; height:8px; border-radius:50%; margin-top:6px; background:var(--dim)}
+.bl-n.now i{background:var(--gold); box-shadow:0 0 0 3px var(--gold-soft)}
+.bl-n.decide i{background:var(--gold); opacity:.6}
+.bl-n .t{font-size:13px; color:var(--text); line-height:1.45}
+.bl-n.now .t{font-weight:700}
+.bl-n .a{font-size:11.5px; color:var(--dim); margin-top:2px}
+.bl-n button{background:none; border:0; color:var(--faint); font:inherit; font-size:11px; cursor:pointer; padding:2px 0; white-space:nowrap}
+.bl-n button:hover{color:var(--text)}
+.bl-ft{font-size:11px; color:var(--faint); line-height:1.6; padding:10px 4px 2px; border-top:1px solid var(--line)}
 /* ══ ⭐ 2026-10-21【即時】右欄改版（Benson 看過 demo v6 定案）══
    三張卡（今天的部位／程式下單／帳戶）都可以摺疊：點標題那一列收起、收起後標題右邊留一句摘要；
    收起狀態記在瀏覽器 localStorage（lv_fold），⛔ 不送請求。
@@ -6957,6 +7035,8 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
          → 正在跑真單的那幾條體檢 → 會真的送單」，愈往右愈接近真錢。
          ⛔ 不可以排到【自動下單】右邊（那一頁永遠是最右邊的終點）。 -->
     <button data-tab="hc">健檢</button>
+    <!-- ⭐ 2026-10-21【系統】：連線／券商流量／五檔錄製／資料備份（從【帳戶總覽】搬過來）。⛔ 唯讀。 -->
+    <button data-tab="sys">系統</button>
     <!-- ⛔⛔ 【自動下單】＝**會真的送出委託單**的那一頁，所以放最右（動線的終點）。 -->
     <button data-tab="fire">自動下單</button>
   </div>
@@ -6965,11 +7045,14 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
    <!-- ⭐ 2026-09-24【交易分析師】每週報告的信件（未讀＝金色＋數字）。⛔ 唯讀：點開只看報告。 -->
    <!-- ⭐ 2026-10-20 重啟鈕：效果＝關掉 App 再從桌面捷徑開。前端兩段式；有部位／關鍵時刻／沒人顧 ⇒ 灰掉（原因＝後端 s.restart.why）。 -->
    <button class="an-mail an-rst off" id="anrst" aria-label="重啟面板" title="重啟面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+   <!-- ⭐ 2026-10-21 鈴鐺「要注意的事」：跟手機同一份清單（GET /api/notice）。⛔ 唯讀。 -->
+   <button class="an-mail" id="anbell" aria-label="要注意的事" title="要注意的事"></button>
    <button class="an-mail" id="anmail" aria-label="分析師週報" title="分析師週報"></button>
   </div>
 </div>
 <div class="an-pop" id="anpop" hidden></div>
 <div class="an-pop rst-pop" id="rstpop" hidden></div>
+<div class="an-pop" id="bellpop" hidden></div>
 <div class="an-sheet" id="ansheet" hidden></div>
 
 <div id="tab-live">
@@ -7019,10 +7102,14 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
         （/api/state 的 `equity`，後端每分鐘才真的問券商一次），
         曲線另外拿 /api/account/hist（一天才多一個點，10 分鐘拿一次）。 -->
 <div id="tab-acct" hidden>
-  <div id="acct"></div>
+  <!-- ⭐ 2026-10-21 左欄：帳戶總覽＋金流明細（金流明細的數字跟著 /api/account/hist 的 cash 來，cashflow.py 算） -->
+  <div class="acol"><div id="acct"></div><div id="acctcash"></div></div>
   <!-- ⭐ 2026-09-30 目標卡：整份從 /api/account/hist 的 `goal` 來（goal.py 算），⛔ 前端不自己算 -->
   <div id="acctgoal"></div>
 </div>
+
+<!-- ⭐ 2026-10-21【系統】：四張唯讀小卡（sysHTML，跟著 500ms 的 tick 畫）。 -->
+<div id="tab-sys" hidden><div id="sys"></div></div>
 
 <!-- ══════════ 【模擬】：七條策略每天事後照規則算一次（⛔ 不會下單）══════════
      後端 sim_lanes.py，唯讀端點 GET /api/sim/state。
@@ -7604,6 +7691,7 @@ function acctPoll(){
    ACCT.pending=false;
    ACCT.hist=(x&&x.ok&&Array.isArray(x.rows))?x.rows:[];
    ACCT.goal=(x&&x.goal)?x.goal:null;
+   ACCT.cash=(x&&x.cash)?x.cash:null;
    ACCT.err=(x&&!x.ok&&x.msg)?String(x.msg):'';
  }).catch(()=>{ ACCT.pending=false; ACCT.hist=ACCT.hist||[]; });
 }
@@ -7653,23 +7741,19 @@ function acctHTML(s){
  }
  const en=E.enough||{};
  const mo=E.month;
+ /* ⭐ 2026-10-21 Benson：只留權益／今日／本月／曲線。
+    「可動用…」「權益比…」平常不畫，⛔ 但不夠的時候一定要講（en.ok===false 或 cushion.warn ⇒ 一行金字）；
+    券商流量／五檔錄製／資料備份搬到【系統】分頁。 */
+ const warns=[];
+ if(en.ok===false&&en.msg) warns.push(en.msg);
+ if(E.cushion&&E.cushion.warn&&E.cushion.msg) warns.push(E.cushion.msg);
  return '<div class="ac">'+hd+
    '<div class="big">'+acctMoney(E.equity)+'</div>'+
    '<div class="sub">今日 '+acctPM(E.day_pl)+
      '（未平倉 '+acctPM(E.float_pl)+'／平倉 '+acctPM(E.settle_pl)+
      '／成本 −'+acctMoney(E.cost)+'）</div>'+
-   '<div class="line'+(en.ok===false?' warn':'')+'">'+esc(en.msg||'')+'</div>'+
-   /* ⭐ 2026-09-24：還撐得住幾次停損（⛔ 整句後端算） */
-   ((E.cushion&&E.cushion.msg)?'<div class="line'+(E.cushion.warn?' warn':'')+'">'+esc(E.cushion.msg)+'</div>':'')+
-   /* ⭐ 2026-09-26 券商每日流量（整句後端算） */
-   ((E.usage&&E.usage.msg)?'<div class="line">'+esc(E.usage.msg)+'</div>':'')+
-   /* ⭐ 2026-09-26 研究用五檔全天錄製（整句後端算） */
-   ((E.depth&&E.depth.msg)?'<div class="line'+(E.depth.warn?' warn':'')+'">'+esc(E.depth.msg)+'</div>':'')+
-   /* ⭐ 2026-09-26 資料備份（整句後端算；失敗或超過 2 天才用警示色） */
-   ((E.backup&&E.backup.msg)?'<div class="line'+(E.backup.warn?' warn':'')+'">'+esc(E.backup.msg)+'</div>':'')+
-   (mo?('<div class="line">本月 '+acctPM(mo.net)+
-        '（從 '+esc(mo.from)+' 起記'+(mo.deposit?'，已扣掉出入金 '+acctMoney(mo.deposit):'')+
-        '）</div>'):'')+
+   warns.map(w=>'<div class="line warn">⚠️ '+esc(w)+'</div>').join('')+
+   (mo?('<div class="line">本月 '+acctPM(mo.net)+'</div>'):'')+
    acctSpark(ACCT.hist)+
    '</div>';
 }
@@ -7722,25 +7806,21 @@ function goalHTML(G){
    (hasSt?'<td>'+(st.state?'<span class="mk '+esc(st.state)+'">'+esc(st.state_txt||'')+'</span>':'')+'</td>':'')+'</tr>').join('');
  let LL=G.lots_line;
  /* ⭐ 2026-10-20 通知那一句跟【自動下單】頂部金條共用「✕ 知道了」（同一把鑰匙）；關掉 ⇒ 顯示平常那一句（後端 plain） */
- let lseen=false; try{ lseen=!!(LL&&LL.seen_key&&LTSEEN.includes(LL.seen_key)); }catch(e){}
- if(lseen) LL=LL.plain||null;
+ /* ⭐ 2026-10-21 Benson：頁面上的金條一律收進右上角鈴鐺 ⇒ 這一行只畫平常那一句（後端 plain）；
+    「可以升級」那種（沒有 plain）⇒ 這一行不畫，鈴鐺裡有。 */
+ if(LL&&LL.att) LL=LL.plain||null;
  const lline=(LL&&LL.text)?('<div class="gl-lots'+(LL.att?' att':'')+'" id="lotsline"><span>'+LL.text+'</span>'+
    '<button class="go" data-tab="fire">'+(LL.att?'到自動下單':'看口數')+'</button>'+
    (LL.seen_key?'<button class="x" data-glseen="1" title="知道了，不再顯示這則">✕</button>':'')+'</div>'):'';
- const mon=(G.months||[]).map(m=>'<tr><td>'+esc(m.ym)+(m.live?'（到現在）':'')+'</td>'+
-   '<td>'+acctMoney(m.dep)+'</td><td>'+acctPM(m.net)+'</td><td>+'+acctMoney(m.goal)+'</td></tr>').join('');
  return '<div class="ac gl"><div class="hd"><span class="t">'+esc(G.title||'目標')+'</span>'+
    '<span class="at">從 '+esc(String(G.start||'').slice(5).replace('-','/'))+' 起算</span></div>'+
    '<div class="gl-pos">'+esc(G.pos||'')+'</div>'+bar+lline+
-   '<div class="line">'+esc(G.vs||'')+(G.since?'<br>'+esc(G.since):'')+'</div>'+
    goalChart(G)+
    '<div class="gl-h">每一級：要多少錢、做幾口、大概幾月到</div>'+
    '<div class="gl-tw"><table class="gl-t"><thead><tr><th>權益</th><th>聯軍＋跟勢</th><th>目標每月</th>'+
    '<th>一年內要補錢</th><th>停損失靈最壞一次</th><th>保守線到</th><th>目標線到</th>'+(hasSt?'<th>狀態</th>':'')+
    '</tr></thead><tbody>'+rows+'</tbody></table></div>'+
-   (mon?'<div class="gl-h">每月實際（券商端、已扣掉存入）</div><div class="gl-tw"><table class="gl-t">'+
-     '<thead><tr><th>月份</th><th>存入</th><th>交易賺賠</th><th>目標</th></tr></thead><tbody>'+mon+'</tbody></table></div>':'')+
-   '<div class="gl-notes">'+(G.notes||[]).map(n=>'<div>・'+esc(n)+'</div>').join('')+'</div></div>';
+   '</div>';
 }
 
 /* ---------------- 右欄總繪製（2026-09-23 v3：只剩警報 ＋ 兩張唯讀小卡）----------------
@@ -7832,8 +7912,8 @@ async function tick(nf){
     ⛔ 旗子是後端算的（s.lots.dot），⛔ 前端不自己判斷；只換 class，⛔ 不動按鈕上的字。 */
  { const fb=document.querySelector('.tabs button[data-tab="fire"]');
    /* 2026-10-20：金條都被他按 ✕ 關掉了 ⇒ 小金點也收起來（還沒拿到金條清單 ⇒ 照後端旗子） */
-   const dot=!!(s&&s.lots&&s.lots.dot) && !(LTALARM && ltVisible(LTALARM).length===0);
-   if(fb) fb.classList.toggle('ltdot', dot); }
+   /* ⭐ 2026-10-21：口數那幾則收進右上角鈴鐺（鈴鐺有數字）⇒ 這顆分頁 ⛔ 不再亮小金點 */
+   if(fb) fb.classList.toggle('ltdot', false); }
  /* ⚠️ 2026-09-23 v3：練習成績那一區從【即時】拿掉了 ⇒ 每 5 秒一次的 /api/stats 輪詢
     也跟著拿掉（它會讀所有紀錄檔，留著就是白白在 HTTP 執行緒上做磁碟 I/O）。
     ⛔ **後端 /api/stats 與 /api/export 一個字都沒拆** —— 手機 App 與下載那條路照舊。 */
@@ -7850,7 +7930,10 @@ async function tick(nf){
 
  // 【帳戶】這一頁的數字就在這份 s 裡（後端每分鐘換一次）⇒ 在這裡畫，
  // ⛔ 不另開一條輪詢（那會變成同一份資料問兩次）。
- if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); setEl('acctgoal', goalHTML(ACCT.goal)); }
+ if(TAB==='acct'){ acctPoll(); setEl('acct', acctHTML(s)); cashRepaint(); setEl('acctgoal', goalHTML(ACCT.goal)); }
+ // ⭐ 2026-10-21【系統】分頁：內容跟著這份 s 畫；異常時分頁亮小金點（⛔ 包 try：它壞掉不可以拖垮即時頁）
+ try{ if(TAB==='sys') setEl('sys', sysHTML(s));
+      const sb=document.querySelector('.tabs button[data-tab="sys"]'); if(sb) sb.classList.toggle('ltdot', sysWarn(s)); }catch(_){}
 
  // 【回顧】分頁時只更新頂列的時鐘／連線燈；即時分頁的 DOM 一律不動。
  // 後端的報價、持倉監控、±100 自動停利停損跑在 shioaji 回呼裡，完全不受影響。
@@ -8821,6 +8904,7 @@ function setTab(t){
  document.getElementById('tab-sim').hidden=(t!=='sim');
  document.getElementById('tab-hc').hidden=(t!=='hc');
  document.getElementById('tab-fire').hidden=(t!=='fire');
+ document.getElementById('tab-sys').hidden=(t!=='sys');
  document.querySelectorAll('.tabs button').forEach(b=>
    b.classList.toggle('on',b.getAttribute('data-tab')===t));
  // 【模擬】不掛在 500ms 的 tick 上：切進來問一次，停在這一頁時每 60 秒再問（離開就停）。
@@ -8833,7 +8917,8 @@ function setTab(t){
  else if(t==='fire'){ alEnter(); }
  // 【帳戶】唯讀：數字跟著 500ms 的 tick 走（後端每分鐘才真的問券商），
  // 切進來先畫一次，順便把曲線拿回來（⛔ 不要等 0.5 秒才有東西，那會閃一下空白）。
- else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); setEl('acctgoal', goalHTML(ACCT.goal)); }
+ else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); setEl('acctcash', cashHTML(ACCT.cash)); setEl('acctgoal', goalHTML(ACCT.goal)); }
+ else if(t==='sys'){ if(LASTS) setEl('sys', sysHTML(LASTS)); }
  // 切回即時時立刻呼叫一次 tick()（後端的報價、持倉監控、±100 自動停利停損
  // 全程都在跑，切分頁完全不影響那一條路）
  else { lastMkt=''; lastTrade=''; lastStats=''; lastWarn=''; tick(); if(!LP.timer) lpLoop(); }
@@ -9901,7 +9986,8 @@ function alPaint(){
  setEl('alcap', alCapHTML(D.risk, D.lots));
  /* ⭐ 2026-10-14 口數卡＋頂部金條（句子全部從後端 D.lots 來） */
  setEl('allots', ltHTML(D.lots));
- setEl('allotsbar', ltBarHTML(D.lots));
+ /* ⭐ 2026-10-21 Benson：頁面上的金條收進右上角鈴鐺 ⇒ 這裡只更新清單（LTALARM），⛔ 不再畫金條 */
+ ltBarHTML(D.lots); setEl('allotsbar','');
  /* 今天的門檻與判定（快／不快／歷史不夠）—— 掛在開關區，今天那張卡收起來時也看得到。 */
  setEl('alfast',alFastHTML(D));
 
@@ -10983,6 +11069,159 @@ document.addEventListener('click',function(e){
 document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ document.getElementById('ansheet').hidden=true; document.getElementById('anpop').hidden=true; } });
 anPaintBtn(); anFetch(); setInterval(anFetch,60000);
 
+/* ══════════ ⭐ 2026-10-21【帳戶】金流明細（Benson 看過 demo v2 定案）══════════
+   ⛔ 數字全部後端算（cashflow.py，跟著 /api/account/hist 進來）；前端只畫。
+   ⛔ 不畫「結餘 → 現在」、不畫「跟券商對得上」、不畫每天的 ✓ —— 只有對不起來那天才標 ⚠ 差多少。
+   月份與展開哪一筆只活在記憶體（⛔ 不寫 localStorage、⛔ 不送請求）。 */
+const CF={ym:null, open:{}};
+function cfAmt(n){
+ n=Math.round(Number(n)||0);
+ return (n>0?'+':(n<0?'−':''))+Math.abs(n).toLocaleString('en-US');
+}
+const cfCls=n=>n>0?'up':(n<0?'down':'');
+function cashHTML(C){
+ if(!C) return '';
+ const head=nav=>'<div class="ac cf"><div class="cf-hd"><span class="t">金流明細</span>'+(nav||'')+'</div>';
+ if(!C.ok) return head('')+'<div class="empty">'+esc(C.msg||'金流明細算不出來')+'</div></div>';
+ const ks=C.keys||[];
+ if(!ks.length) return head('')+'<div class="empty">還沒有紀錄（每天 14:00 記一列，隔天開始有明細）。</div></div>';
+ if(!CF.ym||ks.indexOf(CF.ym)<0) CF.ym=ks[ks.length-1];
+ const i=ks.indexOf(CF.ym), M=(C.months||{})[CF.ym]||{days:[]};
+ const nav='<div class="mon"><button data-cfm="-1"'+(i>0?'':' disabled')+' aria-label="上個月">‹</button>'+
+   '<b>'+esc(CF.ym.slice(0,4))+' 年 '+(+CF.ym.slice(5))+' 月</b>'+
+   '<button data-cfm="1"'+(i<ks.length-1?'':' disabled')+' aria-label="下個月">›</button></div>';
+ let h=head(nav)+'<div class="sum">'+
+   '<div class="c"><div class="k">入金</div><div class="v">'+cfAmt(M.dep)+'</div></div>'+
+   '<div class="c"><div class="k">交易損益</div><div class="v '+cfCls(M.trade)+'">'+cfAmt(M.trade)+'</div></div>'+
+   '<div class="c"><div class="k">手續費＋稅</div><div class="v" style="color:var(--dim)">'+cfAmt(M.fee)+'</div></div>'+
+   '<div class="c"><div class="k">本月實際賺賠</div><div class="v '+cfCls(M.net)+'">'+cfAmt(M.net)+'</div></div></div>'+
+   '<div class="scroll">';
+ (M.days||[]).forEach(d=>{
+   h+='<div class="day"><div class="dh"><span class="d">'+esc(d.date.slice(5))+'</span><span class="w">週'+esc(d.wd||'')+'</span>'+
+     (d.diff?'<span class="df">⚠ 對不起來 '+cfAmt(d.diff)+'</span>':'')+
+     '<span class="bal">結餘<b>'+Math.round(d.bal).toLocaleString('en-US')+'</b></span></div>';
+   (d.items||[]).forEach((x,j)=>{
+     if(x.k==='dep'){
+       h+='<div class="it"><span class="tg dep">入金</span><span class="wh">'+(x.inferred?'<small>券商沒記，用權益推算</small>':'')+'</span>'+
+          '<span class="amt">'+cfAmt(x.amt)+'</span><span></span></div>';
+     }else if(x.k==='fee'){
+       h+='<div class="it fee"><span class="tg"></span><span class="wh">手續費＋稅</span><span class="amt">'+cfAmt(x.amt)+'</span><span></span></div>';
+     }else{
+       const key=d.date+'|'+j, op=!!CF.open[key];
+       h+='<button class="it'+(op?' open':'')+'" data-cfo="'+esc(key)+'"><span class="tg">'+esc(x.sess||'')+'</span>'+
+          '<span class="wh"><b>'+esc(x.name||'')+' '+esc(x.dir||'')+'</b><small>'+cfAmt(x.pts)+' 點 × '+esc(x.qty)+' 口'+
+          (x.night?'・'+esc(x.night):'')+'</small></span><span class="amt '+cfCls(x.amt)+'">'+cfAmt(x.amt)+'</span><span class="ar">›</span></button>';
+       if(op) h+='<div class="det">進場 <b>'+esc(x.entry==null?'—':Math.round(x.entry))+'</b>　'+esc(x.entry_time||'')+'<br>'+
+          '出場 <b>'+esc(x.exit==null?'—':Math.round(x.exit))+'</b>　'+esc(x.exit_time||'')+'　'+esc(x.why||'')+'<br>'+
+          cfAmt(x.pts)+' 點 × '+esc(x.qty)+' 口 × 10 元 ＝ <b>'+cfAmt(x.amt)+'</b></div>';
+     }
+   });
+   h+='</div>';
+ });
+ if(!(M.days||[]).length) h+='<div class="empty">這個月還沒有金流。</div>';
+ return h+'</div></div>';
+}
+function cashRepaint(){
+ const sc=document.querySelector('#acctcash .scroll'), top=sc?sc.scrollTop:0;
+ setEl('acctcash', cashHTML(ACCT.cash));
+ const sc2=document.querySelector('#acctcash .scroll'); if(sc2) sc2.scrollTop=top;
+}
+document.addEventListener('click',function(e){
+ const m=e.target.closest('[data-cfm]');
+ if(m){ const ks=((ACCT.cash||{}).keys)||[], i=ks.indexOf(CF.ym)+Number(m.getAttribute('data-cfm'));
+   if(i>=0&&i<ks.length){ CF.ym=ks[i]; setEl('acctcash', cashHTML(ACCT.cash)); } return; }
+ const o=e.target.closest('[data-cfo]');
+ if(o){ const k=o.getAttribute('data-cfo'); CF.open[k]=!CF.open[k]; cashRepaint(); return; }
+});
+
+/* ══════════ ⭐ 2026-10-21【系統】分頁（從【帳戶總覽】搬過來：連線／流量／五檔／備份）══════════
+   ⛔ 唯讀、零按鈕；句子與燈號全是後端的（s.conn／s.quote／s.equity.usage／depth／backup）。
+   異常 ⇒ 分頁亮小金點（sysWarn）。 */
+const SYS_USAGE_WARN=80;
+function sysWarn(s){
+ if(!s) return false;
+ const E=s.equity||{}, c=s.conn||{}, u=E.usage||{};
+ return c.ok===false || s.quote==='nodata' || (u.pct!=null&&u.pct>=SYS_USAGE_WARN) ||
+   !!(E.depth&&E.depth.warn) || !!(E.backup&&E.backup.warn);
+}
+function sysHTML(s){
+ if(!s) return '';
+ const E=s.equity||{}, c=s.conn||{}, q=s.quote, age=s.age_sec;
+ const qOK=q==='live', bad=c.ok===false||q==='nodata';
+ const qWord=c.ok===false?'連不上券商':(q==='live'?'報價正常':(q==='nodata'?'盤中收不到報價':'休市中'));
+ const card1='<div class="ac sc"><div class="k">券商連線</div><div class="big'+(bad?' warn':'')+'">'+
+   '<span class="ldot '+(bad?'bad':(qOK?'ok':''))+'"></span>'+esc(qWord)+'</div>'+
+   '<div class="row"><span>合約</span><b>'+esc(c.contract_name||'—')+(c.contract?'（'+esc(c.contract)+'）':'')+'</b></div>'+
+   '<div class="row"><span>最後一筆報價</span><b>'+(age==null?'—':(age<5?'剛剛':esc(age)+' 秒前'))+'</b></div>'+
+   (c.ok===false?'<div class="row"><span>斷線從</span><b>'+esc(c.since||'—')+'</b></div>'+
+     (c.last_error?'<div class="msg">'+esc(c.last_error)+'</div>':''):
+     '<div class="row"><span>連線</span><b>正常</b></div>')+'</div>';
+ const u=E.usage||{}, uw=(u.pct!=null&&u.pct>=SYS_USAGE_WARN);
+ const card2='<div class="ac sc"><div class="k">券商流量</div>'+
+   (u.mb!=null?('<div class="big'+(uw?' warn':'')+'">'+esc(Math.round(u.mb))+' MB<small>／上限 '+
+     esc((u.limit_mb||0).toLocaleString('en-US'))+' MB</small></div>'+
+     '<div class="pbar'+(uw?' warn':'')+'"><i style="width:'+Math.min(100,Number(u.pct)||0).toFixed(1)+'%"></i></div>'+
+     '<div class="row"><span>用了</span><b>'+esc(u.pct==null?'—':Number(u.pct).toFixed(1)+'%')+'</b></div>'+
+     '<div class="row"><span>更新</span><b>'+esc(u.at||'—')+'</b></div>'):
+     '<div class="msg">'+esc(u.msg||'還沒問到')+'</div>')+'</div>';
+ const d=E.depth||{};
+ const card3='<div class="ac sc"><div class="k">五檔錄製</div><div class="big'+(d.warn?' warn':'')+'">'+
+   (d.warn?'⚠ 有狀況':(d.msg?'錄製中':'—'))+'</div><div class="msg">'+esc(d.msg||'還沒有狀態')+'</div></div>';
+ const b=E.backup||{};
+ const card4='<div class="ac sc"><div class="k">資料備份</div><div class="big'+(b.warn?' warn':'')+'">'+
+   (b.warn?'⚠ 要看一下':(b.ok?'✓ 正常':'—'))+'</div><div class="msg">'+esc(b.msg||'還沒有狀態')+'</div></div>';
+ return '<div class="sysgrid">'+card1+card2+card3+card4+'</div>';
+}
+
+/* ══════════ ⭐ 2026-10-21 右上角鈴鐺「要注意的事」══════════
+   Benson：所有需要我注意的提醒都放在裡面。⛔ 內容＝手機「要注意的事」同一份（GET /api/notice，唯讀）。
+   頁面上的一般金條（口數那幾則）已經收進來、不再出現在頁面；只有「有部位又出事」的緊急警報（#xal）畫面上照樣跳。
+   「有空再看」可以按知道了（記在 lt_seen，跟原本金條的 ✕ 同一把鑰匙）；要馬上處理／要你決定 ⛔ 不給關。 */
+const BELL={items:[],err:''};
+const BELL_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
+function bellVisible(){ return (BELL.items||[]).filter(x=>!(x.hide&&LTSEEN.includes(x.key))); }
+function bellPaintBtn(){
+ const b=document.getElementById('anbell'); if(!b) return;
+ const n=bellVisible().length;
+ b.classList.toggle('has', n>0);
+ b.innerHTML=BELL_SVG+(n?'<span class="bdg">'+n+'</span>':'');
+}
+function bellFetch(){
+ return fetch('/api/notice',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+   if(x&&x.ok){ BELL.items=x.items||[]; BELL.err=''; } else BELL.err=(x&&x.msg)||'讀不到要注意的事';
+   bellPaintBtn(); if(!document.getElementById('bellpop').hidden) bellList();
+ }).catch(()=>{ BELL.err='連不上面板'; bellPaintBtn(); });
+}
+function bellList(){
+ const p=document.getElementById('bellpop'), b=document.getElementById('anbell');
+ const r=b.getBoundingClientRect();
+ p.style.top=(r.bottom+10)+'px'; p.style.right=Math.max(12,window.innerWidth-r.right)+'px';
+ const V=bellVisible();
+ let h='<div class="an-ih"><b>要注意的事</b><span>'+(V.length?V.length+' 件':'沒有')+'</span></div>';
+ if(BELL.err) h+='<div class="an-empty">'+esc(BELL.err)+'</div>';
+ else if(!V.length) h+='<div class="an-empty">現在沒有要注意的事。</div>';
+ else [['now','要馬上處理'],['decide','要你決定'],['later','有空再看']].forEach(g=>{
+   const L=V.filter(x=>x.lvl===g[0]); if(!L.length) return;
+   h+='<div class="bl-grp">'+g[1]+'</div>'+L.map(x=>'<div class="bl-n '+esc(x.lvl)+'"><i></i><div><div class="t">'+esc(x.text)+'</div>'+
+     (x.act?'<div class="a">→ '+esc(x.act)+'</div>':'')+'</div>'+
+     (x.hide?'<button data-bellx="'+esc(x.key)+'" title="知道了，不再顯示這則">知道了 ✕</button>':'<span></span>')+'</div>').join('');
+ });
+ h+='<div class="bl-ft">跟手機「要注意的事」是同一份清單。要馬上處理、要你決定的事情沒解決前不能關。</div>';
+ p.innerHTML=h; p.hidden=false;
+}
+document.addEventListener('click',function(e){
+ const bb=e.target.closest('#anbell');
+ if(bb){ const p=document.getElementById('bellpop'); if(p.hidden){ bellList(); bellFetch(); } else p.hidden=true; return; }
+ const x=e.target.closest('[data-bellx]');
+ if(x){ const k=x.getAttribute('data-bellx'); if(!LTSEEN.includes(k)) LTSEEN.push(k);
+   LTSEEN=LTSEEN.slice(-60); try{ localStorage.setItem(LTSEEN_KEY,JSON.stringify(LTSEEN)); }catch(_){}
+   bellPaintBtn(); bellList(); return; }
+ const p=document.getElementById('bellpop');
+ if(p&&!p.hidden&&!e.target.closest('#bellpop')) p.hidden=true;
+});
+document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ const p=document.getElementById('bellpop'); if(p) p.hidden=true; } });
+bellPaintBtn(); bellFetch(); setInterval(bellFetch,30000);
+
 /* ⭐ 2026-10-20 老闆：「說明性文字太多 ⇒ 收進 i 圖示，滑鼠移過去再顯示」。
    ・畫面上留：數字、現在的狀態、要他處理的事；ⓘ 裡放：名詞解釋、怎麼算的、規則。
    ・⛔ 警示（.warn／al-alarm）一律留在畫面上，⛔ 不准收進 ⓘ。
@@ -11491,7 +11730,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "msg": "讀不出權益紀錄：%s" % str(e)[:120]})
             return self._json(200, {"ok": True, "rows": [
                 {"date": r.get("date"), "equity": r.get("equity"),
-                 "deposit": r.get("deposit")} for r in rows], "goal": goal_view()})
+                 "deposit": r.get("deposit")} for r in rows], "goal": goal_view(),
+                "cash": cashflow_view()})
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")。
         if self.path.startswith("/api/tick/days"):
             try:
@@ -11611,6 +11851,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, health.state())
             except Exception as e:
                 return self._json(500, {"ok": False, "msg": "健檢算不出來：%s" % str(e)[:150]})
+        # ⭐ 2026-10-21 右上角鈴鐺「要注意的事」（⛔ 唯讀；句子＝手機那份同一張快照，見 monitor_push.notice）
+        if self.path.split("?", 1)[0] == "/api/notice":
+            try:
+                return self._json(200, notice_view())
+            except Exception as e:             # noqa: BLE001
+                return self._json(200, {"ok": False, "items": [], "msg": "讀不到要注意的事：%s" % str(e)[:100]})
         if self.path.split("?", 1)[0] == "/api/nightfire/state":
             # 夜盤自動下單的狀態（唯讀：開關、今晚看幾點、最近幾列定論）。⛔ 沒有 token，但有真實價格 ⇒ 同一道 GET 守衛。
             ok, code, msg = fire_get_guard(self.headers)
@@ -12265,6 +12511,55 @@ def goal_view(now=None):
         return G
     except Exception as e:                 # noqa: BLE001
         return {"ok": False, "msg": "目標算不出來：%s" % str(e)[:100]}
+
+
+# 口數金條裡「手機清單已經有」的種類（⛔ 不重複列）：可以升級／退休 走 lots 的 phone.todo，部位那幾種走 r_lots_alarm
+NOTICE_LOTS_SKIP = ("offer", "retire", "pos_unknown", "pos_handover", "pos_touched", "pos_fill")
+
+
+def notice_view():
+    """
+    ⭐ 2026-10-21 右上角鈴鐺（Benson：所有需要我注意的提醒都放在裡面）。⇒ {"ok", "items":[{lvl,text,act,key,hide}]}
+    ⛔ 規則**只有一份**：手機「要注意的事」（monitor_push._todo）。這裡只再補上口數金條裡手機沒列的那幾則
+       （減級、事故暫停、暫停解除…）—— 那些原本是頁面上的金條，Benson 定：一律收進鈴鐺。
+    hide：能不能按「知道了」關（只有「有空再看」可以；要馬上處理／要你決定 ⛔ 不給關）。
+    """
+    import monitor_push
+    todo, alarm = monitor_push.notice(PORT)
+    items = []
+    for x in todo:
+        if not isinstance(x, dict) or not x.get("text"):
+            continue
+        lvl = x.get("lvl") if x.get("lvl") in ("now", "decide", "later") else "later"
+        items.append({"lvl": lvl, "text": x["text"], "act": x.get("act") or "",
+                      "key": "todo|" + x["text"], "hide": lvl == "later"})
+    for a in alarm:
+        if not isinstance(a, dict) or not a.get("text") or str(a.get("kind")) in NOTICE_LOTS_SKIP:
+            continue
+        items.append({"lvl": "later", "text": str(a["text"]), "act": "到【自動下單】看口數",
+                      "key": "%s|%s" % (a.get("kind") or "", a["text"]), "hide": True})
+    return {"ok": True, "items": items}
+
+
+def cashflow_view(now=None):
+    """
+    ⭐ 2026-10-21【帳戶】金流明細（Benson：實際的錢扣多少加多少）。
+    ⛔ 唯讀：全部計算在 cashflow.py（純函式）；這裡只把權益紀錄、真單、兩本帳本、券商現在那一份遞過去。
+    ⛔ 壞了只回一句話，⛔ 不可以把 /api/account/hist 整支帶掉。
+    """
+    if cashflow is None or goal is None:
+        return {"ok": False, "msg": "金流明細模組沒有載入"}
+    try:
+        now = now or datetime.now()
+        m = EQUITY.get("m") or None
+        live = goal.live_row(m, now.date()) if m else None
+        out = cashflow.build(equity_hist_read(), cashflow.load_trades(broker.TRADE_DIR),
+                             cashflow.load_day_res(auto_fire.FIRE_DIR), cashflow.load_night_res(night_fire.NF_DIR),
+                             goal.eff_deposit, live=live, today=str(now.date()))
+        out["ok"] = True
+        return out
+    except Exception as e:                 # noqa: BLE001
+        return {"ok": False, "msg": "金流明細算不出來：%s" % str(e)[:100]}
 
 
 USAGE_DIR = HERE / "usage"             # ⛔ gitignore
