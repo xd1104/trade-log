@@ -2340,6 +2340,50 @@ def contract_alive(c, now=None):
     return True
 
 
+def pick_front(cands, now=None):
+    """
+    ⭐ 2026-10-21：從（已依交割月排好的）候選裡挑**最近一個還沒到期**的月份。⇒ 合約或 None。
+
+    ⛔ 不再用「成交量最大」挑：結算日前後新舊月份成交量會互相超車，
+       **持有部位時斷線重連**若剛好改挑到下個月 ⇒ broker 只認新合約的部位 ⇒
+       看不到原本那口、停損／平倉送到新月份（多開一口反向、舊的沒平）。
+       ⇒ 同一天重連幾次都要挑到同一個合約：用到期日決定，不看量。
+    ⚠️ 任何一個候選讀不出到期日 ⇒ 回 None（呼叫端退回舊的成交量挑法，⛔ 不猜）。
+    """
+    if not cands:
+        return None
+    for c in cands:
+        if len(re.sub(r"\D", "", str(getattr(c, "delivery_date", "") or ""))) < 8:
+            return None
+    alive = [c for c in cands if contract_alive(c, now)]
+    return alive[0] if alive else None
+
+
+def quiet_seconds(last_recv, conn_at, sess, now_ts, now=None):
+    """
+    ⭐ 2026-10-21：斷線看門狗用的「多久沒收到報價」。⇒ 秒數或 None（None ＝ 不判斷）。
+
+    【踩到的坑】舊版只看 last_recv：**重啟後一筆都還沒收到**（last_recv 是 None）就永遠不算斷線
+    ⇒ 10-21 傍晚他重啟、訂到已到期的合約，畫面寫「程式每分鐘會自動重連」，實際上一次都沒重連。
+    ⇒ 沒收過 ⇒ 從「連上那一刻」與「這一盤開盤那一刻」較晚的那個起算
+       （⛔ 不可以只用連上時刻：08:30 連好、08:45 才開盤，那 15 分鐘本來就沒報價）。
+    """
+    if last_recv:
+        return now_ts - last_recv
+    if not conn_at or sess not in ("day", "night"):
+        return None
+    now = now or datetime.fromtimestamp(now_ts)
+    if sess == "day":
+        start = now.replace(hour=SESSION_OPEN.hour, minute=SESSION_OPEN.minute, second=0, microsecond=0)
+    elif now.time() >= NIGHT_OPEN:
+        start = now.replace(hour=NIGHT_OPEN.hour, minute=NIGHT_OPEN.minute, second=0, microsecond=0)
+    else:
+        start = (now - timedelta(days=1)).replace(hour=NIGHT_OPEN.hour, minute=NIGHT_OPEN.minute,
+                                                   second=0, microsecond=0)
+    base = max(conn_at, start.timestamp())
+    return max(0.0, now_ts - base)
+
+
 def eod_plan(d):
     """
     今天的收盤平倉時刻。回 `EOD_DAY`（同一天只算一次，之後都讀記憶體）。
@@ -13099,6 +13143,9 @@ def main():
         cands.sort(key=lambda c: c.delivery_month)
         # ⭐ 2026-10-21：先剔掉已到期的（結算日 13:30 後重啟會挑到舊月，見 contract_alive）
         cands = [c for c in cands if contract_alive(c)] or cands
+        front = pick_front(cands)
+        if front is not None:
+            return front
         near = cands[:3]
         try:
             snaps = api.snapshots(near)
@@ -13141,6 +13188,7 @@ def main():
         api.quote.subscribe(contract, quote_type=sj.constant.QuoteType.BidAsk,
                             version=sj.constant.QuoteVersion.v1)
         session["api"], session["contract"] = api, contract
+        session["conn_at"] = time.time()
         SESSION_REF["api"] = api
         CONN.update({"ok": True, "since": None, "retries": 0, "last_error": None,
                      "contract": contract.code,
@@ -13368,7 +13416,8 @@ def main():
             market_open = sess in ("day", "night")
 
             if market_open:
-                quiet = (time.time() - st.last_recv) if (st and st.last_recv) else None
+                quiet = quiet_seconds(st.last_recv if st else None, session.get("conn_at"),
+                                      sess, time.time())
                 lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"]
                 if lost and time.time() - last_retry > RECONNECT_EVERY:
                     last_retry = time.time()
