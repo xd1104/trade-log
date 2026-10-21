@@ -10262,11 +10262,13 @@ function alTodayHTML(D,r){
    const head=done?('已出場（'+esc(rwhy({reason:R.why}))+'）'):esc(live_word(r));
    /* ⭐ 2026-09-15 晚上：看得出是「快攻」（09:03:30）還是「回馬槍」（09:15）送的 */
    const leg=alLeg(D,r);
+   /* ⭐ 2026-10-21（Benson：今天 2 口卻寫 1 口）：口數用帳本的實際成交口數；多口時點數寫「每口 × 口數＝合計」 */
+   const q=(alN(r.qty)!=null&&r.qty>0)?Math.round(r.qty):1;
    return '<div class="t">'+head+'：'+esc(alRecName(D,r)||'')+(leg?'・'+esc(leg):'')+' → '+esc(dir)+
-     '　1 口</div><div class="d">進場 <b>'+esc(alF(r.entry))+'</b>'+
+     '　'+q+' 口</div><div class="d">進場 <b>'+esc(alF(r.entry))+'</b>'+
      (done?('　出場 <b>'+esc(alF(R.exit))+'</b>'+
             (R.exit_time?('（'+esc(String(R.exit_time).slice(0,8))+'）'):'')+
-            (alN(R.points)!=null?('　<b>'+esc(alSigned(R.points))+'</b> 點'):
+            (alN(R.points)!=null?(q>1?('　每口 <b>'+esc(alSigned(R.points))+'</b> 點 × '+q+' 口＝<b>'+esc(alSigned(R.points*q))+'</b> 點'):('　<b>'+esc(alSigned(R.points))+'</b> 點')):
               '　<span style="color:var(--gold)">問不到成交價，點數留白</span>'))
           :(/* ⭐ 「開箱」那一口**沒有停利**（r.no_tp）⇒ ⛔ 不可以印一個空的停利格 */
             (r.no_tp?'　停利 <b>不設</b>':'　停利 <b>'+esc(alF(r.tp))+'</b>')+

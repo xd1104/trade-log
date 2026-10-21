@@ -68,6 +68,15 @@ def _trade_pts(r):
                                    and r.get("entry") is not None) else None
 
 
+def _risk_now():
+    """⭐ 2026-10-21：週報的本月風控要跟面板同一把尺（上限＝400×本月用過最大口數）；⛔ 舊版寫死 qty=1 ⇒ 多口後上限寫錯。"""
+    try:
+        import lots
+        return risk_cap.state(lots=lots.cap_lots())
+    except Exception:                   # noqa: BLE001
+        return risk_cap.state(qty=1)
+
+
 def _real_week(mon, fri):
     """這一週自動單真單（日盤 d、夜盤 E 在週一～週五）⇒ [{d, sess, pts, entry, entry_time}]。"""
     out = []
@@ -83,6 +92,10 @@ def _real_week(mon, fri):
             t = risk_cap._match(e, trades, used)
             out.append({"d": e["d"], "sess": e["sess"], "entry": e["entry"], "entry_time": e["entry_time"],
                         "pts": (float(t["points"]) if t is not None and _num(t.get("points")) else None),
+                        # ⭐ 2026-10-21：pts 是**每口**點數（評估策略、跟模擬比用這個）；qty／pts_total 是實際賺賠（錢用這個）
+                        "qty": (int(t.get("qty") or 1) if t is not None else None),
+                        "pts_total": (round(float(t["points"]) * int(t.get("qty") or 1), 1)
+                                      if t is not None and _num(t.get("points")) else None),
                         "state": "open" if t is None else ("ok" if _num(t.get("points")) else "unknown")})
     return out
 
@@ -114,6 +127,7 @@ def strategies(mon, fri, sim):
                     "week_sim_pts": round(sum(x["pts"] for x in sim_days if x["pts"] is not None), 1),
                     "week_sim_n": sum(1 for x in sim_days if x["pts"] is not None),
                     "week_real_pts": round(sum(x["pts"] for x in rl if x["pts"] is not None), 1),
+                    "week_real_total": round(sum(x["pts_total"] for x in rl if x.get("pts_total") is not None), 1),
                     "week_real_n": sum(1 for x in rl if x["pts"] is not None),
                     "sim_days": sim_days, "real": rl, "pairs": pair,
                     "lamp": h.get("lamp"), "lamp_word": h.get("lamp_word"),
@@ -389,7 +403,7 @@ def build(d):
              "week": {"mon": str(mon), "fri": str(fri)},
              "made_at": datetime.now().isoformat(timespec="seconds"),
              "strategies": strategies(mon, fri, sim), "market": mk, "system": system(mon, fri),
-             "risk": risk_cap.state(qty=1), "candidates": candidates(sim), "next_week": next_week(fri),
+             "risk": _risk_now(), "candidates": candidates(sim), "next_week": next_week(fri),
              "retire": retire(sim, ((mk.get("regime") or {}).get("level")))}
     return facts
 

@@ -215,6 +215,11 @@ try:
     say("x.results" in body and "NR[E]" in body, "  最近做得如何：夜盤也算進來")
     say("mo:E" in body, "  本月照開盤那晚 E 歸月（跟風控規則③同一把尺）")
     say("night_real_pairs(res)" in src and 'out["closed"] = closed_days()' in src, "  兩個端點都端出新欄位")
+    say("每口 <b>'+esc(alSigned(R.points))+'</b> 點 × '+q+' 口" in src and "'　'+q+' 口</div>" in src,
+        "  ⭐ 10-21：日盤今天卡用實際口數、多口寫每口×口數＝合計（不再寫死 1 口）")
+    af = (HERE / "analyst_facts.py").read_text(encoding="utf-8")
+    say("risk_cap.state(qty=1)," not in af.replace("return risk_cap.state(qty=1)", "") and '"week_real_total"' in af,
+        "  ⭐ 10-21：週報風控上限跟著口數、真單另給合計點數")
     gi = (HERE.parent.parent / ".gitignore").read_text(encoding="utf-8")
     say("tools/shioaji/HC_PING_URL.txt" in gi, "  ⛔ 心跳網址檔不進版控")
 finally:
