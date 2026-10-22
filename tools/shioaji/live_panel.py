@@ -7003,6 +7003,50 @@ button.it{cursor:pointer} button.it:hover{background:rgba(255,255,255,.025)}
 .gl-t .mk.run{color:var(--text); background:var(--surface-2); border:1px solid var(--line)}
 .gl-t .mk.wait,.gl-t .mk.pending{color:var(--gold); background:var(--gold-soft); border:1px solid var(--gold-line)}
 .gl-t .mk.blocked{color:var(--dim); border:1px solid var(--line)}
+/* ⭐ 2026-10-22 金流明細 B 版「每日卡片」（Benson 從 A／B 兩版挑 B）：本月一個主角大數字＋三個組成；
+   每天一張小卡（右上當天賺賠）、每筆前面小圖示（入金金色＋、日盤 ☀ 藍、夜盤 ☾ 紫）。 */
+.cf .hero{display:flex; gap:16px; align-items:stretch; padding:14px 16px; border-radius:var(--r-md);
+  background:linear-gradient(135deg,var(--hero-tint,rgba(238,90,84,.10)),rgba(28,34,44,.9) 55%); border:1px solid var(--line)}
+.cf .hero.down{--hero-tint:rgba(52,179,126,.10)}
+.cf .hero .hl{flex:1; min-width:0}
+.cf .hero .k{font-size:11px; color:var(--dim); letter-spacing:.5px}
+.cf .hero .big{font-size:30px; font-weight:750; line-height:1.15; margin-top:2px; letter-spacing:-.5px; font-family:var(--font-mono)}
+.cf .hero .big small{font-size:13px; color:var(--dim); font-weight:600; margin-left:4px; letter-spacing:0}
+.cf .hero .big.up{color:var(--up)} .cf .hero .big.down{color:var(--down)}
+.cf .hero .bl{font-size:11px; color:var(--faint); margin-top:5px; font-family:var(--font-mono)}
+.cf .hero .hr{display:flex; flex-direction:column; justify-content:center; gap:6px; padding-left:16px; border-left:1px solid var(--line); min-width:176px}
+.cf .hero .hr div{display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--dim)}
+.cf .hero .hr b{margin-left:auto; font-size:13px; color:var(--text); font-weight:650; font-family:var(--font-mono)}
+.cf .hero .hr b.up{color:var(--up)} .cf .hero .hr b.down{color:var(--down)} .cf .hero .hr b.dim{color:var(--dim)}
+.cf .hero .pt{width:7px; height:7px; border-radius:50%; flex:none}
+.cf .hero .pt.k1{background:var(--gold)} .cf .hero .pt.k2{background:var(--up)} .cf .hero .pt.k3{background:var(--ghost)}
+.cf .scroll{border-top:0; max-height:430px; margin-top:12px}
+.cf .dc{background:var(--surface-2); border:1px solid var(--line); border-radius:12px; padding:5px 5px 7px; margin-bottom:9px}
+.cf .dc .dh2{display:flex; align-items:baseline; gap:6px; padding:6px 8px 3px}
+.cf .dc .dt{font-size:13px; font-weight:700; font-family:var(--font-mono)}
+.cf .dc .dt small{font-size:11px; color:var(--faint); font-weight:500; margin-left:6px; font-family:var(--font-sans)}
+.cf .dc .dn{margin-left:auto; font-size:14px; font-weight:750; font-family:var(--font-mono)}
+.cf .dc .dn.up{color:var(--up)} .cf .dc .dn.down{color:var(--down)} .cf .dc .dn.dim{color:var(--faint); font-size:12px; font-weight:500}
+.cf .dc .df{font-size:11px; color:var(--gold); font-weight:650}
+.cf .row2{display:grid; grid-template-columns:28px 1fr auto 12px; gap:9px; align-items:center; padding:6px 8px; width:100%;
+  background:none; border:0; border-radius:9px; color:inherit; font-family:inherit; text-align:left; font-size:12.5px}
+button.row2{cursor:pointer} button.row2:hover{background:rgba(255,255,255,.03)}
+.cf .ico{width:28px; height:28px; border-radius:8px; display:grid; place-items:center; font-size:13px}
+.cf .ico.dep{color:var(--gold); background:var(--gold-soft); border:1px solid var(--gold-line); font-weight:700}
+.cf .ico.d{color:#7CC4F2; background:rgba(124,196,242,.12); border:1px solid rgba(124,196,242,.3)}
+.cf .ico.n{color:#B39DF0; background:rgba(179,157,240,.12); border:1px solid rgba(179,157,240,.32)}
+.cf .row2 .nm{min-width:0}
+.cf .row2 .nm b{display:block; font-size:13px; font-weight:650; color:var(--text)}
+.cf .row2 .nm small{display:block; font-size:11px; color:var(--faint); margin-top:1px}
+.cf .row2 .amt{font-size:14px; font-weight:700; text-align:right; font-family:var(--font-mono)}
+.cf .row2 .amt.up{color:var(--up)} .cf .row2 .amt.down{color:var(--down)} .cf .row2 .amt.gold{color:var(--gold)}
+.cf .row2 .ar{color:var(--ghost); font-size:13px; transition:transform .15s}
+.cf .row2.open .ar{transform:rotate(90deg)}
+.cf .feeln{display:grid; grid-template-columns:28px 1fr auto 12px; gap:9px; padding:1px 8px 3px; font-size:11.5px; color:var(--faint)}
+.cf .feeln .amt{text-align:right; font-family:var(--font-mono)}
+.cf .dc .det{margin:0 8px 6px 45px}
+.cf .dc .bal2{font-size:11px; color:var(--faint); text-align:right; padding:4px 29px 0 8px; border-top:1px dashed var(--line); margin:4px 8px 0;
+  font-family:var(--font-mono)}
 </style></head><body><div class="app">
 <div class="topbar">
   <div class="brand"><div class="mark">&#9702;</div>
@@ -11094,39 +11138,46 @@ function cashHTML(C){
  const ks=C.keys||[];
  if(!ks.length) return head('')+'<div class="empty">還沒有紀錄（每天 14:00 記一列，隔天開始有明細）。</div></div>';
  if(!CF.ym||ks.indexOf(CF.ym)<0) CF.ym=ks[ks.length-1];
- const i=ks.indexOf(CF.ym), M=(C.months||{})[CF.ym]||{days:[]};
+ const i=ks.indexOf(CF.ym), M=(C.months||{})[CF.ym]||{days:[]}, DS=M.days||[];
  const nav='<div class="mon"><button data-cfm="-1"'+(i>0?'':' disabled')+' aria-label="上個月">‹</button>'+
    '<b>'+esc(CF.ym.slice(0,4))+' 年 '+(+CF.ym.slice(5))+' 月</b>'+
    '<button data-cfm="1"'+(i<ks.length-1?'':' disabled')+' aria-label="下個月">›</button></div>';
- let h=head(nav)+'<div class="sum">'+
-   '<div class="c"><div class="k">入金</div><div class="v">'+cfAmt(M.dep)+'</div></div>'+
-   '<div class="c"><div class="k">交易損益</div><div class="v '+cfCls(M.trade)+'">'+cfAmt(M.trade)+'</div></div>'+
-   '<div class="c"><div class="k">手續費＋稅</div><div class="v" style="color:var(--dim)">'+cfAmt(M.fee)+'</div></div>'+
-   '<div class="c"><div class="k">本月實際賺賠</div><div class="v '+cfCls(M.net)+'">'+cfAmt(M.net)+'</div></div></div>'+
+ /* ⭐ 2026-10-22 B 版：本月一個主角大數字＋三個組成；月初 → 月底（或現在）照後端每天的 start_bal／bal */
+ const last=DS.length?DS[DS.length-1]:null, first=DS.length?DS[0]:null;
+ const bl=(last&&last.start_bal!=null&&first)?('月初 '+Math.round(last.start_bal).toLocaleString('en-US')+' → '+
+   (i===ks.length-1?'現在 ':'月底 ')+Math.round(first.bal).toLocaleString('en-US')):'';
+ let h=head(nav)+'<div class="hero'+(Number(M.net)<0?' down':'')+'"><div class="hl"><div class="k">本月實際賺賠</div>'+
+   '<div class="big '+cfCls(M.net)+'">'+cfAmt(M.net)+'<small>元</small></div>'+(bl?'<div class="bl">'+bl+'</div>':'')+'</div>'+
+   '<div class="hr"><div><span class="pt k1"></span>入金<b>'+cfAmt(M.dep)+'</b></div>'+
+   '<div><span class="pt k2"></span>交易損益<b class="'+cfCls(M.trade)+'">'+cfAmt(M.trade)+'</b></div>'+
+   '<div><span class="pt k3"></span>手續費＋稅<b class="dim">'+cfAmt(M.fee)+'</b></div></div></div>'+
    '<div class="scroll">';
- (M.days||[]).forEach(d=>{
-   h+='<div class="day"><div class="dh"><span class="d">'+esc(d.date.slice(5))+'</span><span class="w">週'+esc(d.wd||'')+'</span>'+
+ DS.forEach(d=>{
+   const tr=(d.items||[]).some(x=>x.k==='trade'), net=(Number(d.trade)||0)+(Number(d.fee)||0);
+   h+='<div class="dc"><div class="dh2"><span class="dt">'+esc(d.date.slice(5))+'<small>週'+esc(d.wd||'')+'</small></span>'+
      (d.diff?'<span class="df">⚠ 對不起來 '+cfAmt(d.diff)+'</span>':'')+
-     '<span class="bal">結餘<b>'+Math.round(d.bal).toLocaleString('en-US')+'</b></span></div>';
+     (tr?'<span class="dn '+cfCls(net)+'">'+cfAmt(net)+'</span>':'<span class="dn dim">沒有交易</span>')+'</div>';
+   let fee=0;
    (d.items||[]).forEach((x,j)=>{
      if(x.k==='dep'){
-       h+='<div class="it"><span class="tg dep">入金</span><span class="wh">'+(x.inferred?'<small>券商沒記，用權益推算</small>':'')+'</span>'+
-          '<span class="amt">'+cfAmt(x.amt)+'</span><span></span></div>';
+       h+='<div class="row2"><span class="ico dep">＋</span><span class="nm"><b>入金</b>'+(x.inferred?'<small>券商沒記，用權益推算</small>':'')+'</span>'+
+          '<span class="amt gold">'+cfAmt(x.amt)+'</span><span></span></div>';
      }else if(x.k==='fee'){
-       h+='<div class="it fee"><span class="tg"></span><span class="wh">手續費＋稅</span><span class="amt">'+cfAmt(x.amt)+'</span><span></span></div>';
+       fee+=Number(x.amt)||0;
      }else{
-       const key=d.date+'|'+j, op=!!CF.open[key];
-       h+='<button class="it'+(op?' open':'')+'" data-cfo="'+esc(key)+'"><span class="tg">'+esc(x.sess||'')+'</span>'+
-          '<span class="wh"><b>'+esc(x.name||'')+' '+esc(x.dir||'')+'</b><small>'+cfAmt(x.pts)+' 點 × '+esc(x.qty)+' 口'+
+       const key=d.date+'|'+j, op=!!CF.open[key], nt=x.sess==='夜盤';
+       h+='<button class="row2'+(op?' open':'')+'" data-cfo="'+esc(key)+'"><span class="ico '+(nt?'n':'d')+'">'+(nt?'☾':'☀')+'</span>'+
+          '<span class="nm"><b>'+esc(x.name||'')+' '+esc(x.dir||'')+'</b><small>'+cfAmt(x.pts)+' 點 × '+esc(x.qty)+' 口'+
           (x.night?'・'+esc(x.night):'')+'</small></span><span class="amt '+cfCls(x.amt)+'">'+cfAmt(x.amt)+'</span><span class="ar">›</span></button>';
        if(op) h+='<div class="det">進場 <b>'+esc(x.entry==null?'—':Math.round(x.entry))+'</b>　'+esc(x.entry_time||'')+'<br>'+
           '出場 <b>'+esc(x.exit==null?'—':Math.round(x.exit))+'</b>　'+esc(x.exit_time||'')+'　'+esc(x.why||'')+'<br>'+
           cfAmt(x.pts)+' 點 × '+esc(x.qty)+' 口 × 10 元 ＝ <b>'+cfAmt(x.amt)+'</b></div>';
      }
    });
-   h+='</div>';
+   if(tr||fee) h+='<div class="feeln"><span></span><span>手續費＋稅</span><span class="amt">'+cfAmt(fee)+'</span><span></span></div>';
+   h+='<div class="bal2">結餘 '+Math.round(d.bal).toLocaleString('en-US')+'</div></div>';
  });
- if(!(M.days||[]).length) h+='<div class="empty">這個月還沒有金流。</div>';
+ if(!DS.length) h+='<div class="empty">這個月還沒有金流。</div>';
  return h+'</div></div>';
 }
 function cashRepaint(){

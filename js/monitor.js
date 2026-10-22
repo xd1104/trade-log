@@ -487,31 +487,41 @@
   // 第二頁：金流明細（資料＝電腦帳戶頁同一份，後端算好 ⇒ s.cash）。⛔ 手機不自己算錢。
   var WHY_WORD = { tp: '停利', sl: '停損', eod: '收盤平', night_eod: '04:58 平' };
   function money(x) { return x == null || isNaN(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(Math.round(x)).toLocaleString(); }
+  // ⭐ 2026-10-22 B 版「每日卡片」（跟電腦帳戶頁同一套樣式）：本月一個主角大數字＋三個組成；每天一張小卡、右上當天賺賠
   function cashHTML(C) {
     var ms = (C && C.months) || [];
     if (!ms.length) return '<h1 class="pgt">金流明細</h1><section class="card"><div class="msg">還沒有資料（電腦面板更新後就會有）。</div></section>';
     var keys = ms.map(function (x) { return x.key; }); if (keys.indexOf(CASH_M) < 0) CASH_M = keys[keys.length - 1];
-    var i = keys.indexOf(CASH_M), M = ms[i];
+    var i = keys.indexOf(CASH_M), M = ms[i], DS = M.days || [];
+    var bl = (M.start && DS.length) ? '月初 ' + Math.round(M.start[1]).toLocaleString() + ' → ' + (i === keys.length - 1 ? '現在 ' : '月底 ') + Math.round(DS[0].bal).toLocaleString() : '';
     var h = '<h1 class="pgt">金流明細</h1><div class="msw">' +
       (i > 0 ? '<button data-cm="' + esc(keys[i - 1]) + '">‹</button>' : '<button disabled>‹</button>') +
       '<b>' + esc(CASH_M.slice(0, 4)) + ' 年 ' + (+CASH_M.slice(5)) + ' 月</b>' +
       (i < keys.length - 1 ? '<button data-cm="' + esc(keys[i + 1]) + '">›</button>' : '<button disabled>›</button>') + '</div>' +
-      '<div class="csum"><div><span>入金</span><b class="num">' + money(M.dep) + '</b></div>' +
-      '<div><span>交易損益</span><b class="num ' + cls(M.pl) + '">' + money(M.pl) + '</b></div>' +
-      '<div><span>手續費＋稅</span><b class="num dim">' + money(M.fee) + '</b></div>' +
-      '<div><span>本月實際賺賠</span><b class="num ' + cls(M.net) + '">' + money(M.net) + '</b></div></div>';
-    h += (M.days || []).map(function (d) {
-      return '<div class="cday"><div class="cdh"><b>' + esc(d.d) + '</b><span>週' + esc(d.w || '') + '</span><span class="bal">結餘<b class="num">' + (d.bal == null ? '—' : Math.round(d.bal).toLocaleString()) + '</b>' +
-        (d.diff ? '<em class="gold">⚠ 差 ' + money(d.diff) + '</em>' : '') + '</span></div>' +
-        (d.items || []).map(function (x) {
-          if (x.k === 'dep') return '<div class="cit"><span class="tg gold">入金</span><span>' + (x.inferred ? '<small>券商沒寫，照權益推算</small>' : '') + '</span><span class="amt num">' + money(x.amt) + '</span></div>';
-          if (x.k === 'fee') return '<div class="cit fee"><span></span><span>手續費＋稅</span><span class="amt num">' + money(x.amt) + '</span></div>';
-          return '<details class="ctr"><summary class="cit"><span class="tg">' + esc(x.sess || '') + '</span><span><b>' + esc((x.name || '') + ' ' + (x.dir || '')) + '</b>' +
-            '<small>' + money(x.pts) + ' 點 × ' + esc(String(x.qty || 1)) + ' 口' + (x.night_of ? '・' + esc(x.night_of) + ' 晚' : '') + '</small></span>' +
-            '<span class="amt num ' + cls(x.amt) + '">' + money(x.amt) + '</span></summary>' +
-            '<div class="cdet">進場 <b class="num">' + esc(String(x.entry == null ? '—' : x.entry)) + '</b>　' + esc(x.entry_time || '') +
-            '<br>出場 <b class="num">' + esc(String(x.exit == null ? '—' : x.exit)) + '</b>　' + esc(x.exit_time || '') + '　' + esc(x.why_txt || WHY_WORD[x.why] || x.why || '') + '</div></details>';
-        }).join('') + '</div>';
+      '<div class="chero' + (M.net < 0 ? ' neg' : '') + '"><div class="k">本月實際賺賠</div><div class="big num ' + cls(M.net) + '">' + money(M.net) + '<small>元</small></div>' +
+      (bl ? '<div class="bl num">' + bl + '</div>' : '') +
+      '<div class="parts"><div><i class="p1"></i>入金<b class="num">' + money(M.dep) + '</b></div>' +
+      '<div><i class="p2"></i>交易損益<b class="num ' + cls(M.pl) + '">' + money(M.pl) + '</b></div>' +
+      '<div><i class="p3"></i>手續費＋稅<b class="num dim">' + money(M.fee) + '</b></div></div></div>';
+    h += DS.map(function (d) {
+      var tr = (d.items || []).filter(function (x) { return x.k === 'trade'; });
+      var fee = (d.items || []).filter(function (x) { return x.k === 'fee'; }).reduce(function (a, x) { return a + (+x.amt || 0); }, 0);
+      var net = tr.reduce(function (a, x) { return a + (+x.amt || 0); }, 0) + fee;
+      var rows = (d.items || []).map(function (x) {
+        if (x.k === 'dep') return '<div class="crow"><span class="ico dep">＋</span><span class="nm"><b>入金</b>' + (x.inferred ? '<small>券商沒寫，照權益推算</small>' : '') + '</span><span class="amt num gold">' + money(x.amt) + '</span></div>';
+        if (x.k !== 'trade') return '';
+        var nt = x.sess === '夜盤';
+        return '<details class="ctr"><summary class="crow"><span class="ico ' + (nt ? 'n' : 'd') + '">' + (nt ? '☾' : '☀') + '</span>' +
+          '<span class="nm"><b>' + esc((x.name || '') + ' ' + (x.dir || '')) + '</b><small>' + money(x.pts) + ' 點 × ' + esc(String(x.qty || 1)) + ' 口' + (x.night_of ? '・' + esc(x.night_of) + ' 晚' : '') + '</small></span>' +
+          '<span class="amt num ' + cls(x.amt) + '">' + money(x.amt) + '</span></summary>' +
+          '<div class="cdet">進場 <b class="num">' + esc(String(x.entry == null ? '—' : Math.round(x.entry))) + '</b>　' + esc(x.entry_time || '') +
+          '<br>出場 <b class="num">' + esc(String(x.exit == null ? '—' : Math.round(x.exit))) + '</b>　' + esc(x.exit_time || '') + '　' + esc(x.why_txt || WHY_WORD[x.why] || x.why || '') + '</div></details>';
+      }).join('');
+      return '<div class="cdc"><div class="cdh2"><b>' + esc(d.d) + '</b><span>週' + esc(d.w || '') + '</span>' +
+        (d.diff ? '<em class="gold">⚠ 差 ' + money(d.diff) + '</em>' : '') +
+        (tr.length ? '<span class="dn num ' + cls(net) + '">' + money(net) + '</span>' : '<span class="dn none">沒有交易</span>') + '</div>' + rows +
+        (tr.length || fee ? '<div class="cfee"><span></span><span>手續費＋稅</span><span class="num">' + money(fee) + '</span></div>' : '') +
+        '<div class="cbal num">結餘 ' + (d.bal == null ? '—' : Math.round(d.bal).toLocaleString()) + '</div></div>';
     }).join('');
     return h;
   }

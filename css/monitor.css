@@ -233,3 +233,35 @@ details.ctr > summary::after{display:none}
 .sdot.bad{background:var(--gold)}
 .ubar{height:6px; background:var(--line); border-radius:3px; margin:8px 0 4px; overflow:hidden}
 .ubar i{display:block; height:100%; background:var(--dim)}
+
+/* ⭐ 2026-10-22 金流明細 B 版「每日卡片」（跟電腦帳戶頁同一套） */
+.chero{padding:14px 16px; border-radius:14px; border:1px solid var(--line);
+  background:linear-gradient(135deg,rgba(255,111,102,.12),var(--surface) 60%)}
+.chero.neg{background:linear-gradient(135deg,rgba(63,203,142,.12),var(--surface) 60%)}
+.chero .k{font-size:12px; color:var(--dim)}
+.chero .big{font-size:32px; font-weight:750; line-height:1.15; margin-top:2px}
+.chero .big small{font-size:14px; color:var(--dim); font-weight:600; margin-left:4px}
+.chero .bl{font-size:12px; color:var(--faint); margin-top:4px}
+.chero .parts{margin-top:10px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:6px}
+.chero .parts div{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--dim)}
+.chero .parts b{margin-left:auto; font-size:15px; color:var(--text)}
+.chero .parts b.win{color:var(--win)} .chero .parts b.loss{color:var(--loss)} .chero .parts b.dim{color:var(--dim)}
+.chero .parts i{width:8px; height:8px; border-radius:50%; flex:none}
+.chero .parts i.p1{background:var(--gold)} .chero .parts i.p2{background:var(--win)} .chero .parts i.p3{background:var(--line)}
+.cdc{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:6px 6px 8px; margin-top:10px}
+.cdh2{display:flex; align-items:baseline; gap:6px; padding:6px 8px 4px}
+.cdh2 > b{font-size:15px} .cdh2 > span{font-size:12px; color:var(--faint)}
+.cdh2 em{font-style:normal; font-size:12px; margin-left:4px}
+.cdh2 .dn{margin-left:auto; font-size:16px; font-weight:750}
+.cdh2 .dn.win{color:var(--win)} .cdh2 .dn.loss{color:var(--loss)} .cdh2 .dn.none{color:var(--faint); font-size:12.5px; font-weight:500}
+.crow{display:grid; grid-template-columns:32px 1fr auto; gap:10px; align-items:center; padding:7px 8px; font-size:14px}
+.crow .ico{width:32px; height:32px; border-radius:10px; display:grid; place-items:center; font-size:15px}
+.crow .ico.dep{color:var(--gold); background:var(--gold-soft); border:1px solid var(--gold); font-weight:700}
+.crow .ico.d{color:#7CC4F2; background:rgba(124,196,242,.12); border:1px solid rgba(124,196,242,.3)}
+.crow .ico.n{color:#B39DF0; background:rgba(179,157,240,.12); border:1px solid rgba(179,157,240,.32)}
+.crow .nm b{display:block; font-weight:650} .crow .nm small{display:block; font-size:12px; color:var(--faint)}
+.crow .amt{font-weight:700; text-align:right}
+details.ctr > summary.crow{padding:7px 8px; min-height:0; font-weight:400; font-size:14px}
+.cdc .cdet{margin:0 8px 6px 50px}
+.cfee{display:grid; grid-template-columns:32px 1fr auto; gap:10px; padding:0 8px 4px; font-size:12.5px; color:var(--faint)}
+.cbal{font-size:12px; color:var(--faint); text-align:right; padding:5px 8px 0; margin:4px 8px 0; border-top:1px dashed var(--line)}
