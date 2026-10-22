@@ -9510,13 +9510,16 @@ function alCapHTML(R,L){
  const cap=Number(R.cap||0), pnl=Number(R.pnl||0), used=Number(R.used_pct||0);
  const fmt=v=>(v>0?'+':(v<0?'−':''))+Math.abs(Math.round(v)).toLocaleString();
  /* ⭐⭐ 2026-10-01 改版：這張卡變成「本月」—— 最上面是本月合計＋日盤／夜盤各多少。
-    ⛔ 數字一律是後端 R.trades 每一口的點數（risk_cap.state，跟風控**同一份**），前端只照 sess 分組加總、⛔ 不另算。 */
+    ⛔ 數字一律是後端 R.trades 每一口的點數（risk_cap.state，跟風控**同一份**），前端只照 sess 分組加總、⛔ 不另算。
+    ⭐ 2026-10-21 Benson：上面「本月」大數字與日盤／夜盤兩行改看**每口**（lot_pts）；底下「本月風控」照舊看**合計**（pnl，上限也是合計）。
+       舊後端沒有 lot_pts ⇒ 退回 pts（1 口時兩者相同）。 */
  const TR=Array.isArray(R.trades)?R.trades:[];
- const grp=k=>{ const a=TR.filter(t=>t&&t.sess===k&&isFinite(Number(t.pts))); return [a.reduce((x,t)=>x+Number(t.pts),0),a.length]; };
- const gd=grp('day'), gn=grp('night'), nx=NF.data;
+ const lp=t=>isFinite(Number(t.lot_pts))?Number(t.lot_pts):Number(t.pts);
+ const grp=k=>{ const a=TR.filter(t=>t&&t.sess===k&&isFinite(lp(t))); return [a.reduce((x,t)=>x+lp(t),0),a.length]; };
+ const gd=grp('day'), gn=grp('night'), nx=NF.data, lotTot=gd[0]+gn[0];
  const sp=v=>'<span class="'+sgn(v)+'">'+fmt(v)+'</span>';
  const mon='<div class="h">本月（'+esc(String(R.month||'').slice(5).replace(/^0/,''))+' 月）</div>'+
-   '<div class="tot">'+sp(pnl)+'<u>點</u></div>'+
+   '<div class="tot">'+sp(lotTot)+'<u>點・每口</u></div>'+
    '<table><tr><td><span class="ses d">☀ 日盤</span> '+esc(alDayName(AL.data||{}))+'</td><td class="p">'+sp(gd[0])+' 點</td><td class="n">'+gd[1]+' 筆</td></tr>'+
    '<tr><td><span class="ses n">☾ 夜盤</span> '+esc(nx?nfName(nx,nx.method):'—')+'</td><td class="p">'+sp(gn[0])+' 點</td><td class="n">'+gn[1]+' 筆</td></tr></table>';
  let h='<div class="cap al-mon'+(R.hit?' hit':'')+'">'+mon+
@@ -9547,7 +9550,7 @@ function alCapHTML(R,L){
     ⛔ 1＋1 而且沒有月中換級時不畫（畫面跟以前一樣）。 */
  const LC=(L&&L.cap)||null;
  if(LC&&(LC.note||(Array.isArray(LC.ab)&&(Number(LC.ab[0])+Number(LC.ab[1]))!==2)))
-   h+='<div class="n">'+esc(LC.line||'')+'；點數是<b>每一筆的合計</b>（多口已經乘進去）。'+(LC.note?'<br>'+esc(LC.note):'')+'</div>';
+   h+='<div class="n">'+esc(LC.line||'')+'；風控這一行是<b>每一筆的合計</b>（多口已經乘進去），上面本月是每口。'+(LC.note?'<br>'+esc(LC.note):'')+'</div>';
  if(RCAP.err) h+='<div class="err">'+esc(RCAP.err)+'</div>';
  if(RCAP.ok) h+='<div class="n">'+esc(RCAP.ok)+'</div>';
  return h+'</div>';
@@ -10248,8 +10251,8 @@ function alPerfPaint(D,days){
  const avg=n=>{ const a=P.slice(-n); return a.length?a.reduce((x,y)=>x+y.pts,0)/a.length:null; };
  const mo=(D.today||'').slice(0,7);
  const moRows=P.filter(x=>String(x.mo).slice(0,7)===mo);
- /* ⭐ 2026-10-14 多口：本月合計＝每一筆的**合計**（每口 × 口數，跟本月卡／風控同一把尺）；上面兩個平均照舊用**每口**（看策略品質，⛔ 不被口數灌水）。1 口時 q＝1、數字跟以前一樣 */
- const moSum=moRows.length?moRows.reduce((x,y)=>x+y.pts*(y.q||1),0):null;
+ /* ⭐ 2026-10-21 Benson：本月合計也改**每口**（跟本月卡一致；錢看帳戶頁的金流明細）。 */
+ const moSum=moRows.length?moRows.reduce((x,y)=>x+y.pts,0):null;
  setEl('alperfn', P.length?(P.length+' 筆算得出點數'):'還沒有算得出點數的紀錄');
  if(!P.length){
    setEl('alperf','');
@@ -10264,7 +10267,7 @@ function alPerfPaint(D,days){
      (a30==null?'—':pm(a30))+'</div><div class="s">點／筆</div></div>'+
    '<div class="c"><div class="k">本月合計</div><div class="v '+sgn(moSum)+'">'+
      (moSum==null?'—':pm(moSum))+'</div><div class="s">'+moRows.length+
-     ' 筆・日盤＋夜盤・不含手續費與稅</div></div>');
+     ' 筆・日盤＋夜盤・每口・不含手續費與稅</div></div>');
  setEl('alsparkbox', sparkBars(P.slice(-30).map(x=>x.pts),50));
 }
 

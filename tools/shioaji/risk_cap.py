@@ -198,7 +198,9 @@ def state(month=None, qty=1, today=None, fire_dir=None, nf_dir=None, trade_dir=N
             q = t.get("qty") if _num(t.get("qty")) and t.get("qty") > 0 else 1
             p = float(t["points"]) * float(q)
             pnl += p
-            base["trades"].append({"d": e["d"], "sess": e["sess"], "pts": round(p, 1)})
+            # ⭐ 2026-10-21：多帶每口點數與口數（畫面「本月」看每口；⛔ 風控照舊用合計 pts／pnl，這兩欄只給畫面）
+            base["trades"].append({"d": e["d"], "sess": e["sess"], "pts": round(p, 1),
+                                   "lot_pts": round(float(t["points"]), 1), "q": int(q)})
         base["pnl"] = round(pnl, 1)
         base["n"] = len(base["trades"])
     except Exception as ex:
