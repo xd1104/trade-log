@@ -1525,7 +1525,10 @@ def view(now=None, E=None, eq=None):
             "next": nxt, "floor": floor, "prev_eq": (lad[run_lv - 1][0] if (run_lv >= 1 and lad) else 0),
             "check": {"next": str(nxt_check), "today": nxt_check == today, "done_today": done_today},
             "trial": _trial(st), "void": st.get("void"),
-            "conds": conds.get("list") or [], "conds_why": conds.get("why") or [], "conds_at": conds.get("at"),
+            # ⭐ 10-27：存檔裡的條件是上次收盤檢查算的；「上次升級」已拿掉（REUP_GAP_MONTHS＝0）⇒ 舊存檔也濾掉，不用等下次收盤
+            "conds": [c for c in (conds.get("list") or []) if REUP_GAP_MONTHS > 0 or c.get("k") != "cool"],
+            "conds_why": [w for w in (conds.get("why") or []) if REUP_GAP_MONTHS > 0 or "才能再升" not in w],
+            "conds_at": conds.get("at"),
             "offer": offer, "pending": pending, "notice": notice, "hist": hist, "per": per,
             "pause_until": st.get("pause_until"), "up_at": st.get("up_at"),
             "cap": {"per_lot": CAP_PER_LEG, "ab": list(cab), "total": CAP_PER_LEG * sum(cab), "note": cap_note},
