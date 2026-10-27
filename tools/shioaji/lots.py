@@ -865,7 +865,7 @@ TRIAL_N = 1                 # 試車要幾筆「實際成交 ≥ 2 口」的自�
 def _tslip():
     """試車那幾句的「滑價」用字：只看 1 筆 ⇒「滑價」；多筆 ⇒「平均滑價」（跟著 TRIAL_N，⛔ 不寫死）。"""
     return "滑價" if TRIAL_N == 1 else "平均滑價"
-REUP_GAP_MONTHS = 1         # 再升：離上一次升級生效至少幾個日曆月
+REUP_GAP_MONTHS = 0         # 再升：離上一次升級生效至少幾個日曆月（⭐ 10-27 老闆：不用等 ⇒ 0＝這個條件整條拿掉）
 PENDING_GUARD_HOUR = 6      # 已確認的升級每天幾點以後重看一次策略（夜盤 05:00 收完、05:30 備份之後）
 
 
@@ -1041,14 +1041,15 @@ def upgrade_check(st, eq, eq_date, today, quality, retire, retire_err=None, to=N
                       "need": TRIAL_N})
     # 上次升級：試車那一次、試車後第一次跳級 ⇒ 不用等；之後 ⇒ 離上一次升級生效至少 1 個日曆月
     cool_ok, free, mode = True, None, ("trial" if kind == "trial" else ("first_jump" if not tr.get("jumped") else "gap"))
-    if mode == "gap" and st.get("up_at"):
+    if mode == "gap" and st.get("up_at") and REUP_GAP_MONTHS > 0:
         try:
             free = _add_months(date.fromisoformat(st["up_at"]), REUP_GAP_MONTHS)
             cool_ok = today >= free
         except ValueError:
             cool_ok = False
-    conds.append({"k": "cool", "name": "上次升級", "ok": cool_ok, "up_at": st.get("up_at"), "mode": mode,
-                  "free": (str(free) if free else None)})
+    if REUP_GAP_MONTHS > 0:
+        conds.append({"k": "cool", "name": "上次升級", "ok": cool_ok, "up_at": st.get("up_at"), "mode": mode,
+                      "free": (str(free) if free else None)})
     pu = st.get("pause_until")
     conds.append({"k": "pause", "name": "停損失靈事故", "ok": not (pu and str(today) < pu), "until": pu})
     why = []
@@ -1745,7 +1746,7 @@ def _panel(now, today, eq, lot1, E):
         if tr.get("reset"):
             trial["line"] += "（%s 有一次下單錯誤，筆數從那之後重算。）" % dtxt(tr["reset"], False)
     elif tr.get("status") == "passed":
-        trial["line"] = "試車已通過（%s）：之後權益撐得到哪一級，就直接建議跳到哪一級；每次升級至少隔一個月。" % (
+        trial["line"] = "試車已通過（%s）：之後權益撐得到哪一級，就直接建議跳到哪一級。" % (
             dtxt(tr.get("passed_at"), False) if tr.get("passed_at") else "—")
     out["trial"] = trial
     # 條件（句子）
@@ -1939,8 +1940,8 @@ def _panel(now, today, eq, lot1, E):
     out["hist"] = [dict(h, date_txt=dtxt(h.get("date"), False), who=("你按的" if h.get("by") == "you" else "自動"))
                    for h in (V.get("hist") or [])]
     out["rule_foot"] = ("每個交易日收盤後檢查；升級要你按確認才生效。先在 1＋1 試車 2＋1：有 %d 筆 2 口以上的真單、"
-                        "沒有下單錯誤、%s ≤ %g 點就算通過；通過之後權益撐得到哪一級就直接建議跳到哪一級，"
-                        "之後每次升級至少隔一個月。減級是自動的（權益低於這一級門檻的 85%%，隔天就退）。"
+                        "沒有下單錯誤、%s ≤ %g 點就算通過；通過之後權益撐得到哪一級就直接建議跳到哪一級。"
+                        "減級是自動的（權益低於這一級門檻的 85%%，隔天就退）。"
                         "⛔ 不看最近賺不賺。" % (TRIAL_N, _tslip(), SLIP_MAX))
     return out
 

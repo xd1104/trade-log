@@ -933,16 +933,17 @@ chk("  11/14 07:00 策略掉到觀察 ⇒ 舊的 pending 作廢、11/16 照舊 2
     (st["pending"], (st["void"] or {}).get("to"), [e["kind"] for e in _r["events"]], lots.base_lots(st, date(2026, 11, 16))),
     (None, 4, ["pending_void"], (2, 1)))
 lots.LEVEL_FILE.write_text(json.dumps(_sv, ensure_ascii=False), encoding="utf-8")
-print("  -- 之後再升：離上一次升級生效至少 1 個日曆月（11/13 ⇒ 12/13）--")
+print("  -- ⭐ 10-27 老闆：再升不用等（REUP_GAP_MONTHS＝0）⇒ 權益一到就建議 --")
+say(lots.REUP_GAP_MONTHS == 0, "  REUP_GAP_MONTHS＝0（老闆 10-27：升級不用等一個月）")
 _r = lots.daily_check([{"date": "2026-12-01", "equity": 262000.0}], now=datetime(2026, 12, 1, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-say(not st["conds"]["ok"] and any("12-13" in w for w in st["conds"]["why"]),
-    "  12/1 權益夠 25 萬級（5＋2），但 11/13 才生效 ⇒ 12/13 以前不升", st["conds"]["why"])
-_r = lots.daily_check([{"date": "2026-12-11", "equity": 262000.0}], now=datetime(2026, 12, 11, 14, 5), ctx=ctx_ok())
-say(not lots.read_state()[0]["conds"]["ok"], "  12/11 還沒滿 ⇒ 不升")
+chk("  12/1 權益夠 25 萬級（5＋2）、11/13 才升過 ⇒ 照樣建議升到 5＋2（不用等）",
+    (st["suggest"]["ok"], st["suggest"]["to"], st["suggest"]["kind"]), (True, 5, "jump"))
+say(not any(c.get("k") == "cool" for c in (lots.view(now=datetime(2026, 12, 1, 15, 0), eq=262000.0).get("conds") or [])),
+    "  條件清單沒有「上次升級」那一條")
 _r = lots.daily_check([{"date": "2026-12-14", "equity": 262000.0}], now=datetime(2026, 12, 14, 14, 5), ctx=ctx_ok())
 st, _ = lots.read_state()
-chk("  12/14 滿一個月 ⇒ 建議升到 5＋2", (st["suggest"]["ok"], st["suggest"]["to"], st["suggest"]["kind"]),
+chk("  12/14 ⇒ 建議升到 5＋2", (st["suggest"]["ok"], st["suggest"]["to"], st["suggest"]["kind"]),
     (True, 5, "jump"))
 P5 = lots.panel(now=datetime(2026, 12, 14, 15, 0), eq=262000.0, lot1=35050.0)
 _pw = P5["offer"]["power"] or {}
