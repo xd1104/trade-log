@@ -12612,6 +12612,8 @@ def cashflow_view(now=None):
         now = now or datetime.now()
         m = EQUITY.get("m") or None
         live = goal.live_row(m, now.date()) if m else None
+        if live and EQUITY.get("at"):
+            live["live_at"] = EQUITY["at"]  # 帳戶抓的時間：之後才出場的單先不列（不然會誤標對不起來）
         out = cashflow.build(equity_hist_read(), cashflow.load_trades(broker.TRADE_DIR),
                              cashflow.load_day_res(auto_fire.FIRE_DIR), cashflow.load_night_res(night_fire.NF_DIR),
                              goal.eff_deposit, live=live, today=str(now.date()))

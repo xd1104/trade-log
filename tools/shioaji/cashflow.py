@@ -98,13 +98,18 @@ def build(rows, trades, day_res, night_res, eff_deposit, live=None, today=None):
                 it["inferred"] = True      # 券商那欄寫 0、是用權益變化推出來的 ⇒ 畫面照實標「推算」
             items.append(it)
         tsum, est = 0, 0
-        for t in sorted(trades.get(d, []), key=lambda x: str(x.get("entry_time") or "")):
+        day_tr = trades.get(d, [])
+        if r.get("live_at"):
+            # ⭐ 10-29：券商那一份是 live_at 那一刻抓的；之後才出場的單還沒進權益 ⇒ 先不列（下一次更新就會進來），
+            #    否則會標「對不起來」（10-29 09:14 停損、帳戶是 09:13:58 抓的 ⇒ 誤標 +7,515）
+            day_tr = [t for t in day_tr if str(t.get("exit_time") or "") <= str(r["live_at"])]
+        for t in sorted(day_tr, key=lambda x: str(x.get("entry_time") or "")):
             if not _is_night(t):
                 continue
             items.append(_trade_item(t, day_res, night_res))
             tsum += items[-1]["amt"]
             est += est_fee(t)
-        for t in sorted(trades.get(d, []), key=lambda x: str(x.get("entry_time") or "")):
+        for t in sorted(day_tr, key=lambda x: str(x.get("entry_time") or "")):
             if _is_night(t):
                 continue
             items.append(_trade_item(t, day_res, night_res))
@@ -112,7 +117,8 @@ def build(rows, trades, day_res, night_res, eff_deposit, live=None, today=None):
             est += est_fee(t)
         fee = tsum - net                   # 倒推：交易 − 淨額 ＝ 付掉的費稅
         unexp = 0                          # 說不出來的錢（＋＝多出來、−＝不見了）
-        if abs(fee - est) > FEE_TOL:
+        if abs(fee - est) > FEE_TOL and not r.get("live_at"):
+            # （今天盤中那一份 ⇒ 還沒出場的單會先扣進場費、券商數字也有時間差 ⇒ 不標；14:00 那列寫進去才對帳）
             # 對不起來 ⇒ 費稅照費率估，剩下的照實列成「差多少」（⛔ 不塞進費稅裡吞掉）
             fee = est
             unexp = round(net - (tsum - est))
