@@ -535,7 +535,7 @@ def snapshot(port):
         _phone_err(snap, "今天那張卡", e)
     # ⭐ 2026-10-21 手機第二頁「金流明細」：跟電腦帳戶頁同一份計算（cashflow.py），⛔ 手機不自己算錢
     try:
-        snap["cash"] = _cash()
+        snap["cash"] = _cash(port)
     except Exception as e:                      # noqa: BLE001
         _phone_err(snap, "金流明細", e)
     try:
@@ -762,13 +762,25 @@ _CASH = {"at": 0.0, "day": None, "v": None}
 CASH_TTL = 600.0                                # 一天才多一列 ⇒ 10 分鐘重算一次就夠（⛔ 不要每 2 分鐘讀一次帳本）
 
 
-def _cash():
-    """⇒ cashflow.to_phone(...)（months 舊到新、days 新到舊）。換日或過了 10 分鐘才重算。"""
+def _cash(port=None):
+    """⇒ cashflow.to_phone(...)（months 舊到新、days 新到舊）。換日或過了 10 分鐘才重算。
+    ⭐ 2026-10-30 先拿面板 /api/account/hist 的 cash（含券商現在那一份）：只讀檔的話今天要等 14:00 記帳才有，
+       早上看不到昨晚夜盤（Benson 10-30 08:05 回報）。面板拿不到才退回讀檔。"""
     import cashflow
     import goal
     today = datetime.now().strftime("%Y-%m-%d")
     if _CASH["v"] is None or _CASH["day"] != today or time.time() - _CASH["at"] > CASH_TTL:
-        _CASH.update(v=cashflow.to_phone(cashflow.build_from_dir(HERE, goal.eff_deposit)), day=today, at=time.time())
+        out = None
+        if port:
+            try:
+                c = _get(port, "/api/account/hist").get("cash")
+                if isinstance(c, dict) and c.get("ok"):
+                    out = c
+            except Exception:                   # noqa: BLE001
+                out = None
+        if out is None:
+            out = cashflow.build_from_dir(HERE, goal.eff_deposit)
+        _CASH.update(v=cashflow.to_phone(out), day=today, at=time.time())
     return _CASH["v"]
 
 
