@@ -1013,23 +1013,37 @@ def tsm_eval(E, bars, first, ctx):
 
 
 def _trend_ctx_read():
-    try:
-        c = json.loads(TREND_CTX.read_text(encoding="utf-8"))
-        return {"sig": dict(c.get("sig") or {})}
-    except Exception:
-        return {"sig": {}}
+    """
+    ⇒ {"sig": {...}}；檔案不存在 ⇒ 空的（第一次跑）。
+    ⛔ 2026-11-02：讀壞或被鎖住 ⇒ 重試後往外丟例外。舊版當成空的，接著寫回去就把 400 晚歷史蓋掉。
+    """
+    for i in range(3):
+        try:
+            c = json.loads(TREND_CTX.read_text(encoding="utf-8"))
+            return {"sig": dict(c.get("sig") or {})}
+        except FileNotFoundError:
+            return {"sig": {}}
+        except Exception:
+            if i == 2:
+                raise
+            time.sleep(0.2)
 
 
 def _trend_ctx_write(ctx):
-    """⛔ 先寫 .tmp 再換檔；只留最近 400 晚。"""
-    try:
-        if len(ctx["sig"]) > 400:
-            ctx["sig"] = dict(sorted(ctx["sig"].items())[-400:])
-        tmp = TREND_CTX.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(ctx, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(TREND_CTX)
-    except Exception:
-        pass
+    """⛔ 先寫 .tmp 再換檔；只留最近 400 晚。⛔ 寫失敗要上畫面（真單的門檻讀這個檔）。"""
+    if len(ctx["sig"]) > 400:
+        ctx["sig"] = dict(sorted(ctx["sig"].items())[-400:])
+    tmp = TREND_CTX.with_suffix(".json.tmp")
+    for i in range(3):
+        try:
+            tmp.write_text(json.dumps(ctx, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(TREND_CTX)
+            return True
+        except Exception as e:
+            if i == 2:
+                _note_err("寫 trend_ctx.json", e)
+                return False
+            time.sleep(0.2)
 
 
 def _trend_at(mm, C, minute):
@@ -1342,6 +1356,27 @@ def _read_unlocked():
             rows[k] = o
             st["ok"] += 1
     return rows, st
+
+
+def holiday_days(months=3):
+    """
+    最近幾個月模擬判定休市的平日 ⇒ ['YYYY-MM-DD', …]（永豐那天沒有日盤成交）。
+    ⭐ 2026-11-02：本機 1 分 K 只認得「前後都有資料」的休市日，連假剛結束那晚認不出來。
+    """
+    out = set()
+    with _FILE_LOCK:
+        files = sorted(f for f in SIM_DIR.iterdir() if _MONTH_RE.match(f.name))[-months:] if SIM_DIR.exists() else []
+        for f in files:
+            for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                if '"holiday"' not in ln:
+                    continue
+                try:
+                    o = json.loads(ln)
+                except Exception:
+                    continue
+                if o.get("why") == "holiday" and o.get("lane") == "orb":
+                    out.add(o["date"])
+    return sorted(out)
 
 
 def read_rows():
@@ -1833,7 +1868,13 @@ def _step_trend(now, rows, get_api, has_position):
     pend = {}
     evs = night_evenings(now)
     since = min(evs) - timedelta(days=3)
-    ctx = _trend_ctx_read()
+    try:
+        ctx = _trend_ctx_read()
+    except Exception as e:
+        # ⛔ 讀不到歷史 ⇒ 這一輪什麼都不定論、不寫回（⛔ 不准把 no_hist 寫成永久定論）
+        _note_err("讀 trend_ctx.json", e)
+        STATE["pending"]["trend"] = {str(E): _pending("error", "走幅歷史讀不出來") for E in evs}
+        return
     dirty = False
     for E in sorted(evs):
         es = str(E)

@@ -1621,7 +1621,14 @@ def closed_days():
        看起來像壞掉 ⇒ 畫面改說「休市」。⛔ 判斷沿用月曆那一把尺（`day_index()` 的 closed：
        本機 1 分 K 範圍內、那天卻沒有日盤）——⛔ 不另寫一份行事曆。
     ⚠️ 本機檔每天清晨才併進前一天 ⇒ **當天**的假日要到隔天才認得出來（當天照舊寫收不到報價）。"""
-    return [x["d"] for x in day_index() if x.get("closed")]
+    out = {x["d"] for x in day_index() if x.get("closed")}
+    # ⭐ 2026-11-02：連假剛結束那晚本機 1 分 K 還認不出來 ⇒ 10-27 夜盤誤判振幅資料太舊、少送 1 口；併入模擬判定的休市日
+    try:
+        if sim_lanes is not None:
+            out.update(sim_lanes.holiday_days())
+    except Exception:                          # noqa: BLE001
+        pass
+    return sorted(out)
 
 
 # ------------------------------------------------- 【細節】分頁：逐筆早盤圖的資料層

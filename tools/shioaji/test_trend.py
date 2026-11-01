@@ -202,6 +202,32 @@ chk("  對照：副本多一個新檔 ⇒ 也抓得到", _changed(_fp, _fingerpr
 say("trend" in S.LANES and S.LANE_NAME["trend"] == "夜盤跟勢" and "trend" in S.SHOWN_LANES,
     "  LANES／畫面都註冊好了")
 
+print("=== ⭐ 2026-11-02 走幅歷史讀寫失敗要出聲、不准蓋掉 ===")
+S.TREND_CTX.write_text('{"sig": {"2026-01-01"', encoding="utf-8")
+_bad = False
+try:
+    S._trend_ctx_read()
+except Exception:
+    _bad = True
+say(_bad, "  ⛔ 檔案壞掉 ⇒ 丟例外（⛔ 不當成空的）")
+S.TREND_CTX.unlink()
+say(S._trend_ctx_read() == {"sig": {}}, "  檔案不存在 ⇒ 空的（第一次跑）")
+S.TREND_CTX.write_text('{"sig": {"2026-01-01"', encoding="utf-8")
+_raw = S.TREND_CTX.read_text(encoding="utf-8")
+_evs, _ne = S.night_evenings, S.STATE["errors"]
+S.night_evenings = lambda now: [date(2026, 6, 10)]
+S._step_trend(datetime(2026, 6, 11, 6, 0), {}, None, lambda: False)
+S.night_evenings = _evs
+say(S.TREND_CTX.read_text(encoding="utf-8") == _raw, "  ⛔ 讀不到歷史 ⇒ 不寫回")
+say(S.STATE["errors"] == _ne + 1, "  ⛔ 上畫面（errors＋1）", S.STATE["last_err"])
+say("2026-06-10" in S.STATE["pending"]["trend"], "  ⛔ 那一晚留在等待，不寫成定論")
+S.TREND_CTX.unlink()
+_rp, _ne = Path.replace, S.STATE["errors"]
+Path.replace = lambda self, t: (_ for _ in ()).throw(PermissionError("鎖住"))
+_w = S._trend_ctx_write({"sig": {"2026-01-01": 1.0}})
+Path.replace = _rp
+say(_w is False and S.STATE["errors"] == _ne + 1, "  ⛔ 寫失敗 ⇒ 上畫面", S.STATE["last_err"])
+
 shutil.rmtree(TMP, ignore_errors=True)
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))
 sys.exit(1 if FAIL else 0)

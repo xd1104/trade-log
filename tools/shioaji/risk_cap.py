@@ -126,7 +126,8 @@ def _match(ent, trades, used):
         f = date.fromisoformat(t["_file"])
         if not (lo <= f <= hi):
             continue
-        if str(t.get("entry_time") or "") != ent["entry_time"]:
+        # ⭐ 2026-11-02：重啟撿回的一口單成績單沒有進場時間 ⇒ 只看價（⛔ 比不到會留在 open，虧損不進風控）
+        if str(t.get("entry_time") or "") != ent["entry_time"]                 and not (t.get("recovered") and not t.get("entry_time")):
             continue
         if not _num(t.get("entry")) or abs(float(t["entry"]) - ent["entry"]) > PX_TOL:
             continue

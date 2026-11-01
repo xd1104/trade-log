@@ -242,11 +242,17 @@ def past_sigs(E):
     【模擬】「夜盤跟勢」記下的過去每晚走幅（點，⛔ 不含 E）⇒ (清單, 最新那一晚)。
     ⛔ 跟模擬**同一份**（`trend_ctx.json`，唯讀）：門檻兩邊各算一份就是兩把尺。
     """
-    try:
-        c = json.loads(TREND_CTX.read_text(encoding="utf-8"))
-        sig = dict(c.get("sig") or {})
-    except Exception:
-        return [], None
+    sig = {}
+    for i in range(3):                                # ⭐ 2026-11-02：模擬同時在換檔時可能暫時讀不到 ⇒ 再讀，⛔ 不當成沒有歷史
+        try:
+            sig = dict(json.loads(TREND_CTX.read_text(encoding="utf-8")).get("sig") or {})
+            break
+        except FileNotFoundError:
+            return [], None
+        except Exception:
+            if i == 2:
+                return [], None
+            time.sleep(0.2)
     ks = [k for k in sorted(sig) if k < str(E) and isinstance(sig[k], (int, float))]
     return [float(sig[k]) for k in ks][-trend_rule.WIN:], (ks[-1] if ks else None)
 

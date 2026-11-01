@@ -165,6 +165,14 @@ try:
     chk("since 標出起算日", s["since"], "2026-07-05")
     RC.RULE_START = "2000-01-01"
 
+    print("── ⭐ 2026-11-02 重啟撿回的一口單（成績單沒有進場時間）也要進風控")
+    _e = {"d": "2026-07-01", "sess": "night", "entry_time": "21:40:02", "entry": 40000.0}
+    _t = {"_file": "2026-07-02", "entry_time": None, "entry": 40000.0, "points": -300.0, "recovered": True}
+    chk("撿回的單用價格配對", RC._match(_e, [_t], set()) is _t, True)
+    chk("⛔ 價格對不上就不配", RC._match(_e, [dict(_t, entry=40010.0)], set()), None)
+    chk("⛔ 不是撿回的單照舊要比進場時間", RC._match(_e, [dict(_t, recovered=False)], set()), None)
+    chk("⛔ 有進場時間的撿回單照舊要比時間", RC._match(_e, [dict(_t, entry_time="21:41:00")], set()), None)
+
     print("── ⑪ 真的 RISK_OVERRIDE 沒被碰")
     chk("真的 RISK_OVERRIDE 不存在（測試不准建）", (HERE / "RISK_OVERRIDE").exists(), False)
 finally:
