@@ -30,7 +30,7 @@ import math
 import re
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -56,7 +56,7 @@ METHOD_NAME = {"T": "台積電快攻", "R": "夜盤跟勢"}
 SYM, FEED = "TSM", "iex"
 
 # ── 夜盤跟勢（R）──
-R_WAIT_S = 1            # 美股開盤 +10 分鐘那一刻之後等幾秒再看（跟模擬「那一根的收盤」只差這一點）
+R_WAIT_S = 1            # 美股開盤 +10 分鐘那一刻之後等幾秒再看（訊號用前一分鐘收盤，等它收完）
 R_SL_PCT = 0.02         # ⭐ 保護停損＝成交價的 2%（Benson 2026-09-23）；⛔ 不設停利
 R_SL_SAFE = 0.975       # 成交前先帶的保守停損 ＝ 報價 × 2% × 這個數（滑價 2.5% 以內都不會超過上限）
 R_CTX_MAX_AGE_D = 10    # 走幅歷史最新那一晚離今晚超過幾天 ⇒ 歷史太舊（面板很久沒開）⇒ 不做
@@ -68,6 +68,7 @@ QUOTE_MAX_AGE = 5       # 台指報價超過 5 秒沒更新就不送
 WIDTH_MIN, WIDTH_MAX = 0.001, 0.03      # 框寬占進場價的合理範圍；超出 ⇒ 資料一定有問題 ⇒ 不送
 EOD_FROM = (4, 58, 0)   # 04:58:00 起平倉
 EOD_UNTIL = (4, 59, 50)
+EOD_LATE_UNTIL = dtime(8, 45)   # 05:00 到這一刻之間補看 04:58 有沒有漏掉
 EOD_RETRY_S = 5.0
 EOD_PX_TOL = 3.0        # 認「是不是我們那一口」：方向一樣、進場價差 ≤ 3 點
 POLL_S = 0.5
@@ -259,10 +260,23 @@ def ref_price(E):
        往回最多找 `sim_lanes.TREND_TOL`（3）分鐘，跟模擬 `_trend_at` 同一個容忍度。
     ⛔ 拿不到就是拿不到（⛔ 不用更早的價、⛔ 不用現價頂）⇒ 今晚不做。
     """
+    return _minute_px(trend_at(E) - timedelta(minutes=trend_rule.LOOKBACK + 1))
+
+
+def sig_price(E):
+    """
+    走幅的「現在」那一端 ⇒ (價, 用了哪一分鐘 HH:MM)；拿不到 ⇒ (None, None)。
+    ⭐ 2026-11-02：對齊模擬與門檻歷史，用進場分鐘前一分鐘的收盤（模擬標籤 21:40 那根）。
+    ⛔ 不准用現價：10-27 現價 +123 過門檻 122.6、同一根收盤 +118 沒過，真單就多做了一筆。
+    """
+    return _minute_px(trend_at(E) - timedelta(minutes=1))
+
+
+def _minute_px(t):
+    """`t` 那一分鐘的收盤，往回最多找 3 分鐘（跟模擬 `_trend_at` 同一個容忍度）。"""
     fn = _CFG["minute_close_fn"]
     if fn is None:
         return None, None
-    t = trend_at(E) - timedelta(minutes=trend_rule.LOOKBACK + 1)
     m0 = t.hour * 60 + t.minute
     for m in range(m0, m0 - 4, -1):                   # TREND_TOL＝3 ⇒ 看 4 個分鐘
         try:
@@ -408,7 +422,7 @@ def _filled(pos, sent):
 def _decide_trend(E, now, lp=None):
     """
     ⭐ 夜盤跟勢（R）。⛔ 每一道「不做」都落地一列理由，⛔ 不猜。
-    訊號 ＝ 現價 − 30 分鐘前那一分鐘的收盤（點）；門檻 ＝ 過去 40 晚 |走幅| 的第 80 百分位
+    訊號 ＝ 進場前一分鐘的收盤 − 30 分鐘前那一分鐘的收盤（點）；門檻 ＝ 過去 40 晚 |走幅| 的第 80 百分位
     （跟【模擬】`sim_lanes.trend_eval` 同一個算法、同一份歷史）。
     ⛔ 不設停利（`tp_points=None` ⇒ broker 一張限價單都不掛、部位標 `no_tp`）；
     ⭐ 停損 ＝ 進場價 × 2%（面板 4Hz 停損迴圈照這一口自己的點數）。
@@ -432,9 +446,13 @@ def _decide_trend(E, now, lp=None):
     if p0 is None:
         _skip(E, "no_ref", extra=info)
         return True
-    mv = px - p0
+    p1, p1_at = sig_price(E)
+    if p1 is None:
+        _skip(E, "no_ref", extra=info)
+        return True
+    mv = p1 - p0
     thr = trend_rule.threshold(past)
-    info.update(mv=round(mv, 1), thr=round(thr, 1), ref=p0, ref_at=p0_at, newest=newest)
+    info.update(mv=round(mv, 1), thr=round(thr, 1), ref=p0, ref_at=p0_at, sig=p1, sig_at=p1_at, newest=newest)
     if not trend_rule.is_fast(mv, thr):
         _skip(E, "not_fast", "台指 30 分鐘走 %+.0f 點，沒到門檻 %.0f 點" % (mv, thr), info)
         return True
@@ -526,7 +544,16 @@ def _eod(E, now):
     ent = _entry_of(rows)
     if ent is None:
         return True                                   # 今晚沒開出部位 ⇒ 沒事
-    pos = broker._state.get("position")
+    # ⭐ 2026-11-02：跟日盤收盤同一個作法，問券商不信記憶體 —— 04:58 剛重啟時記憶體是空的，
+    #    舊版會把還開著的部位寫成「已經沒有部位」然後收工，留倉到 08:45 都沒有停損。
+    pos = broker.reconcile() if broker.is_live() else broker._state.get("position")
+    if pos == "unknown":
+        if _in(now, EOD_FROM, EOD_UNTIL):
+            return False                              # 問不到 ≠ 沒有部位 ⇒ 下一輪再問
+        msg = "04:58 問不到券商部位 —— 請立刻自己到大戶投確認有沒有部位"
+        _append({"E": str(E), "rec": "eod", "why": "failed", "msg": msg})
+        _ST["eod_alarm"] = msg
+        return True
     if pos is None:
         _append({"E": str(E), "rec": "eod", "why": "flat", "msg": "04:58 已經沒有部位（之前已停利或停損）"})
         return True
@@ -552,10 +579,49 @@ def _eod(E, now):
         return True
     print("⚠️ [夜盤自動下單] %s 04:58 平倉沒成功：%s（%g 秒後再試）" % (E, err, EOD_RETRY_S), flush=True)
     if not _in(now, EOD_FROM, EOD_UNTIL):
-        _append({"E": str(E), "rec": "eod", "why": "failed",
-                 "msg": "04:58 平不掉（%s）—— 請立刻自己到大戶投平倉" % err})
+        msg = "04:58 平不掉（%s）—— 請立刻自己到大戶投平倉" % err
+        _append({"E": str(E), "rec": "eod", "why": "failed", "msg": msg})
+        _ST["eod_alarm"] = msg
         return True
     return False
+
+
+def _eod_late(now):
+    """
+    ⭐ 2026-11-02：04:58~05:00 面板沒開 ⇒ `step()` 過了 05:00 認不得昨晚，部位留著卻沒有任何一列。
+    05:00~08:45 補看一次：今晚有開部位、沒有 eod 那一列 ⇒ 問券商，還有部位就落地 `missed` 並發警告。
+    ⛔ 這段時間沒開盤，只警告不送單。
+    """
+    if not (5 <= now.hour and now.time() < EOD_LATE_UNTIL):
+        return
+    E = evening_of(now.replace(hour=4, minute=59))
+    if E is None or _DONE["eod"] == E:
+        return
+    rows = rows_of(E)
+    ent = _entry_of(rows)
+    if ent is None or any(o.get("rec") == "eod" for o in rows):
+        _DONE["eod"] = E
+        return
+    pos = broker.reconcile() if broker.is_live() else broker._state.get("position")
+    if pos == "unknown":
+        return                                        # 面板剛開、還沒連上 ⇒ 下一輪再問
+    _DONE["eod"] = E
+    if pos is None:
+        _append({"E": str(E), "rec": "eod", "why": "flat", "msg": "04:58 面板沒開；現在券商已經沒有部位"})
+    elif _trip_recorded(E, ent):
+        _append({"E": str(E), "rec": "eod", "why": "done_elsewhere", "msg": "今晚那一筆已經出場；現在的部位不是它 ⇒ ⛔ 不碰"})
+    elif not looks_ours(pos, ent):
+        _append({"E": str(E), "rec": "eod", "why": "not_ours", "msg": "04:58 面板沒開；現在的部位不是夜盤自動下單那一口 ⇒ ⛔ 不碰"})
+    else:
+        msg = "04:58 面板沒開，夜盤部位沒有平掉 —— 08:45 開盤前請決定，要自己到大戶投平倉"
+        _append({"E": str(E), "rec": "eod", "why": "missed", "msg": msg})
+        _ST["eod_alarm"] = msg
+        print("⚠️ [夜盤自動下單] %s %s" % (E, msg), flush=True)
+
+
+def eod_alarm():
+    """夜盤收盤沒平掉、部位還在 ⇒ 給畫面與手機的那一句；沒事 ⇒ None。"""
+    return _ST.get("eod_alarm") if broker._state.get("position") is not None else None
 
 
 def _trip_recorded(E, ent):
@@ -682,6 +748,7 @@ def step(now=None):
         now = now or datetime.now()
         E = evening_of(now)
         if E is None:
+            _eod_late(now)
             return
         if _MEM.get("E") != E:
             _MEM.update(E=E, entry=_entry_of(rows_of(E)))

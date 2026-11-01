@@ -414,7 +414,7 @@ broker.close("sl")
 E = date(2026, 6, 10)
 NF.ARM_FLAG.write_text("R", encoding="ascii")
 NF.TREND_CTX.write_text(json.dumps({"sig": {str(E - timedelta(days=i + 1)): (100.0 if i % 2 else -50.0) for i in range(40)}}), encoding="utf-8")
-MC = {21 * 60 + 9: 11800.0}
+MC = {21 * 60 + 9: 11800.0, 21 * 60 + 39: 12000.0}
 NF.configure(quote_fn=lambda: (12000.0, 1.0), session_fn=lambda now: "night", minute_close_fn=lambda m: MC.get(m))
 connect(API("Buy", 12001.0, 11990.0))
 NF._decide(E, NF.trend_at(E) + timedelta(seconds=1))
@@ -1631,7 +1631,7 @@ NF.ARM_FLAG.write_text("R", encoding="ascii")
 NF.TREND_CTX.write_text(json.dumps({"sig": {str(E_N - timedelta(days=i + 1)): (100.0 if i % 2 else -50.0)
                                             for i in range(40)}}), encoding="utf-8")
 NF.configure(quote_fn=lambda: (12000.0, 1.0), session_fn=lambda now: "night",
-             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0}.get(m))
+             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0, 21 * 60 + 39: 12000.0, 22 * 60 + 9: 11800.0, 22 * 60 + 39: 12000.0}.get(m))
 _NA = {"n": 0}
 _orig_na = lots.night_amps
 
@@ -1782,7 +1782,7 @@ NF.ARM_FLAG.write_text("R", encoding="ascii")
 NF.TREND_CTX.write_text(json.dumps({"sig": {str(EN - timedelta(days=i + 1)): (100.0 if i % 2 else -50.0)
                                             for i in range(40)}}), encoding="utf-8")
 NF.configure(quote_fn=lambda: (12000.0, 1.0), session_fn=lambda now: "night",
-             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0}.get(m))
+             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0, 21 * 60 + 39: 12000.0, 22 * 60 + 9: 11800.0, 22 * 60 + 39: 12000.0}.get(m))
 _EOD_AT = datetime.combine(EN + timedelta(days=1), datetime.min.time()).replace(hour=4, minute=58, second=1)
 
 
@@ -2571,7 +2571,7 @@ NF.ARM_FLAG.write_text("R", encoding="ascii")
 NF.TREND_CTX.write_text(json.dumps({"sig": {str(E_N - timedelta(days=i + 1)): (100.0 if i % 2 else -50.0)
                                             for i in range(40)}}), encoding="utf-8")
 NF.configure(quote_fn=lambda: (12000.0, 1.0), session_fn=lambda now: "night",
-             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0}.get(m))
+             minute_close_fn=lambda m: {21 * 60 + 9: 11800.0, 21 * 60 + 39: 12000.0, 22 * 60 + 9: 11800.0, 22 * 60 + 39: 12000.0}.get(m))
 lots._AMP.update(key="x", rows=[("2026-05-%02d" % (i + 1), 2.0) for i in range(25)] + [("2026-06-09", 2.0)], err=None)
 _oe, _oc = broker.enter, broker.can_enter
 broker.enter, broker.can_enter = _fake_enter, (lambda *a, **k: (True, None))

@@ -4644,6 +4644,14 @@ def lots_panel_now(now=None):
         # ⭐ QA r2 必修 2：多口部位不照平常規矩走（他自己加碼過／交接成他的手動部位／重啟後對不上／成交口數一度對不上）
         #    ⇒ 【自動下單】頂部金條＋分頁小金點＋手機「要注意的事」都要有一句白話（句子＝broker.pos_note，只讀記憶體）。
         note, kind = broker.pos_note()
+        _na = night_fire.eod_alarm()
+        if _na and isinstance(P, dict):
+            P["alarm"] = list(P.get("alarm") or []) + [{"kind": "night_eod", "text": "夜盤：" + _na + "。"}]
+            P["dot"] = True
+            ph = dict(P.get("phone") or {})
+            ph["warn"] = ("夜盤：" + _na + "。") + ((" ／ " + ph["warn"]) if ph.get("warn") else "")
+            ph["att"] = True
+            P["phone"] = ph
         if note and isinstance(P, dict):
             P["alarm"] = list(P.get("alarm") or []) + [{"kind": "pos_" + str(kind), "text": "部位：" + note + "。"}]
             P["dot"] = True

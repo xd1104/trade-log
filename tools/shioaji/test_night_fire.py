@@ -356,6 +356,7 @@ def r_reset(px=46000.0, ref=45800.0):
     NF.ARM_FLAG.write_text("R", encoding="ascii")
     ctx_write()
     MC.clear()
+    MC[21 * 60 + 39] = px                          # 21:39 那一分鐘 ＝ 走幅的「現在」那一端
     MC[21 * 60 + 9] = ref                          # 21:09 那一分鐘最後一筆 ＝ 模擬「21:10 那根」的收盤
     FAKE.update(quote=(px, 1.0), first=None)       # ⛔ 夜盤跟勢不看台積電（first 是 None 也要能做）
 
@@ -401,7 +402,7 @@ chk("  ⛔ 門檻只用今晚以前的走幅（今晚與之後的值不准混進
 
 print("  -- 不送的理由 --")
 for name, setup, want in [
-    ("走幅沒到門檻", lambda: FAKE.update(quote=(45850.0, 1.0)), "not_fast"),
+    ("現價過門檻、但 21:39 收盤沒過（10-27 那種）", lambda: MC.update({21 * 60 + 39: 45850.0}), "not_fast"),
     ("拿不到 30 分鐘前那一分鐘", lambda: MC.clear(), "no_ref"),
     ("歷史只有 10 晚", lambda: ctx_write(n=10), "no_hist"),
     ("歷史最新一晚是 20 天前（面板很久沒開）", lambda: ctx_write(last=E - timedelta(days=20)), "no_hist"),
@@ -471,11 +472,9 @@ for trial in range(40):
     sim_mv = sim_lanes.trend_sig(E, bars)
     MC.clear()
     MC.update(trades)
-    ks = [k for k in trades if k <= 21 * 60 + 39]
-    last_mi = max(ks) if ks else None               # 21:40:01 那一刻的現價 ＝ 21:39 以前最後一筆
     ref, _ = NF.ref_price(E)
-    live_mv = (round(trades[last_mi] - ref, 2)
-               if (ref is not None and last_mi is not None and 21 * 60 + 39 - last_mi <= 3) else None)
+    sig, _ = NF.sig_price(E)
+    live_mv = round(sig - ref, 2) if (ref is not None and sig is not None) else None
     if sim_mv != live_mv:
         _bad = (trial, sim_mv, live_mv)
         break
@@ -501,6 +500,57 @@ broker._state["position"] = dict(pos)
 E1 = E + timedelta(days=1)
 run_until(datetime(E1.year, E1.month, E1.day, 4, 58, 0), datetime(E1.year, E1.month, E1.day, 4, 58, 10))
 chk("  04:58 平掉夜盤跟勢那一口", CALLS["close"], ["night_eod"])
+
+print("  -- ⭐ 2026-11-02 04:58 剛重啟：問券商，不信記憶體 --")
+_real_rc = getattr(broker, "reconcile")
+_N458 = datetime(E1.year, E1.month, E1.day, 4, 58, 5)
+_N500 = datetime(E1.year, E1.month, E1.day, 5, 0, 10)
+_N700 = datetime(E1.year, E1.month, E1.day, 7, 0, 0)
+_entp = dict(pos)
+
+
+def eod_reset(ans):
+    r_reset()
+    run_until(TA, TA + timedelta(seconds=30))
+    CALLS["close"].clear()
+    broker._state["position"] = None                # 面板剛重啟：記憶體是空的
+    NF._ST.pop("eod_alarm", None)
+    NF._DONE["eod"] = None
+    broker.is_live = lambda: True
+    broker.reconcile = ans
+
+
+def eod_rows():
+    return [o.get("why") for o in NF.rows_of(E) if o.get("rec") == "eod"]
+
+
+def _back():
+    broker._state["position"] = dict(_entp, entry=NF._entry_of(NF.rows_of(E))["entry"], recovered=True)
+    return broker._state["position"]
+
+
+eod_reset(_back)
+chk("  ⭐ 記憶體是空的、券商還有部位 ⇒ 平掉，⛔ 不准寫 flat", (NF._eod(E, _N458), CALLS["close"], eod_rows()),
+    (True, ["night_eod"], ["closed"]))
+eod_reset(lambda: "unknown")
+chk("  ⛔ 問不到券商 ⇒ 窗口內不下定論", (NF._eod(E, _N458), eod_rows()), (False, []))
+chk("  ⛔ 過了窗口還問不到 ⇒ 落地 failed", (NF._eod(E, _N500), eod_rows()), (True, ["failed"]))
+eod_reset(lambda: None)
+chk("  券商真的沒有部位 ⇒ flat", (NF._eod(E, _N458), eod_rows()), (True, ["flat"]))
+eod_reset(_back)
+NF._eod_late(_N700)
+say(eod_rows() == ["missed"] and "沒有平掉" in str(NF.eod_alarm()), "  ⭐ 04:58 面板沒開 ⇒ 開機補看，落地 missed＋警告",
+    (eod_rows(), NF.eod_alarm()))
+chk("  ⛔ 沒開盤的時段不送平倉單", CALLS["close"], [])
+broker._state["position"] = None
+chk("  部位沒了 ⇒ 警告收掉", NF.eod_alarm(), None)
+NF._DONE["eod"] = None
+_n = len(eod_rows())
+NF._eod_late(datetime(E1.year, E1.month, E1.day, 9, 0, 0))
+chk("  ⛔ 08:45 之後不補看", len(eod_rows()), _n)
+broker.reconcile = _real_rc
+broker.is_live = lambda: False
+NF._ST.pop("eod_alarm", None)
 
 print("  -- 畫面 --")
 st = NF.state(now=datetime(2026, 6, 10, 20, 0))
