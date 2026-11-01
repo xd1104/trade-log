@@ -1413,6 +1413,60 @@ def daily_check(rows, now=None, ctx=None, path=None, closed=None, busy=False):
         return {"ran": False, "events": [], "level": None, "err": "口數每日檢查出錯：%s" % str(e)[:120]}
 
 
+def live_check(eq, now=None, ctx=None, path=None, busy=False):
+    """
+    ⭐ 2026-11-02：入金不用等 14:00。券商**現在**的權益已經過下一級門檻 ⇒ 當場重算升級條件、夠了就出建議。
+    daily_check 只吃 equity/ 每天那一列 ⇒ 下午入金要等到隔天收盤，畫面還一直寫舊權益。
+    ⛔ 手上有部位不跑（權益含未實現損益）；⛔ 只會出建議，升級一樣要他按確認、apply 一樣重驗。
+    ⛔ 不動 `checked`（減級、試車進度照舊走 daily_check）。⛔ 同一天同一級只算一次（退休標準約 2.5 秒 CPU）。
+    ⇒ {"ran", "events", "err"}。⛔ 永遠不往外丟例外。
+    """
+    now = now or datetime.now()
+    today = now.date()
+    try:
+        if busy or not _num(eq):
+            return {"ran": False, "events": [], "err": None}
+        st0, err = read_state(path)
+        if err:
+            return {"ran": False, "events": [], "err": err}
+        tgt, kind = _target(st0, eq)
+        if st0.get("pending") or kind not in ("trial", "jump") or not _is_int(tgt) \
+                or eq < _ladder()[tgt - 1][0]:
+            return {"ran": False, "events": [], "err": None}
+        sug = st0.get("suggest") or {}
+        if sug.get("ok") and not sug.get("withdrawn") and not sug.get("confirmed") \
+                and sug.get("from") == (st0.get("level") or 0) and sug.get("to") == tgt:
+            return {"ran": False, "events": [], "err": None}
+        c0 = st0.get("conds") or {}
+        if c0.get("live") == str(today) and c0.get("to") == tgt:
+            return {"ran": False, "events": [], "err": None}
+        q, ret, rerr, _incs = _gather(ctx)          # ⛔ 鎖外面
+        with _LOCK:
+            st, err = read_state(path)
+            if err:
+                return {"ran": False, "events": [], "err": err}
+            if st.get("pending"):
+                return {"ran": False, "events": [], "err": None}
+            chk = upgrade_check(st, eq, str(today), today, q, ret, rerr)
+            st["conds"] = {"at": str(today), "eq": eq, "eq_date": str(today), "to": chk["to"], "kind": chk["kind"],
+                           "list": chk["conds"], "why": chk["why"], "ok": chk["ok"], "q_n": q.get("n"),
+                           "q_need": q.get("need"), "q": _q_small(q),
+                           "states": {lane: (ret or {}).get(lane) for lane in LANES}, "rerr": rerr,
+                           "live": str(today)}
+            ev = []
+            if chk["ok"]:
+                st["suggest"] = dict(chk)
+                ev.append({"kind": "suggest", "ok": True, "to": chk["to"], "why": [],
+                           "msg": "可以升到 %s%s —— 要你在面板上確認才生效" % (
+                               chk["lots"], "（試車）" if chk["kind"] == "trial" else "")})
+            _write_state(st, path)
+        for e in ev:
+            _log(e.get("kind"), dict(e, eq=eq, eq_date=str(today), by="auto"), now)
+        return {"ran": True, "events": ev, "err": None}
+    except Exception as e:                      # noqa: BLE001  ⛔ 這條執行緒不准死
+        return {"ran": False, "events": [], "err": "口數即時檢查出錯：%s" % str(e)[:120]}
+
+
 def _bump_month_max(st, today):
     cur = list(ladder_lots(effective_level(st, today)))
     mm = st.get("month_max")
@@ -1753,10 +1807,10 @@ def _panel(now, today, eq, lot1, E):
             dtxt(tr.get("passed_at"), False) if tr.get("passed_at") else "—")
     out["trial"] = trial
     # 條件（句子）
-    L = [{"k": c.get("k"), "name": c.get("name"), "ok": c.get("ok"), "html": _cond_html(c)}
-         for c in (V.get("conds") or [])]
-    if nxt and nxt["lvl"] >= 5:
-        L.append({"k": "ops", "name": "營運", "ok": None, "html": "升到 5＋2 以上前要再確認停電備援（09-30 說好的）"})
+    # ⭐ 2026-11-02：權益那一條照券商現在的數字畫（⛔ 不准跟右上角兩個數字）
+    src = [dict(c, eq=eq, ok=eq >= c["need"], gap=max(0, c["need"] - eq))
+           if (c.get("k") == "eq" and _num(eq) and _num(c.get("need"))) else c for c in (V.get("conds") or [])]
+    L = [{"k": c.get("k"), "name": c.get("name"), "ok": c.get("ok"), "html": _cond_html(c)} for c in src]
     out["conds"] = L
     out["conds_note"] = None if any(c["k"] != "ops" for c in L) else "升級條件還沒算過（面板每個交易日 14:00 收盤後算一次）"
     offer, pend, notice = V.get("offer"), V.get("pending"), V.get("notice")
@@ -1790,13 +1844,16 @@ def _panel(now, today, eq, lot1, E):
         vd = {"kind": "trial", "title": "試車中：%d／%d 筆" % (trial["n"], TRIAL_N),
               "sub": (_trial_miss(tr) or "") + "試車跑完之前不會出升級建議。", "att": False}
     elif _num(eqv) and eqv >= nxt["eq"]:
-        vd = {"kind": "blocked", "title": "先不升：卡在%s" % ("、".join("「%s」" % x for x in bad) or "條件"),
-              "sub": "權益已經夠 %s 了；%s會再檢查一次。" % (nxt["label"], out["check"]["next_txt"]), "att": False}
+        vd = {"kind": "blocked", "title": ("先不升：卡在%s" % "、".join("「%s」" % x for x in bad)) if bad
+              else "權益到了，等系統重新檢查",
+              "sub": ("權益已經夠 %s 了；%s會再檢查一次。" % (nxt["label"], out["check"]["next_txt"])) if bad
+              else "權益已經夠 %s 了；手上沒部位時會自動重新檢查，通過就直接出現升級建議，不用等收盤。" % nxt["label"],
+              "att": False}
     else:
         gap = nxt.get("gap")
         far =(not _num(gap)) or gap > FAR_GAP
         vd = {"kind": "far", "title": "離下一級還遠" if far else "離下一級還差 %s" % wan(gap),
-              "sub": ("權益到 %s、而且其他條件都過，那天收盤後就會出現%s。" % (
+              "sub": ("權益到 %s、而且其他條件都過，就會直接出現%s。" % (
                   wan(nxt["eq"]), "試車建議（先跑 2＋1）" if tr.get("status") != "passed" else "升級建議")) +
               (("權益掉到 %s 以下（%s × 0.85），隔天會自動退回 %s。" % (
                   wan(V["floor"]), wan(lad[lv - 1][0]), label(ladder_lots(max(0, lv - 1)))))

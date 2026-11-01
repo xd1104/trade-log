@@ -709,6 +709,40 @@ def ctx_ok(**kw):
     return c
 
 
+print("\n=== ⭐ 2026-11-02 入金不用等 14:00：現在的權益夠了就當場重算 ===")
+_tp = dict(lots.TRIAL_DEFAULT, status="passed", passed_at="2026-10-21", jumped=True)
+_old = {"at": "2026-11-01", "eq": 261189.0, "to": 6, "kind": "jump", "ok": False, "why": ["權益不夠"],
+        "list": [{"k": "eq", "name": "權益", "ok": False, "eq": 261189.0, "need": 300000, "gap": 38811.0}]}
+_N = datetime(2026, 11, 2, 1, 0)
+clear_state()
+write_state(level=5, checked="2026-11-01", trial=_tp, conds=_old)
+_r = lots.live_check(351000.0, now=_N, ctx=ctx_ok(), busy=True)
+say(not _r["ran"], "  ⛔ 手上有部位 ⇒ 不跑（權益含未實現）", _r)
+_P = lots.panel(now=_N, eq=351000.0)
+_c = [c for c in _P["conds"] if c["k"] == "eq"][0]
+say(_c["ok"] and "35.1" in _c["html"], "  ⭐ 還沒重算之前，權益那一條也照現在的數字畫", _c)
+chk("  還沒重算時的結論不寫「卡在條件」", _P["verdict"]["title"], "權益到了，等系統重新檢查")
+_r = lots.live_check(280000.0, now=_N, ctx=ctx_ok())
+say(not _r["ran"], "  權益沒過門檻 ⇒ 不跑", _r)
+_r = lots.live_check(351000.0, now=_N, ctx=ctx_ok())
+_s = lots.read_state()[0]
+chk("  ⭐ 權益夠 ⇒ 當場出建議、直接跳到撐得起的那一級（7＋3）",
+    (_r["ran"], _s["suggest"]["ok"], _s["suggest"]["to"], _s["level"]), (True, True, 7, 5))
+chk("  ⛔ 不動每日檢查的進度", _s["checked"], "2026-11-01")
+_r = lots.live_check(351000.0, now=_N, ctx=ctx_ok())
+say(not _r["ran"], "  ⛔ 已經有同一級的建議 ⇒ 不重算", _r)
+_ok, _m = lots.apply_upgrade(_s["suggest"]["id"], now=_N, rows=[{"date": "2026-11-02", "equity": 351000.0}],
+                             ctx=ctx_ok())
+chk("  ⭐ 這個建議按確認升得上去", (_ok, lots.read_state()[0]["level"]), (True, 7))
+clear_state()
+write_state(level=5, checked="2026-11-01", trial=_tp, conds=_old)
+lots.live_check(351000.0, now=_N, ctx=ctx_ok(retire={"union": "watch", "trend": "ok"}))
+_s = lots.read_state()[0]
+say(not (_s.get("suggest") or {}).get("ok") and _s["conds"]["eq"] == 351000.0,
+    "  ⛔ 其他條件沒過 ⇒ 不出建議，但條件更新成現在的權益", _s.get("conds"))
+_r = lots.live_check(351000.0, now=_N, ctx=ctx_ok())
+say(not _r["ran"], "  ⛔ 同一天同一級只算一次", _r)
+
 clear_state()
 write_state(level=2, checked="2026-11-16", up_month="2026-11")
 lots.daily_check([{"date": "2026-11-17", "equity": 83100.0}], now=datetime(2026, 11, 17, 14, 5), ctx=ctx_ok())
@@ -1290,7 +1324,7 @@ for _f in ast.walk(_lt):
             if isinstance(_n, ast.Call) and getattr(_n.func, "id", None) == "_write_state":
                 _callers.add(_f.name)
 chk("  ⛔ lots.py 裡會寫狀態檔的只有 apply_upgrade／revoke_pending／daily_check（＋每日的 _pending_guard）",
-    sorted(_callers), ["_pending_guard", "apply_upgrade", "daily_check", "revoke_pending"])
+    sorted(_callers), ["_pending_guard", "apply_upgrade", "daily_check", "live_check", "revoke_pending"])
 _lsrc = pathlib.Path(lots.__file__).read_text(encoding="utf-8")
 say(_lsrc.count("tmp.replace(p)") == 1 and "open(" not in _lsrc.split("def _write_state")[1].split("def _log")[0],
     "  寫法是原子換檔（tmp → replace），⛔ 沒有就地覆寫")

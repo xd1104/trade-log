@@ -12900,6 +12900,12 @@ def poll_equity():
                                    busy=broker._state.get("position") is not None)   # 有部位 ⇒ 06:00 那道先不跑
             if _lr.get("err"):
                 LOTS_ERR["err"] = _lr["err"]
+            # ⭐ 2026-11-02 入金當下就重算升級條件（⛔ 有部位、送單那幾刻不跑；只出建議，升級仍要他按確認）
+            if not _eq_quiet(now):
+                _lr = lots.live_check((EQUITY.get("m") or {}).get("equity_amount"), now,
+                                      busy=broker._state.get("position") is not None)
+                if _lr.get("err"):
+                    LOTS_ERR["err"] = _lr["err"]
             _small = lots_state_small()               # ⛔ 讀檔在鎖外面，鎖裡只指派
             with state_lock:
                 STATE["lots"] = _small

@@ -3913,6 +3913,26 @@ chk("  ⛔ 歷史那一列：分母是進場價 12016（⛔ 不是箱子最後�
     round(AF.orb_hist_read()[0][-1]["box_pct"], 6), round(10.0 / 12016.0 * 100, 6))
 chk("    而且那一列就是今天", AF.orb_hist_read()[0][-1]["date"], DAY)
 
+print("\n  ── ⑱c2 ⭐ 2026-11-02 別的候選先下單的日子，箱寬歷史也要補上 ──")
+_cu_dt = datetime.datetime.fromisoformat(DAY + "T10:00:00")
+orb_clear()
+orb_seed([0.05] * AF.ORB_RULE["hist_n"])
+tick_write(DAY, BOX_ROWS + UP_ROWS)
+AF._ORB_CU["key"] = None
+chk("  ⛔ 開箱截止之前不對帳", AF._orb_hist_catchup(datetime.datetime.fromisoformat(DAY + "T09:10:00")), 0)
+chk("  10:00 對帳 ⇒ 補上今天那一列", AF._orb_hist_catchup(_cu_dt), 1)
+_cu = AF.orb_hist_read()[0][-1]
+chk("    那一列的日期、來源、箱寬%", (_cu["date"], _cu["src"], round(_cu["box_pct"], 6)),
+    (DAY, "catchup", round(10.0 / 12016.0 * 100, 6)))
+chk("  ⛔ 同一天不重跑", AF._orb_hist_catchup(_cu_dt), 0)
+AF._ORB_CU["key"] = None
+chk("  ⛔ 已經有那一列就不重寫", AF._orb_hist_catchup(_cu_dt), 0)
+orb_clear()
+orb_seed([0.05] * AF.ORB_RULE["hist_n"])
+tick_write(DAY, UP_ROWS)
+AF._ORB_CU["key"] = None
+chk("  ⛔ 逐筆不完整（面板晚開）⇒ 不補、不猜", AF._orb_hist_catchup(_cu_dt), 0)
+
 print("\n  ── ⑱c2 ⛔ 同一天再跑一次（看門狗重啟）⇒ 不送第二筆 ──")
 _n18, _rows18 = len(_api18.orders), len(rows())
 AF._orb_reset(None)                  # 記憶體全清，只剩帳本

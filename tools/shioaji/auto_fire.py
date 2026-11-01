@@ -359,6 +359,10 @@ ORB_BOX_FROM_MS = _ms_of(ORB_BOX_FROM_AT)
 ORB_BOX_TO_MS = _ms_of(ORB_BOX_TO_AT)
 ORB_BREAK_BY_MS = _ms_of(ORB_BREAK_BY)
 ORB_LAST_MS = _ms_of(ORB_LAST_AT)
+ORB_CATCHUP_DAYS = 40                       # 箱寬歷史對帳往回看幾個有逐筆的日子
+ORB_CATCHUP_EDGE_MS = 30000                 # 逐筆頭尾差超過 30 秒 ⇒ 算不完整，不補
+ORB_CATCHUP_QUIET_MS = _ms_of("08:40:00")   # 這個時刻到開箱截止之間不對帳
+_ORB_CU = {"key": None}
 
 ARM_MAX_BYTES = 64          # 開關檔只讀這麼多 —— 有人不小心指到大檔也不會卡住
 ARM_SHOW = 24               # 內容看不懂時，畫面上顯示前幾個字
@@ -1710,6 +1714,78 @@ def _orb_hist_step(d, box, fill):
         print("⚠️ [自動下單] " + _ORB["err"], flush=True)
 
 
+def orb_hist_row(d):
+    """
+    從 tick_logs 算 `d` 那一天的箱寬歷史 ⇒ (一列, None) 或 (None, 為什麼)。
+    ⛔ 規則全走正本（orb_box_of／orb_break_of／orb_fill／orb_box_pct），跟 `sim_lanes.orb_calc` 同一把尺。
+    ⛔ 逐筆不完整就不算（面板晚開、中途斷掉）：用半段逐筆畫出來的箱子是假的，寧可缺一列。
+    """
+    feed = tick_feed(_tick_path(d), 0)
+    if feed["err"]:
+        return None, feed["err"]
+    box_t = [t for t, _p in feed["trades"] if ORB_BOX_FROM_MS <= t <= ORB_BOX_TO_MS]
+    if not box_t:
+        return None, "箱子那段沒有逐筆"
+    if box_t[0] > ORB_BOX_FROM_MS + ORB_CATCHUP_EDGE_MS or box_t[-1] < ORB_BOX_TO_MS - ORB_CATCHUP_EDGE_MS:
+        return None, "箱子那段逐筆不完整"
+    box = orb_box_of(feed["trades"])
+    hit = orb_break_of(feed["trades"], box["hi"], box["lo"])
+    if hit is None:
+        if not any(t >= ORB_BREAK_BY_MS - ORB_CATCHUP_EDGE_MS for t, _p in feed["trades"]):
+            return None, "%s 前的逐筆不完整" % ORB_BREAK_BY[:5]
+        fill = box["last"]
+    else:
+        # ⚠️ 10-12 的 tick_logs 買賣價斷了 17 分鐘 ⇒ 舊報價不算（差 5 秒以上就退回成交價）
+        fresh = [q for q in feed["quotes"] if q[0] >= hit["t_ms"] - 5000]
+        bid, ask = _quote_at(fresh, hit["t_ms"], (None, None))
+        fill = orb_fill(hit["d"], hit["p"], bid, ask)
+    bp = orb_box_pct(box["w"], fill)
+    if bp is None:
+        return None, "算不出箱子寬度%"
+    return {"date": str(d), "hi": box["hi"], "lo": box["lo"], "w": round(box["w"], 1),
+            "fill": fill, "box_pct": round(bp, 6), "src": "catchup"}, None
+
+
+def _orb_hist_catchup(now=None):
+    """
+    ⭐ 2026-11-02：箱寬歷史**每天都要有一列**，不管那天用什麼做法、開箱有沒有走到最後。
+    10 月快攻／回馬先下單的日子，`_orb_step` 在 `_sent()` 提早收工沒寫 ⇒ 少的全是箱子寬的日子 ⇒ 門檻被拉低、跟回測不同。
+    ⇒ 開箱判斷結束之後（`ORB_BREAK_BY` 再過 1 分鐘）另外對帳：tick_logs 有、歷史沒有的日子補上。
+    ⛔ 跑在送單執行緒、一天最多兩次；⛔ 開盤前到開箱截止那段不跑（整檔重讀，不跟送單搶時間）；⛔ 只 append。
+    ⇒ 這一輪補了幾列。
+    """
+    now = now or datetime.now()
+    d = str(now.date())
+    ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+    if ORB_CATCHUP_QUIET_MS <= ms < ORB_BREAK_BY_MS + 60000:
+        return 0
+    after = ms >= ORB_BREAK_BY_MS
+    key = (d, after)
+    if _ORB_CU["key"] == key:
+        return 0
+    _ORB_CU["key"] = key
+    rows, _bad, _dup = orb_hist_read()
+    have = {r["date"] for r in rows}
+    days = sorted(p.stem for p in TICK_DIR.glob("????-??-??.jsonl"))[-ORB_CATCHUP_DAYS:]
+    new = []
+    for ds in days:
+        if ds in have or ds > d or (ds == d and not after):
+            continue
+        row, why = orb_hist_row(ds)
+        if row is None:
+            print("⚠️ [自動下單] 箱寬歷史 %s 補不回來：%s" % (ds, why), flush=True)
+            continue
+        new.append(row)
+    if new:
+        ORB_HIST.parent.mkdir(parents=True, exist_ok=True)
+        with ORB_HIST.open("a", encoding="utf-8") as f:
+            for r in new:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            f.flush()
+        print("[自動下單] 箱寬歷史補了 %d 天：%s" % (len(new), "、".join(r["date"] for r in new)), flush=True)
+    return len(new)
+
+
 def _orb_end(d, why, extra=None, msg=None):
     """開箱這個候選今天收工（落地一列）。"""
     _ORB["done"] = True
@@ -2554,6 +2630,11 @@ def _worker():
             if _ST["err_n"] <= 3:
                 print("⚠️ [自動下單] 開箱那一段出錯（停損不受影響）：%s" % str(e)[:200],
                       flush=True)
+        try:
+            _orb_hist_catchup()
+        except Exception as e:
+            _ST["err"] = "orb_hist_catchup: " + str(e)[:150]
+            _ST["err_n"] += 1
         try:
             _recover_poll()
         except Exception as e:
