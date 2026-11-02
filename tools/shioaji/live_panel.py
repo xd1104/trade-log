@@ -1145,6 +1145,12 @@ def day_bars(day=None, tf=CHART_TF, full=False):
                         "error": None if SESSION_REF.get("api") else "尚未連線，且本機沒有這幾天的資料"}
             if d == date.today():
                 g = overlay_live(g)          # 先在 1 分 K 這一層換掉還沒收完的那幾分鐘
+                if partial == "today":
+                    # ⭐ 2026-11-02：永豐 kbars 逾時，但面板自己收的即時 K 棒補上了 ⇒ 不是「圖上只有昨晚」
+                    mine = g[(g["ts"].dt.date == d) & (g["ts"].dt.time >= SESSION_OPEN)]
+                    if not mine.empty:
+                        late = mine["ts"].min() > pd.Timestamp.combine(d, SESSION_OPEN) + pd.Timedelta(minutes=5)
+                        partial = "today_part" if late else ""
             bars = to_timeframe(g, tf, base)
         except Exception as e:
             return {"error": str(e)[:120]}
@@ -1292,6 +1298,7 @@ SESS_RETRY_PARTIAL = 8
 # 今天的 kbars 一分鐘才變一次，不必每次要圖都跟永豐重抓（實測整支 0.5~0.85 秒）。
 # 還沒收完的那幾分鐘由 overlay_live() 用即時 tick 換掉，所以壓成 20 秒不會讓畫面變舊。
 TODAY_TTL = 20
+TODAY_RETRY_EMPTY = 120
 
 
 def _csv_stamp():
@@ -1345,11 +1352,13 @@ def _today_raw(d):
     tick 現算的，不靠 kbars；kbars 只負責已經收完的那些分鐘。
     """
     hit = _TODAY_RAW.get(d)
-    if hit is not None and time.time() - hit["at"] < TODAY_TTL:
+    if hit is not None and time.time() - hit["at"] < hit["ttl"]:
         return hit["df"]
     df = _raw_days([d])
     _TODAY_RAW.clear()          # 只留今天那一筆，跨日自然就沒了
-    _TODAY_RAW[d] = {"df": df, "at": time.time()}
+    # 拿不到（多半是 kbars 逾時，一次卡 30 秒）⇒ 隔久一點再試，別讓每次畫圖都卡住
+    bad = df is None or df.empty
+    _TODAY_RAW[d] = {"df": df, "at": time.time(), "ttl": TODAY_RETRY_EMPTY if bad else TODAY_TTL}
     return df
 
 
@@ -8600,6 +8609,8 @@ function pagerHTML(T){
    ? '<span>載入中…</span>'
    : (partial?'<span class="warn">'+(pwhat==='today'
         ? '今天的 K 棒還沒拿到，圖上是昨晚的夜盤'
+        : pwhat==='today_part'
+        ? '永豐的 K 棒拿不到，今天只畫得出面板開著之後的部分'
         : '夜盤資料載入中，圖上只有今天日盤')+'</span>'+
               '<span class="sep">·</span>':'')+
      ((!partial&&noS&&noS!==dayS)

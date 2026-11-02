@@ -229,9 +229,12 @@ def _partial_leg(cur, n, tsums=None):
     if s is not None:
         used = cur.get("tgt_used") or [0.0, 0.0]
         nq = s[1] - float(used[1])
-        if nq > 0 and abs(nq - n) < 1e-9:
-            px, src = round((s[0] - float(used[0])) / nq, 2), "tp"
-            cur["tgt_used"] = [s[0], s[1]]
+        if nq > 0 and nq - n > -1e-9:
+            # ⭐ 2026-11-02：明細比部位晚問，停利單可能已經又多成交幾口（實測部位少 6 口、明細已經 7 口）
+            #    ⇒ 明細的口數比 n 多也是停利單；只記這 n 口，多出來的留給下一段算
+            avg = (s[0] - float(used[0])) / nq
+            px, src = round(avg, 2), "tp"
+            cur["tgt_used"] = [float(used[0]) + avg * n, float(used[1]) + n]
     cur.setdefault("legs", []).append({"qty": int(n), "px": px, "src": src,
                                        "at": datetime.now().strftime("%H:%M:%S")})
     _log("position_partial", {"ok": True, "gone": int(n), "px": px, "src": src,

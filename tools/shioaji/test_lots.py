@@ -1614,6 +1614,34 @@ chk("  停利部分成交那次對帳：leg 價錢照樣算得出來（tp），u
     ([(l["qty"], l["px"], l["src"]) for l in p.get("legs") or []], api.us_locked), ([(1, 12070.0, "tp")], 0))
 live(False)
 
+print("  -- 2026-11-02：部位少 2 口，問明細時停利單已經 3 口全成交 ⇒ 不可以留白 --")
+
+
+class RaceAPI(MultiAPI):
+    race = False
+
+    def update_status(self, acc=None):
+        if self.race:
+            self.race = False
+            self.fill_target(1, 12070.0)
+
+
+api = RaceAPI()
+r = af_send(api, 3)
+api.fill_target(2, 12070.0)
+api.race = True
+broker._LAST_RECONCILE["at"] = 0.0
+broker.reconcile()
+p = broker._state["position"]
+chk("  第一段：2 口算停利、價錢在", [(l["qty"], l["px"], l["src"]) for l in p.get("legs") or []],
+    [(2, 12070.0, "tp")])
+broker._LAST_RECONCILE["at"] = 0.0
+broker.reconcile()
+rows = [json.loads(x) for x in (broker.TRADE_DIR / (str(date.today()) + ".jsonl")).read_text(encoding="utf-8").splitlines()]
+chk("  整趟：3 口、出場價算得出來、理由停利", (rows[-1]["qty"], rows[-1]["exit"], rows[-1]["reason"]),
+    (3, 12070.0, "tp"))
+live(False)
+
 print("  -- A1：口數模組壞掉 ⇒ 一律 1 口（日盤、夜盤）--")
 _orig_dl = lots.day_lots
 lots.day_lots = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("壞了"))
