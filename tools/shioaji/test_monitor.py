@@ -463,5 +463,60 @@ else:
         print("    畫面文字［%s］：%s" % (_k, (TXT7[_k] or "").replace("\n", "｜")))
 MP._get = _real_get
 
+# ── ⭐ 2026-11-03 心跳：urllib 不行改 curl、失敗寫紀錄檔、commit 說明欄帶心跳時間 ─────────────────
+print("\n=== ⑧ 心跳備援／紀錄／說明欄 ===")
+import tempfile as _tf  # noqa: E402
+from datetime import datetime as _dt, timezone as _tz  # noqa: E402
+_saved = (MP.hc_url, MP._hc_urllib, MP._hc_curl, MP.LOG_FILE, dict(MP.STATE))
+MP.LOG_FILE = Path(_tf.mkdtemp()) / "monitor_push.log"
+MP.hc_url = lambda: "https://hc-ping.com/test"
+
+
+def _boom(u):
+    raise OSError("假的連不上")
+
+
+MP._hc_urllib, MP._hc_curl = _boom, (lambda u: None)
+MP.STATE.update(hc_ok=None, hc_err=None, hc_via=None, hc_fails=0, started="2026-11-03T09:00:00+08:00")
+say(MP.heartbeat() is True and MP.STATE["hc_via"] == "curl", "urllib 失敗 ⇒ 改用 curl 成功", MP.STATE)
+say("urllib：假的連不上" in MP.LOG_FILE.read_text(encoding="utf-8"), "urllib 失敗原因有寫進紀錄檔")
+MP._hc_curl = _boom
+say(MP.heartbeat() is False and MP.STATE["hc_fails"] == 1, "兩種都失敗 ⇒ 回 False、連續失敗 1 次")
+say("心跳失敗（連續第 1 次）" in MP.LOG_FILE.read_text(encoding="utf-8"), "兩種都失敗 ⇒ 紀錄檔有寫")
+_ok_at = MP.STATE["hc_ok"]
+say(MP.commit_msg() == "monitor hc_ok=%s up=2026-11-03T09:00:00+08:00" % _ok_at,
+    "說明欄帶最後一次心跳＋啟動時間", MP.commit_msg())
+MP.hc_url = lambda: None
+say(MP.commit_msg() == "monitor hc=off", "沒有心跳網址 ⇒ hc=off")
+MP.hc_url, MP._hc_urllib, MP._hc_curl, MP.LOG_FILE = _saved[:4]
+MP.STATE.clear()
+MP.STATE.update(_saved[4])
+
+print("\n=== ⑨ 看門狗：快照新、心跳停 ⇒ 推「斷線通知失效」===")
+sys.path.insert(0, str(HERE.parents[1] / ".github" / "watchdog"))
+import watchdog as WD  # noqa: E402
+_last = _dt(2026, 11, 3, 3, 0, tzinfo=_tz.utc)          # 11:00 台北
+
+
+def _m(ok):
+    return "monitor hc_ok=%s up=2026-11-03T01:48:54+08:00" % ok
+
+
+n, h = WD.decide_hc({"status": "up"}, _last, _m("2026-11-03T10:58:00+08:00"))
+say(n is None and h == "ok", "心跳 2 分鐘前 ⇒ 不響")
+n, h = WD.decide_hc({"status": "up"}, _last, _m("2026-11-03T10:45:00+08:00"))
+say(n is not None and n["tag"] == "hc-bad" and h == "bad", "心跳停 15 分 ⇒ 響「斷線通知失效」", n)
+n, h = WD.decide_hc({"status": "up", "hc": "bad"}, _last, _m("2026-11-03T10:40:00+08:00"))
+say(n is None and h == "bad", "已經響過 ⇒ 不重複響")
+n, h = WD.decide_hc({"status": "up", "hc": "bad"}, _last, _m("2026-11-03T10:59:00+08:00"))
+say(n is not None and n["tag"] == "hc-ok" and h == "ok", "心跳回來 ⇒ 響「恢復」")
+n, h = WD.decide_hc({"status": "up"}, _last, "monitor hc_ok=none up=2026-11-03T10:55:00+08:00")
+say(n is None and h == "ok", "剛重啟還沒打過 ⇒ 用啟動時間算、不響")
+n, h = WD.decide_hc({"status": "up"}, _last, "monitor hc_ok=none up=2026-11-03T09:00:00+08:00")
+say(n is not None and h == "bad", "啟動兩小時從沒打成功 ⇒ 響")
+for _old in ("monitor", "monitor hc=off", "亂寫"):
+    n, h = WD.decide_hc({"status": "up"}, _last, _old)
+    say(n is None and h == "ok", "看不懂的說明欄「%s」⇒ 不響" % _old)
+
 print("\n" + ("全部通過 ✅" if FAIL == 0 else f"⛔ 有 {FAIL} 項沒過"))
 sys.exit(1 if FAIL else 0)

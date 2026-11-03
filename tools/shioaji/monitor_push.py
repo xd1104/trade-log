@@ -50,7 +50,11 @@ HTTP_TIMEOUT = 10
 MAGIC = b"tlmon1"
 KDF_ITER = 600000
 
-STATE = {"on": False, "msg": "還沒啟動", "last_ok": None, "last_err": None, "pushes": 0, "fails": 0}
+LOG_FILE = HERE / "monitor_push.log"   # ⭐ 2026-11-03 心跳／推送失敗的紀錄（面板的 stdout 是 DEVNULL，印出來沒人看得到）
+LOG_MAX_BYTES = 200_000
+
+STATE = {"on": False, "msg": "還沒啟動", "last_ok": None, "last_err": None, "pushes": 0, "fails": 0,
+         "started": None, "hc_ok": None, "hc_err": None, "hc_via": None, "hc_fails": 0}
 _AN = {"hash": None, "box": None}
 
 
@@ -828,7 +832,7 @@ def push(data_bytes, extra=None):
         if data:
             lines += "100644 blob %s\t%s\n" % (_git("hash-object", "-w", "--stdin", inp=data), name)
     tree = _git("mktree", inp=lines.encode())
-    commit = _git("commit-tree", tree, "-m", "monitor")
+    commit = _git("commit-tree", tree, "-m", commit_msg())
     _git("push", "-f", "-q", "origin", "%s:refs/heads/%s" % (commit, BRANCH))
     return commit
 
@@ -842,23 +846,76 @@ def hc_url():
     return u if u.startswith("https://hc-ping.com/") else None
 
 
+def _now_iso():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _log(msg):
+    """寫一行到 monitor_push.log（⛔ 寫不進去也不可以讓推送掛掉）。檔案超過上限就只留後半。"""
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+            tail = LOG_FILE.read_bytes()[-LOG_MAX_BYTES // 2:]
+            LOG_FILE.write_bytes(tail[tail.find(b"\n") + 1:])
+        with LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
+def commit_msg():
+    """⭐ 2026-11-03 快照 commit 的說明欄帶上心跳狀態（明文，只有兩個時間，⛔ 沒有任何交易資料）。
+    11-02 09:41 起面板照推快照、卻沒打心跳 ⇒ Healthchecks 早就是 down，真當機時沒有新的「轉 down」可觸發，手機沒響。
+    ⇒ GitHub 看門狗讀這一行：快照是新的、心跳卻停了超過 HC_STALE_MIN ⇒ 推「斷線通知失效」到手機。
+    格式：`monitor hc_ok=<最後一次心跳成功或 none> up=<這次面板啟動>`（⚠️ 改格式要同步改 watchdog.py 的 parse_msg）。"""
+    if not hc_url():
+        return "monitor hc=off"
+    return "monitor hc_ok=%s up=%s" % (STATE.get("hc_ok") or "none", STATE.get("started") or "none")
+
+
+def _hc_urllib(u):
+    # ⛔ 不用 urllib.request.urlopen 那個全行程共用的 opener（第一次用時就把代理設定定死）⇒ 每次自己建一個、不走代理
+    op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with op.open(urllib.request.Request(u, headers={"User-Agent": "trade-log-panel"}), timeout=HTTP_TIMEOUT) as r:
+        r.read()
+
+
+def _hc_curl(u):
+    # 備用：跟 git push 一樣走外部程式（Windows 10 內建 curl.exe）。⛔ 不開黑窗
+    r = subprocess.run(["curl.exe", "-fsS", "-m", str(HTTP_TIMEOUT), "-A", "trade-log-panel", "-o", os.devnull, u],
+                       capture_output=True, timeout=HTTP_TIMEOUT + 5,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        raise RuntimeError("curl %d：%s" % (r.returncode, (r.stderr or b"").decode("utf-8", "replace").strip()[-120:]))
+
+
 def heartbeat():
     """⭐ 2026-10-14【斷線通知】：GitHub 的 */5 排程實際上 3～7 小時才跑一次 ⇒ 改由 Healthchecks.io 盯著。
     ⛔ 只在快照**真的推上去之後**才跳一下 ⇒ 「Healthchecks 收不到」＝「手機也收不到新快照」，兩邊同一件事。
     它超過時間沒收到 ⇒ 叫 GitHub 跑一次看門狗（workflow_dispatch）⇒ 照舊用 Web Push 推到手機。
-    ⛔ 失敗只記一筆，⛔ 不影響快照（那才是主線）。"""
+    ⛔ 失敗只記一筆，⛔ 不影響快照（那才是主線）。
+    ⭐ 2026-11-03：先 urllib、不行再 curl.exe；失敗原因寫進 monitor_push.log（以前只留在記憶體，查不到）。"""
     u = hc_url()
     if not u:
+        if STATE.get("hc_err") != "沒有心跳網址檔":
+            _log("心跳：沒有 HC_PING_URL.txt 或內容看不懂 ⇒ 不打心跳")
+        STATE["hc_err"] = "沒有心跳網址檔"
         return False
-    try:
-        with urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "trade-log-panel"}),
-                                    timeout=HTTP_TIMEOUT) as r:
-            r.read()
-        STATE["hc_ok"] = datetime.now().isoformat(timespec="seconds")
+    errs = []
+    for via, fn in (("urllib", _hc_urllib), ("curl", _hc_curl)):
+        try:
+            fn(u)
+        except Exception as e:
+            errs.append("%s：%s" % (via, str(e)[:160]))
+            continue
+        if STATE["hc_fails"] or (errs and STATE.get("hc_via") != via):
+            _log("心跳成功（%s）；之前連續失敗 %d 次%s" % (via, STATE["hc_fails"], "；這次 " + " ／ ".join(errs) if errs else ""))
+        STATE.update(hc_ok=_now_iso(), hc_via=via, hc_fails=0, hc_err=None)
         return True
-    except Exception as e:
-        STATE["hc_err"] = str(e)[:160]
-        return False
+    STATE["hc_fails"] += 1
+    STATE["hc_err"] = " ／ ".join(errs)
+    if STATE["hc_fails"] <= 3 or STATE["hc_fails"] % 30 == 0:
+        _log("心跳失敗（連續第 %d 次）：%s" % (STATE["hc_fails"], STATE["hc_err"]))
+    return False
 
 
 def once(port, key):
@@ -880,6 +937,7 @@ def _loop(port, key):
             STATE["msg"] = "推送失敗"
             if STATE["fails"] <= 3 or STATE["fails"] % 30 == 0:
                 print("⚠️ [手機監控] 推送失敗（第 %d 次）：%s" % (STATE["fails"], STATE["last_err"]), flush=True)
+                _log("推送失敗（第 %d 次）：%s" % (STATE["fails"], STATE["last_err"]))
         time.sleep(EVERY_S)
 
 
@@ -894,5 +952,7 @@ def start(port):
     key = load_key()
     STATE["on"] = True
     STATE["msg"] = "啟動中"
+    STATE["started"] = _now_iso()
+    _log("啟動（心跳網址檔%s）" % ("有" if hc_url() else "⛔ 沒有"))
     threading.Thread(target=_loop, args=(port, key), daemon=True, name="monitor_push").start()
     print("【手機監控】已啟動：每 %d 秒推一張加密快照到 GitHub（%s 分支）" % (EVERY_S, BRANCH), flush=True)
