@@ -52,6 +52,16 @@ try:
         ok, why = LP.restart_check(at(hm))
         say(not ok and "先不要重啟" in (why or ""), "%s 關鍵時刻 ⇒ 擋" % hm, why)
 
+    # ④-b 冬令（2026-11-05 修：原本寫死夏令 21:33～21:43，冬令 22:35～22:40 送單那段沒擋）
+    def wat(hm):
+        return datetime(2026, 11, 4, int(hm[:2]), int(hm[3:5]), 0)
+    for hm in ("22:33", "22:35", "22:40", "22:42"):
+        ok, why = LP.restart_check(wat(hm))
+        say(not ok and "先不要重啟" in (why or ""), "冬令 %s 夜盤判斷中 ⇒ 擋" % hm, why)
+    for hm in ("21:35", "21:40", "22:32", "22:43"):
+        ok, why = LP.restart_check(wat(hm))
+        say(ok, "冬令 %s 不是送單時刻 ⇒ 可以重啟" % hm, why)
+
     # ⑤ 有部位 ⇒ 擋（不管幾點）
     broker._state["position"] = {"dir": "long", "entry": 12000}
     ok, why = LP.restart_check(at("10:30"))

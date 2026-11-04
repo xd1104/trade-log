@@ -181,7 +181,18 @@ DEPTH_SUBS = {"contracts": [], "codes": [], "paused_day": None, "err": None, "at
 #    ⛔ 有部位時**只示警不重連**：重連會卡住主迴圈幾秒，而主迴圈就是停損。等平倉後下一輪再重連。
 DEPTH_STALE_S = 180
 DEPTH_RETRY_EVERY = 600
-DEPTH_QUIET_ZONES = ("09:03:30", "09:15:00", "13:43:30", "21:35:00", "21:40:00", "04:58:00")
+DEPTH_QUIET_ZONES = ("09:03:30", "09:15:00", "13:43:30", "04:58:00")   # 夜盤那兩刻見 night_moments()
+
+
+def night_moments(now):
+    """
+    今晚夜盤兩個送單時刻（台積電快攻、夜盤跟勢）⇒ (done_at, trend_at) 兩個 datetime。
+    ⛔ 2026-11-05：原本寫死夏令 21:35／21:40，11-02 美股換冬令後夜盤改 22:35／22:40，
+       重啟鈕與五檔重連的「關鍵時刻」卻還擋在 21:3x ⇒ 真正送單那幾分鐘沒擋。
+       ⇒ 一律跟 night_fire 問（同一支算法，美股冬夏令自動換）。
+    """
+    E = night_fire.evening_of(now) or now.date()
+    return night_fire.done_at(E), night_fire.trend_at(E)
 DEPTH_QUIET_PAD_S = 120
 DEPTH_WD = {"last_ba": None, "stale_s": None, "retries": 0, "last_retry": 0.0, "held": False}
 
@@ -198,7 +209,12 @@ def depth_check(now_ts, last_ba, tick_quiet, market_open, conn_ok, has_pos, last
         return None, False
     sec = clock.hour * 3600 + clock.minute * 60 + clock.second
     near = False
-    for z in DEPTH_QUIET_ZONES:
+    zones = list(DEPTH_QUIET_ZONES)
+    try:
+        zones += [m.strftime("%H:%M:%S") for m in night_moments(clock)]
+    except Exception:                     # noqa: BLE001  算不出來 ⇒ 退回夏令＋冬令兩組都當安靜（安全方向）
+        zones += ["21:35:00", "21:40:00", "22:35:00", "22:40:00"]
+    for z in zones:
         zs = int(z[:2]) * 3600 + int(z[3:5]) * 60 + int(z[6:8])
         d = abs(sec - zs)
         if min(d, 86400 - d) <= DEPTH_QUIET_PAD_S:
@@ -13032,7 +13048,7 @@ RESTART_BLOCK = (                      # (起, 迄, 原因)；含頭不含尾，
     ("08:58", "09:31", "開盤自動下單判斷中（09:00～09:30）"),
     ("13:27", "13:31", "結算日收盤平倉前後"),
     ("13:42", "13:46", "收盤平倉前後（13:43:30）"),
-    ("21:33", "21:43", "夜盤自動下單判斷中（21:35～21:40）"),
+    # 夜盤送單那段不寫在這裡：冬夏令會換（夏令 21:33～21:43、冬令 22:33～22:43），見 restart_blocks()
     ("04:56", "05:01", "夜盤收盤平倉前後（04:58）"),
 )
 RESTART = {"at": None}                 # 已經要求重啟的時間（主迴圈看到就收工）
@@ -13086,10 +13102,24 @@ def restart_check(now=None):
     if ENTER_LOCK.locked():
         return False, "單子正在送，等一下再按"
     hm = now.strftime("%H:%M")
-    for a, b, why in RESTART_BLOCK:
+    for a, b, why in restart_blocks(now):
         if a <= hm < b:
             return False, "%s～%s %s，先不要重啟" % (a, b, why)
     return True, None
+
+
+def restart_blocks(now):
+    """固定的擋時段＋今晚夜盤送單那段（跟著美股冬夏令走）。算不出來 ⇒ 夏令、冬令兩段都擋。"""
+    out = list(RESTART_BLOCK)
+    try:
+        d, t = night_moments(now)
+        a = (d - timedelta(minutes=2)).strftime("%H:%M")
+        b = (t + timedelta(minutes=3)).strftime("%H:%M")
+        out.append((a, b, "夜盤自動下單判斷中（%s～%s）" % (d.strftime("%H:%M"), t.strftime("%H:%M"))))
+    except Exception:                     # noqa: BLE001
+        out.append(("21:33", "21:43", "夜盤自動下單判斷中（夏令）"))
+        out.append(("22:33", "22:43", "夜盤自動下單判斷中（冬令）"))
+    return out
 
 
 def restart_info():

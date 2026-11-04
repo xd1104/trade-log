@@ -57,7 +57,8 @@ chk("  連上之後還沒收過五檔（last_ba 是 None）⇒ 不判", LP.depth
 print("=== ②③ 什麼時候不重連 ===")
 chk("  ⛔ 手上有部位 ⇒ 只示警", LP.depth_check(T, T - S - 1, 2, True, True, True, 0, C), (S + 1, False))
 chk("  ⛔ 10 分鐘內剛試過 ⇒ 先不試", LP.depth_check(T, T - S - 1, 2, True, True, False, T - 60, C), (S + 1, False))
-for z, c in (("09:03:30", datetime(2026, 10, 12, 9, 2, 0)), ("09:15:00", datetime(2026, 10, 12, 9, 16, 30)),
+for z, c in (("冬令 22:40:00", datetime(2026, 11, 4, 22, 41, 0)), ("冬令 22:35:00", datetime(2026, 11, 4, 22, 34, 0)),
+             ("09:03:30", datetime(2026, 10, 12, 9, 2, 0)), ("09:15:00", datetime(2026, 10, 12, 9, 16, 30)),
              ("13:43:30", datetime(2026, 10, 12, 13, 42, 0)), ("21:40:00", datetime(2026, 10, 12, 21, 41, 0)),
              ("04:58:00", datetime(2026, 10, 13, 4, 57, 0))):
     chk("  ⛔ %s 前後不重連" % z, LP.depth_check(T, T - S - 1, 2, True, True, False, 0, c)[1], False)

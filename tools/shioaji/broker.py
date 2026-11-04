@@ -603,6 +603,10 @@ def broker_position():
     except Exception as e:
         _state["last_error"] = f"對帳失敗：{str(e)[:120]}"
         return "unknown"
+    # ⭐ 2026-11-05：問到了 ⇒ 之前那句「對帳失敗」已經過時，清掉（不然 11-03 04:11 的一次 500
+    #    會一直掛在真單卡上，看起來像現在出事）。⛔ 只清對帳自己寫的那種，別的錯誤留著。
+    if str(_state.get("last_error") or "").startswith("對帳失敗"):
+        _state["last_error"] = None
     code = getattr(_state["contract"], "code", None)
     for p in rows or []:
         if code and getattr(p, "code", None) != code:

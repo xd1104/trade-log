@@ -270,6 +270,19 @@ chk("  沒有 direction 欄位、數量是負的 → short", (broker.broker_posi
 connect(pos_api("", qty=0))
 chk("  數量 0 → 當作沒有部位", broker.broker_position(), None)
 
+print("\n=== 對帳失敗那句：之後問到了就要清掉（2026-11-05）===")
+connect(BadAPI())
+chk("  問不到 → unknown", broker.broker_position(), "unknown")
+chk("  問不到 → 掛上「對帳失敗」", str(broker._state.get("last_error") or "").startswith("對帳失敗"), True)
+connect(FakeAPI())
+broker._state["last_error"] = "對帳失敗：舊的 500"
+broker.broker_position()
+chk("  下一次問到了 → 舊的「對帳失敗」清掉", broker._state.get("last_error"), None)
+broker._state["last_error"] = "別的錯誤"
+broker.broker_position()
+chk("  別種錯誤不歸對帳清", broker._state.get("last_error"), "別的錯誤")
+broker._state["last_error"] = None
+
 print("\n=== 平倉要用券商確認過的方向，不是記憶體裡那份 ===")
 connect(BrokerSim("Action.Sell"))
 broker.is_live = lambda: True
