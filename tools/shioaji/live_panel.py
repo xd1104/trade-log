@@ -219,6 +219,14 @@ def depth_check(now_ts, last_ba, tick_quiet, market_open, conn_ok, has_pos, last
         d = abs(sec - zs)
         if min(d, 86400 - d) <= DEPTH_QUIET_PAD_S:
             near = True
+    # ⭐ 2026-11-05 健檢：開箱突破（09:05～09:30 任何一刻）、夜盤參考價那段都不是「一個時刻」⇒
+    #    跟重啟鈕吃同一份關鍵時段清單（restart_blocks），兩份清單不准再分岔。
+    try:
+        hm = clock.strftime("%H:%M")
+        if any(a <= hm < b for a, b, _w in restart_blocks(clock)):
+            near = True
+    except Exception:                     # noqa: BLE001  算不出來 ⇒ 當成關鍵時段（不重連是安全方向）
+        near = True
     return q, (not has_pos and not near and now_ts - last_retry >= DEPTH_RETRY_EVERY)
 
 
@@ -12393,7 +12401,14 @@ def _lot1():
 def _eq_quiet(now):
     """現在是不是「送單那幾刻」⇒ ⛔ 不去問帳戶（連線留給送單）。"""
     sec = now.hour * 3600 + now.minute * 60 + now.second
-    for t in (SIGNAL_SEC, REV_SEC, EOD_CLOSE_SEC):
+    pts = [SIGNAL_SEC, REV_SEC, EOD_CLOSE_SEC, EOD_CLOSE_SEC_EXPIRY, 4 * 3600 + 58 * 60]
+    # ⭐ 2026-11-05 健檢：原本只避開日盤三刻 ⇒ 夜盤送單（冬令 22:35／22:40）、04:58 夜盤平倉、
+    #    結算日 13:28:30 都會跟送單搶同一條永豐連線。夜盤兩刻跟 night_fire 問（冬夏令自動換）。
+    try:
+        pts += [m.hour * 3600 + m.minute * 60 + m.second for m in night_moments(now)]
+    except Exception:                     # noqa: BLE001
+        pts += [21 * 3600 + 35 * 60, 21 * 3600 + 40 * 60, 22 * 3600 + 35 * 60, 22 * 3600 + 40 * 60]
+    for t in pts:
         if t is not None and abs(sec - t) <= EQUITY_QUIET_S:
             return True
     return False
@@ -12777,11 +12792,24 @@ def backup_view(now=None):
         return {"ok": None, "warn": False, "msg": "資料備份：還沒跑過（每天 05:30 自動跑）"}
     at = str(st.get("at") or st.get("started") or "")
     if st.get("running"):
+        # ⭐ 2026-11-05 健檢：被砍掉／電腦重開 ⇒ 狀態會一直停在 running。正常一輪約 2 分鐘，超過 3 小時就是中斷了。
+        try:
+            run_h = (now - datetime.fromisoformat(str(st.get("started") or at))).total_seconds() / 3600
+        except Exception:
+            run_h = 0
+        if run_h > 3:
+            return {"ok": False, "warn": True,
+                    "msg": "⚠️ 資料備份 %s 開始後就沒有結束（可能中斷了），等明天 05:30 重跑" % at[5:16].replace("T", " ")}
         return {"ok": None, "warn": False, "msg": "資料備份：正在跑（%s 開始）" % at[5:16].replace("T", " ")}
     try:
         age_d = (now - datetime.fromisoformat(at)).total_seconds() / 86400
     except Exception:
         age_d = 99
+    if st.get("ok") and st.get("n_skipped"):
+        # ⭐ 2026-11-05 健檢：有檔太大被跳過 ⇒ 不能再說「成功」
+        sk = st.get("skipped") or []
+        return {"ok": False, "warn": True, "msg": "⚠️ 資料備份 %s 有 %d 個檔太大沒備份到（%s）" % (
+            at[5:16].replace("T", " "), st["n_skipped"], "、".join(sk[:3]))}
     if st.get("ok"):
         return {"ok": True, "warn": age_d > 2, "msg": "資料備份：%s 成功（推上 %s 個檔）%s" % (
             at[5:16].replace("T", " "), st.get("pushed_files", 0), "　⚠️ 已經超過 2 天沒有新的備份" if age_d > 2 else "")}
@@ -13113,9 +13141,13 @@ def restart_blocks(now):
     out = list(RESTART_BLOCK)
     try:
         d, t = night_moments(now)
-        a = (d - timedelta(minutes=2)).strftime("%H:%M")
+        # ⭐ 2026-11-05 健檢：夜盤跟勢要用「進場前 30 分鐘那一分鐘」的價，那個價**只在面板記憶體裡**
+        #    （Today.minute_close，重啟後夜盤那段不會補回來）⇒ 從那一分鐘之前就要擋，不然重啟＝今晚不做。
+        ref = t - timedelta(minutes=night_fire.trend_rule.LOOKBACK + 3)
+        a = min(ref, d - timedelta(minutes=2)).strftime("%H:%M")
         b = (t + timedelta(minutes=3)).strftime("%H:%M")
-        out.append((a, b, "夜盤自動下單判斷中（%s～%s）" % (d.strftime("%H:%M"), t.strftime("%H:%M"))))
+        out.append((a, b, "夜盤自動下單判斷中（%s 起要用記憶體裡的參考價，%s 送單）"
+                    % (ref.strftime("%H:%M"), t.strftime("%H:%M"))))
     except Exception:                     # noqa: BLE001
         out.append(("21:33", "21:43", "夜盤自動下單判斷中（夏令）"))
         out.append(("22:33", "22:43", "夜盤自動下單判斷中（冬令）"))
@@ -13833,6 +13865,9 @@ def main():
                 break
             now = datetime.now()
             today, t = now.date(), now.time()
+            # ⭐ 2026-11-05 健檢：主迴圈（停損就在這條）的心跳。手機監控看它多久沒動 ⇒ 卡住就示警、停掉
+            #    Healthchecks 心跳讓外面的看門狗響。⛔ 只寫一個數字，不拿鎖（讀的人自己算差多少秒）。
+            STATE["loop_at"] = time.time()
 
             # 每天 08:30 重新建立當日連線與狀態。
             # 兩種情況要重建：跨到新的一天，或今天還沒做過開盤前的重建

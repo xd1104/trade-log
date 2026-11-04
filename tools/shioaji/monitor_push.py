@@ -60,6 +60,11 @@ _AN = {"hash": None, "box": None}
 
 # ── 加密 ──────────────────────────────────────────────────────────────
 
+# ⭐ 2026-11-05 健檢：主迴圈多久沒轉一圈算卡住。08:30 每天重新登入會停幾十秒 ⇒ 門檻留寬一點。
+LOOP_STUCK_S = 90       # 手機「要你處理」最前面那一則（有部位或不確定時）
+LOOP_DEAD_S = 300       # 停掉 Healthchecks 心跳 ⇒ 外面的斷線通知響
+
+
 def derive(password, salt, iters=KDF_ITER):
     k = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters, dklen=64)
     return k[:32], k[32:]
@@ -336,6 +341,11 @@ def _todo(snap, lots_alarm, lots_todo, now_ts=None):
     eq = snap.get("equity") if isinstance(snap.get("equity"), dict) else {}
     rk = snap.get("risk") if isinstance(snap.get("risk"), dict) else {}
 
+    def r_loop():
+        la = snap.get("loop_age")
+        if maybe_pos and _fin(la) and la >= LOOP_STUCK_S:
+            add("now", "面板主程式卡住 %d 秒，手上的單停損現在沒人顧" % la, "打開大戶投自己看部位，必要時自己平倉")
+
     def r_stale():
         if pos and real.get("stale_sec"):
             add("now", "報價斷了 %s 秒，手上的單現在沒人顧" % real["stale_sec"], "打開大戶投自己看部位")
@@ -438,7 +448,7 @@ def _todo(snap, lots_alarm, lots_todo, now_ts=None):
         if m and int(m.group(1)) >= 60:
             add("later", "五檔已經 %s 分鐘沒進來" % m.group(1), "回電腦時重開面板")
 
-    for rule in (r_stuck, r_stale, r_day, r_night, r_lots_alarm, r_cushion, r_risk, r_lots_todo, r_conn, r_misc):
+    for rule in (r_loop, r_stuck, r_stale, r_day, r_night, r_lots_alarm, r_cushion, r_risk, r_lots_todo, r_conn, r_misc):
         try:
             rule()
         except Exception as e:                  # noqa: BLE001
@@ -455,6 +465,9 @@ def snapshot(port):
     try:
         s = _get(port, "/api/state")
         _raw["s"] = s
+        # ⭐ 2026-11-05 健檢：主迴圈（停損那條）多久沒轉一圈。⛔ 沒有這個欄位（舊版面板）⇒ None，不判卡住。
+        _la = s.get("loop_at")
+        snap["loop_age"] = round(time.time() - _la) if _fin(_la) else None
         r = s.get("real") or {}
         snap["panel"] = dict(_pick(s, ("status", "msg", "quote", "market", "phase", "clock", "age_sec")),
                              conn=_pick(s.get("conn") or {}, ("ok", "retries", "last_error", "contract_name")))
@@ -919,10 +932,22 @@ def heartbeat():
 
 
 def once(port, key):
-    box = seal(snapshot(port), key)
+    snap = snapshot(port)
+    box = seal(snap, key)
     push(json.dumps(box, separators=(",", ":")).encode("utf-8"), {AN_FILE: _analyst_box(key)})
     STATE["pushes"] += 1
     STATE["last_ok"] = datetime.now().isoformat(timespec="seconds")
+    la = snap.get("loop_age")
+    _r = snap.get("real") if isinstance(snap.get("real"), dict) else None
+    known_flat = _r is not None and "position" in _r and _r.get("position") is None
+    # ⛔ 確定空手就不停心跳：休市時段的定期重連可能卡好幾分鐘（永豐維護），那不是要叫醒人的事
+    if _fin(la) and la >= LOOP_DEAD_S and not known_flat:
+        # ⭐ 2026-11-05 健檢：主迴圈卡住 ⇒ 刻意不心跳，讓 Healthchecks／看門狗把它當成斷線叫手機。
+        STATE["hc_err"] = "面板主程式 %d 秒沒動，刻意不心跳" % la
+        if STATE.get("loop_dead_logged") != int(la // 600):
+            STATE["loop_dead_logged"] = int(la // 600)
+            _log(STATE["hc_err"])
+        return
     heartbeat()
 
 

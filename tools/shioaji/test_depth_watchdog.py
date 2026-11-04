@@ -63,7 +63,11 @@ for z, c in (("冬令 22:40:00", datetime(2026, 11, 4, 22, 41, 0)), ("冬令 22:
              ("04:58:00", datetime(2026, 10, 13, 4, 57, 0))):
     chk("  ⛔ %s 前後不重連" % z, LP.depth_check(T, T - S - 1, 2, True, True, False, 0, c)[1], False)
 chk("  離送單時刻 3 分鐘以上就可以", LP.depth_check(T, T - S - 1, 2, True, True, False, 0,
-                                                datetime(2026, 10, 12, 9, 7, 0))[1], True)
+                                                datetime(2026, 10, 12, 9, 35, 0))[1], True)
+chk("  ⛔ 09:20 開箱突破等待中 ⇒ 不重連（2026-11-05）", LP.depth_check(T, T - S - 1, 2, True, True, False, 0,
+                                                datetime(2026, 10, 12, 9, 20, 0))[1], False)
+chk("  ⛔ 冬令 22:15 夜盤參考價那段 ⇒ 不重連（2026-11-05）", LP.depth_check(T, T - S - 1, 2, True, True, False, 0,
+                                                datetime(2026, 11, 4, 22, 15, 0))[1], False)
 
 print("=== ④ 畫面那句話 ＋ 手機 ===")
 wd0 = dict(LP.DEPTH_WD)

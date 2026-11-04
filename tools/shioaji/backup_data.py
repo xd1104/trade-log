@@ -126,6 +126,9 @@ def split_csv(src, dst_dir):
     return changed
 
 
+SKIPPED = []      # ⭐ 2026-11-05 健檢：這一輪因為太大沒備份到的檔 ⇒ 寫進 status.json，面板／手機會警告
+
+
 def mirror_file(src, dst):
     """⇒ 這次動了幾個檔。大 csv 走 split_csv。"""
     if SECRET_NAME.search(src.name):
@@ -134,6 +137,7 @@ def mirror_file(src, dst):
         return split_csv(src, dst.with_name(dst.name + ".parts"))
     if src.stat().st_size > 95e6:
         log("⚠️ 跳過超過 95 MB 的非 csv 檔：%s" % src)
+        SKIPPED.append(src.name)
         return 0
     if _same(src, dst):
         return 0
@@ -255,7 +259,8 @@ def main():
         n = collect()
         b, files = commit_and_push()
         write_status(running=False, ok=True, at=datetime.now().isoformat(timespec="seconds"), err=None,
-                     changed=n, pushed_files=files, batches=b, secs=round(time.time() - t0))
+                     changed=n, pushed_files=files, batches=b, secs=round(time.time() - t0),
+                     skipped=SKIPPED[:20], n_skipped=len(SKIPPED))
         log("完成：本機有變動 %d 個、推上 %d 個檔（%d 批），花 %d 秒" % (n, files, b, time.time() - t0))
         return 0
     except Exception as e:
