@@ -1,0 +1,44 @@
+# 【期交所籌碼每日收集】（2026-11-04）三大法人／夜盤法人／P/C 比／未平倉／大額交易人
+# ⇒ 補到最新、存進 `chips` 分支。說明在 tools/chips/collect_chips.py 檔頭。
+# ⛔ 不碰任何交易、不碰面板；只抓期交所公開資料。
+name: chips-collect
+
+on:
+  schedule:
+    - cron: "40 9 * * 1-5"     # 台北 17:40（日盤法人、P/C、大額交易人都公布了）
+    - cron: "40 0 * * 2-6"     # 台北隔天 08:40（補夜盤法人與前一天漏掉的）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chips-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: code
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 取出 chips 分支（沒有就從空的開始）
+        run: |
+          mkdir data && cd data && git init -q
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          if git fetch -q --depth 1 origin chips; then git checkout -q -b chips FETCH_HEAD; else git checkout -q -b chips; fi
+      - name: 補到最新
+        run: python code/tools/chips/collect_chips.py --dir data
+      - name: 有變才存
+        run: |
+          cd data
+          git add -A
+          if git diff --cached --quiet; then echo "沒有新資料"; exit 0; fi
+          git -c user.name="chips-collect" -c user.email="chips-collect@users.noreply.github.com" \
+            commit -q -m "籌碼 $(TZ=Asia/Taipei date +%F' '%H:%M)"
+          git push -q origin chips

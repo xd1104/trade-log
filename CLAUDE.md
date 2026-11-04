@@ -3565,6 +3565,39 @@ Benson 2026-09-23 交辦。研究：`tick-research/usopen_scan.py`（以美股�
    ⚠️ 開箱那一段比較特別：它比的是 `tick_logs` 裡**交易所給的時間戳**，
    只有「窗口開不開」那一道看本機時鐘。
 
+## ⭐ 2026-11-04【每日判斷快照】＋【期交所籌碼每日收集】（⛔ 兩件都只記錄、不碰下單）
+
+### 每日判斷快照 `tools/shioaji/decision_log.py`
+起因：11-02 才發現 `orb_hist.jsonl` 漏記 8 天、多虧 738 點，畫面上當時看不出來。
+- 每個交易日日盤（09:32 以後）＋夜盤（判斷時刻＋5 分鐘）各落地一列到
+  `decision_log/YYYY-MM.jsonl`（⛔ gitignore，含真實價格）。一個 (date, sess) 一列、只 append。
+- 日盤：快攻／開箱／純回馬各自的實際值、門檻、差幾 %／幾點、做／不做＋理由；做法（帳本那一列寫的，
+  ⛔ 不拿現在的開關冒充）、口數、收盤平倉結果；fast_hist／orb_hist 的門檻與天數、**最近 25 個交易日
+  漏了哪幾天**（`hist.gaps`，拿 fast_hist＋逐筆檔當日曆）；逐筆檔 08:45~09:30 的洞與痕跡列、
+  09:03:30 報價多舊。`flags` 是白話的「有問題的地方」，正常日子是空的。
+- 夜盤：跟勢／台積電的走幅、門檻、差多少、波動預測、口數、做／不做＋理由。帳本沒算走幅（關著）⇒
+  用跟勢那一套算一份**參考值**（`signal.src="reference"`，⛔ 不是當時的判斷）。
+- 資料來源全是**已經落地的帳本與歷史檔**（auto_fire.read_all／hist_read／orb_hist_read、
+  night_fire.rows_of、lots.night_plan、risk_cap.blocked）＋判斷正本的純函式（fast_verdict／orb_threshold）。
+  ⛔ 不呼叫任何送單或改狀態的函式、⛔ 不 import broker／live_panel、⛔ 不拿 state_lock
+  （test_decision_log.py ⑨ 用 AST 守）。讀逐筆檔用字串切片、每 2 萬列讓出 GIL（實測一天 0.12 秒）。
+- 面板晚開 ⇒ 開機後補最近 10 天「帳本有、快照沒有」的日子，標 `src:"catchup"`。
+- 接線：`main()` 最後一段 try 包著 `decision_log.start()`（test_sim_lanes ⑧ 的 AUTH_PATCH 有登記）。
+- 探針 `test_decision_log.py`（70 項，假數字、暫存資料夾）。
+
+### 期交所籌碼每日收集 `tools/chips/collect_chips.py` ＋ `.github/workflows/chips.yml`
+- GitHub Actions 每個交易日台北 17:40、隔天 08:40 各跑一次（2026-11-04 實測 Actions 連得到期交所），
+  補到最新、存進 trade-log 的 **`chips` 分支**（公開市場數據；⛔ 不進 main，不跟面板的同步打架）。
+  手機也看得到：github.com/xd1104/trade-log/tree/chips。
+- 檔案（前五支格式跟 tick-research/chips/ 一樣，研究腳本照讀）：futco／mxf_inst／futco_ah／pcratio／mtx_oi，
+  新增 tmf_inst（微台法人）、fut_inst_all／fut_inst_ah_all（全部期貨契約日夜盤法人）、
+  tx_oi／tmf_oi（大台／微台全市場未平倉）、large_trader（大額交易人，只留 TX／MTX／TMF）。
+- ⛔ 期交所會 429 ⇒ 每次請求間隔 8 秒、失敗退讓 20／40／80… 秒重試；一次最多 28 天。
+  每組從「組裡最舊那支檔的最後一天」補起；另外拿 futco.csv 當交易日曆，最近 60 天的漏日單獨再抓。
+  表頭跟舊檔不一樣 ⇒ 拒絕（期交所改格式要人看過）。一次都沒成功 ⇒ 離開碼 3（Actions 會紅）。
+- 只用標準函式庫。測試 `tools/chips/test_collect_chips.py`（假的期交所，不連網）。
+- 研究那邊要用最新資料：`git fetch origin chips` 後 `git show origin/chips:futco.csv`，或直接從 chips 分支下載。
+
 ## 檔案配置
 
 ```

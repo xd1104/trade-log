@@ -13758,6 +13758,13 @@ def main():
         monitor_push.start(PORT)
     except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
         print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])
+    # 【每日判斷快照】（2026-11-04）每個交易日日盤＋夜盤各落地一列「看到什麼、為什麼做／不做」。
+    #   ⛔ 只記錄：只讀帳本與歷史檔、自己的執行緒、⛔ 不拿 state_lock；起不來只印警告。
+    try:
+        import decision_log
+        decision_log.start()
+    except Exception as e:          # noqa: BLE001  ⛔ 刻意接住所有例外
+        print("⚠️ 【判斷快照】起不來（其他功能不受影響）：%s" % str(e)[:160])
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     threading.Thread(target=_find_supervisor, daemon=True).start()   # ⭐ 重啟鈕：誰在顧這個面板

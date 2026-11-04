@@ -99,3 +99,5 @@ tools/shioaji/backup/
 tools/shioaji/LOTS_LEVEL.json
 tools/shioaji/LOTS_LEVEL.json.*
 tools/shioaji/lots/
+# 【每日判斷快照】（2026-11-04）：含真實價格與判斷，只留本機
+tools/shioaji/decision_log/

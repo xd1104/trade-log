@@ -1772,6 +1772,16 @@ AUTH_PATCH = [
      '        monitor_push.start(PORT)\n'
      '    except Exception as e:\n'
      '        print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])\n'),
+    # ⭐ 2026-11-04 **有授權的例外**（Benson 交辦【每日判斷快照】）：main() 多一段起判斷快照的執行緒
+    #   （⛔ 只讀帳本與歷史檔、⛔ 不拿 state_lock、⛔ 包 try ⇒ 起不來只印警告；主迴圈一行都沒動）。
+    ("【判斷快照】main() 起一條唯讀的記錄執行緒（包 try）",
+     '        print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])\n',
+     '        print("⚠️ 【手機監控】起不來（其他功能不受影響）：%s" % str(e)[:160])\n'
+     '    try:\n'
+     '        import decision_log\n'
+     '        decision_log.start()\n'
+     '    except Exception as e:\n'
+     '        print("⚠️ 【判斷快照】起不來（其他功能不受影響）：%s" % str(e)[:160])\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")
