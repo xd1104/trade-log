@@ -13143,6 +13143,27 @@ def request_restart():
     return 200, {"ok": True, "msg": "收到，面板正在重啟，大約一分鐘後會自己接回來"}
 
 
+# ⭐ 2026-11-05 健檢：real_state 每一圈（主迴圈、而且在 state_lock 裡）都叫 broker.can_enter，
+#    它會跟永豐要一次 list_positions ⇒ 一秒好幾次查帳、停損那條迴圈每圈都在等網路，
+#    查太頻繁還可能被永豐擋（11-03 04:11 那次 500 就是查部位）。
+#    這裡只是**畫面上那句「能不能進場」**：每 CAN_ENTER_VIEW_S 秒才真的問一次；有沒有部位變了就馬上重問。
+#    ⛔ 真的要送單時（手動進場端點、自動下單）各自都會重新叫 broker.can_enter，不吃這份快取。
+#    ⛔ 對帳本身由 broker.reconcile_tick()（3 秒節流）負責，跟這裡無關。
+CAN_ENTER_VIEW_S = 3.0
+_CAN_ENTER_VIEW = {"at": 0.0, "key": None, "v": (False, "")}
+
+
+def _can_enter_view(price, live, has_pos, now=None):
+    now = time.time() if now is None else now
+    key = (bool(live), bool(has_pos), price is None)
+    c = _CAN_ENTER_VIEW
+    if c["key"] == key and now - c["at"] < CAN_ENTER_VIEW_S:
+        return c["v"]
+    v = broker.can_enter(price, live)
+    c.update(at=now, key=key, v=v)
+    return v
+
+
 def real_state(price, quote, age):
     """真實下單那張卡要的資料。順便在這裡跑停損監控 —— 兩者看的是同一組數字。"""
     try:
@@ -13167,7 +13188,7 @@ def real_state(price, quote, age):
                 snap["sl"] = snap["tp"] = snap["tp_pts"] = snap["sl_pts"] = None
         stale = REAL_STALE["since"]
         snap["stale_sec"] = round(time.time() - stale) if stale else None
-        ok, why = broker.can_enter(price, quote == "live")
+        ok, why = _can_enter_view(price, quote == "live", bool(pos))
         snap["can_enter"], snap["why"] = ok, why
         snap["code"] = code_stamp()
         return snap
@@ -13902,8 +13923,15 @@ def main():
                 # 日盤其餘時間：照常顯示價格與趨勢，但不記錄
                 if not session["saved"] and st.open is not None:
                     session["saved"] = True
-                    ok, msg = sync_to_cloud()
-                    print(f"[{today}] 09:30 下單時段結束。雲端同步：{msg}")
+                    # ⭐ 2026-11-05 健檢：git 推送原本在主迴圈上同步跑（每步最多 60 秒）⇒ 09:30 日盤單
+                    #    多半還開著，網路卡住時停損會有幾秒到幾分鐘沒人看 ⇒ 改丟背景執行緒。
+                    def _bg_sync(day=today):
+                        try:
+                            _ok, _msg = sync_to_cloud()
+                        except Exception as _e:          # noqa: BLE001
+                            _msg = "同步失敗：%s" % str(_e)[:120]
+                        print(f"[{day}] 09:30 下單時段結束。雲端同步：{_msg}", flush=True)
+                    threading.Thread(target=_bg_sync, name="sync-0930", daemon=True).start()
                     # 逐筆落地的成績單。dropped 不是 0 就代表那個早上有一段是缺的
                     # （檔案裡也有痕跡列），下次要把 max_queue 或 flush_every 調一調。
                     ts_stat = TICKS.stats()
