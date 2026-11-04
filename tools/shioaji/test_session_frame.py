@@ -194,5 +194,39 @@ chk("  夜盤沒到 → night", LP.session_frame(D)[2], "night")
 install({PREV: bars(PREV, NIGHT, 46700.0), D: bars(D, DAY, 46500.0)}, incomplete=False)
 chk("  都到齊 → 不回報不完整", LP.session_frame(D)[2], "")
 
+print("\n=== ⑦ 過了午夜：昨天日盤的即時 K 棒不可以變成「今天」的未來 K 棒 ===")
+# 2026-11-05 00:04 他回報「K 線圖只到下午 1 點 45」：minute_bar 的鍵只有分鐘，
+# 午夜後昨天 08:45~13:45 被蓋上今天日期，接在今晚夜盤後面。
+class _St:
+    pass
+_st = _St()
+_st.minute_bar = {}
+for mi in list(range(8 * 60 + 45, 13 * 60 + 45)) + list(range(15 * 60, 24 * 60)) + [0, 1, 2, 3]:
+    _st.minute_bar[mi] = {"o": 1.0, "h": 1.0, "l": 1.0, "c": 1.0, "v": 1}
+_NOW = dt.datetime(2026, 11, 5, 0, 4)
+class _MidnightDT(dt.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return _NOW
+_old_state = LP.CURRENT_STATE.get("today")
+LP.CURRENT_STATE["today"] = _st
+LP.datetime = _MidnightDT
+try:
+    _g = pd.DataFrame({"ts": [pd.Timestamp("2026-11-04 23:59"), pd.Timestamp("2026-11-05 00:00")],
+                       "Open": [1.0, 1.0], "High": [1.0, 1.0], "Low": [1.0, 1.0],
+                       "Close": [1.0, 1.0], "Volume": [1, 1]})
+    _o = LP.overlay_live(_g)
+    chk("  沒有晚於現在的 K 棒（昨天日盤不可以跑到今晚後面）",
+        bool((_o["ts"] > pd.Timestamp(_NOW) + pd.Timedelta(minutes=1)).any()), False)
+    chk("  午夜後的即時 K 棒還在",
+        sorted(str(t)[11:16] for t in _o["ts"] if t.date() == dt.date(2026, 11, 5)),
+        ["00:00", "00:01", "00:02", "00:03", "00:04"])
+finally:
+    LP.datetime = dt.datetime
+    if _old_state is None:
+        LP.CURRENT_STATE.pop("today", None)
+    else:
+        LP.CURRENT_STATE["today"] = _old_state
+
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")
 sys.exit(1 if FAIL else 0)

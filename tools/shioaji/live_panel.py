@@ -1468,6 +1468,11 @@ def overlay_live(g):
     if not rows:
         return g
     live = pd.DataFrame(rows)
+    # ⛔ 2026-11-05 00:04 他回報「K 線圖只到下午 1 點 45」：過了午夜，minute_bar 裡
+    #    **昨天日盤** 08:45~13:45 那幾分鐘被蓋上「今天」的日期 ⇒ 變成還沒發生的未來 K 棒，
+    #    接在今晚夜盤後面（圖的最右邊是昨天的日盤、真正最新的夜盤反而擠在中間）。
+    #    即時 K 棒不可能在未來 ⇒ 結束時間晚於「現在＋1 分」的一律丟掉。
+    live = live[live["ts"] <= pd.Timestamp(now) + pd.Timedelta(minutes=1)]
     edge = g["ts"].max()                               # kbars 最後那一根（結束時間標記）
     live = live[live["ts"] >= edge]
     if live.empty:
