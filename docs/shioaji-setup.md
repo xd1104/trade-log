@@ -61,7 +61,7 @@ Benson 要的是「每天開盤即時算數字給他當判斷依據」。已做�
 |---|---|
 | `build_stats.py` | 從一年資料算 12 種開盤情境的基準表 → `stats.json`，每項附樣本數／95% CI／顯著與否 |
 | `morning_live.py` | 早盤即時面板：接 tick 合成 1 分 K，09:00–09:05 倒數，09:05 出「判斷依據卡」 |
-| `start-morning.bat` | 雙擊啟動（Benson 用） |
+| `scripts/start-morning.bat` | 雙擊啟動（Benson 用） |
 
 - 測試模式：`morning_live.py --demo`（不等開盤，收 60 秒即時 tick 跑完整流程）
 - 每天 09:05 的開盤資料自動存 `morning_logs/YYYY-MM-DD.json`，之後可累積驗證
@@ -138,7 +138,7 @@ Python 3.12 venv 在 repo 根目錄 `.venv`，已安裝 shioaji 1.7.2 與 pandas
 `.env` 已被 `.gitignore` 擋掉，不會上傳。**金鑰不要貼進對話。**
 
 ### 2. 通過期貨 API 測試
-跑 `tools/shioaji/shioaji_futures_test.py`（**模擬模式 simulation=True，不碰真錢、免憑證**）。
+跑 `tools/shioaji/scripts/shioaji_futures_test.py`（**模擬模式 simulation=True，不碰真錢、免憑證**）。
 
 - 金鑰見上面 1.5（**由 Benson 自己填，不要幫他把金鑰貼進對話或檔案 commit**）
 - 可測試時間：週一~五 08:00–20:00（18:00 後限台灣 IP）；腳本會抓現價，
@@ -152,7 +152,7 @@ Python 3.12 venv 在 repo 根目錄 `.venv`，已安裝 shioaji 1.7.2 與 pandas
 > `snapshots` 用法。**有錯誤就直接讀 traceback 修到通**，不要叫使用者自己解。
 
 ### 3. 抓歷史 K 線
-測試通過後跑 `tools/shioaji/shioaji_export.py`（正式環境、只讀資料、免憑證），
+測試通過後跑 `tools/shioaji/scripts/shioaji_export.py`（正式環境、只讀資料、免憑證），
 預設拉 `TXF.TXFR1`（台指期近月連續）1 分 K，輸出 `txf_1min.csv`。
 建議至少半年～一年，樣本才夠。
 

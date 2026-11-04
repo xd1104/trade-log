@@ -13,6 +13,11 @@
 
 【安全】API Key / Secret 填在同資料夾的 .env（已被 .gitignore 擋掉），不寫進程式碼、不上傳。
 """
+# ⭐ 2026-11-05 搬到 scripts/（一次性／手動用的腳本，面板不會載入）。資料檔與共用模組都還在上一層
+#    tools/shioaji/ ⇒ 讓這支照舊以為自己在上一層：__file__ 指回去、上一層放進 import 路徑。
+import sys as _sys, pathlib as _pl  # noqa: E401,E402
+__file__ = str(_pl.Path(__file__).resolve().parent.parent / _pl.Path(__file__).name)  # noqa: A001
+_sys.path.insert(0, str(_pl.Path(__file__).parent))
 import sys
 import time
 import shioaji as sj

@@ -9,6 +9,11 @@
 ⚠️ 要先有 20 晚歷史才會開始做 ⇒ 開頭那一個多月一律「歷史不夠」，那是正常的。
 ⚠️ 已經有定論的晚上不重算（`append_row` 自己會擋重複），但歷史照樣記進 `trend_ctx.json`。
 """
+# ⭐ 2026-11-05 搬到 scripts/（一次性／手動用的腳本，面板不會載入）。資料檔與共用模組都還在上一層
+#    tools/shioaji/ ⇒ 讓這支照舊以為自己在上一層：__file__ 指回去、上一層放進 import 路徑。
+import sys as _sys, pathlib as _pl  # noqa: E401,E402
+__file__ = str(_pl.Path(__file__).resolve().parent.parent / _pl.Path(__file__).name)  # noqa: A001
+_sys.path.insert(0, str(_pl.Path(__file__).parent))
 import argparse
 import sys
 from datetime import date, timedelta

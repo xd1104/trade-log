@@ -8,6 +8,11 @@
 ⛔ 規則走 `sim_lanes.DERIVED_EVAL` 正本（⛔ 這支不自己算一份）。
 ⚠️ 本尊那一晚／那一天沒有定論 ⇒ 這三條也算不出來（照實計數，⛔ 不猜）。
 """
+# ⭐ 2026-11-05 搬到 scripts/（一次性／手動用的腳本，面板不會載入）。資料檔與共用模組都還在上一層
+#    tools/shioaji/ ⇒ 讓這支照舊以為自己在上一層：__file__ 指回去、上一層放進 import 路徑。
+import sys as _sys, pathlib as _pl  # noqa: E401,E402
+__file__ = str(_pl.Path(__file__).resolve().parent.parent / _pl.Path(__file__).name)  # noqa: A001
+_sys.path.insert(0, str(_pl.Path(__file__).parent))
 import argparse
 import sys
 from datetime import date, timedelta

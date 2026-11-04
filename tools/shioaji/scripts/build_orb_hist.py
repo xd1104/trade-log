@@ -25,6 +25,11 @@
 ⛔ 規則一律呼叫 `auto_fire` 的正本（`orb_box_of` / `orb_break_of` / `orb_fill` / `orb_box_pct`），
    ⛔ 不在這裡另寫一份 —— 種子跟面板算出來的值要是兩把尺，門檻就整個歪掉。
 """
+# ⭐ 2026-11-05 搬到 scripts/（一次性／手動用的腳本，面板不會載入）。資料檔與共用模組都還在上一層
+#    tools/shioaji/ ⇒ 讓這支照舊以為自己在上一層：__file__ 指回去、上一層放進 import 路徑。
+import sys as _sys, pathlib as _pl  # noqa: E401,E402
+__file__ = str(_pl.Path(__file__).resolve().parent.parent / _pl.Path(__file__).name)  # noqa: A001
+_sys.path.insert(0, str(_pl.Path(__file__).parent))
 import argparse
 import json
 import pathlib

@@ -7,7 +7,7 @@ echo.
 echo   Morning Panel starting...
 echo   (Ctrl+C to stop)
 echo.
-"..\..\.venv\Scripts\python.exe" morning_live.py %*
+"..\..\..\.venv\Scripts\python.exe" morning_live.py %*
 echo.
 echo   Finished. Press any key to close.
 pause >nul

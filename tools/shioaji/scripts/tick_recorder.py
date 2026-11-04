@@ -35,6 +35,11 @@
    混在同一個檔裡，讀的人會把取樣當成逐筆。**這支保留**是因為它有一個面板做不到的優點：
    不用重啟面板就能開始錄（盤中他手上可能有部位，面板不能停）。
 """
+# ⭐ 2026-11-05 搬到 scripts/（一次性／手動用的腳本，面板不會載入）。資料檔與共用模組都還在上一層
+#    tools/shioaji/ ⇒ 讓這支照舊以為自己在上一層：__file__ 指回去、上一層放進 import 路徑。
+import sys as _sys, pathlib as _pl  # noqa: E401,E402
+__file__ = str(_pl.Path(__file__).resolve().parent.parent / _pl.Path(__file__).name)  # noqa: A001
+_sys.path.insert(0, str(_pl.Path(__file__).parent))
 import argparse
 import datetime
 import json
