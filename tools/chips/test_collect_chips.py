@@ -161,7 +161,7 @@ try:
     chk("P/C 依日期排好（舊到新）", [C.to_date(r[0]) for r in pc] == sorted(C.to_date(r[0]) for r in pc), True)
     n1 = len(fake.calls)
     rep2, _ = C.run(D, today=date(2030, 2, 20), F=mk(fake, sl), log=lambda *a: None, F_etf=ETF_F())
-    chk("第二輪期交所那幾支一列都不加（ETF 一次 80 天、會接著補）", sum(sum(v.values()) for k, v in rep2.items() if k != "etf"), 0)
+    chk("第二輪期交所那幾支一列都不加（ETF 一次最多 ETF_MAX_DAYS 天、會接著補）", sum(sum(v.values()) for k, v in rep2.items() if k != "etf"), 0)
     chk("第二輪每組只問「今天之後」⇒ 0 次", len(fake.calls) - n1, 0)
 
     print("=== ③ 隔天：只補新的一天 ===")

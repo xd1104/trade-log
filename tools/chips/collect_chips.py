@@ -217,7 +217,7 @@ def get_large(F, a, b):
 # ── 期貨型 ETF（投信網站，不是期交所）────────────────────────────────
 ETF_HEAD = ["日期", "ETF", "契約", "月份", "口數", "權重%", "來源"]
 ETF_GAP = 3.0
-ETF_MAX_DAYS = 80          # 一次最多查幾個日子（Actions 一次跑不完的，下一次接著補）
+ETF_MAX_DAYS = 250         # 一次最多查幾個日子（Actions 一次跑不完的，下一次接著補）
 ETF_START = date(2023, 11, 1)
 YUANTA = ("https://etfapi.yuantaetfs.com/ectranslation/api/bridge?APIType=ETFAPI&CompanyName=YUANTAFUNDS"
           "&DeviceId=null&FuncId=PCF/Daily&AppName=ETF&Device=3&Platform=ETF&ticker=%s&date=%s")
