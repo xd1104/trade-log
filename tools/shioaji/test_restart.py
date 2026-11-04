@@ -78,6 +78,46 @@ try:
     finally:
         LP.ENTER_LOCK.release()
 
+    # ⑩ 自動重啟（2026-11-05）：程式有新版＋沒部位＋安全時段才會自己按
+    def dt(y, mo, d, hm):
+        return datetime(y, mo, d, int(hm[:2]), int(hm[3:5]), 0)
+    W = LP.auto_restart_window
+    say(W(dt(2026, 11, 5, "05:05")) and W(dt(2026, 11, 5, "08:29")), "平日 05:05～08:29 是安全時段")
+    say(not W(dt(2026, 11, 5, "04:59")) and not W(dt(2026, 11, 5, "08:30")) and not W(dt(2026, 11, 5, "10:30"))
+        and not W(dt(2026, 11, 5, "22:00")), "平日 04:59、08:30、盤中、夜盤都不是")
+    say(not W(dt(2026, 11, 7, "03:00")) and W(dt(2026, 11, 7, "05:05")), "週六 05:00 前還有夜盤 ⇒ 05:05 起才可以")
+    say(W(dt(2026, 11, 8, "14:00")), "週日整天可以")
+    calls = []
+    real_req, real_file = LP.request_restart, LP.AUTO_RESTART_FILE
+    LP.request_restart = lambda: (calls.append(1) or (200, {"ok": True}))
+    import tempfile as _tf
+    LP.AUTO_RESTART_FILE = Path(_tf.mkdtemp()) / "auto_restart.json"
+    try:
+        LP.SUPERVISOR.update(done=True, who="app")
+        broker._state["position"] = None
+
+        def tick(when, stale=True):
+            LP.AUTO_RESTART.update(day=None, checked=0.0)
+            return LP.auto_restart_tick(when, stamp={"stale": stale, "started": "11-05 00:07"})
+        say(tick(dt(2026, 11, 5, "05:10")) and calls == [1], "有新版、沒部位、05:10 ⇒ 自己重啟", calls)
+        say(LP.AUTO_RESTART_FILE.exists(), "留下紀錄（新面板起來後通知手機用）")
+        calls.clear()
+        say(not tick(dt(2026, 11, 5, "05:10"), stale=False) and calls == [], "沒有新版 ⇒ 不重啟", calls)
+        say(not tick(dt(2026, 11, 5, "10:30")) and calls == [], "盤中 ⇒ 不重啟", calls)
+        broker._state["position"] = {"dir": "long", "entry": 43000}
+        say(not tick(dt(2026, 11, 5, "05:10")) and calls == [], "⛔ 有部位 ⇒ 不重啟", calls)
+        broker._state["position"] = None
+        LP.AUTO_RESTART.update(day=dt(2026, 11, 5, "05:10").date(), checked=0.0)
+        say(not LP.auto_restart_tick(dt(2026, 11, 5, "06:00"), stamp={"stale": True}) and calls == [],
+            "一天最多一次", calls)
+        LP.SUPERVISOR.update(done=True, who=None)
+        say(not tick(dt(2026, 11, 5, "05:10")) and calls == [], "⛔ 不是捷徑開的（關掉不會自己開回來）⇒ 不重啟", calls)
+    finally:
+        LP.request_restart, LP.AUTO_RESTART_FILE = real_req, real_file
+        LP.AUTO_RESTART.update(day=None, checked=0.0)
+        LP.SUPERVISOR.update(done=True, who="app")
+        broker._state["position"] = None
+
     # ⑦ 已經要求過 ⇒ 不能再按第二次
     LP.RESTART["at"] = 1.0
     ok, why = LP.restart_check(at("10:30"))

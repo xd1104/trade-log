@@ -1495,9 +1495,16 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
     # ⛔⛔ sl_points 一定要帶：停損活在面板迴圈（check_real_position），它讀的是
     #     **這一口部位自己的** sl_points；沒帶就掉回手動真單的 SL_POINTS（130）⇒ 提早被洗掉。
     # ⭐ tp_points=None ⇒ broker 一次 place_target 都不呼叫（開箱那個候選不設停利）。
+    sent_at = time.time()
     ok, err, pos = broker.enter(direction, px, tp_points, sl_points=pts, qty=qty)
     if not ok:
-        return _result(d, base, False, "order_failed",
+        # ⭐ 2026-11-05（Benson 同意健檢建議）：送出去卻沒確認到成交（券商回報慢／查不到）⇒ 留下線索。
+        #    之後對帳撿到一口對得上的部位（方向、口數、價差、10 分鐘內）就接手：停損照這一口、收盤照常平。
+        mb = dict(base, dir=direction, px=px, sl_points=pts, tp_points=tp_points,
+                  no_tp=tp_points is None, qty_sent=qty, lots_level=lvl,
+                  maybe_filled=True, sent_at=sent_at)
+        _MEM["maybe"] = dict(mb, date=d)
+        return _result(d, mb, False, "order_failed",
                        WHY["order_failed"] + "：" + str(err or "券商沒有說原因"))
     entry = _num((pos or {}).get("entry"))
     tp = None if (entry is None or tp_points is None) else \
@@ -2409,8 +2416,54 @@ def _eod_worker():
 # ⛔ 對不上 ⇒ **維持 SL_POINTS**，並把原因掛在部位上（`sl_warn`，/api/state 端得出去）
 #    ＋ 主控台。⚠️ 方向是**寧可用手動那一套**：誤把他自己的單當成自動的，停損就被放寬了。
 
-def _recover_decide(pos, ent, why):
+ADOPT_WINDOW_S = 600     # 送單記成失敗後多久內撿到的部位才算「可能是那一張」
+ADOPT_PX_TOL = 60.0      # 成交價離送單當下的報價最多差幾點
+
+
+def adopt_check(pos, maybe, now_ts=None):
+    """純函式：撿回來的部位是不是今天那一張「記成失敗」的單成交出來的。⇒ (是嗎, 原因)。"""
+    if not isinstance(pos, dict) or not isinstance(maybe, dict) or not maybe.get("maybe_filled"):
+        return False, "沒有可疑的那一張"
+    now_ts = time.time() if now_ts is None else now_ts
+    if pos.get("dir") != maybe.get("dir"):
+        return False, "方向不一樣"
+    try:
+        if now_ts - float(maybe.get("sent_at")) > ADOPT_WINDOW_S:
+            return False, "離送單太久"
+        if abs(float(pos.get("entry")) - float(maybe.get("px"))) > ADOPT_PX_TOL:
+            return False, "價差太大"
+    except (TypeError, ValueError):
+        return False, "缺價格或時間"
+    q, qs = _num(pos.get("qty")), _num(maybe.get("qty_sent"))
+    if q is None or qs is None or not (1 <= q <= qs):
+        return False, "口數對不上"
+    return True, None
+
+
+def _maybe_row(d):
+    """⚠️ 工作執行緒：今天最後一張「記成失敗、可能成交」的那一列（沒有 ⇒ {}）。"""
+    for o in reversed(_rows_of(d)):
+        if o.get("rec") == "result" and not o.get("ok") and o.get("maybe_filled"):
+            return dict(o)
+    return {}
+
+
+def _recover_decide(pos, ent, why, maybe=None):
     """純函式：撿回來的那口 ＋ 今天帳本那一口 ⇒ 要補到部位上的欄位。"""
+    if ent is None and adopt_check(pos, maybe)[0]:
+        # ⭐ 2026-11-05：今天沒有「成功」那一列，但有一張記成失敗的單對得上這口 ⇒ 是它成交出來的，接手
+        slp = _num(maybe.get("sl_points"))
+        if slp is not None and slp > 0:
+            out = {"sl_points": slp, "tp_points": _num(maybe.get("tp_points")), "sl_src": "autofire",
+                   "adopt": True}
+            if maybe.get("no_tp") or maybe.get("tp_points") is None:
+                out["no_tp"] = True
+                out["tp_points"] = None
+            q = _num(pos.get("qty"))
+            if q is not None and q > 1:
+                out["entry_qty"] = int(q)
+                out["entry_fill"] = float(pos["entry"])
+            return out
     if ent is None:
         if why == "eod_unsure":
             # 今天有一張單停在「送出去了但不知道結果」⇒ 撿回來的這口**可能**就是它，
@@ -2465,7 +2518,8 @@ def recover_meta(pos):
     try:
         if _MEM["date"] != str(date.today()):
             return None
-        return _recover_decide(pos, _MEM["entry"], _MEM["state"])
+        mb = _MEM.get("maybe") if (_MEM.get("maybe") or {}).get("date") == _MEM["date"] else None
+        return _recover_decide(pos, _MEM["entry"], _MEM["state"], mb)
     except Exception:
         return None
 
@@ -2488,7 +2542,38 @@ def _night_claims(pos):
 def _mem_load(d):
     """⚠️ 送單執行緒／start()：讀今天帳本那一口放進記憶體。"""
     ent, why = _auto_entry(d)
-    _MEM.update({"date": d, "entry": ent, "state": why})
+    _MEM.update({"date": d, "entry": ent, "state": why, "maybe": dict(_maybe_row(d), date=d)})
+
+
+def _adopt_write(pos):
+    """
+    ⚠️ 工作執行緒：接手那一口 ⇒ 補寫一列 result ok（adopted）讓收盤平倉認得它；有停利就補掛停利單
+    （原本那張單在確認成交之前就停手了 ⇒ 券商端沒有停利單）。
+    """
+    d = str(date.today())
+    mb = _MEM.get("maybe") if (_MEM.get("maybe") or {}).get("date") == d else _maybe_row(d)
+    with broker._lock:
+        if broker._state.get("position") is not pos or pos.get("adopt_written"):
+            return
+        pos["adopt_written"] = True
+    extra = {k: v for k, v in (mb or {}).items() if k not in ("ok", "why", "why_msg", "maybe_filled", "rec", "stage")}
+    extra.update({"entry": pos.get("entry"), "entry_time": pos.get("entry_time"), "qty": pos.get("qty"),
+                  "adopted": True, "sl_points": pos.get("sl_points"), "tp_points": pos.get("tp_points"),
+                  "no_tp": bool(pos.get("no_tp"))})
+    e, slp, tpp = _num(pos.get("entry")), _num(pos.get("sl_points")), _num(pos.get("tp_points"))
+    sgn = 1 if pos.get("dir") == "long" else -1
+    if e is not None and slp is not None:
+        extra["sl"] = round(e - sgn * slp, 1)
+    if e is not None and tpp is not None:
+        extra["tp"] = round(e + sgn * tpp, 1)
+    _result(d, extra, True, None, "送單當下記成失敗，之後對帳確認其實成交了 ⇒ 接手（停損 %s 點、收盤照常平倉）"
+            % (slp if slp is not None else "?"))
+    _MEM["maybe"] = {}
+    if e is not None and tpp is not None and broker.is_live():
+        tok, terr = broker.place_target(e + sgn * tpp)
+        if not tok:
+            _ST["rec_msg"] = "接手那一口的停利單沒掛上去（%s）—— 請自己到大戶投補掛" % (terr or "券商拒絕")
+            print("⚠️ [自動下單] " + _ST["rec_msg"], flush=True)
 
 
 _REC_SEEN = {"pos": None}      # 哪一口已經講過了（⛔ 主控台一口只講一次，不要每 0.5 秒刷一次）
@@ -2506,11 +2591,14 @@ def _recover_poll():
     pos = broker._state.get("position")
     if not isinstance(pos, dict) or not pos.get("recovered"):
         return None
+    if pos.get("adopt") and not pos.get("adopt_written"):
+        _adopt_write(pos)
     if pos.get("sl_src") is None:
         d = str(date.today())
         if _MEM["date"] != d:
             _mem_load(d)
-        meta = _recover_decide(pos, _MEM["entry"], _MEM["state"])
+        mb = _MEM.get("maybe") if (_MEM.get("maybe") or {}).get("date") == d else None
+        meta = _recover_decide(pos, _MEM["entry"], _MEM["state"], mb)
         if meta.get("multi_unknown") and _night_claims(pos):
             # ⭐ QA r3 必修 2：對不上**日盤**帳本，但對得上**今晚夜盤**帳本開著的那一筆 ⇒ 那是夜盤的單，
             #    ⛔ 不標「分不出」—— 交給夜盤那支補（night_fire._recover_poll），結果不看兩條執行緒誰先跑

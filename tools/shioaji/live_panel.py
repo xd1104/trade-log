@@ -13056,6 +13056,15 @@ def code_stamp():
             out.append(datetime.fromtimestamp(m).strftime("%m-%d %H:%M"))
         except Exception:
             out.append("?")
+    # ⭐ 2026-11-05 健檢：原本只看 broker.py／live_panel.py ⇒ 只改 auto_fire／night_fire／lots 時
+    #    畫面說「最新」、其實跑的是舊的。⇒ 這個行程載入的所有本地模組都要看。
+    for mod in list(sys.modules.values()):
+        fn = getattr(mod, "__file__", None)
+        try:
+            if fn and Path(fn).parent == HERE and fn.endswith(".py"):
+                newest = max(newest, Path(fn).stat().st_mtime)
+        except Exception:                 # noqa: BLE001
+            pass
     # stale ＝ 硬碟上的程式比這個行程還新 ⇒ 我跑的不是最新的那份。
     # `panel_app.pyw` 靠這個決定「要不要先把舊伺服器收掉再開」，
     # 前端也靠它跳提醒 —— 不然關視窗再開只是接回同一個舊伺服器，
@@ -13152,6 +13161,69 @@ def restart_blocks(now):
         out.append(("21:33", "21:43", "夜盤自動下單判斷中（夏令）"))
         out.append(("22:33", "22:43", "夜盤自動下單判斷中（冬令）"))
     return out
+
+
+# ══ 自動重啟（2026-11-05 Benson 要的）════════════════════════════════════════════
+# 程式有新版（code_stamp stale）＋ 沒有部位 ＋ 安全時段 ⇒ 面板自己按一次重啟鈕（走同一支 request_restart，
+# 條件 restart_check 一條都不少）。⛔ 一天最多一次；⛔ 不自己去抓新版（git pull 仍由人做 ⇒ 只有確認過的版本會上線）。
+# 安全時段：平日 05:05～08:30（夜盤 04:58 平倉完、08:30 每天重新登入之前）；週六 05:05 起、週日整天。
+AUTO_RESTART = {"day": None, "checked": 0.0}
+AUTO_RESTART_FILE = USAGE_DIR / "auto_restart.json"   # ⛔ usage/ 在 gitignore 裡
+AUTO_RESTART_EVERY_S = 30
+
+
+def auto_restart_window(now):
+    hm = now.strftime("%H:%M")
+    wd = now.weekday()
+    if wd == 6:
+        return True
+    if wd == 5:
+        return hm >= "05:05"
+    return "05:05" <= hm < "08:30"
+
+
+def auto_restart_tick(now=None, stamp=None):
+    """主迴圈每一圈叫（⛔ 便宜：30 秒才真的看一次）。⇒ True＝已經要求重啟。"""
+    now = now or datetime.now()
+    if AUTO_RESTART["day"] == now.date() or not auto_restart_window(now):
+        return False
+    t = time.time()
+    if t - AUTO_RESTART["checked"] < AUTO_RESTART_EVERY_S:
+        return False
+    AUTO_RESTART["checked"] = t
+    st = stamp if stamp is not None else code_stamp()
+    if not st.get("stale"):
+        return False
+    ok, _why = restart_check(now)
+    if not ok:
+        return False
+    AUTO_RESTART["day"] = now.date()
+    try:
+        AUTO_RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTO_RESTART_FILE.write_text(json.dumps({"at": now.isoformat(timespec="seconds"),
+                                                 "old": st.get("started")}, ensure_ascii=False),
+                                     encoding="utf-8")
+    except Exception:                     # noqa: BLE001  寫不了只是少一則通知
+        pass
+    print("[自動重啟] 程式有新版、沒有部位、在安全時段 ⇒ 重啟換上新版", flush=True)
+    code, _out = request_restart()
+    return code == 200
+
+
+def auto_restart_notice():
+    """⚠️ 背景執行緒：上一次是自動重啟 ⇒ 送一則手機通知（⛔ 失敗只印一行）。"""
+    try:
+        import subprocess
+        if not AUTO_RESTART_FILE.exists():
+            return
+        info = json.loads(AUTO_RESTART_FILE.read_text(encoding="utf-8"))
+        AUTO_RESTART_FILE.unlink()
+        body = "%s 換上新版（沒有部位、安全時段才自動重啟）。" % str(info.get("at", ""))[5:16].replace("T", " ")
+        subprocess.run(["py", "-3.11", str(HERE / "push_note.py"), "面板已自動重啟", body],
+                       capture_output=True, timeout=60)
+        print("[自動重啟] 已通知手機：" + body, flush=True)
+    except Exception as e:                # noqa: BLE001
+        print("⚠️ [自動重啟] 通知手機失敗：%s" % str(e)[:120], flush=True)
 
 
 def restart_info():
@@ -13856,6 +13928,7 @@ def main():
     print("面板已啟動，可以整天掛著。每天 08:45~09:30 自動進入即時模式。（Ctrl+C 結束）")
 
     threading.Thread(target=_find_supervisor, daemon=True).start()   # ⭐ 重啟鈕：誰在顧這個面板
+    threading.Thread(target=auto_restart_notice, name="auto-restart-note", daemon=True).start()
 
     last_retry = 0.0
     try:
@@ -13868,6 +13941,10 @@ def main():
             # ⭐ 2026-11-05 健檢：主迴圈（停損就在這條）的心跳。手機監控看它多久沒動 ⇒ 卡住就示警、停掉
             #    Healthchecks 心跳讓外面的看門狗響。⛔ 只寫一個數字，不拿鎖（讀的人自己算差多少秒）。
             STATE["loop_at"] = time.time()
+            try:
+                auto_restart_tick(now)            # ⭐ 2026-11-05 自動重啟（條件跟重啟鈕同一支）
+            except Exception:                     # noqa: BLE001  ⛔ 不准擋停損迴圈
+                pass
 
             # 每天 08:30 重新建立當日連線與狀態。
             # 兩種情況要重建：跨到新的一天，或今天還沒做過開盤前的重建

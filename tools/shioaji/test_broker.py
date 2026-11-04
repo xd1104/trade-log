@@ -311,6 +311,82 @@ chk("  平倉成功後本機部位清空", broker._state["position"], None)
 broker.is_live = lambda: broker.REAL_FLAG.exists()
 (broker.ORDER_DIR / f"{TODAY}.jsonl").unlink()
 
+print("\n=== 一口平倉：送第二張以前先確認部位還在（2026-11-05）===")
+
+
+class LaggyReport:
+    """第一張平倉單其實成交了，但券商部位回報慢 lag 次查詢才消失（09-23、10-15 實測的樣子）。"""
+
+    def __init__(self, lag, fail_after_send=False, fill_on=1, deals=False):
+        self.sent, self.lag, self.asks, self.fail = 0, lag, 0, fail_after_send
+        self.fill_on, self.deals = fill_on, deals
+
+    def place_order(self, contract, order):
+        if str(order.octype) == "FuturesOCType.Cover" and str(order.price_type) == "FuturesPriceType.MKP":
+            self.sent += 1
+            if self.sent >= self.fill_on:
+                self.asks = 0
+            if self.deals:
+                # 委託單自己的回報（跟真的永豐 trade 一樣有 status.deals／status.status）
+                filled = self.sent >= self.fill_on
+                st = type("S", (), {"status": "Status.Filled" if filled else "Status.Cancelled",
+                                    "deals": [type("D", (), {"quantity": 1, "price": 46900})()] if filled else []})()
+                return type("T", (), {"status": st})()
+        return FakeTrade()
+
+    def update_status(self, acc=None):
+        pass
+
+    def cancel_order(self, t):
+        pass
+
+    def list_positions(self, acc=None):
+        if self.sent >= 1 and self.fail:
+            raise RuntimeError("500")
+        if self.sent >= self.fill_on:
+            self.asks += 1
+            if self.asks > self.lag:
+                return []
+        return [type("P", (), {"code": "TMFI6", "quantity": 1,
+                               "direction": "Action.Sell", "price": 46978})()]
+
+
+def _one_lot_short():
+    broker._state["position"] = {"dir": "short", "entry": 46978, "qty": 1, "entry_time": "11:23",
+                                 "target_trade": None, "recovered": False}
+
+
+broker.is_live = lambda: True
+broker.FILL_WAIT = 1.0
+broker._close_fail["at"] = 0
+
+api = LaggyReport(lag=50, deals=True)              # 第一張的 1 秒等待裡看不到消失，第 5 次查才空手
+connect(api); _one_lot_short()
+ok, msg = broker.close("sl")
+chk("  回報慢：只送 1 張平倉單（⛔ 不送第二張變反向）", api.sent, 1)
+chk("  回報慢：仍判定平倉成功", ok, True)
+chk("  回報慢：本機部位清空", broker._state["position"], None)
+
+broker._close_fail["at"] = 0
+api = LaggyReport(lag=0, fail_after_send=True)   # 送出後一直查不到部位
+connect(api); _one_lot_short()
+ok, msg = broker.close("sl")
+chk("  查不到部位：⛔ 不送第二張", api.sent, 1)
+chk("  查不到部位：回報沒平掉（停損稍後會再從頭試）", ok, False)
+chk("  查不到部位：⛔ 本機部位保留（不然停損就停了）", (broker._state["position"] or {}).get("dir"), "short")
+
+broker._close_fail["at"] = 0
+api = LaggyReport(lag=0, fill_on=2, deals=True)  # 對照組：第一張真的沒撮到，第二張才成交
+connect(api); _one_lot_short()
+ok, msg = broker.close("sl")
+chk("  對照組：第一張沒撮到、部位確認還在 ⇒ 照送第二張", api.sent, 2)
+chk("  對照組：第二張成交 ⇒ 平倉成功", ok, True)
+broker._close_fail["at"] = 0
+broker.is_live = lambda: broker.REAL_FLAG.exists()
+_f = broker.ORDER_DIR / f"{TODAY}.jsonl"
+if _f.exists():
+    _f.unlink()
+
 print("\n=== 平倉沒撮到：不可以當成平掉了（09-01 真的發生）===")
 
 

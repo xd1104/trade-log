@@ -59,7 +59,9 @@ SYM, FEED = "TSM", "iex"
 R_WAIT_S = 1            # 美股開盤 +10 分鐘那一刻之後等幾秒再看（訊號用前一分鐘收盤，等它收完）
 R_SL_PCT = 0.02         # ⭐ 保護停損＝成交價的 2%（Benson 2026-09-23）；⛔ 不設停利
 R_SL_SAFE = 0.975       # 成交前先帶的保守停損 ＝ 報價 × 2% × 這個數（滑價 2.5% 以內都不會超過上限）
-R_CTX_MAX_AGE_D = 10    # 走幅歷史最新那一晚離今晚超過幾天 ⇒ 歷史太舊（面板很久沒開）⇒ 不做
+R_CTX_MAX_AGE_TD = 7    # 走幅歷史最新那一晚離今晚超過幾個**交易日** ⇒ 歷史太舊（面板很久沒開）⇒ 不做
+#    ⭐ 2026-11-05（Benson 同意健檢建議）：原本用日曆 10 天 ⇒ 過年長假後第一晚真單不做、模擬照做。
+#       改跟 lots 同一把尺（lots.trading_gap：平日、而且不在休市表）。
 
 ENTRY_WAIT_S = 3        # 第一根收完（done_at）之後等幾秒再問 Alpaca（K 棒要一點時間才出來）
 FETCH_UNTIL_S = 90      # 問到 done_at + 90 秒還拿不到 ⇒ 今晚不做（⛔ 不猜）
@@ -151,6 +153,21 @@ def decide_at(E, method):
 def look_at(E, method):
     """畫面上「今晚幾點看」。"""
     return (trend_at(E) if method == "R" else done_at(E)).strftime("%H:%M")
+
+
+def _mem_evening(now):
+    """
+    部位認人用的「是哪一晚」：夜盤中 ＝ evening_of(now)；
+    ⭐ 2026-11-05（Benson 同意健檢建議）05:00～15:00 ＝ 昨晚（04:58 沒平掉的那一口白天重啟也要認得，
+       ⛔ 不然停損會掉回手動 130 點）。週末／不是平日晚上 ⇒ None。
+    """
+    E = evening_of(now)
+    if E is None and 5 <= now.hour < 15:
+        E = evening_of(now.replace(hour=4, minute=59))
+    return E
+
+
+_EOD_SETTLED = ("closed", "flat", "done_elsewhere", "not_ours")   # 04:58 已經有定論 ⇒ 白天不再認那一口
 
 
 def _in(now, a, b):
@@ -438,7 +455,7 @@ def _decide_trend(E, now, lp=None):
     if len(past) < trend_rule.MIN_N:
         _skip(E, "no_hist", "過去的走幅歷史不夠（%d 晚，要 %d 晚）" % (len(past), trend_rule.MIN_N), info)
         return True
-    if newest is None or (E - date.fromisoformat(newest)).days > R_CTX_MAX_AGE_D:
+    if newest is None or lots.trading_gap(newest, E) > R_CTX_MAX_AGE_TD:
         _skip(E, "no_hist", "走幅歷史太舊（最新一晚是 %s）—— 面板太久沒開，門檻不可信" % newest,
               dict(info, newest=newest))
         return True
@@ -480,8 +497,14 @@ def _decide_trend(E, now, lp=None):
     lp = lp or {"qty": broker.QTY}
     base = dict(info, dir=d, px=px, pts=sl0, live=broker.is_live(), **lp)
     _append(dict(base, E=str(E), rec="sending"))          # ⛔ 先落地「送出去了」再送（中斷也看得出來）
+    sent_at = time.time()
     ok, err, pos = broker.enter(d, px, None, sl_points=sl0, qty=lp["qty"])
     res = dict(base, E=str(E), rec="result", ok=bool(ok), err=err)
+    if not ok:
+        # ⭐ 2026-11-05（Benson 同意健檢建議）：送出去了卻沒看到成交（回報慢／查不到）⇒ 留下「可能成交」的線索，
+        #    之後對帳撿到一口對得上的部位就接手（adopt_check），⛔ 不讓它變成沒人顧 04:58 的手動單。
+        res.update(maybe_filled=True, qty_sent=lp["qty"], sent_at=sent_at)
+        _MEM.update(E=E, maybe=res)
     sl = sl0
     if ok and isinstance(pos, dict):
         sl = _trend_sl_after_fill(pos, sl0)
@@ -685,7 +708,7 @@ def recover_meta(pos):
     """
     try:
         ent = _MEM.get("entry")
-        if ent and looks_ours(pos, ent) and evening_of(datetime.now()) == _MEM.get("E"):
+        if ent and looks_ours(pos, ent) and _mem_evening(datetime.now()) == _MEM.get("E"):
             # ⭐ 夜盤跟勢那一口沒有停利（tp_points=None）⇒ 補回 `no_tp`，⛔ 不可以 float(None)
             #    （丟例外 ⇒ broker 把它判成 unmatched ⇒ 停損掉回手動 130 點）。
             if ent.get("tp_points") is None:
@@ -696,7 +719,7 @@ def recover_meta(pos):
             out.update(_multi_meta(ent))
             return out
         q = pos.get("qty") if isinstance(pos, dict) else None
-        if (ent and evening_of(datetime.now()) == _MEM.get("E") and isinstance(q, int) and q > 1
+        if (ent and _mem_evening(datetime.now()) == _MEM.get("E") and isinstance(q, int) and q > 1
                 and (_multi_meta(ent) or (isinstance(ent.get("qty_sent"), int) and ent["qty_sent"] > 1))):
             # ⭐ QA r2 必修 4：今晚開的是多口、撿回來的也是多口、卻對不上（落地的狀態也沒補回）⇒ 分不出是誰的
             #    ⇒ ⛔ 不准退到一口的迴圈去平 ⇒ 不平、示警
@@ -719,6 +742,8 @@ def _recover_poll():
         pass
     pos = broker._state.get("position")
     ent = _MEM.get("entry")
+    if isinstance(pos, dict) and pos.get("recovered") and not ent:
+        ent = _adopt(pos)
     if not isinstance(pos, dict) or not pos.get("recovered") or not ent:
         return
     # ⭐ QA r3 必修 2：日盤那支先跑、把今晚這筆標成「分不出」（它只看得到日盤帳本）⇒ 對得上今晚帳本就由這裡蓋回來。
@@ -743,6 +768,58 @@ def _recover_poll():
         "停損（不設停利）" if ent.get("tp_points") is None else "停損停利", ent["sl_points"]), flush=True)
 
 
+ADOPT_WINDOW_S = 600     # 送單失敗後多久內撿到的部位才算「可能是那一張」
+ADOPT_PX_TOL = 60.0      # 成交價離送單當下的報價最多差幾點（範圍市價的滑價上限之內）
+
+
+def adopt_check(pos, maybe, now_ts=None):
+    """純函式：撿回來的部位是不是那一張「記成失敗」的單成交出來的。⇒ (是嗎, 原因)。"""
+    if not isinstance(pos, dict) or not isinstance(maybe, dict) or not maybe.get("maybe_filled"):
+        return False, "沒有可疑的那一張"
+    now_ts = time.time() if now_ts is None else now_ts
+    if pos.get("dir") != maybe.get("dir"):
+        return False, "方向不一樣"
+    try:
+        if now_ts - float(maybe.get("sent_at")) > ADOPT_WINDOW_S:
+            return False, "離送單太久"
+        if abs(float(pos.get("entry")) - float(maybe.get("px"))) > ADOPT_PX_TOL:
+            return False, "價差太大"
+    except (TypeError, ValueError):
+        return False, "缺價格或時間"
+    q, qs = pos.get("qty"), maybe.get("qty_sent")
+    if not (isinstance(q, int) and isinstance(qs, int) and 1 <= q <= qs):
+        return False, "口數對不上"
+    return True, None
+
+
+def _adopt(pos):
+    """⚠️ 工作執行緒：今晚那張「記成失敗」的單其實成交了 ⇒ 補寫一列 result ok（adopted），之後 04:58／停損照常。"""
+    E = _MEM.get("E")
+    maybe = _MEM.get("maybe")
+    if E is None:
+        return None
+    if maybe is None:
+        for o in reversed(rows_of(E)):
+            if o.get("rec") == "result" and not o.get("ok") and o.get("maybe_filled"):
+                maybe = o
+                break
+        _MEM["maybe"] = maybe or {}
+    ok, _why = adopt_check(pos, maybe)
+    if not ok:
+        return None
+    sl = _trend_sl_after_fill(pos, float(maybe.get("pts") or 0)) if maybe.get("method") == "R" \
+        else float(maybe.get("pts") or 0)
+    row = {k: v for k, v in maybe.items() if k not in ("ok", "err", "maybe_filled", "rec")}
+    row.update(E=str(E), rec="result", ok=True, adopted=True, entry=pos.get("entry"),
+               entry_time=pos.get("entry_time"), qty=pos.get("qty"), sl_points=sl,
+               tp_points=None, no_tp=True,
+               msg="送單當下記成失敗，之後對帳確認其實成交了 ⇒ 接手（停損 %g 點、04:58 照常平倉）" % sl)
+    out = _append(row)
+    _MEM.update(entry=out, maybe={})
+    print("[夜盤自動下單] %s" % row["msg"], flush=True)
+    return out
+
+
 # ── 工作執行緒 ────────────────────────────────────────────────────────
 
 _DONE = {"decide": None, "eod": None, "warm": None, "lwarm": None}
@@ -755,6 +832,14 @@ def step(now=None):
         E = evening_of(now)
         if E is None:
             _eod_late(now)
+            Ep = _mem_evening(now)
+            if Ep is not None:
+                # ⭐ 2026-11-05：白天也要認得「昨晚沒平掉的那一口」（⛔ 04:58 已經有定論的那晚不認）
+                if _MEM.get("E") != Ep:
+                    rows = rows_of(Ep)
+                    settled = any(o.get("rec") == "eod" and o.get("why") in _EOD_SETTLED for o in rows)
+                    _MEM.update(E=Ep, entry=None if settled else _entry_of(rows), maybe=None)
+                _recover_poll()
             return
         if _MEM.get("E") != E:
             _MEM.update(E=E, entry=_entry_of(rows_of(E)))

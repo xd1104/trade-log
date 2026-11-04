@@ -1593,7 +1593,35 @@ def _close_locked(reason):
     # ⭐ 2026-10-02：從這裡開始是「我們自己送的平倉單在路上」⇒ 對帳那邊看到空手不記帳（見 _CLOSE_INFLIGHT）。
     #    ⚠️ 刻意排在上面那次 reconcile() **之後**：送單之前就已經空手（停利早就成交）的那一筆，照舊由對帳記 tp。
     _CLOSE_INFLIGHT["on"] = True
+    res = None
     for attempt in range(CLOSE_TRIES):
+        if attempt > 0 and is_live():
+            # ⭐ 2026-11-05（Benson 同意健檢建議）：送第二張以前先確認部位還在。
+            #    實測 09-23、10-15 第一張「5 秒內沒看到部位消失」，第二張 1 秒內就平掉 ⇒ 券商回報會慢。
+            #    第一張其實已經成交、只是回報慢的話，第二張就是反向新倉 ⇒ ⛔ 沒確認還在就不送。
+            #    查不到 ⇒ 這一輪停手（不清部位、停損迴圈冷卻後會再從頭 close() 一次，那裡會重新跟券商確認方向）。
+            #    先問**上一張平倉單自己**：成交明細有口數 ⇒ 它成交了，只是部位回報慢 ⇒ ⛔ 不送第二張。
+            #    （券商部位這時還顯示舊的那口，只看部位會誤判「還在」。）
+            ost = _close_order_state(res)
+            # ⚠️ 只有「一口」才能這樣推：手動 2 口以上（沒有 entry_qty）也走這條迴圈、每張平 1 口，
+            #    上一張成交只代表平掉 1 口 ⇒ 照舊看部位還在不在（test_lots 守）。
+            one = _num_qty(pos.get("qty")) <= 1
+            chk = "flat" if (ost == "filled" and one) else _still_open(pos["dir"])
+            if chk == "flat":
+                exit_px = _fill_price(res) if res is not None else None
+                rec = record_trade(pos, exit_px, reason)
+                with _lock:
+                    _state["position"] = None
+                _log("close_confirmed", {"ok": True, "tries": attempt, "late_report": True,
+                                         "stray_target": stray, "exit": exit_px,
+                                         "points": (rec or {}).get("points")})
+                return True, ("平倉成功，但那張停利單沒撤掉，請自己到大戶投刪除"
+                              if stray else None)
+            if chk != "open":
+                last_err = ("跟券商確認不到部位（%s）—— 先不送下一張平倉單（避免平過頭變反向），"
+                            "稍後會再試；請到大戶投看一下" % ("方向反了" if chk == "flip" else "查詢失敗"))
+                _log("close_unsure", {"ok": False, "try": attempt + 1, "chk": chk, "why": last_err})
+                break
         ok, err, res = _send(
             _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC,
                    sj.FuturesOCType.Cover),
@@ -1632,6 +1660,40 @@ def _close_locked(reason):
                           "why": "沒有平掉，部位還在，本機狀態保留"})
     return False, ("平不掉（範圍市價 IOC 連續 %d 次沒撮到）—— 部位還在，"
                    "請立刻自己到大戶投平倉" % CLOSE_TRIES if last_err is None else last_err)
+
+
+def _num_qty(q):
+    try:
+        return int(q) if q is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _close_order_state(trade):
+    """上一張平倉單 ⇒ 'filled'（明細有成交）／'unfilled'（IOC 已取消、沒成交）／'unknown'。⛔ 不拿鎖。"""
+    if trade is None or _state["api"] is None:
+        return "unknown"
+    _update_status()
+    s = _deal_sums(trade)
+    if s is not None and s[1] >= 1:
+        return "filled"
+    st = str(getattr(getattr(trade, "status", None), "status", "") or "")
+    if "Cancel" in st or "Fail" in st:
+        return "unfilled"
+    return "unknown"
+
+
+def _still_open(direction, tries=6, gap=0.4):
+    """⇒ 'open'（還在、方向一樣）／'flat'（已經沒有）／'flip'（方向反了）／'unknown'（一直查不到）。"""
+    for i in range(tries):
+        p = broker_position()
+        if p is None:
+            return "flat"
+        if isinstance(p, dict):
+            return "open" if p.get("dir") == direction else "flip"
+        if i + 1 < tries:
+            time.sleep(gap)
+    return "unknown"
 
 
 def _close_multi(pos, reason, act, stray):
