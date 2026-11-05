@@ -26,6 +26,9 @@ def at(hm):
 
 
 saved = (dict(LP.SUPERVISOR), dict(LP.RESTART), broker._state.get("position"))
+real_ms = LP.auto_fire.morning_settled
+SETTLED = {"v": False}
+LP.auto_fire.morning_settled = lambda d: SETTLED["v"]   # ⛔ 不讓真帳本影響 ①～⑥（10-21 那天真的有成交）
 try:
     LP.RESTART["at"] = None
     broker._state["position"] = None
@@ -118,6 +121,53 @@ try:
         LP.SUPERVISOR.update(done=True, who="app")
         broker._state["position"] = None
 
+    # ⑪ 2026-11-05：開盤那一口已經有結果＋沒部位 ⇒ 08:58～09:31 不再擋（其他時段照擋）
+    SETTLED["v"] = True
+    for hm in ("09:10", "09:15", "09:30"):
+        ok, why = LP.restart_check(at(hm))
+        say(ok, "今天單已有結果、沒部位、%s ⇒ 可以重啟" % hm, why)
+    for hm in ("13:43", "04:58", "21:35"):
+        ok, why = LP.restart_check(at(hm))
+        say(not ok and "先不要重啟" in (why or ""), "單有結果也不放其他時段：%s ⇒ 擋" % hm, why)
+    broker._state["position"] = {"dir": "long", "entry": 12000}
+    ok, why = LP.restart_check(at("09:15"))
+    say(not ok and "有部位" in why, "單有結果但還有部位 ⇒ 擋", why)
+    broker._state["position"] = None
+    LP.auto_fire.morning_settled = lambda d: 1 / 0
+    ok, why = LP.restart_check(at("09:15"))
+    say(not ok and "先不要重啟" in (why or ""), "看不出有沒有定論（出錯）⇒ 照擋", why)
+    LP.auto_fire.morning_settled = lambda d: SETTLED["v"]
+    SETTLED["v"] = False
+
+    # ⑫ morning_settled 本身：用假帳本逐種情況驗
+    import json as _json
+    import tempfile as _tf
+    AF = LP.auto_fire
+    real_dir = AF.FIRE_DIR
+    AF.FIRE_DIR = Path(_tf.mkdtemp())
+    try:
+        def case(rows):
+            d = "2026-11-05"
+            (AF.FIRE_DIR / "2026-11.jsonl").write_text(
+                "".join(_json.dumps(dict(r, date=d), ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+            AF._MS_CACHE["key"] = None
+            return real_ms(d)
+        say(case([]) is False, "沒有任何列 ⇒ 還沒定論")
+        say(case([{"rec": "fire", "cand": "fast", "stage": "sending"}]) is False, "送出去還不知道下場 ⇒ 還沒定論")
+        say(case([{"rec": "fire", "cand": "fast", "stage": "sending"},
+                  {"rec": "result", "cand": "fast", "ok": True, "dir": "long", "stage": "done"},
+                  {"rec": "skip", "cand": "orb", "why": "union_done"}]) is True, "快攻成交 ⇒ 有定論")
+        say(case([{"rec": "result", "cand": "fast", "ok": False, "why": "order_failed"}]) is False,
+            "送單失敗（可能成交、要撿回）⇒ 還沒定論")
+        say(case([{"rec": "skip", "cand": "fast", "why": "not_fast"},
+                  {"rec": "skip", "cand": "orb", "why": "orb_short"}]) is False, "回馬槍還沒判 ⇒ 還沒定論")
+        say(case([{"rec": "skip", "cand": "fast", "why": "not_fast"},
+                  {"rec": "skip", "cand": "orb", "why": "orb_short"},
+                  {"rec": "skip", "cand": "rev", "why": "no_reversal"}]) is True, "三個候選都收工 ⇒ 有定論")
+    finally:
+        AF.FIRE_DIR = real_dir
+        AF._MS_CACHE["key"] = None
+
     # ⑦ 已經要求過 ⇒ 不能再按第二次
     LP.RESTART["at"] = 1.0
     ok, why = LP.restart_check(at("10:30"))
@@ -133,6 +183,7 @@ try:
     bat = (Path(__file__).resolve().parent / "start-panel.bat").read_text(encoding="utf-8", errors="replace")
     say("if errorlevel 2 goto already" in bat, "bat 的判斷還是 errorlevel 2（改了要回來看離開碼）")
 finally:
+    LP.auto_fire.morning_settled = real_ms
     LP.SUPERVISOR.clear(); LP.SUPERVISOR.update(saved[0])
     LP.RESTART.clear(); LP.RESTART.update(saved[1])
     broker._state["position"] = saved[2]

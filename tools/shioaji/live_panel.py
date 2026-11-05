@@ -13141,8 +13141,23 @@ def restart_check(now=None):
     hm = now.strftime("%H:%M")
     for a, b, why in restart_blocks(now):
         if a <= hm < b:
+            # ⭐ 2026-11-05 Benson：09:03 進、09:09 停損出場之後還是被擋到 09:31。開盤那段擋的是「自動下單還在判斷」，
+            #    今天那一口已經有結果（或三個候選都收工）＋上面已確認沒部位 ⇒ 沒東西要顧了，放行。
+            #    ⛔ 只放開盤這一段；看帳本檔案（有 5 秒快取，這支每 0.5 秒會叫）；讀不到一律當還沒定論＝照擋。
+            if a == MORNING_BLOCK_AT and _morning_settled(now):
+                continue
             return False, "%s～%s %s，先不要重啟" % (a, b, why)
     return True, None
+
+
+MORNING_BLOCK_AT = RESTART_BLOCK[0][0]
+
+
+def _morning_settled(now):
+    try:
+        return bool(auto_fire.morning_settled(str(now.date())))
+    except Exception:                     # noqa: BLE001  ⛔ 安全方向：看不出來就照擋
+        return False
 
 
 def restart_blocks(now):

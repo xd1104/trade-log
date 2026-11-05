@@ -2063,6 +2063,38 @@ def _eod_settled(d):
     return bool(e) and e.get("why") in EOD_SETTLED
 
 
+_MS_CACHE = {"key": None, "at": 0.0, "val": False}
+MORNING_SETTLED_TTL_S = 5.0
+
+
+def morning_settled(d=None):
+    """
+    ⭐ 2026-11-05（重啟鈕用，⛔ 唯讀、不改任何下單行為）：今天開盤這一段自動下單**已經有定論**了嗎。
+    True ＝ 有一口 `result ok`（`_sent()` 之後其餘候選都不會再送），或三個候選全都 skip 收工。
+    ⛔ 有 `fire`／stage=sending（送出去還不知道下場）、只有失敗的 result（可能成交、要撿回）⇒ False。
+    ⛔ 讀不到、算不出 ⇒ False（安全方向＝照擋）。有 5 秒快取（面板每 0.5 秒會問）。
+    """
+    d = d or str(date.today())
+    t = time.time()
+    if _MS_CACHE["key"] == d and t - _MS_CACHE["at"] < MORNING_SETTLED_TTL_S:
+        return _MS_CACHE["val"]
+    try:
+        cands, _e = _day_rows(d)
+        rows = list(cands.values())
+        if any(r.get("rec") == "fire" or r.get("stage") == "sending" for r in rows):
+            val = False
+        elif any(r.get("rec") == "result" and not r.get("ok") for r in rows):
+            val = False
+        elif any(r.get("rec") == "result" and r.get("ok") for r in rows):
+            val = True
+        else:
+            val = all((cands.get(c) or {}).get("rec") == "skip" for c in CANDS)
+    except Exception:                     # noqa: BLE001
+        val = False
+    _MS_CACHE.update(key=d, at=t, val=val)
+    return val
+
+
 def _auto_entry(d):
     """
     今天**自動下單真的開出來**的那一口。回 (那一列, 不能動手的原因)。
