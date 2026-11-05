@@ -7873,25 +7873,38 @@ function goalWan(v){ return (Math.round(v/1000)/10)+' 萬'; }
    ① 預設「近期」：橫軸只畫起算日到今天後 40 天、縱軸照看得到的值縮放 ⇒ 實際權益不再擠成最左邊一根針；「全程」照舊畫到 50 萬。
    ② 入金那一段改金色點線＋標「+10 萬」（跳上去的是存錢、不是賺的）；③ 現在那一點標金額、畫「今天」那條線；
    ④ 縱軸字太擠的跳過（全程的 7 萬／10 萬疊在一起）；⑤ 線一律裁在圖框裡。⛔ 數字全照後端（goal.view），前端不算任何金額。 */
-let GOAL_VIEW=(function(){ try{ return localStorage.getItem('goalView')||'near'; }catch(e){ return 'near'; } })();
+/* ⭐ 2026-11-05 Benson 選「多加幾顆按鈕」：橫軸範圍 1 個月／3 個月／半年／1 年／全程。
+   範圍＝以今天為右邊（右邊多留一成），往回推 N；推過起算日 ⇒ 改從起算日往後畫 N（資料還不夠長的時候看得到計畫線往哪走）。 */
+const GOAL_SPANS=[['1m','1 個月',1],['3m','3 個月',3],['6m','半年',6],['1y','1 年',12],['all','全程',0]];
+let GOAL_VIEW=(function(){ try{ const v=localStorage.getItem('goalView');
+  return v==='near'?'3m':(GOAL_SPANS.some(x=>x[0]===v)?v:'3m'); }catch(e){ return '3m'; } })();
 function goalChart(G){
  const L=(G.line||[]).filter(p=>p&&p.s!=null); if(L.length<2) return '';
  const A=(G.actual||[]).filter(p=>p&&p.e!=null);
- const near=GOAL_VIEW!=='all', DAY=864e5, f=v=>v.toFixed(1);
- const t0=Date.parse(L[0].d), tA=A.length?Date.parse(A[A.length-1].d):t0;
- const t1=near?Math.max(tA+40*DAY, t0+90*DAY):Date.parse(L[L.length-1].d), tr=(t1-t0)||1;
+ const sp=GOAL_SPANS.find(x=>x[0]===GOAL_VIEW)||GOAL_SPANS[1], months=sp[2];
+ const near=months>0, DAY=864e5, f=v=>v.toFixed(1);
+ const t0=Date.parse(L[0].d), tEnd=Date.parse(L[L.length-1].d);
+ const tA=A.length?Date.parse(A[A.length-1].d):t0;
+ let xs=t0, t1=tEnd;
+ if(near){
+   const span=months*30.44*DAY;
+   t1=tA+span*0.12; xs=t1-span;
+   if(xs<t0){ xs=t0; t1=t0+span; }
+ }
+ const tr=(t1-xs)||1;
  const steps=G.steps||[];
+ const inR=d=>{ const t=Date.parse(d); return t>=xs&&t<=t1; };
  let hi;
  if(near){
-   const vs=A.map(p=>p.e);
-   L.forEach(p=>{ if(Date.parse(p.d)<=t1){ vs.push(p.s); if(p.t!=null) vs.push(p.t); } });
-   hi=Math.max(...vs)*1.14;
+   const vs=A.filter(p=>inR(p.d)).map(p=>p.e);
+   L.forEach(p=>{ if(inR(p.d)){ vs.push(p.s); if(p.t!=null) vs.push(p.t); } });
+   hi=Math.max(1, ...vs)*1.14;
  } else hi=Math.max(steps.length?steps[steps.length-1].eq:0, ...L.map(p=>p.s))*1.04;
  const lo=0, W=640, H=240, pl=44, pr=14, pt=16, pb=22;
- const X=d=>pl+(W-pl-pr)*((Date.parse(d)-t0)/tr), Y=v=>pt+(H-pt-pb)*(1-(v-lo)/(hi-lo));
+ const X=d=>pl+(W-pl-pr)*((Date.parse(d)-xs)/tr), Y=v=>pt+(H-pt-pb)*(1-(v-lo)/(hi-lo));
  const wan=v=>(Math.round(Math.abs(v)/1000)/10)+'萬';
  const path=(pts,k)=>pts.filter(p=>p[k]!=null).map((p,i)=>(i?'L':'M')+f(X(p.d))+' '+f(Y(p[k]))).join(' ');
- /* 縱軸：近期用整數刻度；全程用階梯門檻（從上往下畫、離上一個字不到 13px 就只畫線不寫字） */
+ /* 縱軸：有範圍的用整數刻度；全程用階梯門檻（從上往下畫、離上一個字不到 13px 就只畫線不寫字） */
  let g='';
  const hline=(v,txt)=>'<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+f(Y(v))+'" y2="'+f(Y(v))+'" stroke="var(--line-soft)" stroke-width="1"></line>'+
    (txt?'<text x="'+(pl-6)+'" y="'+f(Y(v)+3.5)+'" text-anchor="end" font-size="10" fill="var(--faint)">'+txt+'</text>':'');
@@ -7903,23 +7916,29 @@ function goalChart(G){
    steps.slice().reverse().forEach(s0=>{ const y=Y(s0.eq), ok=Math.abs(y-last)>=13; g+=hline(s0.eq, ok?(s0.eq/10000)+'萬':''); if(ok) last=y; });
  }
  g+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+f(Y(0))+'" y2="'+f(Y(0))+'" stroke="var(--line-soft)" stroke-width="1"></line>';
- /* 橫軸：近期每月一格、全程每年一格 */
+ /* 橫軸：1 個月每週一格（週一）、3 個月／半年每月、1 年每兩個月、全程每年 */
  let xr='';
- const vline=(t,txt)=>{ const x=f(X(new Date(t).toISOString().slice(0,10)));
+ const ymd=t=>{ const d=new Date(t); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+ const vline=(ds,txt)=>{ const x=f(X(ds));
    return '<line x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--line-soft)" stroke-dasharray="2 3"></line>'+
      '<text x="'+x+'" y="'+(H-6)+'" text-anchor="middle" font-size="10" fill="var(--faint)">'+txt+'</text>'; };
- if(near){
-   const d=new Date(t0); d.setDate(1);
+ if(months===1){
+   const d=new Date(xs); d.setHours(0,0,0,0);
+   while(d.getDay()!==1) d.setDate(d.getDate()+1);
+   for(; d.getTime()<=t1; d.setDate(d.getDate()+7)) xr+=vline(ymd(d.getTime()), (d.getMonth()+1)+'/'+d.getDate());
+ } else if(near){
+   const every=months>=12?2:1;
+   const d=new Date(xs); d.setHours(0,0,0,0); d.setDate(1);
    for(d.setMonth(d.getMonth()+1); d.getTime()<=t1; d.setMonth(d.getMonth()+1)){
-     const t=Date.UTC(d.getFullYear(), d.getMonth(), 1);
-     xr+=vline(t, d.getMonth()===0?(d.getFullYear()+'/1'):((d.getMonth()+1)+'月')); }
+     if(every>1&&d.getMonth()%every) continue;
+     xr+=vline(ymd(d.getTime()), d.getMonth()===0?(d.getFullYear()+'/1'):((d.getMonth()+1)+'月')); }
  } else {
-   for(let y=new Date(t0).getFullYear()+1; Date.parse(y+'-01-01')<=t1; y++) xr+=vline(Date.parse(y+'-01-01'), String(y));
+   for(let y=new Date(xs).getFullYear()+1; Date.parse(y+'-01-01')<=t1; y++) xr+=vline(y+'-01-01', String(y));
  }
  /* 今天 */
  const td=new Date(), tds=td.getFullYear()+'-'+String(td.getMonth()+1).padStart(2,'0')+'-'+String(td.getDate()).padStart(2,'0');
  let today='';
- if(Date.parse(tds)>=t0&&Date.parse(tds)<=t1){ const x=f(X(tds));
+ if(Date.parse(tds)>=xs&&Date.parse(tds)<=t1){ const x=f(X(tds));
    today='<line x1="'+x+'" x2="'+x+'" y1="'+(pt-4)+'" y2="'+(H-pb)+'" stroke="var(--dim)" stroke-width="1" stroke-dasharray="3 3"></line>'+
      '<text x="'+x+'" y="'+(pt-6)+'" text-anchor="middle" font-size="9.5" fill="var(--dim)">今天</text>'; }
  /* 實際權益：入金那一段拆出來畫金色點線 */
@@ -7944,8 +7963,7 @@ function goalChart(G){
      '<text x="'+f(x+11)+'" y="'+f(y+4)+'" font-size="11" font-weight="650" fill="var(--text)">'+goalWan(z.e)+'</text>'; }
  const hasDep=A.some((p,i)=>i&&Math.abs(Number(p.dep||0))>=1000);
  return '<div class="gl-chart"><div class="gl-vw">'+
-   '<button data-glview="near" class="'+(near?'on':'')+'">近期</button>'+
-   '<button data-glview="all" class="'+(near?'':'on')+'">全程到 50 萬</button></div>'+
+   GOAL_SPANS.map(x=>'<button data-glview="'+x[0]+'" class="'+(x[0]===sp[0]?'on':'')+'">'+x[1]+'</button>').join('')+'</div>'+
    '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="目標線、保守線與實際權益">'+
    '<defs><clipPath id="glclip"><rect x="'+pl+'" y="'+(pt-8)+'" width="'+(W-pl-pr+8)+'" height="'+(H-pt-pb+8)+'"></rect></clipPath></defs>'+
    g+xr+today+'<g clip-path="url(#glclip)">'+
