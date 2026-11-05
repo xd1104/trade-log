@@ -5680,6 +5680,11 @@ body{background:var(--bg); color:var(--text); font-family:var(--font-sans); line
 .gl-key i{display:inline-block; width:16px; height:0; vertical-align:middle; margin-right:5px}
 .gl-key .k-t{border-top:2px solid var(--gold)} .gl-key .k-s{border-top:2px dashed var(--dim)}
 .gl-key .k-a{border-top:2px solid var(--text)}
+.gl-key .k-d{border-top:2px dotted var(--gold)}
+.gl-vw{display:flex; justify-content:flex-end; gap:4px; margin-bottom:2px}
+.gl-vw button{font:inherit; font-size:11px; padding:2px 10px; border-radius:999px; cursor:pointer;
+  border:1px solid var(--line-soft); background:transparent; color:var(--faint)}
+.gl-vw button.on{color:var(--text); border-color:var(--dim)}
 .gl-h{font-size:12px; font-weight:650; color:var(--text); margin-top:14px}
 .gl-tw{overflow-x:auto; margin-top:6px}
 .gl-t{width:100%; border-collapse:collapse; font-size:11.5px; font-family:var(--font-mono);
@@ -7864,31 +7869,90 @@ function acctHTML(s){
    ⛔ 句子、日期、口數、每月數字**全部後端算**（goal.py）；前端只負責畫。
    ⛔ 兩條是「計畫線」不是猜測：保守線＝只存錢、目標線＝存錢＋打折後獲利（他 09-30 選兩條都畫）。 */
 function goalWan(v){ return (Math.round(v/1000)/10)+' 萬'; }
+/* ⭐ 2026-11-05 Benson：「這個曲線有點醜」⇒ 改版：
+   ① 預設「近期」：橫軸只畫起算日到今天後 40 天、縱軸照看得到的值縮放 ⇒ 實際權益不再擠成最左邊一根針；「全程」照舊畫到 50 萬。
+   ② 入金那一段改金色點線＋標「+10 萬」（跳上去的是存錢、不是賺的）；③ 現在那一點標金額、畫「今天」那條線；
+   ④ 縱軸字太擠的跳過（全程的 7 萬／10 萬疊在一起）；⑤ 線一律裁在圖框裡。⛔ 數字全照後端（goal.view），前端不算任何金額。 */
+let GOAL_VIEW=(function(){ try{ return localStorage.getItem('goalView')||'near'; }catch(e){ return 'near'; } })();
 function goalChart(G){
  const L=(G.line||[]).filter(p=>p&&p.s!=null); if(L.length<2) return '';
- const A=G.actual||[];
- const t0=Date.parse(L[0].d), t1=Date.parse(L[L.length-1].d), tr=(t1-t0)||1;
+ const A=(G.actual||[]).filter(p=>p&&p.e!=null);
+ const near=GOAL_VIEW!=='all', DAY=864e5, f=v=>v.toFixed(1);
+ const t0=Date.parse(L[0].d), tA=A.length?Date.parse(A[A.length-1].d):t0;
+ const t1=near?Math.max(tA+40*DAY, t0+90*DAY):Date.parse(L[L.length-1].d), tr=(t1-t0)||1;
  const steps=G.steps||[];
- const hi=Math.max(steps.length?steps[steps.length-1].eq:0, ...L.map(p=>p.s))*1.04, lo=0;
- const W=640,H=230,pl=46,pr=10,pt=10,pb=22;
+ let hi;
+ if(near){
+   const vs=A.map(p=>p.e);
+   L.forEach(p=>{ if(Date.parse(p.d)<=t1){ vs.push(p.s); if(p.t!=null) vs.push(p.t); } });
+   hi=Math.max(...vs)*1.14;
+ } else hi=Math.max(steps.length?steps[steps.length-1].eq:0, ...L.map(p=>p.s))*1.04;
+ const lo=0, W=640, H=240, pl=44, pr=14, pt=16, pb=22;
  const X=d=>pl+(W-pl-pr)*((Date.parse(d)-t0)/tr), Y=v=>pt+(H-pt-pb)*(1-(v-lo)/(hi-lo));
- const path=(pts,k)=>pts.filter(p=>p[k]!=null).map((p,i)=>(i?'L':'M')+X(p.d).toFixed(1)+' '+Y(p[k]).toFixed(1)).join(' ');
+ const wan=v=>(Math.round(Math.abs(v)/1000)/10)+'萬';
+ const path=(pts,k)=>pts.filter(p=>p[k]!=null).map((p,i)=>(i?'L':'M')+f(X(p.d))+' '+f(Y(p[k]))).join(' ');
+ /* 縱軸：近期用整數刻度；全程用階梯門檻（從上往下畫、離上一個字不到 13px 就只畫線不寫字） */
  let g='';
- steps.forEach(st=>{ const y=Y(st.eq);
-   g+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y.toFixed(1)+'" y2="'+y.toFixed(1)+'" stroke="var(--line-soft)" stroke-width="1"></line>'+
-      '<text x="'+(pl-5)+'" y="'+(y+3.5).toFixed(1)+'" text-anchor="end" font-size="10" fill="var(--faint)">'+(st.eq/10000)+'萬</text>'; });
- let yr='';
- for(let y=new Date(t0).getFullYear()+1; Date.parse(y+'-01-01')<=t1; y++){
-   const x=X(y+'-01-01').toFixed(1);
-   yr+='<line x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--line-soft)" stroke-dasharray="2 3"></line>'+
-       '<text x="'+x+'" y="'+(H-6)+'" text-anchor="middle" font-size="10" fill="var(--faint)">'+y+'</text>'; }
- const act=A.length?('<path d="'+path(A,'e')+'" fill="none" stroke="var(--text)" stroke-width="2"></path>'+
-   '<circle cx="'+X(A[A.length-1].d).toFixed(1)+'" cy="'+Y(A[A.length-1].e).toFixed(1)+'" r="4" fill="var(--text)"></circle>'):'';
- return '<div class="gl-chart"><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="目標線、保守線與實際權益">'+g+yr+
-   '<path d="'+path(L,'s')+'" fill="none" stroke="var(--dim)" stroke-width="1.6" stroke-dasharray="5 4"></path>'+
-   '<path d="'+path(L,'t')+'" fill="none" stroke="var(--gold)" stroke-width="2"></path>'+act+'</svg>'+
+ const hline=(v,txt)=>'<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+f(Y(v))+'" y2="'+f(Y(v))+'" stroke="var(--line-soft)" stroke-width="1"></line>'+
+   (txt?'<text x="'+(pl-6)+'" y="'+f(Y(v)+3.5)+'" text-anchor="end" font-size="10" fill="var(--faint)">'+txt+'</text>':'');
+ if(near){
+   const st=[10000,20000,50000,100000,200000].find(x=>hi/x<=6)||100000;
+   for(let v=st; v<hi; v+=st) g+=hline(v, (v/10000)+'萬');
+ } else {
+   let last=-99;
+   steps.slice().reverse().forEach(s0=>{ const y=Y(s0.eq), ok=Math.abs(y-last)>=13; g+=hline(s0.eq, ok?(s0.eq/10000)+'萬':''); if(ok) last=y; });
+ }
+ g+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+f(Y(0))+'" y2="'+f(Y(0))+'" stroke="var(--line-soft)" stroke-width="1"></line>';
+ /* 橫軸：近期每月一格、全程每年一格 */
+ let xr='';
+ const vline=(t,txt)=>{ const x=f(X(new Date(t).toISOString().slice(0,10)));
+   return '<line x1="'+x+'" x2="'+x+'" y1="'+pt+'" y2="'+(H-pb)+'" stroke="var(--line-soft)" stroke-dasharray="2 3"></line>'+
+     '<text x="'+x+'" y="'+(H-6)+'" text-anchor="middle" font-size="10" fill="var(--faint)">'+txt+'</text>'; };
+ if(near){
+   const d=new Date(t0); d.setDate(1);
+   for(d.setMonth(d.getMonth()+1); d.getTime()<=t1; d.setMonth(d.getMonth()+1)){
+     const t=Date.UTC(d.getFullYear(), d.getMonth(), 1);
+     xr+=vline(t, d.getMonth()===0?(d.getFullYear()+'/1'):((d.getMonth()+1)+'月')); }
+ } else {
+   for(let y=new Date(t0).getFullYear()+1; Date.parse(y+'-01-01')<=t1; y++) xr+=vline(Date.parse(y+'-01-01'), String(y));
+ }
+ /* 今天 */
+ const td=new Date(), tds=td.getFullYear()+'-'+String(td.getMonth()+1).padStart(2,'0')+'-'+String(td.getDate()).padStart(2,'0');
+ let today='';
+ if(Date.parse(tds)>=t0&&Date.parse(tds)<=t1){ const x=f(X(tds));
+   today='<line x1="'+x+'" x2="'+x+'" y1="'+(pt-4)+'" y2="'+(H-pb)+'" stroke="var(--dim)" stroke-width="1" stroke-dasharray="3 3"></line>'+
+     '<text x="'+x+'" y="'+(pt-6)+'" text-anchor="middle" font-size="9.5" fill="var(--dim)">今天</text>'; }
+ /* 實際權益：入金那一段拆出來畫金色點線 */
+ let sol='', dz='', lab='', area='';
+ A.forEach((p,i)=>{ const x=X(p.d), y=Y(p.e);
+   if(i===0){ sol='M'+f(x)+' '+f(y); return; }
+   const q=A[i-1], dep=Number(p.dep||0);
+   if(Math.abs(dep)>=1000){
+     dz+='M'+f(X(q.d))+' '+f(Y(q.e))+' L'+f(x)+' '+f(y)+' ';
+     sol+=' M'+f(x)+' '+f(y);
+     if(near) lab+='<text x="'+f(x-5)+'" y="'+f((Y(q.e)+y)/2+3)+'" text-anchor="end" font-size="9.5" fill="var(--gold)">'+(dep>0?'+':'−')+wan(dep)+'</text>';
+   } else sol+=' L'+f(x)+' '+f(y);
+ });
+ if(A.length>1) area='<path d="M'+f(X(A[0].d))+' '+f(Y(0))+' '+A.map(p=>'L'+f(X(p.d))+' '+f(Y(p.e))).join(' ')+
+   ' L'+f(X(A[A.length-1].d))+' '+f(Y(0))+' Z" fill="var(--text)" opacity="0.06"></path>';
+ let act='';
+ if(A.length){ const z=A[A.length-1], x=X(z.d), y=Y(z.e);
+   act=area+'<path d="'+dz+'" fill="none" stroke="var(--gold)" stroke-width="1.6" stroke-dasharray="1.5 3" stroke-linecap="round"></path>'+
+     '<path d="'+sol+'" fill="none" stroke="var(--text)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>'+lab+
+     '<circle cx="'+f(x)+'" cy="'+f(y)+'" r="8" fill="var(--text)" opacity="0.15"></circle>'+
+     '<circle cx="'+f(x)+'" cy="'+f(y)+'" r="3.8" fill="var(--text)"></circle>'+
+     '<text x="'+f(x+11)+'" y="'+f(y+4)+'" font-size="11" font-weight="650" fill="var(--text)">'+goalWan(z.e)+'</text>'; }
+ const hasDep=A.some((p,i)=>i&&Math.abs(Number(p.dep||0))>=1000);
+ return '<div class="gl-chart"><div class="gl-vw">'+
+   '<button data-glview="near" class="'+(near?'on':'')+'">近期</button>'+
+   '<button data-glview="all" class="'+(near?'':'on')+'">全程到 50 萬</button></div>'+
+   '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="目標線、保守線與實際權益">'+
+   '<defs><clipPath id="glclip"><rect x="'+pl+'" y="'+(pt-8)+'" width="'+(W-pl-pr+8)+'" height="'+(H-pt-pb+8)+'"></rect></clipPath></defs>'+
+   g+xr+today+'<g clip-path="url(#glclip)">'+
+   '<path d="'+path(L,'s')+'" fill="none" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="5 4"></path>'+
+   '<path d="'+path(L,'t')+'" fill="none" stroke="var(--gold)" stroke-width="2" stroke-linejoin="round"></path>'+act+'</g></svg>'+
    '<div class="gl-key"><span><i class="k-t"></i>目標線（存錢＋獲利）</span><span><i class="k-s"></i>保守線（只存錢）</span>'+
-   '<span><i class="k-a"></i>實際權益</span></div></div>';
+   '<span><i class="k-a"></i>實際權益</span>'+(hasDep?'<span><i class="k-d"></i>入金</span>':'')+'</div></div>';
 }
 function goalHTML(G){
  if(!G) return '';
@@ -11360,6 +11424,9 @@ document.addEventListener('click',function(e){
 /* ⭐ 2026-10-20【帳戶】目標卡那一句口數通知的 ✕（跟【自動下單】金條同一把鑰匙；⛔ 不送請求）。
    ⛔ 不能放進【自動下單】那個監聽（它開頭就 `if(TAB!=='fire') return`）。 */
 document.addEventListener('click',function(e){
+ const gv=e.target.closest('[data-glview]');
+ if(gv){ GOAL_VIEW=gv.dataset.glview; try{ localStorage.setItem('goalView',GOAL_VIEW); }catch(e2){}
+   setEl('acctgoal', goalHTML(ACCT.goal)); return; }
  const gs=e.target.closest('[data-glseen]'); if(!gs) return;
  const L0=((ACCT&&ACCT.goal)||{}).lots_line;
  if(L0&&L0.seen_key&&!LTSEEN.includes(L0.seen_key)){

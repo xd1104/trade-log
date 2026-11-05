@@ -235,6 +235,7 @@ def view(rows, eq_now, dep_today=0.0, now=None, live=None):
     now = now or datetime.now()
     today = now.date()
     rows = [r for r in (rows or []) if isinstance(r.get("equity"), (int, float))]
+    effs = _effs(rows)                    # 每一列的實際出入金（圖上入金那段畫點線用）
     if not isinstance(eq_now, (int, float)):
         eq_now = float(rows[-1]["equity"]) if rows else None
     if eq_now is None:
@@ -327,8 +328,10 @@ def view(rows, eq_now, dep_today=0.0, now=None, live=None):
         "line": [{"d": p["date"], "s": p["safe"],
                   "t": (p["target"] if (j == 0 or pts[j - 1]["target"] < GOAL) else None)}
                  for j, p in enumerate(pts)],
-        "actual": [{"d": str(r["date"]), "e": round(float(r["equity"]))}
-                   for r in rows if str(r["date"]) >= str(d0)],
+        # ⭐ 2026-11-05：dep＝那天的實際出入金（同 months_actual 那把尺 _effs）⇒ 圖上把入金那段畫成點線、不當成賺的
+        "actual": [dict({"d": str(r["date"]), "e": round(float(r["equity"]))},
+                        **({"dep": round(effs[i])} if abs(effs[i]) >= 1000 else {}))
+                   for i, r in enumerate(rows) if str(r["date"]) >= str(d0)],
         "steps": steps,
         "months": mon[-12:],
         "notes": [
