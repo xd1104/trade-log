@@ -558,6 +558,8 @@ chk("只送微台 1 口平倉；小台照明細還在（確認中）⇒ 回報�
 chk("兩張停利都撤（小台那張還掛著，不撤會變反向新倉）", sorted(F.cancels), ["MXF", "TMF"])
 CLK.t += broker.LATE_LEG_S + 1                    # 那一腿券商從沒顯示過 ⇒ 等 LATE_LEG_S（可能是晚到的腿）
 broker.reconcile()
+CLK.t += 3                                        # 持續＝至少 DIFF_CONFIRM_N 次對帳都一樣＋相隔 ≥ CLOSE_COOLDOWN
+broker.reconcile()
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()
 tr = trades()
@@ -595,6 +597,8 @@ got = broker.reconcile()
 chk("本機 MIX、券商只剩微台 ⇒ 確認前照帳本（11）", got["qty"], 11)
 CLK.t += broker.LATE_LEG_S + 1
 broker.reconcile()
+CLK.t += 3                                        # 持續＝至少 DIFF_CONFIRM_N 次對帳都一樣＋相隔 ≥ CLOSE_COOLDOWN
+broker.reconcile()
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()
 chk("  持續確認之後 ⇒ 小台那腿記成別處平掉、剩 TMF 1 口", (got["product"], got["qty"], "mix" in got,
@@ -619,6 +623,8 @@ F._apply("TMF", -1, 38000.0)
 got = broker.reconcile()
 chk("本機 MIX、券商一腿變多一腿變少 ⇒ 確認前照帳本 11", got["qty"], 11)
 CLK.t += broker.LATE_LEG_S + 1
+broker.reconcile()
+CLK.t += 3                                        # 持續＝至少 DIFF_CONFIRM_N 次對帳都一樣＋相隔 ≥ CLOSE_COOLDOWN
 broker.reconcile()
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()
@@ -751,6 +757,8 @@ CLK.t = F._late["MXF"][0] + 1
 F._apply("MXF", 4, 38000.0)                       # 小台：晚到的空 2 口＋多 4 口 ⇒ 券商上是多 2 口（反方向）
 broker.reconcile()
 CLK.t += broker.LATE_LEG_S + 1
+broker.reconcile()
+CLK.t += 3                                        # 持續＝至少 DIFF_CONFIRM_N 次對帳都一樣＋相隔 ≥ CLOSE_COOLDOWN
 broker.reconcile()
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()

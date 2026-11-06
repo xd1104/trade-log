@@ -2716,6 +2716,7 @@ def _leg_caps(pos):
 OWN_TMF_MULTI = True          # 微台多口也用帳本（⭐ 第三輪品管：取代 _close_multi；False ⇒ 只有小台／混搭用帳本）
 LEGACY_HANDOVER = False       # ⛔ 預設關：True ⇒ 確認過券商比我們多時，照舊把多的轉成「他的手動部位」（老闆不會手動加碼 ⇒ 不用）
 IOC_FINAL_S = 60.0            # 範圍市價 IOC 送出後幾秒還沒回報結束 ⇒ 照已回報的明細當成結束（IOC 不可能這麼久之後才成交）
+DIFF_CONFIRM_N = 3            # 券商跟帳本的差異要至少幾次對帳都一樣（再加上相隔 ≥ CLOSE_COOLDOWN）才採信
 RECENT_CLOSE_S = 120.0        # 帳本部位平完之後幾秒內，券商同方向、不超過剛平掉的口數 ⇒ 當成舊資料、不撿回
 _RECENT_CLOSE = {"at": 0.0, "dir": None, "legs": {}, "msg": None}
 
@@ -2911,11 +2912,14 @@ def _own_reconcile(cur):
             cur["diff_susp"] = {"sig": sig, "since": None, "wait": True}
             return cur
         if not isinstance(sp, dict) or sp.get("sig") != sig or sp.get("since") is None:
-            cur["diff_susp"] = {"sig": sig, "since": now}
+            cur["diff_susp"] = {"sig": sig, "since": now, "n": 1}
             _log("own_diff_suspect", {"ok": None, "diff": diff, "why": "券商部位跟程式明細算的不一樣 —— 先照明細，%g 秒後還一樣才採信"
                                       % CLOSE_COOLDOWN})
             return cur
-        if now - float(sp["since"]) < CLOSE_COOLDOWN:
+        sp["n"] = int(sp.get("n") or 1) + 1
+        if now - float(sp["since"]) < CLOSE_COOLDOWN or sp["n"] < DIFF_CONFIRM_N:
+            # 持續＝相隔 ≥ CLOSE_COOLDOWN、而且至少 DIFF_CONFIRM_N 次對帳都一樣（中間有一次不一樣就重算）
+            # （性質測試抓到：兩次互不相干的暫時舊資料剛好隔 16 秒、中間的對帳又問不到 ⇒ 只看兩次會被湊成「持續」）
             return cur
         cur.pop("diff_susp", None)
         if any(v < 0 for v in sb.values()):
