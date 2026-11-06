@@ -1206,6 +1206,8 @@ for fill in (10, 0):
     F.lag, F._hist = 0, []
     if fill:
         chk("  明細回報之後：照明細 10 口、還是程式的部位", ((pos() or {}).get("qty"), (pos() or {}).get("recovered")), (10, False))
+        chk("  ⭐ 第七輪：明細回報之後自動補掛停利（10 口、成交價＋60）",
+            [(x[0], x[1].order.quantity, x[3]) for x in F.targets][-1:], [("TMF", 10, 38061)])
         F.mkt = {"TMF": 37801.0, "MXF": 37800.0}
         n0 = len(F.sent)
         ok, err = broker.close("sl")
@@ -1230,6 +1232,8 @@ for _ in range(6):
     CLK.t += 2
     broker.reconcile()
 F.lag, F._hist = 0, []
+chk("  ⭐ 第七輪：明細回報之後兩腿各補掛一張停利", sorted((x[0], x[1].order.quantity) for x in F.targets[-2:]),
+    [("MXF", 2), ("TMF", 1)])
 n0 = len(F.sent)
 ok, err = broker.close("sl")
 chk("  明細回報後停損：兩腿都平、⛔ 沒平過頭、空手、這一趟一筆 11 口",
@@ -1256,6 +1260,45 @@ finally:
     AF.time = _aft
 chk("  空殼 60 秒逾時結算後，那一腿 70 秒出現 ⇒ 窗口內照撿回部位平掉（⛔ 不先定案 flat）",
     (AF._ST["last"].get("why"), F.eq(), F.bad), ("eod_closed", {}, []))
+
+print("\n  -- 第七輪品管 #1：進場前查券商部位失敗 ⇒ 重問；問到「沒有」走正常確認；一直問不到 ⇒ 不送 --")
+F = fresh(mini=False)
+F.pos_fail = 1
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
+chk("第一次問不到、重問問到空手 ⇒ 正常進場（不是保守估計、停利照掛）",
+    (ok, p["qty"], bool(p["own_trades"][0].get("est")), [s[4] for s in S(F)]), (True, 10, False, ["MKP", "LMT"]))
+F = fresh(mini=False)
+F.pos_fail = 10
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
+F.pos_fail = 0
+chk("  一直問不到 ⇒ 一張都不送、講原因", (ok, S(F), "確認不到部位" in (err or "")), (False, [], True))
+
+print("\n  -- 第七輪品管 #2：帳本部位平完、券商舊資料卡 200 秒（過了不撿回的 120 秒）⇒ 撿回後一口迴圈 ⛔ 不平過頭 --")
+F = fresh(mini=False)
+broker.enter("long", 38000, 60, sl_points=200, qty=10)
+F.lag = 200.0
+broker.close("sl")
+n0 = len(F.sent)
+for _ in range(12):
+    CLK.t += broker.CLOSE_COOLDOWN + 1
+    broker._close_fail["at"] = 0
+    if broker.reconcile() is not None:
+        broker.close("sl")
+chk("  舊資料被撿回、停損一張都沒送（判斷是舊資料）", (S(F, n0), F.bad), ([], []))
+F.lag, F._hist = 0, []
+CLK.t += 5
+chk("  券商更新之後：空手、沒有部位", (F.eq(), broker.reconcile()), ({}, None))
+F = fresh(mini=False)
+broker.enter("long", 38000, 60, sl_points=200, qty=10)
+broker.close("sl")
+CLK.t += broker.RECENT_CLOSE_S + 1
+F._apply("TMF", 3, 38050.0)                       # 之後真的出現一筆同方向 3 口（均價不同 ⇒ 不是那份舊資料）
+for _ in range(3):
+    CLK.t += broker.CLOSE_COOLDOWN + 1
+    broker._close_fail["at"] = 0
+    if broker.reconcile() is not None:
+        broker.close("sl")
+chk("  對照：平完後出現口數／均價不一樣的同方向部位 ⇒ 照撿回部位平掉、⛔ 沒平過頭", (F.eq(), F.bad), ({}, []))
 
 src = (HERE / "auto_fire.py").read_text(encoding="utf-8")
 say("place_order" not in src and "FuturesOrder" not in src, "⛔ auto_fire 裡沒有 place_order／FuturesOrder")

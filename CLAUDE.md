@@ -1065,9 +1065,19 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   ・照明細確認那條（進場前券商就有同方向部位）明細 FILL_WAIT 內沒回報完 ⇒ ⛔ 不丟「不知道」：照送出量保守估計當帳本部位
     （進場單記 `est`），有程式停損、**停利單先不掛**；估計的口數算進口數、⛔ 不算進平倉上限 hi（`book[p]["unsure"]`），明細回報了才平。
     單結束後照明細；明細說 0 ⇒ 清部位、⛔ 不記 0 口成績單。
+    ⚠️ 明細一直不回報：送出 IOC_FINAL_S（60 秒）後那張進場單逾時當成結束、照明細（0 口）⇒ **直接清掉部位、交給撿回流程**
+    （⛔ 沒有經過差異確認；之後券商上真的有的口數照撿回規則：兩次對帳一樣才平、照手動停損）。
   ・帳本部位「不乾淨」結算記 `_RECENT_CLOSE["unclean"]`（`broker.recent_unclean()`）。收盤 auto_fire／night_fire 碰過空殼或剛有不乾淨結算 ⇒
     拿到「沒有部位」先不定案 flat，窗口內再問（晚到那一腿冒出來 ⇒ 照撿回部位平掉），窗口到了才定案。
-  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`／`test_qa6_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
+  ⭐ **第七輪品管（2026-11-06 深夜）**：
+  ・`_entry_base` 問不到券商部位 ⇒ 重問（共 `ENTRY_BASE_TRIES`＝3 次）；問到「沒有同方向」⇒ 正常的部位確認；一直問不到 ⇒ enter() ⛔ 不送單、回失敗。
+    （保守估計那條只剩「進場前券商上真的顯示同方向部位」才會走。）
+  ・保守估計進場（停利先不掛，部位記 `tp_pending`）⇒ 對帳時進場單都結束、明細回報了 ⇒ `_own_tp_fill` 照明細口數與均價補掛停利（已開始平倉就不補）。
+  ・一口一口平的迴圈（`_close_locked` 最後那段，撿回部位／手動多口都走這裡）：每送一口前 `_loop_guard` 用 `_sent_dealt` 算之前送出的平倉單
+    （還沒回報的當成已成交），券商口數 > 起算口數 − 已平 ⇒ 券商舊資料 ⇒ ⛔ 這一輪不送、冷卻後再來。
+    帳本部位乾淨平完 ⇒ 這一趟的平倉／停利單記成種子（`_loop_seed`，同方向、同口數、同均價、`LOOP_SEED_S` 內有效）：
+    過了 RECENT_CLOSE_S 舊資料被撿回來，一口迴圈也不會再平。⛔ 一口部位（沒有種子）不套這道，跟 main 一樣（test_broker 守）。
+  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`／`test_qa6_mix.py`／`test_qa7_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：
