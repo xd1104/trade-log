@@ -944,10 +944,6 @@ def pos_note(p=None):
     if p.get("handover"):
         return ("程式開的那幾口已經出場；剩下 %s 口是你的（你自己加碼的）⇒ 面板照手動單的規矩用 %g 點停損，"
                 "收盤／04:58 不會自動平，記得自己處理" % (p.get("qty"), MANUAL_SL_POINTS)), "handover"
-    if p.get("touched") and (p.get("product") == "MIX" or p.get("mix0")):
-        # ⭐ 2026-11-06 混搭上他加碼過 ⇒ _close_mix 不平（分不出哪一腿是他的）⇒ 畫面要照實講「停損不會執行」
-        return ("混搭部位上你自己加碼過 ⇒ 分不出哪一腿的哪幾口是你的：停損、收盤、04:58 都不會幫你平，"
-                "請自己到大戶投處理"), "unknown"
     if p.get("touched"):
         return ("你在這一筆上自己加碼過 ⇒ 收盤／04:58 不會自動平，記得自己處理；停損只會平程式開的 %d 口"
                 "（你加的那幾口不動）" % _ours_left(p)), "touched"
@@ -1010,7 +1006,11 @@ def _meta_sync():
             _META["last"] = key
         elif p is None and (_META["last"] is not None or not _META.get("swept")):
             # 部位沒了 ⇒ 清掉（這支程式第一次看到空手時也掃一次：上次當掉前留下的舊檔）
-            path.unlink(missing_ok=True)
+            # ⭐ 2026-11-06 第二輪品管 QA2-6：重啟時那一筆正在等晚到的腿（late_pending、LATE_LEG_S 內）⇒ 券商「空手」是假的，⛔ 不刪
+            _m = _meta_load() if _META["last"] is None else None
+            if not (isinstance(_m, dict) and _m.get("late_pending")
+                    and time.time() - float(_m.get("late_pending_at") or 0) <= LATE_LEG_S):
+                path.unlink(missing_ok=True)
             _META.update(last=None, swept=True)
     except Exception:                       # noqa: BLE001  ⛔ 寫不進去不影響停損與平倉
         pass
@@ -1056,7 +1056,7 @@ def _meta_apply(got, meta, late_pre=None):
         if _ml is not None:
             meta = _ml
     q = int(got.get("qty") or 0)
-    if q == 1 and not meta.get("handover"):
+    if q == 1 and not meta.get("handover") and not meta.get("late_pending"):
         # ⭐ QA r4（G7）：撿回來的是 1 口、落地檔又不是交接 ⇒ 不套用落地檔，走原本的帳本認人（1 口那一套）
         #    ——落地檔可能是更早那一趟多口留下的（當掉沒清），拿它比 1 口只會把 1 口的單誤標成分不出。
         return None
@@ -1272,7 +1272,9 @@ def _reconcile_prefetch(cur, pos):
     if cur.get("target_trades") is not None or cur.get("entry_trades") is not None:
         # ⭐ 2026-11-06 混搭：兩腿各一張 ⇒ 明細合起來（_deal_sums 已經換成微台等值）。
         #    混搭開出來但只成交一腿的部位：停利是單張（target_trade）、進場單是兩張（entry_trades）⇒ 一起算。
-        tl = list((cur.get("target_trades") or {}).values()) + [cur.get("target_trade")]
+        # ⭐ 第二輪品管 QA2-2：撤掉／成交完的停利單也要算（撤單那一瞬間成交的那段才有價錢，成績單才有點數）
+        tl = list((cur.get("target_trades") or {}).values()) + [cur.get("target_trade")] + \
+            list((cur.get("target_done_trades") or {}).values())
         out["tsums"] = _sum_deals(tl)
         out["esums"] = _sum_deals((cur.get("entry_trades") or {}).values())
         return out
@@ -1373,17 +1375,21 @@ def _late_leg(cur, pos):
     have = _leg_have(cur)
     out = {}
     for p, up in ups.items():
-        if bm[p] > int(ms.get(p) or 0):
-            return None                       # 比送出去的多 ⇒ 有他的 ⇒ 不認
+        if p not in ms:
+            continue                          # 這一趟沒送這種合約 ⇒ 多出來的不是晚到的腿
         s = _deal_sums(ets.get(p))
-        if s is None or s[1] <= 0 or s[1] + 1e-9 < bm[p]:
-            return None                       # 那張進場單的明細沒說它成交了這麼多 ⇒ 不是它 ⇒ 不認
-        if up > s[1] - int(have.get(p) or 0) + 1e-9:
-            # ⭐ 2026-11-06（性質測試抓到）：明細裡**已經算進部位**的那幾口不能再認一次 —— 平掉一部分之後券商回報退回舊資料
-            #    （口數比本機多），舊版會把它當成晚到的腿併進來 ⇒ 部位變大、之後平過頭。只認「明細比我們已經算的還多」的那一段。
-            return None
-        out[p] = {"up": int(up), "px": round(s[0] / s[1], 2), "lo": s[2], "hi": s[3], "age": round(age, 1)}
-    return out
+        if s is None or s[1] <= 0:
+            continue                          # 那張進場單的明細沒說它成交 ⇒ 不是它 ⇒ 不認（多出來的交給「他加碼」那套）
+        # ⭐ 2026-11-06（性質測試抓到）：明細裡**已經算進部位**的那幾口不能再認一次 —— 平掉一部分之後券商回報退回舊資料
+        #    （口數比本機多），舊版會把它當成晚到的腿併進來 ⇒ 部位變大、之後平過頭。只認「明細比我們已經算的還多」的那一段。
+        # ⭐ 第二輪品管：券商那一腿比「晚到的成交」還多（他也加了）⇒ 只認明細那一段，剩的交給「他加碼」那套（舊版整個不認 ⇒
+        #    我們晚到的那幾口被當成他的）。明細一定 ≤ 送出量 ⇒ 不會超過 mix_sent。
+        u = min(int(up), int(round(s[1])) - int(have.get(p) or 0), int(ms.get(p) or 0) - int(have.get(p) or 0))
+        u = (u // RATIO[p]) * RATIO[p]
+        if u <= 0:
+            continue
+        out[p] = {"up": u, "px": round(s[0] / s[1], 2), "lo": s[2], "hi": s[3], "age": round(age, 1)}
+    return out or None
 
 
 def _late_merge(cur, add):
@@ -1519,6 +1525,35 @@ def _meta_late(got, meta, lp):
     return m
 
 
+def _touch_step(cur, pos, oq):
+    """
+    ⭐ 2026-11-06（PM）「他加碼過」要持續證據。⛔ 呼叫端拿著 _lock；⛔ 這裡**不改**本機口數（呼叫端照樣更新成券商的值，
+    跟 main 一樣：第二輪品管 QA2-10 —— 懷疑期間本機口數停在舊值，平倉起點跟 main 不一樣 ⇒ 明細晚到時平到他那口）。
+    券商口數比我們該有的多（_ours_left）⇒ 先記懷疑（touch_susp）；相隔 ≥ CLOSE_COOLDOWN 還是比我們多、
+    不在我們剛送平倉單的那段時間（_touch_quiet，跟部位綁）、我們剩的口數沒變（中間平過倉 ⇒ 重新起算）⇒ 才標 touched。
+    ⚠️ 懷疑期間停損／收盤照樣只平「我們剩下的口數」（_close_multi／_close_mix 都扣 _ours_left）⇒ 不會平到他的。
+    """
+    now = time.time()
+    sp = cur.get("touch_susp")
+    if _touch_quiet(now, cur):
+        cur.pop("touch_susp", None)
+        return
+    ours = _ours_left(cur)
+    if not isinstance(sp, dict) or int(sp.get("ours", -1)) != int(ours):
+        cur["touch_susp"] = {"since": now, "qty": int(pos["qty"]), "ours": int(ours)}
+        _log("position_touch_suspect", {"ok": None, "was": oq, "now": pos["qty"], "ours": ours,
+                                        "why": "券商口數比我們的多 —— 先不判他加碼（可能是舊資料），"
+                                               "%g 秒後還是這樣才判" % CLOSE_COOLDOWN})
+        return
+    if now - float(sp.get("since") or now) < CLOSE_COOLDOWN:
+        return
+    cur.pop("touch_susp", None)
+    cur["touched"] = True
+    _log("position_touched", {"ok": False, "was": oq, "now": pos["qty"],
+                              "why": "券商口數比我們開的多（他自己加碼？）—— 收盤不幫他平，"
+                                     "停損只平我們剩下的 %d 口" % ours})
+
+
 def _mix_mismatch(cur, pos):
     """
     ⭐ 2026-11-06 混搭：本機部位 cur 跟券商部位 pos 的合約對不對得上 ⇒ 對不上的那一句話；對得上 ⇒ None。
@@ -1530,6 +1565,12 @@ def _mix_mismatch(cur, pos):
     """
     cp, bp = cur.get("product") or "TMF", pos.get("product") or "TMF"
     if cp == bp and cp != "MIX":
+        return None
+    if pos.get("dir") == cur.get("dir") and not cur.get("handover") and _leg_caps(cur) is not None:
+        # ⭐ 2026-11-06 第二輪品管（PM 拍板）：我們每一腿最多有幾口分得出來（_leg_caps：進場量－停利成交－自己平掉的）
+        #    ⇒ 一腿變多一腿變少、只剩一腿但比本機多、本機單一但券商多了另一種 ⇒ ⛔ 不再 unknown：
+        #    照常對帳（口數照券商、多出來的先記懷疑），平倉時 _close_mix 每一腿只平我們的、剩的轉成他的手動部位。
+        #    真的分不出（每一腿上限合起來比我們剩的還多）⇒ 由 _close_mix 擋下來、示警。
         return None
     if cp == "MIX":
         cm = cur.get("mix") if isinstance(cur.get("mix"), dict) else {}
@@ -1659,13 +1700,15 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
             if (mine and _pq_ok(cur, oq) and 0 < pos["qty"] < oq
                     and cur.get("dir") == pos["dir"] and not _CLOSE_INFLIGHT["on"]):
                 n = oq - pos["qty"]
-                if cur.get("touched") and not _tp_matches(cur, n, tsums):
+                if not _tp_matches(cur, n, tsums):
                     # 他加碼過、這次少的又不是停利單吃的 ⇒ 先算成**他自己那幾口**（他在別處減碼），
                     # 超過他那幾口的部分才算我們的（⛔ 不然我們剩幾口會被低估、停損少平）。
+                    # ⭐ 2026-11-06 第二輪品管：本機口數現在跟著券商（含懷疑中、靜默期、一次暫時的舊資料）⇒
+                    #    「本機比我們該有的多」那幾口一律先算成他的（⛔ 舊資料退掉時被記成「我們的口數在別處平掉」⇒ 停損少平）。
                     n -= min(n, max(0, oq - _ours_left(cur)))
                 if n > 0:
                     _partial_leg(cur, n, tsums)
-                if cur.get("touched") and _ours_left(cur) <= 0:
+                if _ours_left(cur) <= 0:
                     # 我們那幾口全部出去了，券商上剩的都是他的 ⇒ 這一趟收尾記帳、剩下的改成他的手動部位
                     record_trade(cur, None, "legs", qty=0)
                     _state["position"] = _his_manual(pos)
@@ -1691,32 +1734,11 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
                                              "why": "進場那張單其實成交了 %d 口（部位回報慢）—— 這幾口是我們的，"
                                                     "收盤照樣平；⚠️ 停利單只掛了 %d 口" % (pos["qty"], oq)})
                 else:
-                    # ⭐ 2026-11-06（PM）：一次暫時的舊資料不可以變成「永久不停損／收盤不平」。
-                    #    券商口數比我們該有的多 ⇒ 先記「懷疑」，⛔ 這一次什麼都不改（口數、均價照本機）；
-                    #    相隔 ≥ CLOSE_COOLDOWN 的兩次對帳都還是比我們多、而且不在我們剛送平倉單的那段時間（_touch_quiet）
-                    #    ⇒ 才標「他動過」（touched）。中間回到正常 ⇒ 懷疑取消。
-                    #    ⚠️ main 的單一合約多口路徑原本也是看到一次就標（券商回報退回舊資料時會誤判），這裡一起修。
-                    now = time.time()
-                    sp = cur.get("touch_susp")
-                    if _touch_quiet(now):
-                        cur.pop("touch_susp", None)
-                        return _state["position"]
-                    if not isinstance(sp, dict) or int(sp.get("oq") or -1) != int(oq):
-                        # 第一次看到；或懷疑之後本機口數變了（中間平過倉）⇒ 之前那次不算數、重新起算
-                        #    （性質測試抓到：兩次互不相干的暫時舊資料，中間隔著一次平倉，被湊成「持續 15 秒」）
-                        cur["touch_susp"] = {"since": now, "qty": int(pos["qty"]), "oq": int(oq)}
-                        _log("position_touch_suspect", {"ok": None, "was": oq, "now": pos["qty"],
-                                                        "why": "券商口數比我們的多 —— 先不判他加碼（可能是舊資料），"
-                                                               "%g 秒後還是這樣才判" % CLOSE_COOLDOWN})
-                        return _state["position"]
-                    if now - float(sp.get("since") or now) < CLOSE_COOLDOWN:
-                        return _state["position"]
-                    cur.pop("touch_susp", None)
-                    cur["touched"] = True
-                    _log("position_touched", {"ok": False, "was": oq, "now": pos["qty"],
-                                              "why": "券商口數比我們開的多（他自己加碼？）—— 收盤不幫他平，"
-                                                     "停損只平我們剩下的 %d 口" % _ours_left(cur)})
-            elif cur.get("touch_susp") and not (pos["qty"] > oq and pos["qty"] > _ours_left(cur)):
+                    _touch_step(cur, pos, oq)
+            elif (mine and not cur.get("touched") and cur.get("dir") == pos["dir"] and cur.get("touch_susp")
+                  and pos["qty"] > _ours_left(cur)):
+                _touch_step(cur, pos, oq)            # 懷疑中、券商還是比我們該有的多 ⇒ 繼續計時
+            elif cur.get("touch_susp"):
                 cur.pop("touch_susp", None)          # 回到正常 ⇒ 剛才那次是舊資料，懷疑取消
             cur["dir"] = pos["dir"]
             cur["entry"] = pos["entry"]
@@ -1732,6 +1754,10 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
             cur["qty"] = pos["qty"]
             # ⭐ 2026-11-06 混搭：兩腿各幾口照券商。券商只剩一種（另一腿不見了，上面已經照「口數變少」記好那一段）
             #    ⇒ 部位降成單一合約：product 改成剩下那種、刪掉 mix（mix0 留著：這一趟是混搭開的，停利單有兩張要撤）。
+            if (pos.get("product") or "TMF") != (cur.get("product") or "TMF") and not isinstance(cur.get("mix0"), dict) \
+                    and cur.get("product") in RATIO and _pq_ok(cur, cur.get("entry_qty")):
+                # ⭐ 第二輪品管：合約要變之前先記下「我們進場的是哪一種、幾口」（_leg_caps 的基準；不然會拿新的合約別當進場量）
+                cur["mix0"] = {cur["product"]: int(cur["entry_qty"])}
             if (pos.get("product") or "TMF") == "MIX":
                 cur["product"] = "MIX"
                 cur["mix"] = dict(pos.get("mix") or {})
@@ -1741,6 +1767,9 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
                                                "why": "混搭部位剩一種合約 ⇒ 降成單一合約部位"})
                 cur["product"] = pos.get("product") or "TMF"
                 cur.pop("mix", None)
+            elif (pos.get("product") or "TMF") != (cur.get("product") or "TMF"):
+                # ⭐ 第二輪品管：本機單一合約、券商是另一種（_mix_mismatch 已經確認分得出我們的上限）⇒ 合約照券商
+                cur["product"] = pos.get("product") or "TMF"
     return _state["position"]
 
 
@@ -1804,10 +1833,12 @@ TOUCH_QUIET_S = 2 * CLOSE_COOLDOWN   # 送出平倉單之後幾秒內，券商�
 _LAST_CLOSE_SEND = {"at": 0.0}
 
 
-def _touch_quiet(now=None):
+def _touch_quiet(now=None, cur=None):
     """⭐ 2026-11-06：現在是不是「我們剛送過平倉單」的那段時間（正在平倉、或最後一張平倉單送出後 TOUCH_QUIET_S 秒內）。"""
     now = time.time() if now is None else now
-    return bool(_CLOSE_INFLIGHT["on"]) or now - _LAST_CLOSE_SEND["at"] < TOUCH_QUIET_S
+    cur = _state["position"] if cur is None else cur
+    at = float((cur or {}).get("close_sent_at") or 0.0) if isinstance(cur, dict) else 0.0
+    return bool(_CLOSE_INFLIGHT["on"]) or now - at < TOUCH_QUIET_S
 
 
 def _send(order, why, product=None):
@@ -1815,6 +1846,8 @@ def _send(order, why, product=None):
     api = _state["api"]
     if str(why).startswith("close_"):
         _LAST_CLOSE_SEND["at"] = time.time()  # ⭐ 2026-11-06：記下最後一張平倉單的時刻（判「他加碼」要避開這段，見 _touch_quiet）
+        if isinstance(_state["position"], dict):
+            _state["position"]["close_sent_at"] = _LAST_CLOSE_SEND["at"]   # ⭐ 第二輪品管：跟部位綁（新部位不受上一筆影響）
     prod = product or _cur_product()
     body = {"action": str(order.action), "price": order.price, "qty": order.quantity,
             "price_type": str(order.price_type), "order_type": str(order.order_type),
@@ -2517,6 +2550,7 @@ def _cancel_targets(pos):
         return False
     _update_status()                       # 【一定要先 update_status】不然 cancel_order 回 400
     left, stray = {}, False
+    done = dict(pos.get("target_done_trades") or {})
     tf = {p: list(v) for p, v in (pos.get("tgt_fill") or {}).items()}
     for p, t in tts.items():
         if t is None:
@@ -2528,6 +2562,7 @@ def _cancel_targets(pos):
             oq = float(getattr(getattr(t, "order", None), "quantity", 0) or 0) * _ratio_of_trade(t)
         except (TypeError, ValueError):
             oq = 0.0
+        done[p] = t
         if s is not None and oq > 0 and s[1] >= oq - 1e-9:
             _log("cancel_target", {"ok": True, "product": p, "skip": True, "why": "這一腿的停利單已經全部成交，不用撤"})
             continue
@@ -2543,6 +2578,7 @@ def _cancel_targets(pos):
         pos["target_trades"] = left
         pos["target_trade"] = None
         pos["tgt_fill"] = tf
+        pos["target_done_trades"] = {k: v for k, v in done.items() if k not in left}
     return stray
 
 
@@ -2570,7 +2606,11 @@ def _leg_caps(pos):
     base = pos.get("mix0") if isinstance(pos.get("mix0"), dict) else \
         {pos.get("product") if pos.get("product") in RATIO else "TMF": int(pos.get("entry_qty"))}
     tf = pos.get("tgt_fill") or {}
-    cl = pos.get("closed_by_leg") or {}
+    cl = dict(pos.get("closed_by_leg") or {})
+    for p, lst in (pos.get("close_hist_trades") or {}).items():
+        # ⭐ 第二輪品管（QA2-7 seed 104）：之前幾輪送出的平倉單，現在明細回報了（或還沒回報 ⇒ 當成全部成交）
+        #    ⇒ 上一輪結算時明細晚到、券商又慢，closed_by_leg 會少算 ⇒ 這一輪上限偏大、平到他的。跨輪一起算、取大的。
+        cl[p] = max(int(cl.get(p) or 0), int(round(_close_pend(lst)[1])))
     return {p: int(base.get(p) or 0) - int(round(float((tf.get(p) or [0.0, 0.0])[1]))) - int(cl.get(p) or 0)
             for p in RATIO}
 
@@ -2587,18 +2627,11 @@ def _close_mix(pos, reason):
       ・看得到的都平完了、但進場單明細說還有一腿成交了券商還沒回報（晚到腿，品管 M7）⇒ ⛔ 不清部位：
         留下那一腿（late_pending），回報之後下一輪平掉；整趟還是一筆成績單。
       ・券商上有反方向的腿 ⇒ 一張都不再送、大聲講。
-      ・他在混搭部位上加碼過（touched）⇒ 分不出哪一腿的哪幾口是他的 ⇒ ⛔ 不平、示警（寧可不平，不可以平錯）。
+      ・⭐ 2026-11-06 第二輪品管（PM 拍板）：**只平我們的口數**，跟單一合約一樣 —— 每一腿平 min(券商那一腿, _leg_caps 上限)、
+        合計不超過 _ours_left；平完之後券商上剩的就是他的 ⇒ 轉成他的手動部位（handover）。他加碼過（touched）也照這樣平
+        （舊版整筆拒平 ⇒ 停損失效）。每一腿上限合起來比我們剩的還多（真的分不出哪一腿是誰的）⇒ 才不平、示警。
     """
     import shioaji as sj
-    if pos.get("touched"):
-        _close_fail["at"] = time.time()
-        if pos.get("refused_said") is None:
-            pos["refused_said"] = True
-            _log("close_refused", {"ok": False, "qty": pos.get("qty"), "product": "MIX",
-                                   "why": "混搭部位上他自己加碼過，分不出哪一腿的哪幾口是他的，不平"})
-            print("⚠️ [真實] 混搭部位上你自己加碼過，停損不會執行 —— 請自己到大戶投處理", flush=True)
-        return False, ("混搭部位上你自己加碼過（券商 %s 口等值，我們的 %d 口等值）—— 分不出哪一腿的哪幾口是你的，"
-                       "停損、收盤都不會幫你平，請自己到大戶投處理" % (pos.get("qty"), _ours_left(pos)))
     act = sj.Action.Sell if pos["dir"] == "long" else sj.Action.Buy
     if not is_live():
         # 演練：照本機記的兩腿各送一張（跟單一合約那條一樣，送了就當平掉）
@@ -2620,7 +2653,7 @@ def _close_mix(pos, reason):
             _close_fail["at"] = time.time()
             return False, "跟券商對帳失敗（撤完停利單之後），不確定還剩多少 —— 先不送平倉單；請到大戶投看一下"
         pos = again
-        if pos.get("multi_unknown") or pos.get("touched"):
+        if pos.get("multi_unknown"):
             _close_fail["at"] = time.time()
             return False, pos_note(pos)[0] or "分不出是誰的，不平"
     legs0 = _broker_legs()
@@ -2630,15 +2663,18 @@ def _close_mix(pos, reason):
     if any(l.get("dir") != pos["dir"] for l in legs0.values()):
         _close_fail["at"] = time.time()
         return False, "券商上有一腿方向跟部位相反 —— 不敢送平倉單，請立刻自己到大戶投處理"
+    _update_status()
     caps = _leg_caps(pos)
-    h0 = {}
+    h0, his = {}, {}
     for p in ("MXF", "TMF"):                  # 固定先小台再微台（跟進場同一個順序，紀錄好讀）
         if p not in legs0:
             continue
-        q = int(legs0[p].get("qty") or 0)
+        b = int(legs0[p].get("qty") or 0)
+        q = b
         if caps is not None:
             q = max(0, min(q, caps.get(p, 0)))
             q = (q // RATIO[p]) * RATIO[p]
+        his[p] = b - q                        # 這一腿券商上不是我們的（他加碼的）
         if q > 0:
             h0[p] = q
     if not h0:
@@ -2652,11 +2688,12 @@ def _close_mix(pos, reason):
         _close_fail["at"] = time.time()
         return False, ("券商上有 %d 口等值，比程式剩下的 %d 口多 —— 分不出哪一腿的哪幾口是你的，不平，請自己到大戶投處理"
                        % (sum(h0.values()), _ours_left(pos)))
-    _tp_untracked(pos, sum(h0.values()))
+    _tp_untracked(pos, sum(h0.values()) + sum(his.values()))
     sent = {p: [] for p in h0}
     before = {}
     errs, last_err = {}, None
     _CLOSE_INFLIGHT["on"] = True
+    # ⭐ 第二輪品管：下面「券商那一腿還剩多少」一律先扣掉他的（his），剩的才是我們的
     bl = legs0
     for attempt in range(CLOSE_TRIES):
         if attempt > 0:
@@ -2672,7 +2709,7 @@ def _close_mix(pos, reason):
         _update_status()
         todo, unsure = {}, []
         for p in h0:
-            held = int((bl.get(p) or {}).get("qty") or 0)
+            held = int((bl.get(p) or {}).get("qty") or 0) - int(his.get(p) or 0)
             dealt, pend = _close_pend(sent[p])
             if held <= 0 or dealt >= h0[p] - 1e-9:
                 continue                      # 這一腿平完了（券商說沒了，或明細說全部成交了）
@@ -2703,6 +2740,8 @@ def _close_mix(pos, reason):
             if ok:
                 sent[p].append((res, n))
                 sent_now.append(p)
+                with _lock:
+                    pos.setdefault("close_hist_trades", {}).setdefault(p, []).append((res, n))
             else:
                 errs[p] = err
         if not sent_now:
@@ -2712,7 +2751,8 @@ def _close_mix(pos, reason):
         for _ in range(int(FILL_WAIT / 0.4)):
             time.sleep(0.4)
             b2 = _broker_legs()
-            if isinstance(b2, dict) and all(not b2.get(p) for p in sent_now):
+            if isinstance(b2, dict) and all(int((b2.get(p) or {}).get("qty") or 0) <= int(his.get(p) or 0)
+                                            for p in sent_now):
                 flat = True
                 break
         if flat:
@@ -2729,7 +2769,8 @@ def _close_mix(pos, reason):
         alltr += [t for t, _n in sent[p]]
         rd = max(0, int(round(h0[p] - dealt)))
         if isinstance(fin, dict):
-            rb = int((fin.get(p) or {}).get("qty") or 0)
+            # ⭐ 第二輪品管：券商那一腿剩的要先扣掉他的，才是我們還剩的（⛔ 不可以拿他的口數推成「我們還沒平完」⇒ 下一輪平到他的）
+            rb = max(0, int((fin.get(p) or {}).get("qty") or 0) - int(his.get(p) or 0))
             remain[p] = 0 if rd == 0 else min(rb, rd)
         else:
             remain[p] = rd
@@ -2744,12 +2785,19 @@ def _close_mix(pos, reason):
     if left == 0 and not pend:
         exit_px = _fill_price_many(alltr, want=gone)
         rec = record_trade(pos, exit_px, reason, qty=gone)
+        rest = _his_rest(fin, his, pos["dir"])
         with _lock:
-            _state["position"] = None
+            # 我們的都平完了；券商上剩的是他加碼的 ⇒ 轉成他的手動部位（跟 main 的 _close_multi 一樣）
+            _state["position"] = _his_manual(rest) if rest else None
         _log("close_confirmed", {"ok": True, "product": "MIX", "stray_target": stray, "exit": exit_px,
                                  "points": (rec or {}).get("points"), "closed": gone,
                                  "legs": {p: h0[p] for p in h0}})
-        return True, ("平倉成功，但有停利單沒撤掉，請自己到大戶投刪除" if stray else None)
+        msg = []
+        if stray:
+            msg.append("有停利單沒撤掉，請自己到大戶投刪除")
+        if rest:
+            msg.append("平掉我們的 %d 口等值；剩下 %d 口等值是你自己的，沒有動" % (gone, rest["qty"]))
+        return True, ("平倉成功，但" + "；".join(msg)) if msg else None
     # 沒平完：⛔ 絕對不可以清掉本機部位。平掉的那一段記成一段 leg（整趟結束時一起記成績單），部位留下剩的。
     s = _sum_deals(alltr)
     px = round(s[0] / s[1], 2) if (s is not None and gone > 0 and abs(s[1] - gone) < 1e-9) else None
@@ -2761,11 +2809,11 @@ def _close_mix(pos, reason):
         if pend:
             _pending_stub(cur, pend)
         else:
-            cur["qty"] = int(left)
-            both = [p for p in remain if remain[p] > 0]
+            cur["qty"] = int(left) + sum(int(his.get(p) or 0) for p in his)   # 本機口數＝券商口數（含他的，跟 main 一樣）
+            both = [p for p in ("MXF", "TMF") if remain.get(p, 0) + int(his.get(p) or 0) > 0]
             if len(both) == 2:
                 cur["product"] = "MIX"
-                cur["mix"] = {p: int(remain[p]) for p in ("MXF", "TMF")}
+                cur["mix"] = {p: int(remain.get(p, 0)) + int(his.get(p) or 0) for p in ("MXF", "TMF")}
             else:
                 cur["product"] = both[0]
                 cur.pop("mix", None)
@@ -2795,6 +2843,35 @@ def _close_mix(pos, reason):
     _log("close_failed", {"ok": False, "err": last_err, "product": "MIX", "remain": remain, "closed": gone,
                           "why": "混搭沒有平完，剩下的那一腿留著，本機狀態保留"})
     return False, msg
+
+
+def _his_rest(fin, his, direction):
+    """
+    ⭐ 2026-11-06 第二輪品管：我們的都平完了，券商上剩下的（他加碼的）⇒ 給 _his_manual 用的部位 dict；沒有 ⇒ None。
+    每一腿取 min(券商現在那一腿, 開始時判定是他的)（券商回報慢的話，現在那一腿可能還含我們剛平掉的）。
+    """
+    legs = {}
+    for p, h in (his or {}).items():
+        h = int(h or 0)
+        if isinstance(fin, dict):
+            f = fin.get(p) or {}
+            if f and f.get("dir") != direction:
+                continue
+            h = min(h, int(f.get("qty") or 0))
+            px = float(f.get("entry") or 0)
+        else:
+            px = 0.0
+        if h > 0:
+            legs[p] = (h, px)
+    if not legs:
+        return None
+    q = sum(v[0] for v in legs.values())
+    out = {"dir": direction, "qty": q, "entry": round(sum(v[0] * v[1] for v in legs.values()) / q, 2)}
+    if len(legs) == 2:
+        out.update(product="MIX", mix={p: legs[p][0] for p in ("MXF", "TMF")})
+    else:
+        out["product"] = next(iter(legs))
+    return out
 
 
 def _tp_untracked(pos, held_now):
@@ -2834,6 +2911,12 @@ def _pending_stub(cur, pend):
     for p, n in pend.items():
         s = _deal_sums(ets.get(p))
         addpx[p] = (s[0] / s[1]) if (s is not None and s[1] > 0) else ef
+        if s is not None and s[2] is not None:
+            # 第二輪品管 QA2-6：這期間重啟要從落地檔補回 ⇒ 成交價區間要含晚到那一腿（_meta_apply 第 ④ 道）
+            cur["fill_lo"] = min(float(cur.get("fill_lo", s[2])), s[2])
+            cur["fill_hi"] = max(float(cur.get("fill_hi", s[3])), s[3])
+    # 券商回報那一腿時的均價＝那一腿的成交均價（重啟後 _meta_apply 比對「券商均價沒變」用）
+    cur["bpx"] = round(sum(addpx[p] * n for p, n in pend.items()) / max(1, sum(pend.values())), 2)
     tot = eq0 + sum(pend.values())
     ef2 = round((ef * eq0 + sum(addpx[p] * n for p, n in pend.items())) / tot, 2) if tot > 0 else ef
     m0 = cur.get("mix0") if isinstance(cur.get("mix0"), dict) else \

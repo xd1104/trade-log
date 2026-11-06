@@ -2140,7 +2140,7 @@ def _ent_own(ent):
     """
     q = _ent_qty(ent)
     sent = _num((ent or {}).get("qty_sent"))
-    if (ent or {}).get("fill_unsure") and sent is not None and sent == int(sent) and broker.qty_ok(int(sent)):
+    if (ent or {}).get("fill_unsure") and sent is not None and sent == int(sent) and broker._eq_ok(int(sent)):
         return max(q, float(sent))
     return q
 
@@ -2189,7 +2189,7 @@ def _looks_ours(pos, ent):
     # ⭐ QA 必修 2：進場那張單其實成交了更多口（部位回報慢一拍，broker 用委託單明細確認過 ⇒ late_fill）
     #    ⇒ 那幾口也是我們的。⛔ 上限是當初送出去的口數。
     lq, sent = pos.get("entry_qty"), _num(ent.get("qty_sent"))
-    if pos.get("late_fill") and broker.qty_ok(lq) and sent is not None and lq <= sent:
+    if pos.get("late_fill") and broker._eq_ok(lq) and sent is not None and lq <= sent:
         eq = max(eq, float(lq))
     pq = _num(pos.get("qty"))
     if pq is None or pq != int(pq) or not (1 <= pq <= eq):

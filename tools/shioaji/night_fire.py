@@ -693,7 +693,8 @@ def _multi_meta(ent):
     """⭐ 2026-10-14 多口：帳本記的是多口 ⇒ 補回「開了幾口、成交均價」（broker 平倉每張最多送幾口）。一口 ⇒ {}（行為照舊）。"""
     q = ent.get("qty")
     qs = ent.get("qty_sent")
-    if ent.get("fill_unsure") and isinstance(qs, int) and not isinstance(qs, bool) and broker.qty_ok(qs):
+    # ⭐ 2026-11-06 第二輪品管 QA2-8：_eq_ok（⛔ 不看小台開關；開關關掉後仍認得混搭開的口數）
+    if ent.get("fill_unsure") and isinstance(qs, int) and not isinstance(qs, bool) and broker._eq_ok(qs):
         q = max(q if isinstance(q, int) and not isinstance(q, bool) else 1, qs)   # ⭐ 成交口數沒定案 ⇒ 最多認到送出去的
     if isinstance(q, int) and not isinstance(q, bool) and q > 1:
         out = {"entry_qty": q}

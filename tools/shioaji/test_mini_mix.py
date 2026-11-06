@@ -462,10 +462,11 @@ print("\n=== t. 「他加碼」要持續證據（一次暫時的舊資料不可�
 F = fresh()
 broker.enter("long", 38000, 60, sl_points=200, qty=11)
 broker._LAST_CLOSE_SEND["at"] = 0.0
-F.ghost_more(1)                                   # 一次舊資料：小台多 1 口
+F.ghost_more(1)                                   # 一次舊資料：微台多 1 口
 got = broker.reconcile()
-chk("一次口數變多 ⇒ 只記懷疑、⛔ 不標 touched、口數不改", (got.get("touched"), got["qty"], bool(got.get("touch_susp"))),
-    (None, 11, True))
+# ⭐ 第二輪品管：懷疑期間本機口數照樣跟著券商（跟 main 一樣），只是先不標 touched
+chk("一次口數變多 ⇒ 只記懷疑、⛔ 不標 touched（口數照券商）", (got.get("touched"), got["qty"], bool(got.get("touch_susp"))),
+    (None, 12, True))
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()
 chk("  下一次對帳回到正常 ⇒ 懷疑取消", (got.get("touched"), got.get("touch_susp"), got["qty"]), (None, None, 11))
@@ -485,6 +486,13 @@ chk("  不到 CLOSE_COOLDOWN ⇒ 還是懷疑", (got.get("touched"), bool(got.ge
 CLK.t += broker.CLOSE_COOLDOWN
 got = broker.reconcile()
 chk("  相隔 ≥ CLOSE_COOLDOWN 還是比我們多 ⇒ 標 touched", got.get("touched"), True)
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+# ⭐ 第二輪品管（PM 拍板）：混搭 touched 不再整筆拒平 ⇒ 每一腿只平我們的（小台 2＋微台 1）、他加的小台 1 口轉成他的手動部位
+chk("  touched 之後停損：只平我們的 11 口、⛔ 不碰他加的小台 1 口", (ok, S(F, n0), F.hold, F.bad),
+    (True, [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")], {"TMF": 0, "MXF": 1}, []))
+chk("  剩的轉成他的手動部位（handover）、成績單一筆 11 口", (pos().get("handover"), pos()["qty"], [t["qty"] for t in trades()]),
+    (True, 5, [11]))
 
 F = fresh()
 broker.enter("long", 38000, 60, sl_points=200, qty=11)
@@ -493,8 +501,8 @@ broker.close("sl")                                # 小台平掉、微台平不�
 F.policy = None
 F.ghost_more(3)                                   # 剛平過倉：券商回報還停在舊的（比本機多）
 got = broker.reconcile()
-chk("剛送過平倉單（靜默期）⇒ 口數變多不拿來判、也不記懷疑", (got.get("touched"), got.get("touch_susp"), got["qty"]),
-    (None, None, 1))
+chk("剛送過平倉單（靜默期）⇒ 口數變多不拿來判、也不記懷疑（口數照券商）", (got.get("touched"), got.get("touch_susp"), got["qty"]),
+    (None, None, 2))
 CLK.t += broker.TOUCH_QUIET_S + 1
 cool()
 F.ghost = []
@@ -508,7 +516,7 @@ broker.enter("long", 38000, 60, sl_points=200, qty=3)
 broker._LAST_CLOSE_SEND["at"] = 0.0
 F.ghost_more(1)
 got = broker.reconcile()
-chk("微台 3 口：一次舊資料比本機多 ⇒ ⛔ 不標 touched（main 原本會直接標）", (got.get("touched"), got["qty"]), (None, 3))
+chk("微台 3 口：一次舊資料比本機多 ⇒ ⛔ 不標 touched（main 原本會直接標）", (got.get("touched"), got["qty"]), (None, 4))
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()
 n0 = len(F.sent)
@@ -576,14 +584,24 @@ F = fresh()
 broker.enter("long", 38000, None, sl_points=200, qty=3)
 chk("（3 口 ⇒ 微台）", pos()["product"], "TMF")
 F._apply("MXF", 1, 38000.0)
-chk("⛔ 本機 TMF、券商變 MIX ⇒ unknown", broker.reconcile(), "unknown")
-chk("  本機部位沒被清掉", (pos()["product"], pos()["qty"]), ("TMF", 3))
-say("分不出來" in (broker._state["last_error"] or ""), "  示警寫在 last_error", broker._state["last_error"])
+# ⭐ 第二輪品管（PM 拍板）：分得出我們每一腿的上限（進場是微台 3 口）⇒ ⛔ 不再 unknown；多出來的小台先記懷疑，平倉只平我們的
+got = broker.reconcile()
+chk("本機 TMF 3、券商多了小台 1 口 ⇒ 照常對帳（合約照券商、記懷疑、記下進場是微台 3 口）",
+    (got.get("product"), got["qty"], bool(got.get("touch_susp")), got.get("mix0")), ("MIX", 8, True, {"TMF": 3}))
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損只平我們的微台 3 口、⛔ 不碰小台；剩的轉成他的手動部位", (ok, S(F, n0), F.hold, pos().get("handover")),
+    (True, [("TMF", "Sell", 3, "Cover", "MKP")], {"TMF": 0, "MXF": 1}, True))
 F = fresh()
 broker.enter("long", 38000, None, sl_points=200, qty=11)
 F._apply("MXF", 1, 38000.0)
 F._apply("TMF", -1, 38000.0)
-chk("⛔ 本機 MIX、券商一腿變多一腿變少 ⇒ unknown", broker.reconcile(), "unknown")
+got = broker.reconcile()
+chk("本機 MIX、券商一腿變多一腿變少（分得出上限）⇒ 照常對帳", (got.get("product"), got["qty"]), ("MXF", 15))
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損只平我們的小台 2 口（微台那口他平掉了）、他加的小台 1 口留著", (ok, S(F, n0), F.hold, F.bad),
+    (True, [("MXF", "Sell", 2, "Cover", "MKP")], {"TMF": 0, "MXF": 1}, []))
 # 重啟：落地檔對得上 ⇒ 補回混搭狀態
 F = fresh()
 broker.enter("long", 38000, 60, sl_points=200, qty=11)
@@ -704,10 +722,14 @@ F.policy = lambda pr, r: (0, F.mkt[pr]) if (pr == "MXF" and r["oc"] == "New") el
 broker.enter("long", 38000, 60, sl_points=200, qty=11)
 F.policy = None
 F._apply("MXF", 3, 38000.0)                       # 券商上冒出小台 3 口（15 等值 > 送出的 10）
-chk("⛔ 晚到量超過送出量 ⇒ unknown", broker.reconcile(), "unknown")
-chk("  本機部位不動", (pos()["product"], pos()["qty"]), ("TMF", 1))
-F._apply("MXF", -1, 38000.0)                      # 剩 2 口（＝送出量），但那張進場單明細是 0（IOC 沒撮到）
-chk("⛔ 量沒超過、但進場單明細證明不是它成交的 ⇒ unknown", broker.reconcile(), "unknown")
+got = broker.reconcile()
+# ⭐ 第二輪品管：進場單明細是 0（IOC 沒撮到）⇒ ⛔ 不當成晚到的腿；分得出上限 ⇒ 不再 unknown，小台全部算他的
+chk("明細 0 的那一腿冒出來 ⇒ ⛔ 不併成晚到（進場量還是微台 1 口）、記懷疑", (got.get("late_leg"), got.get("entry_qty"),
+                                                          bool(got.get("touch_susp"))), (None, 1, True))
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損只平我們的微台 1 口、⛔ 小台 3 口一口都不碰", (ok, S(F, n0), F.hold), (True, [("TMF", "Sell", 1, "Cover", "MKP")],
+                                                                    {"TMF": 0, "MXF": 3}))
 F = fresh()
 F.late = {"MXF": 6.0}
 broker.enter("short", 38000, 60, sl_points=200, qty=11)
@@ -723,10 +745,19 @@ chk("  本機部位方向沒被改", (pos()["dir"], pos()["product"]), ("short",
 F, ok, p = late_case("MXF", 6.0)
 F._apply("MXF", 1, 38000.0)                       # 晚到的 2 口＋他多買 1 口 ⇒ 回報時 3 口（15 > 送出的 10）
 CLK.t = F._late["MXF"][0] + 1
-chk("⛔ 真的晚到、但券商那一腿比送出去的多 ⇒ unknown", broker.reconcile(), "unknown")
+got = broker.reconcile()
+chk("真的晚到＋他多買 ⇒ 只併明細那 10 口等值、多的 5 口記懷疑", (got.get("entry_qty"), got.get("late_leg"), bool(got.get("touch_susp"))),
+    (11, True, True))
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損平我們的小台 2＋微台 1、他的小台 1 口留著", (ok, S(F, n0), F.hold),
+    (True, [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")], {"TMF": 0, "MXF": 1}))
 F, ok, p = late_case("MXF", 6.0)
 CLK.t += broker.LATE_LEG_S + 1
-chk("⛔ 超過 LATE_LEG_S 才出現 ⇒ 不當成晚到（unknown）", broker.reconcile(), "unknown")
+got = broker.reconcile()
+# 超過 LATE_LEG_S ⇒ 不走晚到腿那條；但兩張進場單的明細合起來剛好＝券商口數 ⇒ 多口那套「回報慢」（late_fill）認回來
+chk("超過 LATE_LEG_S 才出現 ⇒ 不走晚到腿，由進場單明細（late_fill）認回 11 口", (got.get("late_leg"), got.get("late_fill"),
+                                                                     got.get("entry_qty")), (None, True, 11))
 
 F, ok, p = late_case("TMF", 40.0)
 chk("微台腿晚 40 秒、回報前就觸發停損：先照看得到的小台 10 開著", (p["product"], p["qty"]), ("MXF", 10))
@@ -832,6 +863,9 @@ for it in range(N_PROP):
             CLK.t += rng.choice([0.0, 1.0, 3.0])
         r = broker.close("sl")
         if pos() is None and not F.eq():
+            break
+        if isinstance(pos(), dict) and pos().get("handover"):
+            # 我們的口數都平完了，剩的轉成他的手動部位（第二輪品管）⇒ 程式這一趟結束（手動部位的停損是 main 那條一口迴圈，不在這裡測）
             break
     F.lag, F.pos_fail, F.hide, F.ghost = 0, 0, None, []
     F.update_status()
