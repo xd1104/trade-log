@@ -117,6 +117,17 @@ pn = pd["10-03"]["items"][0]
 chk("夜盤：why 是代碼、why_txt 是中文、night_of＝那一晚", (pn["why"], pn["why_txt"], pn["night_of"]), ("night_eod", "04:58 平", "10-02"))
 chk("日盤 night_of＝None", pd["10-02"]["items"][0]["night_of"], None)
 
+print("\n  ── ⭐ 2026-11-06 小台／混搭的手續費估算（小台單邊 25 元／口合約、微台 18 元；稅照等值）──")
+_tx = round(38000 * 10 * C.TAX_RATE) + round(38100 * 10 * C.TAX_RATE)
+chk("舊紀錄（沒有 product）＝每等值口 36＋稅（跟以前一樣）", C.est_fee({"qty": 2, "entry": 38000, "exit": 38100}),
+    2 * (36 + _tx))
+chk("product＝TMF 跟沒寫一樣", C.est_fee({"qty": 2, "product": "TMF", "entry": 38000, "exit": 38100}), 2 * (36 + _tx))
+chk("整筆小台 10 等值＝2 口合約 ⇒ 2×25×2＋10 份稅",
+    C.est_fee({"qty": 10, "product": "MXF", "entry": 38000, "exit": 38100}), 100 + 10 * _tx)
+chk("混搭 11（10＋1）⇒ 2×25×2＋1×18×2＋11 份稅",
+    C.est_fee({"qty": 11, "product": "MIX", "mix": {"MXF": 10, "TMF": 1}, "entry": 38000, "exit": 38100}),
+    100 + 36 + 11 * _tx)
+
 print("\n  ── 守門：面板有接、前端只畫 ──")
 src = (Path(__file__).parent / "live_panel.py").read_text(encoding="utf-8")
 chk("/api/account/hist 端出 cash", '"cash": cashflow_view()' in src, True)

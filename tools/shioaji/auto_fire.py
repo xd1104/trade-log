@@ -1518,7 +1518,9 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
                   "entry_time": (pos or {}).get("entry_time"),
                   "slip": None if (entry is None or px is None) else
                           round((entry - px) * (1 if direction == "long" else -1), 1),
-                  "has_target": bool((pos or {}).get("target_trade") is not None),
+                  # ⭐ 2026-11-06 混搭：停利是兩張、放在 target_trades（每一腿一張）
+                  "has_target": bool((pos or {}).get("target_trade") is not None
+                                     or (pos or {}).get("target_trades")),
                   # ⭐⭐ 這一口**券商端有沒有任何掛單**。開箱那個候選 no_tp=True ⇒
                   #    券商端一張單都沒有（永豐又沒有停損單）⇒ 停損與收盤平倉都靠面板。
                   #    ⛔ 這件事要寫進畫面那一列與 reason（PM 2026-09-16 指定）。

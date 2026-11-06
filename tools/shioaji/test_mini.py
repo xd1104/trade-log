@@ -2,7 +2,7 @@
 """
 小台（MXF）支援的離線測試（2026-11-06）。⛔ 不連永豐、不送任何單（演練模式＋會爆炸的假 place_order）。
 驗：開關沒開 ⇒ 跟以前一模一樣；開了 ⇒ 5 的倍數整筆用小台、口數在送單／讀券商兩個邊界正確換算、
-    對帳兩種合約都看、兩種同時有部位或跟本機對不上 ⇒ 不動。
+    對帳兩種合約都看、兩種反方向同時有部位或跟本機對不上 ⇒ 不動（同方向 ⇒ 混搭，見 test_mini_mix.py）。
 跑法：.venv\\Scripts\\python.exe tools\\shioaji\\test_mini.py
 """
 import pathlib
@@ -75,12 +75,15 @@ print("\n=== ② 開關開著 ⇒ 5 的倍數整筆小台 ===")
 setup(API(), mini=True)
 chk("10 口 ⇒ 小台", broker.product_for(10), "MXF")
 chk("5 口 ⇒ 小台", broker.product_for(5), "MXF")
-chk("4／7／1 口 ⇒ 微台（不混搭）", [broker.product_for(q) for q in (4, 7, 1)], ["TMF", "TMF", "TMF"])
+# ⭐ 2026-11-06 晚 混搭上線：開關開著時「不是 5 的倍數、≥5 口」改成混搭（下午那版是「不混搭 ⇒ 微台／不合理」）。
+#    開關沒開的期待（①）一個都沒改；混搭的完整測試在 test_mini_mix.py。
+chk("4／1 口 ⇒ 微台；7 口 ⇒ 混搭（1 小台＋2 微台）", [broker.product_for(q) for q in (4, 7, 1)], ["TMF", "MIX", "TMF"])
 chk("上限放寬到 50（＝10 口小台）", (broker.qty_ok(50), broker.qty_ok(51)), (True, False))
-chk("⛔ 11～14 口湊不成（微台一張送不了、小台不整除）⇒ 不合理", [broker.qty_ok(q) for q in (11, 12, 14, 15)],
-    [False, False, False, True])
+chk("11～14 口改成混搭 ⇒ 合理", [broker.qty_ok(q) for q in (11, 12, 14, 15)], [True, True, True, True])
 ok, err, _p = broker.enter("long", 38000, None, sl_points=470, qty=11)
-chk("⛔ 叫它下 11 口 ⇒ 一張都不送、不炸例外", (ok, "口數不合理" in (err or "")), (False, True))
+chk("叫它下 11 口 ⇒ 混搭進場（演練）", (ok, (_p or {}).get("product"), (_p or {}).get("mix")),
+    (True, "MIX", {"MXF": 10, "TMF": 1}))
+broker._state["position"] = None
 o = broker._order(sj.Action.Buy, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.New,
                   qty=10, product="MXF")
 chk("微台等值 10 ⇒ 送 2 口小台", o.quantity, 2)
@@ -111,7 +114,11 @@ setup(API([P("TMFK6", 3, "Action.Sell")]), mini=True)
 bp = broker.broker_position()
 chk("微台 3 口空單 ⇒ 3、微台", (bp["qty"], bp["product"], bp["dir"]), (3, "TMF", "short"))
 setup(API([P("TMFK6", 3), P("MXFK6", 1)]), mini=True)
-chk("⛔ 兩種同時有部位 ⇒ unknown（不動）", broker.broker_position(), "unknown")
+bp = broker.broker_position()
+chk("兩種同方向 ⇒ 合成混搭（不再是 unknown）", (bp or {}).get("mix") if isinstance(bp, dict) else bp,
+    {"MXF": 5, "TMF": 3})
+setup(API([P("TMFK6", 3, "Action.Sell"), P("MXFK6", 1)]), mini=True)
+chk("⛔ 兩種反方向 ⇒ unknown（不動）", broker.broker_position(), "unknown")
 setup(API([P("TXFK6", 1)]), mini=True)
 chk("大台部位不是我們的 ⇒ 沒部位", broker.broker_position(), None)
 setup(API([P("MXFK6", 2)]), mini=False)

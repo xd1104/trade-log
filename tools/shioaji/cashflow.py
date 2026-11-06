@@ -19,6 +19,8 @@ from datetime import date
 
 PT_VALUE = 10                      # 微台一點 10 元
 FEE_SIDE = 18                      # 手續費：單邊每口 18 元（他的費率）
+FEE_SIDE_MXF = 25                  # ⭐ 2026-11-06 小台手續費：單邊每口（一口小台合約）25 元
+MINI_RATIO = 5                     # ⭐ 2026-11-06 一口小台＝5 口微台等值（＝ broker.RATIO["MXF"]；這支⛔ 不 import broker）
 TAX_RATE = 0.00002                 # 期交稅 十萬分之二（單邊，契約價值 ＝ 點數 × 10）
 FEE_TOL = 30                       # 元。倒推的費稅跟費率估的差超過這個 ⇒ 標對不起來
 
@@ -33,9 +35,21 @@ def _num(v):
 
 
 def est_fee(t):
-    """費率估的這一筆來回手續費＋稅（只拿來判斷對不對得起來）。"""
+    """
+    費率估的這一筆來回手續費＋稅（只拿來判斷對不對得起來）。
+    ⭐ 2026-11-06 小台／混搭：成績單的 qty 是**微台等值**（1 小台＝5）。手續費照**合約口數**收（小台單邊 25 元／口、
+       微台 18 元／口）⇒ 依成績單的 product／mix 分開算；稅跟契約價值成正比 ⇒ 照等值算（算法一個字都沒變）。
+       ⛔ 沒有 product 的舊紀錄、或 product＝TMF ⇒ 跟以前一模一樣（每等值口 18×2）。
+    """
     q = int(t.get("qty") or 1)
     tax = sum(round((_num(t.get(k)) or 0) * PT_VALUE * TAX_RATE) for k in ("entry", "exit"))
+    prod = t.get("product")
+    if prod == "MXF":
+        return -(-q // MINI_RATIO) * 2 * FEE_SIDE_MXF + q * tax
+    if prod == "MIX" and isinstance(t.get("mix"), dict):
+        mq = int(t["mix"].get("MXF") or 0)
+        tq = int(t["mix"].get("TMF") or 0)
+        return -(-mq // MINI_RATIO) * 2 * FEE_SIDE_MXF + tq * 2 * FEE_SIDE + q * tax
     return q * (2 * FEE_SIDE + tax)
 
 
