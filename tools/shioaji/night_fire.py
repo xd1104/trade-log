@@ -586,8 +586,14 @@ def _eod(E, now):
         _ST["eod_alarm"] = msg
         return True
     if pos is None:
+        if (_ST.get("eod_shell") == E or broker.recent_unclean()) and _in(now, EOD_FROM, EOD_UNTIL):
+            # ⭐ 2026-11-06 第六輪品管 #2：空殼剛結算（晚到那一腿逾時才當成結束）⇒「沒有部位」不一定是真的：
+            #    那一腿可能晚一點才出現在券商上 ⇒ ⛔ 先不定案 flat，04:59:50 前每一輪再問；出現了就照撿回部位平掉
+            return False
         _append({"E": str(E), "rec": "eod", "why": "flat", "msg": "04:58 已經沒有部位（之前已停利或停損）"})
         return True
+    if broker.own_shell(pos):
+        _ST["eod_shell"] = E                       # 第六輪品管 #2：記下這一晚碰過空殼（結算後「沒有部位」先不定案）
     done = _trip_recorded(E, ent)
     if done:
         # ⭐ QA r2 必修 1：成績單裡已經有今晚這一趟（停損／停利已經出場）⇒ 現在券商上的不是那一口 ⇒ ⛔ 不碰

@@ -1157,6 +1157,7 @@ CLK.t += 1
 chk("(a) 平完 1 秒、券商還顯示舊的 10 口 ⇒ 不撿回（沒有部位），但 can_enter 擋下",
     (broker.reconcile(), broker.can_enter(38000, True)), (None, (False, "剛平倉、券商部位還沒更新，稍後再進")))
 F.policy = lambda pr, r: (4, F.mkt[pr]) if r["oc"] == "New" else (r["q"], F.mkt[pr])
+broker._RECENT_CLOSE["at"] = 0.0                  # 第六輪起 enter() 自己也會擋 ⇒ 這裡模擬「時間窗已過、券商還顯示舊部位」
 ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
 F.policy = None
 chk("(b) 這時還是進場（只成交 4 口）⇒ 確認口數照明細 4（⛔ 不被舊的 10 口騙）", (ok, p["qty"], p["own_trades"][0]["conf"]), (True, 4, 4))
@@ -1167,18 +1168,94 @@ chk("  停損只平 4 口、⛔ 沒平過頭", ([s for s in S(F, n0) if s[4] == 
 F.lag, F._hist = 0, []
 CLK.t += 10
 chk("  券商更新成空手之後 can_enter 放行", broker.can_enter(38000, True), (True, None))
+print("\n  -- 第六輪品管 #3：enter() 自己也擋「剛平完、券商還顯示舊部位」（不靠呼叫端先走 can_enter）--")
 F = fresh(mini=False)
 broker.enter("long", 38000, 60, sl_points=200, qty=10)
 F.lag = 6.0
 broker.close("sl")
 CLK.t += 1
-F.policy = lambda pr, r: (0, F.mkt[pr]) if r["oc"] == "New" else (r["q"], F.mkt[pr])
+n0 = len(F.sent)
 ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
-F.policy = None
-chk("(b) 新單 0 成交 ⇒ 沒部位；舊部位照樣不撿回", (ok, pos(), broker.reconcile()), (False, None, None))
-CLK.t += 10
+chk("直接 enter（沒先問 can_enter）⇒ 擋下、一張都沒送、講原因", (ok, S(F, n0), "剛平倉" in (err or "")), (False, [], True))
+chk("  舊部位照樣不撿回", (pos(), broker.reconcile()), (None, None))
 F.lag, F._hist = 0, []
-chk("  ⛔ 沒有送任何平倉單、券商空手", ([s for s in S(F) if s[3] == "Cover" and s[4] == "MKP"][1:], F.eq()), ([], {}))
+CLK.t += 10
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
+chk("  券商更新成空手之後 enter 照常", (ok, p["qty"]), (True, 10))
+
+print("\n  -- 第六輪品管 #1：進場前券商就有同方向部位（照明細確認）＋明細晚 8 秒 ⇒ 照送出量保守估計、仍是程式的部位 --")
+for fill in (10, 0):
+    F = fresh(mini=False)
+    broker.enter("long", 38000, 60, sl_points=200, qty=10)
+    F.lag = 6.0
+    broker.close("sl")
+    CLK.t += 1
+    broker._RECENT_CLOSE["at"] = 0.0              # 模擬：「剛平完」那個時間窗已經過了，但券商還顯示舊部位（進場前 base＝10）
+    _hide_new(F, "TMF", 8.0)
+    if not fill:
+        F.policy = lambda pr, r: (0, F.mkt[pr]) if r["oc"] == "New" else (r["q"], F.mkt[pr])
+    n0 = len(F.sent)
+    ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
+    F.policy = None
+    chk("實際成交 %d：進場回成功、帳本部位 10 口（保守估計）、有程式停損、停利單先不掛、講清楚" % fill,
+        (ok, p.get("own"), p["qty"], p.get("sl_points"), [s[4] for s in S(F, n0)], "停利單先不掛" in (err or "")),
+        (True, True, 10, 200.0, ["MKP"], True))
+    for _ in range(6):                            # 明細回報前後各對帳幾次
+        CLK.t += 2
+        broker.reconcile()
+    F.lag, F._hist = 0, []
+    if fill:
+        chk("  明細回報之後：照明細 10 口、還是程式的部位", ((pos() or {}).get("qty"), (pos() or {}).get("recovered")), (10, False))
+        F.mkt = {"TMF": 37801.0, "MXF": 37800.0}
+        n0 = len(F.sent)
+        ok, err = broker.close("sl")
+        chk("  停損平 10 口、⛔ 沒平過頭、空手", (ok, S(F, n0), F.bad, F.eq()), (True, [("TMF", "Sell", 10, "Cover", "MKP")], [], {}))
+        chk("  這一趟一筆成績單 10 口", [t["qty"] for t in trades()], [10, 10])
+    else:
+        chk("  明細回報 0 成交 ⇒ 部位清掉、⛔ 沒送平倉單、⛔ 不記 0 口假成績單",
+            (pos(), [s for s in S(F, n0) if s[3] == "Cover"], [t["qty"] for t in trades()]), (None, [], [10]))
+
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+F.lag = 6.0
+broker.close("sl")
+CLK.t += 1
+broker._RECENT_CLOSE["at"] = 0.0
+_hide_new(F, "MXF", 8.0)
+n0 = len(F.sent)
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=11)
+chk("混搭 11：小台那一腿明細晚 8 秒 ⇒ 照送出量保守估計 MIX 11、停利先不掛",
+    (ok, p.get("product"), p["qty"], [s[4] for s in S(F, n0)], "停利單先不掛" in (err or "")), (True, "MIX", 11, ["MKP", "MKP"], True))
+for _ in range(6):
+    CLK.t += 2
+    broker.reconcile()
+F.lag, F._hist = 0, []
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  明細回報後停損：兩腿都平、⛔ 沒平過頭、空手、這一趟一筆 11 口",
+    (ok, S(F, n0), F.bad, F.eq(), [t["qty"] for t in trades()]),
+    (True, [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")], [], {}, [11, 11]))
+
+print("\n  -- 第六輪品管 #2：收盤時空殼剛結算拿到「沒有部位」⇒ 窗口內再問（晚到那一腿 70 秒才出現）--")
+_LOTS["q"] = 11
+F = fresh()
+F.late = {"MXF": 70.0}
+_hide_new(F, "MXF", 70.0)
+for f in list(AF.FIRE_DIR.glob("*")) if AF.FIRE_DIR.exists() else []:
+    f.unlink()
+AF._send(dd, {"method": "U", "cand": "fast", "dir": "long", "leg": "fast", "sl_points": 200, "tp_points": 60},
+         {"method": "U"}, "long", 38000.0, 200, 0, _rt.time(), {"quote_age_ms": 100}, "t", tp_points=60)
+CLK.t += 7
+broker.close("sl")
+ent, why = AF._auto_entry(dd)
+_aft = AF.time
+AF.time = CLK
+try:
+    AF._eod(dd, 0, CLK.t, "13:43:30")
+finally:
+    AF.time = _aft
+chk("  空殼 60 秒逾時結算後，那一腿 70 秒出現 ⇒ 窗口內照撿回部位平掉（⛔ 不先定案 flat）",
+    (AF._ST["last"].get("why"), F.eq(), F.bad), ("eod_closed", {}, []))
 
 src = (HERE / "auto_fire.py").read_text(encoding="utf-8")
 say("place_order" not in src and "FuturesOrder" not in src, "⛔ auto_fire 裡沒有 place_order／FuturesOrder")

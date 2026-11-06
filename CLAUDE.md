@@ -1059,7 +1059,15 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   ・帳本部位進場前記下券商同方向已有的口數（`_entry_base`）；有（或問不到）⇒ 不拿券商部位確認成交，改看進場單明細（`_wait_deals`）；
     明細 FILL_WAIT 內都沒回報 ⇒ 回「不知道有沒有成交」、不掛停利、不還原不撿回。這一筆最後沒部位 ⇒ 還原「剛平完」記憶（`_rc_restore`）。
   ・`broker.own_shell(pos)`：帳本部位口數 0（混搭空殼）。auto_fire 13:43:30 遇到 ⇒ 窗口內每 EOD_RETRY_S 再問，⛔ 不判 eod_not_ours；窗口到了還是空殼 ⇒ eod_failed（可重試、會示警）。
-  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
+  ⭐ **第六輪品管（2026-11-06 深夜）**：
+  ・`enter()` 自己也擋「剛平完（RECENT_CLOSE_S 內）、券商還顯示部位」：一張都不送，回「剛平倉、券商部位還沒更新，稍後再進」。
+    正式呼叫端（auto_fire／night_fire 兩處／live_panel 手動）都先走 can_enter，這是第二道。
+  ・照明細確認那條（進場前券商就有同方向部位）明細 FILL_WAIT 內沒回報完 ⇒ ⛔ 不丟「不知道」：照送出量保守估計當帳本部位
+    （進場單記 `est`），有程式停損、**停利單先不掛**；估計的口數算進口數、⛔ 不算進平倉上限 hi（`book[p]["unsure"]`），明細回報了才平。
+    單結束後照明細；明細說 0 ⇒ 清部位、⛔ 不記 0 口成績單。
+  ・帳本部位「不乾淨」結算記 `_RECENT_CLOSE["unclean"]`（`broker.recent_unclean()`）。收盤 auto_fire／night_fire 碰過空殼或剛有不乾淨結算 ⇒
+    拿到「沒有部位」先不定案 flat，窗口內再問（晚到那一腿冒出來 ⇒ 照撿回部位平掉），窗口到了才定案。
+  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`／`test_qa6_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：

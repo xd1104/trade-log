@@ -2365,6 +2365,7 @@ def _eod(day, lag_ms, put_at, at=None):
 
     deadline = put_at + EOD_WINDOW_S
     last_err, tries = None, 0
+    shell_seen = False
     while True:
         # ── ③ 現在券商上有什麼（⛔ 券商是真相；演練模式沒有券商，看記憶體那一口）
         pos = broker.reconcile() if broker.is_live() else broker._state.get("position")
@@ -2374,8 +2375,14 @@ def _eod(day, lag_ms, put_at, at=None):
                 continue
             return _eod_row(d, "eod_unknown", dict(base, tries=tries))
         if pos is None:
+            if (shell_seen or broker.recent_unclean()) and time.time() < deadline:
+                # ⭐ 2026-11-06 第六輪品管 #2：空殼剛結算（晚到那一腿逾時才當成結束）⇒「沒有部位」不一定是真的：
+                #    那一腿可能晚一點才出現在券商上 ⇒ ⛔ 先不定案 flat，窗口內再問；出現了就照撿回部位認人、平掉
+                time.sleep(EOD_RETRY_S)
+                continue
             return _eod_row(d, "eod_flat", dict(base, tries=tries))
         if broker.own_shell(pos):
+            shell_seen = True
             # ⭐ 2026-11-06 第五輪品管 (c)：混搭空殼（已知口數平完、還有一腿進場回報沒到，口數 0）⇒ ⛔ 不判「不是我們的」
             #    （eod_not_ours 會定案、那一腿晚到之後收盤就不平了）⇒ 窗口內等那一腿（或等 broker 結算），之後再認人／平倉
             last_err = "收盤時部位口數 0、還有一腿進場回報沒到（等那一腿或結算）"
