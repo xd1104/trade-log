@@ -825,6 +825,80 @@ for delay in (10.0, 20.0):
                                                        [l["src"] for l in t.get("legs") or []]), (13, True, []))
     chk("  ⛔ 沒有平過頭", (F.bad, F.eq()), ([], {}))
 
+print("\n=== q. 第四輪品管（2026-11-06）：晚到的腿留著程式停損、採信過的晚到跟之後的明細互相抵銷 ===")
+
+
+def _hide_new(F, prod, secs):
+    """那一種合約的進場單（New／MKP）狀態＋明細一起晚 secs 秒才回報（假時鐘）。"""
+    hid = []
+    _o, _us = F.place_order, F.update_status
+
+    def _po(c, o):
+        t = _o(c, o)
+        if str(o.octype).endswith("New") and str(o.price_type).endswith("MKP") and CODE2P[c.code] == prod:
+            t.hidden = (t.status.deals, t.status.status, None)
+            t.status.deals, t.status.status = [], "OrderStatus.Submitted"
+            hid.append((t, CLK.t + secs))
+        return t
+
+    def _upd(acc=None):
+        for t, at in list(hid):
+            if CLK.t >= at and t.hidden is not None:
+                t.status.deals, t.status.status, t.hidden = t.hidden[0], t.hidden[1], None
+                hid.remove((t, at))
+        _us(acc)
+
+    F.place_order, F.update_status = _po, _upd
+
+
+F = fresh()
+F.late = {"MXF": 20.0}
+_hide_new(F, "MXF", 20.0)
+t0 = CLK.t
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=11)
+chk("小台腿（部位＋明細）晚 20 秒：進場時只看得到微台 1 口", (ok, p["qty"], p["product"]), (True, 1, "TMF"))
+CLK.t = t0 + 7
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  第 7 秒停損：先平看得到的微台 1 口、⛔ 不結算（小台那張進場單還沒結束）、講清楚",
+    (ok, S(F, n0), pos() is not None, "還沒到" in (err or "")), (False, [("TMF", "Sell", 1, "Cover", "MKP")], True, True))
+CLK.t = F._late["MXF"][0] + 1
+got = broker.reconcile()
+chk("  小台回報到了 ⇒ 還是我們的（有程式停損 200 點、不是撿回）",
+    (got.get("product"), got.get("qty"), got.get("sl_points"), got.get("recovered"), got.get("own")),
+    ("MXF", 10, 200.0, False, True))
+cool()
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  再停損 ⇒ 平小台 2 口、空手、⛔ 沒平過頭", (ok, S(F, n0), F.eq(), F.bad, pos()),
+    (True, [("MXF", "Sell", 2, "Cover", "MKP")], {}, [], None))
+chk("  整趟一筆成績單 11 口（MIX）", [(t["qty"], t.get("product")) for t in trades()], [(11, "MIX")])
+
+F = fresh()
+F.policy = lambda pr, r: (0, F.mkt[pr]) if (pr == "MXF" and r["oc"] == "New") else (r["q"], F.mkt[pr])
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+F.policy = None
+F._apply("MXF", 2, 38000.0)                       # 券商上出現小台 2 口（進場單明細說 0 成交、已取消）
+CLK.t += broker.TOUCH_QUIET_S + 1
+broker.reconcile()
+CLK.t += 5
+broker.reconcile()
+CLK.t += broker.CLOSE_COOLDOWN
+got = broker.reconcile()
+chk("確認過券商多小台 10 口等值 ⇒ 採信成晚到（11）", (got["qty"], [a["q"] for a in got.get("own_adj") or []]), (11, [10]))
+_mt = [x for x in Trade._live if x.contract.code == C["MXF"].code and str(x.status.status).endswith("Cancelled")][-1]
+_mt.status.deals, _mt.status.status = [Deal(38000.0, 2)], "OrderStatus.Filled"   # 之後那張進場單的明細補到了
+got = broker.reconcile()
+chk("  ⭐ #4 之後明細補到 ⇒ 跟調整互相抵銷、⛔ 不重複算（還是 11，不是 21）", (got["qty"], got.get("mix")),
+    (11, {"MXF": 10, "TMF": 1}))
+n0 = len(F.sent)
+F.mkt = {"TMF": 37901.0, "MXF": 37900.0}
+ok, err = broker.close("sl")
+chk("  停損平完：小台 2＋微台 1、空手、⛔ 沒平過頭", (ok, S(F, n0), F.eq(), F.bad),
+    (True, [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")], {}, []))
+t = trades()[-1]
+chk("  成績單 11 口、點數＝實際（-100）", (len(trades()), t["qty"], t["points"]), (1, 11, -100.0))
+
 print("\n=== n. 不平過頭的性質測試（固定種子，隨機成交／不成交／部分成交／回報慢／查不到）===")
 rng = random.Random(20261106)
 viol, incons, rounds_left = [], [], 0

@@ -1046,7 +1046,15 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   ・落地檔存每張單的明細數字＋委託單編號（`_own_meta`），重啟後補回（`_own_restore`，用 `list_trades` 問回委託單），
     券商空手也照補（可能是晚到／舊資料）；結算時先刪落地檔再記成績單（⛔ 不重複記）。
   ・模擬帳戶實測：小台平倉單狀態／明細可以慢過 FILL_WAIT ⇒ 明細沒回報前不再送、下一輪明細到了就結算（出場價照明細）。
-  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
+  ⭐ **第四輪品管（2026-11-06 深夜）**：
+  ・進場單多記 `conf`（enter() 用券商部位／明細確認的口數）、`px`。那一腿進場 ＝ **max(conf, 進場明細)**；明細沒追上 conf 前進場單不算結束
+    （⛔ 明細晚到不會算成 0 口假成績單、停損照 conf 平完）。
+  ・逾時：進場／平倉單送出 `IOC_FINAL_S` 後當成結束（`_own_rec` 回 `"to"`）；重啟後問不到的單照落地的送出時間算到期、大聲示警（`own_restore_lost`）。
+    停利單不逾時；重啟後問不到 ⇒ 平倉回報講「停利單可能還掛著，請到大戶投刪除」。
+  ・採信過的「晚到 +q」記 `e_at`（採信那一刻的進場量），之後明細補進來的先抵掉這筆（⛔ 不重複算）。
+  ・混搭整腿 0 口、進場單還沒結束（`_grow`）⇒ ⛔ 不結算（晚到的腿進來仍是我們的、有程式停損、同一筆成績單）；平倉回報講「還有一腿回報還沒到」。
+  ・`RECENT_CLOSE_S` 不撿回只套用在 `_clean`（沒有逾時／問不到、進場明細都追上 conf）的結算；否則券商上還有的照撿回處理（⛔ 不藏）。
+  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：

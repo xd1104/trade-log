@@ -2139,7 +2139,7 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
             _ps["own"] = True
             _ps["entry0"] = entry
             _ps["mix_sent_at"] = time.time()
-            _own_add(_ps, "entry", prod, want, res)
+            _own_add(_ps, "entry", prod, want, res, conf=k, px=entry)
     if want > 1 and is_live():
         _meta_sync()                    # ⭐ QA r2 必修 4：多口部位一成立就落地（重啟後補得回來）；一口的不寫
     if want > 1 and is_live():
@@ -2360,7 +2360,8 @@ def _enter_mix(direction, price, tp_points, sl_points, want, act):
         pos["own"] = True
         pos["entry0"] = entry
         for p in legs:
-            _own_add(pos, "entry", p, legs[p][0], trades[p])
+            _own_add(pos, "entry", p, legs[p][0], trades[p],
+                     conf=(filled[p][1] if p in filled else 0), px=(filled[p][0] if p in filled else None))
         _state["position"] = pos
     if is_live():
         _meta_sync()                         # 多口部位一成立就落地（重啟後補得回來）
@@ -2721,28 +2722,52 @@ RECENT_CLOSE_S = 120.0        # 帳本部位平完之後幾秒內，券商同方
 _RECENT_CLOSE = {"at": 0.0, "dir": None, "legs": {}, "msg": None}
 
 
-def _own_add(pos, role, p, n, trade):
-    """帳本記一張我們自己的單（role＝entry／target／close；n＝送出的微台等值）。"""
-    # 進場單一律在 enter() 等完成交、定案之後才記（decided）⇒ 不擋「單都結束了」的判斷；之後晚到的明細照樣讀得到
-    pos.setdefault("own_trades", []).append({
-        "role": role, "p": p, "n": int(n), "t": trade, "at": time.time(), "decided": role == "entry",
-        "id": getattr(getattr(trade, "order", None), "id", None)})
+def _own_add(pos, role, p, n, trade, conf=None, px=None):
+    """
+    帳本記一張我們自己的單（role＝entry／target／close；n＝送出的微台等值）。
+    ⭐ 2026-11-06 第四輪品管 #1：進場單多記 conf＝enter() 用券商部位（或明細）確認的口數、px＝那時的成交均價。
+       那一腿的進場口數 ＝ max(conf, 進場明細)；明細還沒追上 conf 之前，進場單不算結束（⛔ 不會因為明細晚到算成 0 口）。
+    """
+    r = {"role": role, "p": p, "n": int(n), "t": trade, "at": time.time(),
+         "id": getattr(getattr(trade, "order", None), "id", None)}
+    if role == "entry":
+        r["conf"] = int(conf if conf is not None else 0)
+        if px is not None:
+            r["px"] = float(px)
+    pos.setdefault("own_trades", []).append(r)
 
 
 def _own_rec(rec, now):
-    """一張單 ⇒ (已回報成交量, Σ價×量, 結束了嗎)。⛔ 不問券商（呼叫端先 _update_status）。"""
+    """
+    一張單 ⇒ (已回報成交量, Σ價×量, 結束了嗎)。⛔ 不問券商（呼叫端先 _update_status）。
+    結束了嗎：False／True（券商回報結束、或明細滿了）／"to"（逾時當成結束：IOC_FINAL_S，或重啟後問不到那張單）。
+    ⭐ 2026-11-06 第四輪品管：
+       · 進場單：明細 < conf（確認口數）⇒ 不算結束（明細還在路上）；送出 IOC_FINAL_S 秒後才逾時當成結束。
+       · 重啟後問不到的單（t 是 None、落地時沒結束）⇒ 照落地的送出時間＋IOC_FINAL_S 算到期（⛔ 不能永遠「沒結束」：
+         平倉保守上限會永遠是 0、停損永遠送不出去）。停利單（限價、會一直掛著）不逾時。
+    """
     t = rec.get("t")
+    age = now - float(rec.get("at") or now)
+    to = rec["role"] != "target" and age >= IOC_FINAL_S
     if t is None:
-        return float(rec.get("q0") or 0.0), float(rec.get("pq0") or 0.0), bool(rec.get("fin0"))
+        dq, dpq = float(rec.get("q0") or 0.0), float(rec.get("pq0") or 0.0)
+        fin = rec.get("fin0")
+        if fin and fin != "to":
+            done = True
+        elif fin == "to" or to:
+            done = "to"
+        else:
+            done = False
+        return dq, dpq, done
     s = _deal_sums(t)
     dq, dpq = (s[1], s[0]) if s is not None else (0.0, 0.0)
     st = str(getattr(getattr(t, "status", None), "status", "") or "")
     done = ("Cancel" in st or "Fail" in st or ("Filled" in st and "PartFilled" not in st)
             or (s is not None and dq >= rec["n"] - 1e-9))
-    if not done and rec["role"] == "entry" and (rec.get("decided") or now - float(rec.get("at") or now) >= FILL_WAIT + 1.0):
-        done = True                   # 進場：enter() 已經照當下明細定案；之後晚到的明細照樣讀得到（只是不擋確認）
-    if not done and rec["role"] == "close" and now - float(rec.get("at") or now) >= IOC_FINAL_S:
-        done = True
+    if done and rec["role"] == "entry" and dq < int(rec.get("conf") or 0) - 1e-9:
+        done = False                  # 狀態說結束、明細還沒追上確認口數 ⇒ 明細還在路上
+    if not done and to:
+        done = "to"
     return dq, dpq, done
 
 
@@ -2753,16 +2778,32 @@ def _own_book(pos, now=None):
        ours ＝ e − t − c ＋ 調整、hi ＝ e − t − cp ＋ 調整（送平倉單的上限）。
     """
     now = time.time() if now is None else now
-    b = {p: {"e": 0.0, "epq": 0.0, "t": 0.0, "tpq": 0.0, "c": 0.0, "cpq": 0.0, "cp": 0.0, "adj": 0.0}
+    b = {p: {"e": 0.0, "epq": 0.0, "t": 0.0, "tpq": 0.0, "c": 0.0, "cpq": 0.0, "cp": 0.0, "adj": 0.0,
+             "late": 0.0, "late_pq": 0.0, "gone": 0.0, "edq": 0.0}
          for p in RATIO}
-    allf, last, live_t = True, 0.0, []
+    # _all_final：每一張進場／平倉單都結束了（差異確認用）；_exit_final：平倉單都結束了（結算用）
+    # _grow：還有進場單沒結束、整腿 0 口（晚到的腿還可能進來）⇒ ⛔ 不結算（第四輪品管建議 5）
+    # _clean：沒有一張是「逾時當成結束」、進場明細都追上確認口數 ⇒ 結算後才套用 RECENT_CLOSE_S 不撿回（第四輪品管 #2）
+    allf, exitf, grow, clean, last, live_t = True, True, False, True, 0.0, []
     for rec in pos.get("own_trades") or []:
         dq, dpq, done = _own_rec(rec, now)
         x = b.setdefault(rec["p"], {"e": 0.0, "epq": 0.0, "t": 0.0, "tpq": 0.0, "c": 0.0, "cpq": 0.0,
-                                    "cp": 0.0, "adj": 0.0})
+                                    "cp": 0.0, "adj": 0.0, "late": 0.0, "late_pq": 0.0, "gone": 0.0, "edq": 0.0})
         if rec["role"] == "entry":
-            x["e"] += dq
-            x["epq"] += dpq
+            conf = float(rec.get("conf") or 0)
+            x["edq"] += dq
+            if dq < conf - 1e-9:
+                # ⭐ 第四輪品管 #1：明細還沒追上 enter() 確認的口數 ⇒ 照確認口數（缺的那幾口用當初的成交均價）
+                px = float(rec.get("px") or (dpq / dq if dq > 0 else 0.0))
+                x["e"] += conf
+                x["epq"] += dpq + (conf - dq) * px
+                clean = False
+            else:
+                x["e"] += dq
+                x["epq"] += dpq
+            if not done and conf <= 0 and dq <= 0:
+                # 整腿都還沒看到（混搭晚到的那一腿）⇒ 還可能整腿進來。已經看到部分成交的單不算（IOC 部分成交是一次回報的）
+                grow = True
         elif rec["role"] == "target":
             x["t"] += dq
             x["tpq"] += dpq
@@ -2772,16 +2813,40 @@ def _own_book(pos, now=None):
             x["c"] += dq
             x["cpq"] += dpq
             x["cp"] += dq if done else float(rec["n"])
+            exitf = exitf and bool(done)
+        if done == "to":
+            clean = False
         if rec["role"] != "target":
-            allf = allf and done
+            allf = allf and bool(done)
             last = max(last, float(rec.get("at") or 0.0))
     for a in pos.get("own_adj") or []:
-        b[a["p"]]["adj"] += float(a["q"])
-    for p, x in b.items():
+        x = b[a["p"]]
+        q = float(a["q"])
+        if q > 0:
+            # ⭐ 第四輪品管 #4：採信過的「晚到 +q」要跟之後補進來的進場明細互相抵銷（⛔ 不重複算）：
+            #    採信那一刻那一腿的進場是 e_at，之後明細多出來的部分先抵掉這筆調整
+            e_at = a.get("e_at")
+            used = max(0.0, x["e"] - float(e_at)) if e_at is not None else 0.0
+            eff = max(0.0, q - used)
+            x["late"] += eff
+            if a.get("pq") is not None and q > 0:
+                x["late_pq"] += float(a["pq"]) * eff / q
+            x["adj"] += eff
+        else:
+            x["gone"] += -q
+            x["adj"] += q
+    for p in RATIO:
+        x = b[p]
         x["ours"] = x["e"] - x["t"] - x["c"] + x["adj"]
         x["hi"] = x["e"] - x["t"] - x["cp"] + x["adj"]
     b["_all_final"], b["_last_send"], b["_live_tgt"] = allf, last, live_t
+    b["_exit_final"], b["_grow"], b["_clean"] = exitf, grow, clean
     return b
+
+
+def _own_done(book):
+    """帳本說「這一趟可以結算了」嗎（呼叫端另外看口數 ≤ 0）。"""
+    return book["_exit_final"] and not book["_grow"]
 
 
 def _own_fields(cur, book):
@@ -2794,11 +2859,8 @@ def _own_fields(cur, book):
     elif len(has) == 1:
         cur["product"] = has[0]
         cur.pop("mix", None)
-    eq = sum(book[p]["e"] for p in RATIO)
-    epq = sum(book[p]["epq"] for p in RATIO)
-    for a in cur.get("own_adj") or []:
-        if a["q"] > 0 and a.get("pq") is not None:
-            eq, epq = eq + a["q"], epq + float(a["pq"])
+    eq = sum(book[p]["e"] + book[p]["late"] for p in RATIO)
+    epq = sum(book[p]["epq"] + book[p]["late_pq"] for p in RATIO)   # 第四輪品管 #4：晚到調整用抵銷後的量
     if eq > 0:
         ef = round(epq / eq, 2)
         cur["entry_fill"] = ef
@@ -2811,8 +2873,7 @@ def _own_fields(cur, book):
             cur["late_fill"] = True
         if cur.get("entry0") is not None and abs(ef - float(cur["entry0"])) > 0.005:
             cur["late_leg"] = True    # 進場價跟帳本當初記的不一樣（晚到的腿）⇒ auto_fire／night_fire 認人改比 entry0
-    m0 = {p: int(round(book[p]["e"] + max(0.0, sum(a["q"] for a in cur.get("own_adj") or []
-                                                      if a["p"] == p and a["q"] > 0)))) for p in RATIO}
+    m0 = {p: int(round(book[p]["e"] + book[p]["late"])) for p in RATIO}
     if all(m0.values()) or cur.get("product") == "MIX":
         cur["mix0"] = m0              # 成績單記 MIX（兩腿都進過場）
 
@@ -2833,7 +2894,7 @@ def _own_finish(cur, now):
     tpq = sum(book[p]["tpq"] for p in RATIO)
     cq = sum(book[p]["c"] for p in RATIO)
     cpq = sum(book[p]["cpq"] for p in RATIO)
-    gone = -sum(a["q"] for a in cur.get("own_adj") or [] if a["q"] < 0)
+    gone = sum(book[p]["gone"] for p in RATIO)
     legs = []
     if tq > 0:
         legs.append({"qty": int(round(tq)), "px": round(tpq / tq, 2), "src": "tp", "at": datetime.now().strftime("%H:%M:%S")})
@@ -2850,11 +2911,14 @@ def _own_finish(cur, now):
         rec = record_trade(rp, round(tpq / tq, 2), "tp", qty=int(round(tq)))
     else:
         rec = record_trade(rp, round(cpq / cq, 2) if cq > 0 else None, reason, qty=int(round(cq)))
+    # ⭐ 第四輪品管 #2：「RECENT_CLOSE_S 內券商同方向不撿回」只套用在帳本確定平完、明細都滿了（_clean）；
+    #    有任何一張是逾時當成結束、或進場明細沒追上確認口數 ⇒ ⛔ 不藏（券商上還有的就是真部位，照撿回規則處理、有停損）
     _RECENT_CLOSE.update(at=now, dir=cur.get("dir"),
-                         legs={p: int(round(book[p]["e"])) + int(round(sum(a["q"] for a in cur.get("own_adj") or []
-                                                                         if a["p"] == p and a["q"] > 0)))
-                               for p in RATIO},
+                         legs=({p: int(round(book[p]["e"] + book[p]["late"])) for p in RATIO}
+                               if book["_clean"] else {}),
                          msg="這一筆已經平完了（%s）" % reason)
+    if not book["_clean"]:
+        _log("own_finish_unclean", {"ok": None, "why": "這一趟有委託單是逾時／問不到才當成結束 —— 平完後券商上若還有部位，照撿回處理（不藏）"})
     _state["position"] = None
     _log("own_finished", {"ok": True, "reason": reason, "qty": (rec or {}).get("qty"), "exit": (rec or {}).get("exit"),
                           "points": (rec or {}).get("points"), "tp": tq, "close": cq, "elsewhere": gone})
@@ -2893,7 +2957,7 @@ def _own_reconcile(cur):
             if sb[p] > int(seen.get(p) or 0):
                 seen[p] = sb[p]
         _own_fields(cur, book)
-        if cur["qty"] <= 0 and book["_all_final"] and not any(v < 0 for v in sb.values()):
+        if cur["qty"] <= 0 and _own_done(book) and not any(v < 0 for v in sb.values()):
             # 帳本說我們每一腿都 0、單都結束 ⇒ 這一趟結束（券商若還顯示同方向的口數：舊資料或不是這一趟的 ⇒
             # RECENT_CLOSE_S 內不撿回；之後還在才當成另一筆撿回、有停損）
             _own_finish(cur, now)
@@ -2930,7 +2994,8 @@ def _own_reconcile(cur):
                 if LEGACY_HANDOVER:
                     continue
                 px = float((legs.get(p) or {}).get("entry") or cur.get("entry") or 0)
-                cur.setdefault("own_adj", []).append({"p": p, "q": d, "pq": px * d, "src": "late"})
+                cur.setdefault("own_adj", []).append({"p": p, "q": d, "pq": px * d, "src": "late",
+                                                       "e_at": book[p]["e"]})
                 _state["last_error"] = ("券商上%s比程式明細多 %d 口等值（確認 %g 秒以上）⇒ 當成程式晚到的成交，照程式停損／收盤平掉 —— "
                                         "請到大戶投確認" % ({"MXF": "小台", "TMF": "微台"}[p], d, CLOSE_COOLDOWN))
                 _log("own_adopt", {"ok": False, "p": p, "q": d, "px": px, "why": _state["last_error"]})
@@ -2940,8 +3005,9 @@ def _own_reconcile(cur):
                 _log("own_gone", {"ok": False, "p": p, "q": -d,
                                   "why": "券商上%s比程式明細少 %d 口等值（確認 %g 秒以上、單都結束了）⇒ 記成別處平掉" %
                                          ({"MXF": "小台", "TMF": "微台"}[p], -d, CLOSE_COOLDOWN)})
-        _own_fields(cur, _own_book(cur, now))
-        if cur["qty"] <= 0 and book["_all_final"]:
+        book = _own_book(cur, now)
+        _own_fields(cur, book)
+        if cur["qty"] <= 0 and _own_done(book):
             _own_finish(cur, now)
             return None
         return cur
@@ -2981,8 +3047,12 @@ def _own_meta(p):
     recs = []
     for r in p.get("own_trades") or []:
         q, pq, fin = _own_rec(r, now)
-        recs.append({"role": r["role"], "p": r["p"], "n": r["n"], "at": r.get("at"), "id": r.get("id"),
-                     "q0": q, "pq0": pq, "fin0": fin})
+        x = {"role": r["role"], "p": r["p"], "n": r["n"], "at": r.get("at"), "id": r.get("id"),
+             "q0": q, "pq0": pq, "fin0": fin}
+        for k in ("conf", "px", "lost"):          # 第四輪品管：確認口數、成交均價、重啟後問不到
+            if r.get(k) is not None:
+                x[k] = r[k]
+        recs.append(x)
     keep = ("dir", "entry", "entry_fill", "entry0", "entry_qty", "qty", "qty_sent", "product", "mix", "mix0",
             "entry_time", "entry_day", "sl_points", "tp_points", "no_tp", "fill_lo", "fill_hi", "mix_sent_at",
             "late_leg", "own_adj", "own_seen", "close_reason", "fill_warn", "bpx", "entry_qty0", "late_fill", "restored")
@@ -3009,10 +3079,25 @@ def _own_restore(m):
         byid = {}
     cur = {k: v for k, v in m.items() if k not in ("own_recs", "day", "own")}
     cur.update(own=True, recovered=False, restored=True, sl_src="meta", target_trade=None, own_trades=[])
+    lost = {"entry": 0, "close": 0, "target": 0}
     for r in m.get("own_recs") or []:
         rr = dict(r)
         rr["t"] = byid.get(str(r.get("id"))) if r.get("id") is not None else None
+        if rr["t"] is None and not (r.get("fin0") and r.get("fin0") != "to"):
+            # 落地時還沒結束（或是停利單）、重啟後又問不到 ⇒ 照落地數字＋送出時間到期（_own_rec），停利單當成「可能還掛著」
+            rr["lost"] = True
+            lost[r["role"]] = lost.get(r["role"], 0) + 1
         cur["own_trades"].append(rr)
+    if any(lost.values()):
+        # ⭐ 2026-11-06 第四輪品管 #3：重啟後問不到委託單 ⇒ 大聲示警（⛔ 不安靜照舊）
+        w = "重啟後跟券商問不到%s —— 先照落地時的明細數字，進場／平倉單送出 %g 秒後當成結束" % (
+            "、".join("%d 張%s單" % (v, {"entry": "進場", "close": "平倉", "target": "停利"}[k])
+                     for k, v in lost.items() if v), IOC_FINAL_S)
+        if lost["target"]:
+            w += "；停利單可能還掛著，平倉後請到大戶投刪除"
+        _state["last_error"] = w
+        _log("own_restore_lost", {"ok": False, "lost": lost, "why": w})
+        print("⚠️ [真實] " + w, flush=True)
     # 停機期間停利已經全部成交（帳本算出 0 口）也照樣補回 ⇒ 對帳時立刻結算、記成績單（⛔ 不可以當成「已經記過」丟掉）
     return cur
 
@@ -3097,11 +3182,11 @@ def _close_own(pos, reason):
     with _lock:
         if _state["position"] is pos:
             _own_fields(pos, book)
-            if pos["qty"] <= 0 and book["_all_final"]:
+            if pos["qty"] <= 0 and _own_done(book):
                 _own_finish(pos, now)
                 msg = []
                 if stray:
-                    msg.append("有停利單沒撤掉，請自己到大戶投刪除")
+                    msg.append(_STRAY_MSG[stray])
                 return True, ("平倉成功，但" + "；".join(msg)) if msg else None
     _close_fail["at"] = time.time()
     parts = []
@@ -3113,14 +3198,23 @@ def _close_own(pos, reason):
                                                   ("（%s）" % errs[p] if errs.get(p) else "")))
         elif book[p]["c"] > 0:
             parts.append("%s那一腿已平掉（%d 口等值）" % (word[p], int(round(book[p]["c"]))))
+    if book["_grow"] and not any(int(round(book[p]["ours"])) > 0 for p in RATIO):
+        # ⭐ 第四輪品管建議 5：我們已知的口數平完了，但還有一腿進場單沒結束（晚到的腿可能還會進來）⇒ 部位先留著、
+        #    那一腿回報到了照程式停損平掉、成績單同一筆（⛔ 不先結算：結算後晚到的那一腿會變成沒有程式停損的撿回部位）
+        parts = ["已知的口數都平掉了，但還有一腿進場單的成交回報還沒到（最多再等 %g 秒）—— 先留著部位、回報到了會照停損平掉"
+                 % IOC_FINAL_S]
     msg = ("；".join(parts) or "平倉單的成交還沒回報完") + "—— 部位還在，%.0f 秒後會再處理；等不及請立刻自己到大戶投平倉" % CLOSE_COOLDOWN
     if last_err:
         msg = last_err + "；" + msg
     if stray:
-        msg += "；另外有停利單沒撤掉，請自己到大戶投刪除"
+        msg += "；另外" + _STRAY_MSG[stray]
     _log("close_failed", {"ok": False, "err": last_err, "own": True,
                           "left": {p: int(round(book[p]["ours"])) for p in RATIO}, "why": msg})
     return False, msg
+
+
+_STRAY_MSG = {True: "有停利單沒撤掉，請自己到大戶投刪除",
+              "unknown": "停利單可能還掛著，請到大戶投刪除（重啟後問不到那張單、撤不了）"}
 
 
 def _own_cancel_targets(pos):
@@ -3131,10 +3225,16 @@ def _own_cancel_targets(pos):
     now = time.time()
     stray = False
     for r in list(pos.get("own_trades") or []):
-        if r["role"] != "target" or r.get("t") is None:
+        if r["role"] != "target":
             continue
         dq, _dpq, done = _own_rec(r, now)
         if done:
+            continue
+        if r.get("t") is None:
+            # ⭐ 2026-11-06 第四輪品管 Q4-5：重啟後問不到這張停利單 ⇒ 撤不了，⛔ 不可以安靜成功（呼叫端照 stray 講出來）
+            stray = "unknown" if not stray else stray
+            _log("cancel_target", {"ok": False, "product": r["p"],
+                                   "why": "重啟後問不到這張停利單、撤不了 —— 停利單可能還掛著，請到大戶投刪除"})
             continue
         try:
             _state["api"].cancel_order(r["t"])
