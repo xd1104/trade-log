@@ -1805,6 +1805,28 @@ def _still_open(direction, tries=6, gap=0.4):
     return "unknown"
 
 
+def _sent_dealt(trades):
+    """
+    ⭐ 2026-11-06（QA 實測：部位回報停在舊資料 ≥ 5 秒 ⇒ 多口平倉整筆再送一次 ⇒ 平過頭變反向全口數，還回報成功）。
+    已經送出去的平倉單 [(trade, 送出口數)] ⇒ (確定成交幾口, **保守估計**可能成交幾口)。
+    保守估計：明細滿了 ⇒ 送出量；IOC 已取消／失敗 ⇒ 明細量；**其他（還沒回報、問不到明細）⇒ 當成全部成交**。
+    ⛔ 呼叫端先 _update_status。
+    """
+    dealt = pend = 0.0
+    for t, n in trades:
+        sm = _deal_sums(t)
+        d = sm[1] if sm is not None else 0.0
+        st = str(getattr(getattr(t, "status", None), "status", "") or "")
+        dealt += d
+        if sm is not None and d >= n - 1e-9:
+            pend += n
+        elif sm is not None and ("Cancel" in st or "Fail" in st):
+            pend += d
+        else:
+            pend += n
+    return dealt, pend
+
+
 def _close_multi(pos, reason, act, stray):
     """
     ⭐ 2026-10-14 多口平倉（我們自己開的多口部位才走這裡；⛔ 呼叫端已拿 _close_lock、已撤停利單）。
@@ -1821,16 +1843,41 @@ def _close_multi(pos, reason, act, stray):
     if to_close <= 0:
         return False, "這一筆已經沒有我們的口數了（券商上剩的是你自己的）—— 不碰，要平請自己到大戶投"
     done, trades, last_err = 0, [], None
+    sent = []                                   # ⭐ 2026-11-06 [(委託單, 送出口數)]
     _CLOSE_INFLIGHT["on"] = True
     for attempt in range(CLOSE_TRIES):
+        n_send = to_close - done
+        if sent and is_live():
+            # ⭐⭐ 2026-11-06 平過頭的根因修法：第二張起，**先看前面那幾張自己的成交明細**，⛔ 不能只信部位
+            #    （部位回報停在舊資料時 done 會是 0 ⇒ 舊版整筆再送一次）。
+            #    明細說平完了 ⇒ 不送、算平完；還沒回報的那幾張 ⇒ 當成已經成交、⛔ 不再送（寧可這一輪平不完、冷卻後再來）。
+            _update_status()
+            dealt, pend = _sent_dealt(sent)
+            if dealt >= to_close - 1e-9:
+                done = to_close
+                exit_px = _fill_price_many(trades, want=to_close)
+                rec = record_trade(pos, exit_px, reason, qty=to_close)
+                with _lock:
+                    _state["position"] = None
+                _log("close_confirmed", {"ok": True, "tries": attempt, "stray_target": stray, "exit": exit_px,
+                                         "points": (rec or {}).get("points"), "closed": to_close,
+                                         "his_left": 0, "by": "deals"})
+                return True, ("平倉成功，但那張停利單沒撤掉，請自己到大戶投刪除" if stray else None)
+            n_send = int(min(to_close - done, to_close - pend))
+            if n_send <= 0:
+                last_err = "上一張平倉單的成交還沒回報 —— 先不送下一張（避免平過頭變反向），稍後會再試"
+                _log("close_wait_report", {"ok": False, "try": attempt + 1, "dealt": dealt, "pend": pend,
+                                           "why": "前一張可能已經成交、只是回報慢 ⇒ 不再送"})
+                break
         ok, err, res = _send(
             _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC,
-                   sj.FuturesOCType.Cover, qty=to_close - done),
+                   sj.FuturesOCType.Cover, qty=n_send),
             "close_" + reason)
         last_err = err
         if not ok:
             break
         trades.append(res)
+        sent.append((res, n_send))
         if not is_live():
             with _lock:
                 _state["position"] = None
