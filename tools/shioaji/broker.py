@@ -1328,6 +1328,7 @@ def reconcile():
                     cur = _state["position"]
         if isinstance(cur, dict) and cur.get("own"):
             out = _own_reconcile(cur)
+            _own_cancel_left()                 # ⭐ 第八輪品管：這一趟剛結算 ⇒ 撤掉還掛著的停利單（鎖外面）
             if isinstance(out, dict) and out.get("tp_pending") is not None:
                 _own_tp_fill(out)
             _meta_sync()
@@ -2741,7 +2742,7 @@ def _close_locked(reason):
         if not ok:
             break
         if guarded:
-            _LOOP["trades"].append((res, float(QTY)))
+            _LOOP["trades"].append((res, float(QTY), time.time()))
         # 【「券商收到」不等於「平掉了」】範圍市價 IOC 當下沒撮到就整張不成交。
         # 舊版把 ok=True 當成平倉完成、直接清掉本機部位 ⇒ 券商還有部位、
         # 面板卻以為空手 ⇒ **停損不再監控，而且再按平倉會說「沒有部位」**
@@ -3028,6 +3029,8 @@ def _own_tp_fill(pos):
     recs = [r for r in pos.get("own_trades") or [] if r["role"] == "entry"]
     if not recs or any(r.get("est") and not _own_rec(r, now)[2] for r in recs):
         return
+    if _CLOSE_INFLIGHT["on"] or pos.get("close_reason"):
+        return                                   # ⭐ 第八輪品管：平倉正在進行 ⇒ 不補掛（撞上停損會留下殘單）
     if any(r["role"] == "close" for r in pos.get("own_trades") or []):
         with _lock:
             pos.pop("tp_pending", None)          # 已經開始平倉 ⇒ 不補掛
@@ -3140,11 +3143,13 @@ def _own_finish(cur, now):
                                if book["_clean"] else {}),
                          msg="這一筆已經平完了（%s）" % reason)
     _RECENT_CLOSE["unclean"] = not book["_clean"]
+    # ⭐ 第八輪品管：還掛著（沒結束）的停利單記下來，呼叫端出了鎖之後撤掉（_own_cancel_left）
+    _RECENT_CLOSE["left_tgts"] = [r["t"] for r in book["_live_tgt"] if r.get("t") is not None and not r.get("cxl")]
     if book["_clean"]:
         # ⭐ 第七輪品管 #2：這一趟乾淨平完 ⇒ 平倉／停利單當「起算」：RECENT_CLOSE_S 過後券商若還顯示剛好同樣的口數（舊資料）
         #    被撿回來，一口迴圈也 ⛔ 不會再平（看這些單已經平掉多少）
         _loop_seed(cur.get("dir"), sum(book[p]["e"] + book[p]["late"] for p in RATIO),
-                   trades=[(r["t"], float(r["n"])) for r in cur.get("own_trades") or []
+                   trades=[(r["t"], float(r["n"]), float(r.get("at") or now)) for r in cur.get("own_trades") or []
                            if r["role"] in ("close", "target") and r.get("t") is not None],
                    px=cur.get("bpx") or cur.get("entry"))
     if not book["_clean"]:
@@ -3153,6 +3158,30 @@ def _own_finish(cur, now):
     _log("own_finished", {"ok": True, "reason": reason, "qty": (rec or {}).get("qty"), "exit": (rec or {}).get("exit"),
                           "points": (rec or {}).get("points"), "tp": tq, "close": cq, "elsewhere": gone})
     return rec
+
+
+def _own_cancel_left():
+    """
+    ⭐ 2026-11-06 第八輪品管：_own_finish 結算時還掛著的停利單（_RECENT_CLOSE["left_tgts"]）⇒ 撤掉。⛔ 鎖外面叫（會問券商）。
+    ⇒ True＝有撤不掉的（已示警，呼叫端回報裡要提醒）。
+    """
+    left = _RECENT_CLOSE.pop("left_tgts", None) or []
+    if not left or not is_live() or _state["api"] is None:
+        return False
+    _update_status()
+    bad = 0
+    for t in left:
+        try:
+            _state["api"].cancel_order(t)
+            _log("cancel_target", {"ok": True, "why": "這一趟已經結算、停利單還掛著 ⇒ 撤掉"})
+        except Exception as e:                # noqa: BLE001
+            bad += 1
+            _log("cancel_target", {"ok": False, "err": str(e)[:200], "why": "結算後撤不掉還掛著的停利單"})
+    if bad:
+        _state["last_error"] = "這一筆已經平完，但有 %d 張停利單撤不掉、可能還掛著 —— 請立刻到大戶投刪除（成交會變反向新倉）" % bad
+        print("⚠️ [真實] " + _state["last_error"], flush=True)
+        return True
+    return False
 
 
 def _own_signed_legs(legs, direction):
@@ -3349,11 +3378,12 @@ def _close_own(pos, reason):
         with _lock:
             _state["position"] = None
         return True, None
-    stray = _own_cancel_targets(pos)
-    _update_status()                          # ⭐ #1／#8：撤完停利單一定再讀一次停利明細（撤單那一瞬間成交的那段）
+    # ⭐ 第八輪品管：先標「平倉進行中」再撤停利單 ⇒ 這段時間主迴圈的對帳 ⛔ 不會補掛停利（_own_tp_fill）
     with _lock:
         pos["close_reason"] = reason
     _CLOSE_INFLIGHT["on"] = True
+    stray = _own_cancel_targets(pos)
+    _update_status()                          # ⭐ #1／#8：撤完停利單一定再讀一次停利明細（撤單那一瞬間成交的那段）
     errs, last_err, unsure = {}, None, []
     before = {}
     word = {"MXF": "小台", "TMF": "微台"}
@@ -3410,15 +3440,20 @@ def _close_own(pos, reason):
     _update_status()
     now = time.time()
     book = _own_book(pos, now)
+    fin = False
     with _lock:
         if _state["position"] is pos:
             _own_fields(pos, book)
             if pos["qty"] <= 0 and _own_done(book):
                 _own_finish(pos, now)
-                msg = []
-                if stray:
-                    msg.append(_STRAY_MSG[stray])
-                return True, ("平倉成功，但" + "；".join(msg)) if msg else None
+                fin = True
+    if fin:
+        if _own_cancel_left():
+            stray = stray or True
+        msg = []
+        if stray:
+            msg.append(_STRAY_MSG[stray])
+        return True, ("平倉成功，但" + "；".join(msg)) if msg else None
     _close_fail["at"] = time.time()
     parts = []
     for p in ("MXF", "TMF"):
@@ -3474,6 +3509,7 @@ def _own_cancel_targets(pos):
             continue
         try:
             _state["api"].cancel_order(r["t"])
+            r["cxl"] = True               # 第八輪品管：撤過了（結算時 _own_finish 不再重撤）
             _log("cancel_target", {"ok": True, "product": r["p"], "why": "平倉前先撤掉還掛著的停利單"})
         except Exception as e:
             stray = True
@@ -3880,7 +3916,14 @@ def _loop_guard(pos):
         _loop_start(pos, _num_qty(pos.get("qty")) or 0, now)
         return None
     _update_status()
-    _dealt, pend = _sent_dealt(_LOOP["trades"])
+    # ⭐ 第八輪品管：還沒回報的平倉單送出超過 IOC_FINAL_S（跟帳本同一把尺）⇒ 不再當成已成交、照明細
+    #    （IOC 沒撮到、狀態又永遠不回報 ⇒ 不然停損永遠送不出去）
+    young = [(t, n) for t, n, at in _LOOP["trades"] if now - at < IOC_FINAL_S]
+    _dealt, pend = _sent_dealt(young)
+    for t, n, at in _LOOP["trades"]:
+        if now - at >= IOC_FINAL_S:
+            sm = _deal_sums(t)
+            pend += min(float(n), sm[1]) if sm is not None else 0.0
     bp = broker_position()
     if bp == "unknown":
         return "跟券商確認不到部位 —— 先不送下一張平倉單（避免平過頭），稍後會再試"

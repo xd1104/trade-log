@@ -1077,7 +1077,11 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
     （還沒回報的當成已成交），券商口數 > 起算口數 − 已平 ⇒ 券商舊資料 ⇒ ⛔ 這一輪不送、冷卻後再來。
     帳本部位乾淨平完 ⇒ 這一趟的平倉／停利單記成種子（`_loop_seed`，同方向、同口數、同均價、`LOOP_SEED_S` 內有效）：
     過了 RECENT_CLOSE_S 舊資料被撿回來，一口迴圈也不會再平。⛔ 一口部位（沒有種子）不套這道，跟 main 一樣（test_broker 守）。
-  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`／`test_qa6_mix.py`／`test_qa7_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
+  ⭐ **第八輪品管（2026-11-06 深夜）**：
+  ・`_loop_guard`：還沒回報的平倉單送出超過 `IOC_FINAL_S`（60 秒，跟帳本同一把尺）⇒ 不再當成已成交、照明細（`_LOOP["trades"]` 每張記送出時刻）。
+  ・`_close_own` 先標 close_reason／`_CLOSE_INFLIGHT` 再撤停利；`_own_tp_fill` 看到平倉進行中就不補掛。
+  ・`_own_finish` 把還掛著的停利單記進 `_RECENT_CLOSE["left_tgts"]`，呼叫端出鎖後 `_own_cancel_left()` 撤掉；撤不掉 ⇒ 示警＋平倉回報提醒。
+  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`／`test_qa6_mix.py`／`test_qa7_mix.py`／`test_qa8_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：
