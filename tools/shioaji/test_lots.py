@@ -179,6 +179,9 @@ class MultiAPI:
             for _ in range(k):
                 self.lots.pop(0)
                 t.status.deals.append(D(self.exit_px, 1))
+            # ⭐ 2026-11-06：IOC 撮合完就結束，不會一直停在 Submitted（broker 平倉第二張起會看這個字串判斷「上一張結束了沒」）。
+            #    模擬帳戶實測：送 3 成交 1 ⇒ 'OrderStatus.Filled'（部分成交也是 Filled）；一口都沒撮到 ⇒ 當成 Cancelled。
+            t.status.status = "OrderStatus.Filled" if k > 0 else "OrderStatus.Cancelled"
         elif oc.endswith("Cover"):
             self.target = t
         return t

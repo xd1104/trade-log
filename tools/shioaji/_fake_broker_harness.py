@@ -138,7 +138,7 @@ class Fake:
         k = max(0, min(int(k), o.quantity))
         self._apply(p, (k if act == "Buy" else -k), px)
         deals = [Deal(px, k)] if k else []
-        st = "Filled" if k == o.quantity else "Cancelled"
+        st = "OrderStatus.Filled" if k > 0 else "OrderStatus.Cancelled"   # 11-06 模擬帳戶實測：部分成交也是 Filled
         if self.hide and self.rng.random() < self.hide[0]:
             t.hidden = (deals, st, self.hide[1])
         else:

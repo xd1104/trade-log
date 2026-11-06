@@ -51,6 +51,26 @@ for lag in (0, 6.0):
     chk("回報慢 %s 秒：券商最後空手" % lag, F.hold, {"TMF": 0, "MXF": 0})
     chk("回報慢 %s 秒：回報成功" % lag, ok, True)
 
+print("\n=== ②-b 第一張只成交一部分（實測狀態是 Filled）＋部位回報慢 ⇒ 只補送剩下的 ===")
+for lag in (0, 6.0):
+    F = fresh(mini=False)
+    broker.enter("long", 38000, 60, sl_points=200, qty=10)
+    n0 = len(F.sent)
+    cnt2 = {"n": 0}
+
+    def pol2(p, rec, cnt=cnt2):
+        if rec["oc"] == "Cover" and rec["pt"] != "LMT":
+            cnt["n"] += 1
+            if cnt["n"] == 1:
+                return 4, F.mkt[p]            # 第一張 10 口只撮到 4 口
+        return rec["q"], F.mkt[p]
+    F.policy = pol2
+    F.lag = lag
+    ok, err = broker.close("sl")
+    covers = [x[2] for x in S(F, n0) if x[3] == "Cover" and x[4] != "LMT"]
+    chk("回報慢 %s 秒：平倉單 10 口 → 補 6 口" % lag, covers, [10, 6])
+    chk("回報慢 %s 秒：沒有平過頭、最後空手" % lag, (F.bad, F.hold), ([], {"TMF": 0, "MXF": 0}))
+
 print("\n=== ③ 成交了但明細晚回報＋部位也慢 ⇒ 不送第二張 ===")
 import random as _r  # noqa: E402
 F = fresh(mini=False)
