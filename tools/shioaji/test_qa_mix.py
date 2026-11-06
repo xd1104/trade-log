@@ -87,7 +87,7 @@ class Trade:
         Trade._n[0] += 1
         self.contract = c
         self.order = type("O", (), {"id": "T%d" % Trade._n[0], "quantity": o.quantity})()
-        self.status = type("S", (), {"status": "Submitted", "deals": []})()
+        self.status = type("S", (), {"status": "OrderStatus.Submitted", "deals": []})()
         self.hidden = None                 # (deals, status, 還要幾次 update_status 才回報)
 
 
@@ -138,7 +138,8 @@ class Fake:
         k = max(0, min(int(k), o.quantity))
         self._apply(p, (k if act == "Buy" else -k), px)
         deals = [Deal(px, k)] if k else []
-        st = "Filled" if k == o.quantity else "Cancelled"
+        # 2026-11-06 模擬帳戶實測（probe_ioc_status.py）：IOC 有成交（含部分成交）⇒ OrderStatus.Filled；0 成交 ⇒ Cancelled
+        st = "OrderStatus.Filled" if k > 0 else "OrderStatus.Cancelled"
         if self.hide and self.rng.random() < self.hide[0]:
             t.hidden = (deals, st, self.hide[1])
         else:
@@ -147,12 +148,14 @@ class Fake:
 
     def fill_target(self, p, k, px=None):
         for (tp, t, act, price) in self.targets:
-            if tp == p and t.status.status == "Submitted":
+            if tp == p and t.status.status in ("OrderStatus.Submitted", "OrderStatus.PartFilled"):
                 px = float(price) if px is None else px
                 self._apply(p, (k if act == "Buy" else -k), px)
                 t.status.deals.append(Deal(px, k))
                 if sum(d.quantity for d in t.status.deals) >= t.order.quantity:
-                    t.status.status = "Filled"
+                    t.status.status = "OrderStatus.Filled"
+                else:
+                    t.status.status = "OrderStatus.PartFilled"   # 限價 ROD 部分成交（還掛著）
                 return t
         raise AssertionError("找不到 %s 的停利單" % p)
 
@@ -169,9 +172,9 @@ class Fake:
         p = CODE2P[t.contract.code]
         if p in self.cancel_err:
             raise RuntimeError("cancel 失敗（假）")
-        if t.status.status == "Filled":
+        if t.status.status == "OrderStatus.Filled":
             raise RuntimeError("已經成交，不能撤")
-        t.status.status = "Cancelled"
+        t.status.status = "OrderStatus.Cancelled"
         self.cancels.append(p)
 
     def list_positions(self, acc=None):
@@ -316,7 +319,7 @@ def tag(n):
 
 
 def live_targets(F):
-    return [(p, act, px) for (p, t, act, px) in F.targets if t.status.status == "Submitted"]
+    return [(p, act, px) for (p, t, act, px) in F.targets if t.status.status in ("OrderStatus.Submitted", "OrderStatus.PartFilled")]
 
 
 tag("A  mix entry, TMF leg no fill -> single MXF position; stop-loss must cancel the MXF target order")
@@ -444,7 +447,7 @@ def po(c, o, F=F, _o=_orig_po):
     t = _o(c, o)
     if str(o.octype).endswith("Cover") and str(o.price_type).endswith("MKP"):
         d, st = t.status.deals, t.status.status
-        t.status.deals, t.status.status = [], "Cancelled"
+        t.status.deals, t.status.status = [], "OrderStatus.Cancelled"
         t.hidden = (d, st, 3)
     return t
 

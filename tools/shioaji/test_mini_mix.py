@@ -86,7 +86,7 @@ class Trade:
         Trade._n[0] += 1
         self.contract = c
         self.order = type("O", (), {"id": "T%d" % Trade._n[0], "quantity": o.quantity})()
-        self.status = type("S", (), {"status": "Submitted", "deals": []})()
+        self.status = type("S", (), {"status": "OrderStatus.Submitted", "deals": []})()
         self.hidden = None                 # (deals, status, 還要幾次 update_status 才回報)
 
 
@@ -137,7 +137,8 @@ class Fake:
         k = max(0, min(int(k), o.quantity))
         self._apply(p, (k if act == "Buy" else -k), px)
         deals = [Deal(px, k)] if k else []
-        st = "Filled" if k == o.quantity else "Cancelled"
+        # 2026-11-06 模擬帳戶實測（probe_ioc_status.py）：IOC 有成交（含部分成交）⇒ OrderStatus.Filled；0 成交 ⇒ Cancelled
+        st = "OrderStatus.Filled" if k > 0 else "OrderStatus.Cancelled"
         if self.hide and self.rng.random() < self.hide[0]:
             t.hidden = (deals, st, self.hide[1])
         else:
@@ -146,12 +147,14 @@ class Fake:
 
     def fill_target(self, p, k, px=None):
         for (tp, t, act, price) in self.targets:
-            if tp == p and t.status.status == "Submitted":
+            if tp == p and t.status.status in ("OrderStatus.Submitted", "OrderStatus.PartFilled"):
                 px = float(price) if px is None else px
                 self._apply(p, (k if act == "Buy" else -k), px)
                 t.status.deals.append(Deal(px, k))
                 if sum(d.quantity for d in t.status.deals) >= t.order.quantity:
-                    t.status.status = "Filled"
+                    t.status.status = "OrderStatus.Filled"
+                else:
+                    t.status.status = "OrderStatus.PartFilled"   # 限價 ROD 部分成交（還掛著）
                 return t
         raise AssertionError("找不到 %s 的停利單" % p)
 
@@ -168,9 +171,9 @@ class Fake:
         p = CODE2P[t.contract.code]
         if p in self.cancel_err:
             raise RuntimeError("cancel 失敗（假）")
-        if t.status.status == "Filled":
+        if t.status.status == "OrderStatus.Filled":
             raise RuntimeError("已經成交，不能撤")
-        t.status.status = "Cancelled"
+        t.status.status = "OrderStatus.Cancelled"
         self.cancels.append(p)
 
     def list_positions(self, acc=None):
@@ -417,6 +420,29 @@ tr = trades()
 chk("成績單一筆、等值 11、出場價兩段加權", [(t["product"], t["qty"], t["exit"]) for t in tr],
     [("MIX", 11, round((37800 * 10 + 37801) / 11, 2))])
 chk("⛔ 沒有平過頭、券商空手", (F.bad, F.eq(), pos()), ([], {}, None))
+
+print("\n=== g2. 部分成交（狀態 OrderStatus.Filled，照模擬帳戶實測）＋部位回報慢 ⇒ 同一輪只補送剩下的、⛔ 不平過頭 ===")
+for lag in (0.0, 6.0, 10.0):
+    F = fresh()
+    broker.enter("long", 38000, 60, sl_points=200, qty=13)          # 小台 2＋微台 3
+    n0 = len(F.sent)
+    _first = {"MXF": True, "TMF": True}
+
+    def _pol(pr, r, F=F, _first=_first):
+        if r["oc"] == "Cover" and _first.get(pr):
+            _first[pr] = False
+            return 1, F.mkt[pr]                                    # 第一張每一腿都只成交 1 口
+        return r["q"], F.mkt[pr]
+    F.policy = _pol
+    F.lag, F._hist = lag, []
+    ok, err = broker.close("sl")
+    chk("lag=%g：平完（同一輪補送剩下的）" % lag, (ok, pos()), (True, None))
+    chk("  送單：小台 2→補 1、微台 3→補 2（狀態 Filled 但明細只有 1 口 ⇒ 照明細量算）", S(F, n0),
+        [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 3, "Cover", "MKP"),
+         ("MXF", "Sell", 1, "Cover", "MKP"), ("TMF", "Sell", 2, "Cover", "MKP")])
+    chk("  ⛔ 沒有平過頭、券商空手", (F.bad, F.eq()), ([], {}))
+    chk("  成績單一筆 13 口", [t["qty"] for t in trades()], [13])
+
 
 print("\n=== h. 平倉前券商已經少了一腿（他自己平掉小台）⇒ 只平剩下那腿 ===")
 F = fresh()
@@ -699,7 +725,7 @@ for it in range(N_PROP):
             F.lag, F._hist = rng.choice([3.0, 6.0, 10.0]), []
         if rng.random() < 0.25 and isinstance(pos(), dict):
             # ⭐ 品管 M9：平倉前幾秒停利剛成交（部分或全部），部位還沒回報
-            live = [(tp, t) for (tp, t, a, px) in F.targets if t.status.status == "Submitted"]
+            live = [(tp, t) for (tp, t, a, px) in F.targets if t.status.status in ("OrderStatus.Submitted", "OrderStatus.PartFilled")]
             if live:
                 tp, t = rng.choice(live)
                 left = t.order.quantity - sum(dd.quantity for dd in t.status.deals)

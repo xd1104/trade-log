@@ -2499,7 +2499,7 @@ def _cancel_targets(pos):
 def _close_pend(trades):
     """
     ⭐ 2026-11-06 混搭平倉：同一腿已經送出去的平倉單 ⇒ (確定成交了幾口等值, **保守估計**可能成交了幾口等值)。
-    保守估計：明細滿了 ⇒ 送出的口數；IOC 已經取消／失敗**而且明細有成交** ⇒ 明細的口數（部分成交、剩的取消了）；
+    保守估計：明細滿了 ⇒ 送出的口數；IOC 已經結束（已成交／已取消／失敗）**而且明細有成交** ⇒ 明細的口數（部分成交、剩的取消了）；
     **其他（還沒回報、問不到、⭐ 取消了但明細是 0）⇒ 當成全部成交**。
     ⛔ 為什麼要保守：券商部位回報會慢（09-23、10-15 實測），只看部位會把「其實已經成交」的那張再送一次 ⇒ 平過頭變反向新倉。
     ⭐ 2026-11-06 品管 M6：「狀態先變取消、明細晚幾秒才到」實測得出來 ⇒ 取消＋明細 0 不能當成沒成交；
@@ -2514,7 +2514,10 @@ def _close_pend(trades):
         dealt += d
         if s is not None and d >= n - 1e-9:
             pend += n
-        elif s is not None and d > 0 and ("Cancel" in st or "Fail" in st):
+        elif s is not None and d > 0 and ("Cancel" in st or "Fail" in st or "Filled" in st):
+            # ⭐ 2026-11-06 模擬帳戶實測（scripts/probe_ioc_status.py）：IOC 送 3 口只成交 1 口，狀態是
+            #    'OrderStatus.Filled'（⛔ 不是 Cancelled）⇒ Filled 也算結束、照明細量算（跟 main 的 _sent_dealt 同一把尺）。
+            #    ⚠️ 跟 _sent_dealt 唯一的差別：結束了但明細是 0 ⇒ 這裡仍當成可能成交（品管 M6：狀態先到、明細晚到）。
             pend += d
         else:
             pend += n
