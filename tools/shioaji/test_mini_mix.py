@@ -398,14 +398,15 @@ F.mkt = {"TMF": 37801.0, "MXF": 37800.0}
 ok, err = broker.close("sl")
 chk("回報失敗", ok, False)
 say("微台那一腿還剩 1 口等值" in (err or "") and "小台那一腿已平掉" in (err or ""), "原因講得出哪一腿平掉、哪一腿還在", err)
-chk("送單：小台 2 一次；微台 1 送 CLOSE_TRIES 次", S(F, n0),
-    [("MXF", "Sell", 2, "Cover", "MKP")] + [("TMF", "Sell", 1, "Cover", "MKP")] * broker.CLOSE_TRIES)
+# ⭐ 2026-11-06 品管 M6：IOC「已取消＋明細 0」可能是明細晚到 ⇒ 這一輪那一腿不補送（冷卻後下一輪再送）
+chk("送單：小台 2 一張；微台 1 一張（取消＋明細 0 ⇒ 這一輪不補送）", S(F, n0),
+    [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")])
 p = pos()
 chk("部位留下微台 1 口（降成單一合約、mix0 還在）", (p["product"], p["qty"], "mix" in p, p["mix0"]),
     ("TMF", 1, False, {"MXF": 10, "TMF": 1}))
 chk("平掉的小台那一段記成 leg", [(l["qty"], l["px"], l["src"]) for l in p["legs"]], [(10, 37800.0, "sl")])
 ok2, err2 = broker.close("sl")
-chk("冷卻中 ⇒ 不送", (ok2, len(F.sent)), (False, n0 + 1 + broker.CLOSE_TRIES))
+chk("冷卻中 ⇒ 不送", (ok2, len(F.sent)), (False, n0 + 2))
 cool()
 F.policy = None
 n1 = len(F.sent)
@@ -610,15 +611,22 @@ F, ok, p = late_case("TMF", 40.0)
 chk("微台腿晚 40 秒、回報前就觸發停損：先照看得到的小台 10 開著", (p["product"], p["qty"]), ("MXF", 10))
 n0 = len(F.sent)
 ok, err = broker.close("sl")
-chk("  只平看得到的小台 2 口（⛔ 看不到的那腿不送）", (ok, S(F, n0)), (True, [("MXF", "Sell", 2, "Cover", "MKP")]))
+chk("  只平看得到的小台 2 口（⛔ 看不到的那腿不送）、回報沒平完", (ok, S(F, n0)), (False, [("MXF", "Sell", 2, "Cover", "MKP")]))
 say("微台 1 口等值的成交券商還沒回報" in (err or ""), "  講出「還有一腿成交了但券商還沒回報」", err)
+p = pos()
+chk("  ⛔ 部位不清：只剩晚到的微台 1 口（late_pending）、進場量 11", (p["product"], p["qty"], p.get("late_pending"), p["entry_qty"]),
+    ("TMF", 1, {"TMF": 1}, 11))
+CLK.t += 5
+chk("  還沒回報、券商空手 ⇒ 本機不清、不記帳", (broker.reconcile() is pos(), len(trades())), (True, 0))
 CLK.t = F._late["TMF"][0] + 1
 got = broker.reconcile()
-chk("  回報到了 ⇒ 撿回成一筆部位（不是 unknown；照撿回部位的規矩有停損）",
-    (got if got == "unknown" else (got["product"], got["qty"], got["recovered"])), ("TMF", 1, True))
+chk("  回報到了 ⇒ 還是同一筆部位（不是撿回、不是 unknown）",
+    (got if got == "unknown" else (got["product"], got["qty"], got["recovered"], got.get("late_pending"))), ("TMF", 1, False, None))
+cool()
 n0 = len(F.sent)
 ok, err = broker.close("sl")
 chk("  再平掉它、⛔ 不平過頭", (ok, S(F, n0), F.bad, F.eq()), (True, [("TMF", "Sell", 1, "Cover", "MKP")], [], {}))
+chk("  整趟一筆成績單、11 口", [(t["qty"], t["product"]) for t in trades()], [(11, "MIX")])
 
 print("\n  -- 晚到期間重啟（落地檔補回 mix_sent，用委託單編號問回明細）--")
 F, ok, p = late_case("MXF", 20.0)
@@ -686,6 +694,18 @@ for it in range(N_PROP):
         if rng.random() < 0.15:
             F.pos_fail = rng.choice([1, 3, 8])
         cool()
+        if rng.random() < 0.25:
+            # ⭐ 品管 M9：冷卻之後才開始回報慢 ⇒ 平倉一開始讀到的就是舊部位
+            F.lag, F._hist = rng.choice([3.0, 6.0, 10.0]), []
+        if rng.random() < 0.25 and isinstance(pos(), dict):
+            # ⭐ 品管 M9：平倉前幾秒停利剛成交（部分或全部），部位還沒回報
+            live = [(tp, t) for (tp, t, a, px) in F.targets if t.status.status == "Submitted"]
+            if live:
+                tp, t = rng.choice(live)
+                left = t.order.quantity - sum(dd.quantity for dd in t.status.deals)
+                if left > 0 and F.hold[tp] != 0:
+                    F.fill_target(tp, rng.randint(1, min(left, abs(F.hold[tp]))))
+            CLK.t += rng.choice([0.0, 1.0, 3.0])
         r = broker.close("sl")
         if pos() is None and not F.eq():
             break
@@ -725,11 +745,25 @@ chk("成績單不寫 product（＝微台，跟以前逐欄位相同）", ["produ
 F = fresh(mini=False)
 F.hold, F.px = {"MXF": 2, "TMF": 1}, {"MXF": 38000.0, "TMF": 38001.0}
 got = broker.reconcile()
-chk("開關沒開也看得到手上的混搭（重啟撿回，不然沒有停損）", (got or {}).get("product"), "MIX")
+# ⭐ 2026-11-06 品管 M3：開關關著、本機也沒有混搭開的部位 ⇒ 跟 main 一樣 unknown、一張都不送
+chk("開關沒開、券商上兩種合約（不是程式開的）⇒ unknown（跟 main 一樣）", got, "unknown")
 n0 = len(F.sent)
 ok, err = broker.close("manual")
-chk("開關沒開時手上的混搭照樣平得掉（小台 2＋微台 1）", (ok, S(F, n0)),
+chk("  一張都不送", (ok, len(F.sent) - n0), (False, 0))
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+broker.MINI_FLAG.unlink()                         # 開著時開了混搭，之後他把開關關掉
+chk("開關被關掉，但本機部位是混搭開的 ⇒ 照樣認得", (broker.reconcile() or {}).get("product"), "MIX")
+n0 = len(F.sent)
+ok, err = broker.close("manual")
+chk("  照樣平得掉（小台 2＋微台 1）", (ok, S(F, n0)),
     (True, [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")]))
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+broker.MINI_FLAG.unlink()
+connect(F, mini=False)                            # 開關關著＋重啟：落地檔是混搭開的 ⇒ 撿回成 MIX
+got = broker.reconcile()
+chk("開關關著＋重啟、落地檔是混搭開的 ⇒ 撿回 MIX、落地檔補回", (got.get("product"), got.get("sl_src")), ("MIX", "meta"))
 
 # ════════════════════════════════════════════════════════════════════════════
 print("\n=== k. 日盤 13:43:30 收盤平倉面對混搭（auto_fire）===")
@@ -822,6 +856,22 @@ chk("  平完 _already_closed＝closed（成績單 entry＝帳本的價）", AF.
 st = risk_cap.state(month=dd[:7], fire_dir=AF.FIRE_DIR, nf_dir=TMP / "__none_nf", trade_dir=broker.TRADE_DIR, lots=(10, 1))
 chk("  風控對得到這一趟（11 口）", [x["q"] for x in st["trades"]], [11])
 chk("  ⛔ 沒有平過頭", (F.bad, F.eq()), ([], {}))
+# ⭐ 品管 M7：小台腿晚 40 秒、回報前就停損（只平掉微台）⇒ 部位留著晚到那一腿；回報之後 13:43:30 照樣認得、平掉
+F = af_open(late={"MXF": 40.0})
+ok, err = broker.close("sl")
+chk("M7 日盤：停損時只看得到微台 ⇒ 平掉微台、部位留著晚到的小台（late_pending）",
+    (ok, (pos() or {}).get("product"), (pos() or {}).get("late_pending")), (False, "MXF", {"MXF": 10}))
+CLK.t = F._late["MXF"][0] + 1
+broker.reconcile()
+ent, why = AF._auto_entry(dd)
+chk("  回報之後：還沒平過（已實現只有微台 1 口 < 11）", AF._already_closed(ent)[0], "open")
+chk("  13:43:30 認得是自己的", AF._looks_ours(pos(), ent), (True, None))
+n0 = len(F.sent)
+AF._eod(dd, 0, _rt.time(), "13:43:30")
+chk("  收盤平掉小台 2 口", (AF._ST["last"].get("why"), S(F, n0)), ("eod_closed", [("MXF", "Sell", 2, "Cover", "MKP")]))
+chk("  整趟一筆成績單 11 口（微台 sl＋小台 eod）、券商空手、⛔ 沒平過頭",
+    ([(t["qty"], [(l["qty"], l["src"]) for l in t.get("legs") or []]) for t in trades()], F.eq(), F.bad),
+    ([(11, [(1, "sl"), (10, "eod")])], {}, []))
 src = (HERE / "auto_fire.py").read_text(encoding="utf-8")
 say("place_order" not in src and "FuturesOrder" not in src, "⛔ auto_fire 裡沒有 place_order／FuturesOrder")
 
@@ -860,6 +910,27 @@ chk("成績單 night_eod、13 口", [(t["reason"], t["qty"], t.get("product")) f
 (broker.TRADE_DIR / ("%s.jsonl" % (E + timedelta(days=1)))).write_text(
     (broker.TRADE_DIR / ("%s.jsonl" % date.today())).read_text(encoding="utf-8"), encoding="utf-8")
 chk("_trip_recorded 找得到今晚這一趟（加權進場價對得上帳本）", bool(NF._trip_recorded(E, ent)), True)
+# ⭐ 品管 M7：夜盤 13 口、小台腿晚 40 秒、回報前就停損 ⇒ 04:58 照樣認得晚到那一腿、平掉
+E2 = date(2026, 6, 17)
+NF.TREND_CTX.write_text(json.dumps({"sig": {str(E2 - timedelta(days=i + 1)): (100.0 if i % 2 else -50.0)
+                                            for i in range(40)}}), encoding="utf-8")
+F = fresh()
+F.late = {"MXF": 40.0}
+NF._ST["tried"] = None
+NF._decide(E2, NF.trend_at(E2) + timedelta(seconds=1))
+chk("M7 夜盤：進場時只看得到微台 3 口", ((pos() or {}).get("product"), (pos() or {}).get("qty")), ("TMF", 3))
+ok, err = broker.close("sl")
+chk("  停損只平微台 3 口、部位留著晚到的小台", (ok, (pos() or {}).get("late_pending")), (False, {"MXF": 10}))
+CLK.t = F._late["MXF"][0] + 1
+broker.reconcile()
+ent2 = NF._entry_of(NF.rows_of(E2))
+chk("  04:58 認得是自己的", NF.looks_ours(pos(), ent2), True)
+n0 = len(F.sent)
+NF._ST["eod_try_at"] = 0.0
+NF._eod(E2, datetime(2026, 6, 18, 4, 58, 1))
+chk("  04:58 平掉小台 2 口", ([o.get("why") for o in NF.rows_of(E2) if o.get("rec") == "eod"], S(F, n0)),
+    (["closed"], [("MXF", "Sell", 2, "Cover", "MKP")]))
+chk("  整趟一筆 13 口、券商空手、⛔ 沒平過頭", ([t["qty"] for t in trades()], F.eq(), F.bad), ([13], {}, []))
 risk_cap.blocked = _rb
 
 print("\n=== m. 成績單與風控：點數 × 等值口數 × 10 元 ===")

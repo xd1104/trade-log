@@ -1016,7 +1016,13 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   沒被他動過 ⇒ `_late_merge` 併進部位（進場價重新加權、`late_leg`；晚到那幾口**沒有停利單**，fill_warn 講）；
   任何一項不過 ⇒ 照舊 unknown。重啟時用委託單編號 `api.list_trades()` 問回明細（`_meta_late`），問不到 ⇒ 分不出。
   ⚠️ 併過晚到腿的成績單 `entry`＝帳本那個價（entry0，auto_fire／night_fire／risk_cap 靠它認），加權均價在 `entry_w`、points 用它算。
-  晚到腿還沒回報就觸發平倉 ⇒ 只平看得到的、回報裡講「還有一腿沒回報」，回報後那一腿會被撿回成部位（照撿回規矩有停損）。
+  晚到腿還沒回報就觸發平倉 ⇒ 只平看得到的、⛔ 部位不清：留下晚到那一腿（`late_pending`，券商空手時 LATE_LEG_S 內不清不記帳），
+  回報後停損／13:43:30／04:58 照常認得、平掉，整趟一筆成績單。
+  ⭐ **品管退件修正（2026-11-06）**：`_cancel_targets` 連單張 `target_trade` 一起撤（M1）；開關關著時只有本機／落地檔是混搭開的
+  才把兩種合約合成 MIX、單一合約進場只看送出那種合約那一腿（M3）；平倉每一腿再跟 `_leg_caps`（進場量 − 停利已成交 `tgt_fill`
+  − 我們之前平掉的 `closed_by_leg`）取小，停利剛成交沒回報 ⇒ 補記 tp leg（M4）；IOC「已取消＋明細 0」當成可能成交、
+  這一輪不補送，冷卻後再來（M6）；整筆小台也走 `_close_mix`。品管攻擊測試：`test_qa_mix.py`（QA-D 的微台 10 口等 main 修
+  `_close_multi`、QA-F 重啟後停利單撤不到是 main 既有限制）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：
