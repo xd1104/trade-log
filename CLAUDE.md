@@ -1054,7 +1054,12 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   ・採信過的「晚到 +q」記 `e_at`（採信那一刻的進場量），之後明細補進來的先抵掉這筆（⛔ 不重複算）。
   ・混搭整腿 0 口、進場單還沒結束（`_grow`）⇒ ⛔ 不結算（晚到的腿進來仍是我們的、有程式停損、同一筆成績單）；平倉回報講「還有一腿回報還沒到」。
   ・`RECENT_CLOSE_S` 不撿回只套用在 `_clean`（沒有逾時／問不到、進場明細都追上 conf）的結算；否則券商上還有的照撿回處理（⛔ 不藏）。
-  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
+  ⭐ **第五輪品管（2026-11-06 深夜）**：
+  ・`RECENT_CLOSE_S` 不撿回 ⛔ 不等於空手：reconcile 藏掉舊部位時記 `_RECENT_CLOSE["hid_at"]`，`can_enter()` 看到就擋「剛平倉、券商部位還沒更新，稍後再進」。
+  ・帳本部位進場前記下券商同方向已有的口數（`_entry_base`）；有（或問不到）⇒ 不拿券商部位確認成交，改看進場單明細（`_wait_deals`）；
+    明細 FILL_WAIT 內都沒回報 ⇒ 回「不知道有沒有成交」、不掛停利、不還原不撿回。這一筆最後沒部位 ⇒ 還原「剛平完」記憶（`_rc_restore`）。
+  ・`broker.own_shell(pos)`：帳本部位口數 0（混搭空殼）。auto_fire 13:43:30 遇到 ⇒ 窗口內每 EOD_RETRY_S 再問，⛔ 不判 eod_not_ours；窗口到了還是空殼 ⇒ eod_failed（可重試、會示警）。
+  測試：`test_mini_mix.py`、品管 `test_qa_mix.py`／`test_qa2_mix.py`／`test_qa3_mix.py`／`test_qa4_mix.py`／`test_qa5_mix.py`；模擬帳戶 `test_mix_sim.py`（⛔ 只有 PM 跑）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：

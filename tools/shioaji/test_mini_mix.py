@@ -1121,6 +1121,65 @@ chk("  收盤平掉小台 2 口", (AF._ST["last"].get("why"), S(F, n0)), ("eod_c
 chk("  整趟一筆成績單 11 口（eod）、券商空手、⛔ 沒平過頭",
     ([(t["qty"], t["reason"], t["exit"] is not None) for t in trades()], F.eq(), F.bad),
     ([(11, "eod", True)], {}, []))
+# ⭐ 第五輪品管 (c)：小台腿（部位＋明細）晚 20 秒、第 7 秒停損 ⇒ 空殼（口數 0）；剛好碰上 13:43:30 收盤
+#    ⇒ ⛔ 不可以判成 eod_not_ours 定案；窗口內等那一腿進來再平
+_LOTS["q"] = 11
+F = fresh()
+F.late = {"MXF": 20.0}
+_hide_new(F, "MXF", 20.0)
+for f in list(AF.FIRE_DIR.glob("*")) if AF.FIRE_DIR.exists() else []:
+    f.unlink()
+AF._send(dd, {"method": "U", "cand": "fast", "dir": "long", "leg": "fast", "sl_points": 200, "tp_points": 60},
+         {"method": "U"}, "long", 38000.0, 200, 0, _rt.time(), {"quote_age_ms": 100}, "t", tp_points=60)
+CLK.t += 7
+ok, err = broker.close("sl")
+chk("空殼：停損平掉微台、小台那一腿還沒回報 ⇒ 部位口數 0（broker.own_shell）",
+    (ok, (pos() or {}).get("qty"), broker.own_shell(pos())), (False, 0, True))
+ent, why = AF._auto_entry(dd)
+n0 = len(F.sent)
+_aft = AF.time
+AF.time = CLK                                     # 收盤那一段的等待用假時鐘（每次重試 EOD_RETRY_S 秒）
+try:
+    AF._eod(dd, 0, CLK.t, "13:43:30")
+finally:
+    AF.time = _aft
+chk("  13:43:30 碰上空殼 ⇒ 等到小台那一腿進來、照樣認得、平掉（⛔ 不是 eod_not_ours）",
+    (AF._ST["last"].get("why"), S(F, n0)), ("eod_closed", [("MXF", "Sell", 2, "Cover", "MKP")]))
+chk("  整趟一筆成績單 11 口（eod）、券商空手、⛔ 沒平過頭",
+    ([(t["qty"], t["reason"]) for t in trades()], F.eq(), F.bad), ([(11, "eod")], {}, []))
+
+print("\n  -- 第五輪品管 (a)(b)：剛平完、券商回報慢還顯示舊部位 --")
+F = fresh(mini=False)
+broker.enter("long", 38000, 60, sl_points=200, qty=10)
+F.lag = 6.0
+broker.close("sl")
+CLK.t += 1
+chk("(a) 平完 1 秒、券商還顯示舊的 10 口 ⇒ 不撿回（沒有部位），但 can_enter 擋下",
+    (broker.reconcile(), broker.can_enter(38000, True)), (None, (False, "剛平倉、券商部位還沒更新，稍後再進")))
+F.policy = lambda pr, r: (4, F.mkt[pr]) if r["oc"] == "New" else (r["q"], F.mkt[pr])
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
+F.policy = None
+chk("(b) 這時還是進場（只成交 4 口）⇒ 確認口數照明細 4（⛔ 不被舊的 10 口騙）", (ok, p["qty"], p["own_trades"][0]["conf"]), (True, 4, 4))
+CLK.t += 1
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損只平 4 口、⛔ 沒平過頭", ([s for s in S(F, n0) if s[4] == "MKP"], F.bad), ([("TMF", "Sell", 4, "Cover", "MKP")], []))
+F.lag, F._hist = 0, []
+CLK.t += 10
+chk("  券商更新成空手之後 can_enter 放行", broker.can_enter(38000, True), (True, None))
+F = fresh(mini=False)
+broker.enter("long", 38000, 60, sl_points=200, qty=10)
+F.lag = 6.0
+broker.close("sl")
+CLK.t += 1
+F.policy = lambda pr, r: (0, F.mkt[pr]) if r["oc"] == "New" else (r["q"], F.mkt[pr])
+ok, err, p = broker.enter("long", 38000, 60, sl_points=200, qty=10)
+F.policy = None
+chk("(b) 新單 0 成交 ⇒ 沒部位；舊部位照樣不撿回", (ok, pos(), broker.reconcile()), (False, None, None))
+CLK.t += 10
+F.lag, F._hist = 0, []
+chk("  ⛔ 沒有送任何平倉單、券商空手", ([s for s in S(F) if s[3] == "Cover" and s[4] == "MKP"][1:], F.eq()), ([], {}))
+
 src = (HERE / "auto_fire.py").read_text(encoding="utf-8")
 say("place_order" not in src and "FuturesOrder" not in src, "⛔ auto_fire 裡沒有 place_order／FuturesOrder")
 

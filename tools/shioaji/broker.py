@@ -1336,6 +1336,8 @@ def reconcile():
             and pos.get("dir") == _RECENT_CLOSE["dir"] \
             and all(int(v) <= int(_RECENT_CLOSE["legs"].get(p) or 0) for p, v in _mix_of(pos).items()):
         # ⭐ 第三輪品管 #3：帳本部位剛平完，券商還顯示同方向、不超過剛平掉的口數 ⇒ 舊資料，⛔ 不撿回
+        # ⭐ 2026-11-06 第五輪品管：⛔ 這只是「不撿回成部位」，不是「空手」—— 記下這一刻，can_enter() 照樣擋
+        _RECENT_CLOSE["hid_at"] = time.time()
         return None
     _cur0 = _state["position"]
     if isinstance(pos, dict) and isinstance(_cur0, dict) and isinstance(_cur0.get("mix_sent"), dict):
@@ -1924,11 +1926,16 @@ def can_enter(price, quote_live):
     n = entries_today()
     if n >= MAX_ENTRIES:
         return False, f"今天真實進場已經 {n} 次，達到上限 {MAX_ENTRIES} 次"
+    t0 = time.time()
     pos = reconcile()
     if pos == "unknown":
         return False, "跟券商對帳失敗，這種時候不送單"
     if pos:
         return False, "已經有部位了，先平倉才能再進場"
+    if float(_RECENT_CLOSE.get("hid_at") or 0.0) >= t0:
+        # ⭐ 2026-11-06 第五輪品管：剛平完、券商還顯示舊的同方向部位（RECENT_CLOSE_S 內不撿回）⇒ ⛔ 不當成空手放行
+        #    （這時進場，確認成交會被舊部位騙 ⇒ 停損送太多口平過頭；main 這裡也會擋）
+        return False, "剛平倉、券商部位還沒更新，稍後再進"
     return True, None
 
 
@@ -2054,21 +2061,34 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         return False, "口數不合理（%r）—— 一張都沒送" % (want,), None
     act = sj.Action.Buy if direction == "long" else sj.Action.Sell
     prod = product_for(want)              # ⭐ 2026-11-06 小台開著＋5 的倍數 ⇒ 整筆小台
+    own_path = prod != "TMF" or (want > 1 and OWN_TMF_MULTI)
+    # ⭐ 2026-11-06 第五輪品管 (b)：帳本部位進場前先記下券商上**同方向**已經有的口數（剛平完、回報慢的舊部位）。
+    #    有 ⇒ 進場後券商部位「增加多少」分不出來 ⇒ ⛔ 不拿券商部位確認成交口數，改用進場單自己的明細（_wait_deals）。
+    base = _entry_base(direction) if (own_path and is_live()) else None
     # ⭐ 第三輪品管：要送新的進場單了 ⇒「剛平完、別撿回舊資料」的記憶作廢（不然這一筆晚到的成交會被當成上一筆的舊資料，沒有停損）
+    #    ⭐ 第五輪品管：這一筆最後沒有部位（沒成交）⇒ 還原（券商上的舊部位照樣不撿回）
+    _RECENT_CLOSE.pop("unsure", None)
+    _rc_saved = dict(_RECENT_CLOSE)
     _RECENT_CLOSE["at"] = 0.0
     if prod == "MIX":
         # ⭐ 2026-11-06 混搭（例 11＝2 小台＋1 微台）⇒ 另一條路（兩張進場單、兩張停利單）。
         #    ⛔ 下面單一合約那條一個字都沒動。
-        return _enter_mix(direction, price, tp_points, sl_points, want, act)
+        out = _enter_mix(direction, price, tp_points, sl_points, want, act, base=base)
+        _rc_restore(out, _rc_saved)
+        return out
     ok, err, res = _send(
         _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.New,
                qty=want, product=prod),
         "entry", product=prod)
     if not ok:
+        _rc_restore((False, err, None), _rc_saved)
         return False, err, None
 
     try:
-        fill, got, fill_warn = _wait_fill_n(direction, want, res if want > 1 else None, product=prod)
+        if base:
+            fill, got, fill_warn = _wait_deals_single(res, want, base)
+        else:
+            fill, got, fill_warn = _wait_fill_n(direction, want, res if want > 1 else None, product=prod)
     except RuntimeError as e:
         # 方向不符：券商那邊有東西但不是我們送的方向。停手、不掛停利、
         # **不要清掉部位**（清掉畫面會顯示空手，但帳上其實有東西）。
@@ -2090,6 +2110,7 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         _log("entry_nofill", {"ok": False, "why": "IOC 沒有成交，不掛停利"})
         with _lock:
             _state["position"] = None
+        _rc_restore((False, None, None), _rc_saved)
         return False, "沒有成交（範圍市價 IOC 當下沒撮到），沒有掛停利，也沒有部位", None
 
     entry = fill if fill is not None else float(price)
@@ -2242,7 +2263,61 @@ def _wait_fill_legs(direction, legs):
     return out
 
 
-def _enter_mix(direction, price, tp_points, sl_points, want, act):
+def _entry_base(direction):
+    """⭐ 第五輪品管 (b)：進場前券商上同方向已經有的口數 ⇒ {合約: 微台等值}（沒有 ⇒ {}；問不到 ⇒ {"?": 1}＝增加量不明）。"""
+    legs = _broker_legs()
+    if legs == "unknown":
+        return {"?": 1}
+    return {p: int(l.get("qty") or 0) for p, l in (legs or {}).items()
+            if l.get("dir") == direction and int(l.get("qty") or 0) > 0}
+
+
+def _rc_restore(out, saved):
+    """這一筆進場最後沒有部位 ⇒ 把「剛平完、別撿回舊資料」還原（⛔ 不然券商上的舊部位會被撿回成一筆新的）。"""
+    unsure = _RECENT_CLOSE.pop("unsure", None)
+    if not (isinstance(out, tuple) and out and out[0]) and _state["position"] is None and not unsure:
+        _RECENT_CLOSE.update(saved)
+
+
+def _wait_deals(trades):
+    """
+    ⭐ 第五輪品管 (b)：只看進場單自己的明細等成交（券商部位裡混著舊部位、增加量分不出來時用）。
+    ⇒ ({合約: (均價或 None, 成交微台等值)}, 全部結束了嗎)。⛔ 不拿鎖。
+    """
+    deadline = time.time() + FILL_WAIT
+    while True:
+        _update_status()
+        out, alldone = {}, True
+        for p, (n, t) in trades.items():
+            s = _deal_sums(t)
+            dq = s[1] if s is not None else 0.0
+            st = str(getattr(getattr(t, "status", None), "status", "") or "")
+            done = ("Cancel" in st or "Fail" in st or ("Filled" in st and "PartFilled" not in st)
+                    or dq >= n - 1e-9)
+            alldone = alldone and done
+            out[p] = (round(s[0] / dq, 2) if dq > 0 else None, int(round(dq)), done)
+        if alldone or time.time() >= deadline:
+            return out, alldone
+        time.sleep(0.4)
+
+
+def _wait_deals_single(res, want, base):
+    """單一合約版：⇒ (均價, 口數, 警示)；沒成交 ⇒ (None, 0, None)；明細一直沒回報 ⇒ RuntimeError（不知道有沒有成交）。"""
+    out, _all = _wait_deals({"_": (want, res)})
+    px, q, done = out["_"]
+    why = "進場前券商上已經有同方向的部位（%s，可能是剛平完、回報慢的舊資料）⇒ 照進場單明細確認成交" % (
+        "問不到" if "?" in base else "、".join("%s %d 口等值" % (p, v) for p, v in base.items()))
+    _log("entry_base", {"ok": None, "base": base, "dealt": q, "done": done, "why": why})
+    if q > 0:
+        return px, q, None if done else why
+    if done:
+        return None, 0, None
+    _RECENT_CLOSE["unsure"] = True
+    raise RuntimeError("送出去了，但券商上原本就有同方向的部位、進場單的成交明細 %g 秒內沒回報 —— "
+                       "**不知道有沒有成交**，沒有掛停利，請立刻自己到大戶投確認部位" % FILL_WAIT)
+
+
+def _enter_mix(direction, price, tp_points, sl_points, want, act, base=None):
     """
     ⭐ 2026-11-06 混搭進場（enter() 判出 product "MIX" 才走這裡）：小台 want//5 口＋微台 want%5 口。
     ・先送小台那張、再送微台那張（都是 MKP＋IOC＋New），兩張都送出去之後才一起等成交（⛔ 不讓微台那張晚 5 秒才送）。
@@ -2268,7 +2343,18 @@ def _enter_mix(direction, price, tp_points, sl_points, want, act):
     if tok:
         legs["TMF"] = (split["TMF"], res_t)
     try:
-        fills = _wait_fill_legs(direction, legs)
+        if base:
+            # ⭐ 第五輪品管 (b)：進場前券商就有同方向部位 ⇒ 只看兩張進場單自己的明細（券商增加量分不出來）
+            dl, alldone = _wait_deals({p: legs[p] for p in legs})
+            fills = {p: (v[0], v[1], None) for p, v in dl.items()}
+            _log("entry_base", {"ok": None, "base": base, "dealt": {p: v[1] for p, v in dl.items()}, "done": alldone,
+                                "why": "進場前券商上已經有同方向的部位 ⇒ 照兩張進場單的明細確認成交"})
+            if not any(v[1] > 0 for v in dl.values()) and not alldone:
+                _RECENT_CLOSE["unsure"] = True
+                raise RuntimeError("送出去了，但券商上原本就有同方向的部位、兩張進場單的成交明細 %g 秒內都沒回報 —— "
+                                   "**不知道有沒有成交**，沒有掛停利，請立刻自己到大戶投確認部位" % FILL_WAIT)
+        else:
+            fills = _wait_fill_legs(direction, legs)
     except RuntimeError as e:
         _log("entry_mismatch", {"ok": False, "err": str(e)})
         return False, str(e), None
@@ -2842,6 +2928,14 @@ def _own_book(pos, now=None):
     b["_all_final"], b["_last_send"], b["_live_tgt"] = allf, last, live_t
     b["_exit_final"], b["_grow"], b["_clean"] = exitf, grow, clean
     return b
+
+
+def own_shell(pos):
+    """
+    ⭐ 2026-11-06 第五輪品管 (c)：帳本部位的「空殼」：已知的口數都平完了（口數 0），但還有一腿進場單沒結束
+    （晚到的腿可能還會進來 ⇒ broker 先不結算）。auto_fire 收盤認人遇到它要等，⛔ 不可以判成「不是我們的」。
+    """
+    return isinstance(pos, dict) and bool(pos.get("own")) and int(pos.get("qty") or 0) <= 0
 
 
 def _own_done(book):

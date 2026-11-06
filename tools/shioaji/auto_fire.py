@@ -2375,6 +2375,14 @@ def _eod(day, lag_ms, put_at, at=None):
             return _eod_row(d, "eod_unknown", dict(base, tries=tries))
         if pos is None:
             return _eod_row(d, "eod_flat", dict(base, tries=tries))
+        if broker.own_shell(pos):
+            # ⭐ 2026-11-06 第五輪品管 (c)：混搭空殼（已知口數平完、還有一腿進場回報沒到，口數 0）⇒ ⛔ 不判「不是我們的」
+            #    （eod_not_ours 會定案、那一腿晚到之後收盤就不平了）⇒ 窗口內等那一腿（或等 broker 結算），之後再認人／平倉
+            last_err = "收盤時部位口數 0、還有一腿進場回報沒到（等那一腿或結算）"
+            if time.time() < deadline:
+                time.sleep(EOD_RETRY_S)
+                continue
+            break
         ours, diff = _looks_ours(pos, ent)
         if not ours:
             # ⛔⛔ 這是最重要的一條：**不是我們開的就不碰**。
