@@ -114,6 +114,7 @@ class Fake:
         self.late = {}                     # {合約: 秒}：那一種合約的新倉成交，部位要晚幾秒才回報（進場腿晚到）
         self._late = {}                    # {合約: (到幾點才回報, 回報之前看到的部位口數, 均價)}
         self.no_list_trades = False
+        self.ghost, self.ghost_until = [], 0.0   # 接下來幾次 list_positions 回這些「舊資料」（口數比實際多；只在 ghost_until 之前有效＝暫時的）
 
     # ── 券商 API ──
     def place_order(self, c, o):
@@ -180,6 +181,9 @@ class Fake:
         if self.pos_fail > 0:
             self.pos_fail -= 1
             raise RuntimeError("查不到（假）")
+        if self.ghost and CLK.t <= self.ghost_until:
+            return self.ghost.pop(0)
+        self.ghost = []
         if self.lag and self._hist:
             seen = None
             for t, rows in self._hist:
@@ -245,6 +249,16 @@ class Fake:
     def _snap(self):
         if self.lag:
             self._hist.append((CLK.t, self._rows()))
+
+    def ghost_more(self, k=1, until=10.0):
+        """接下來 k 次 list_positions 回一份「某一腿多 1 口」的舊資料（模擬回報退回舊資料／一次暫時的錯資料）。"""
+        rows = self._rows()
+        if rows:
+            r = rows[0]
+            bumped = type("P", (), {"code": r.code, "quantity": r.quantity + 1, "direction": r.direction,
+                                    "price": r.price})()
+            self.ghost = [[bumped] + rows[1:] for _ in range(k)]
+            self.ghost_until = CLK.t + until
 
     def eq(self):
         return {p: abs(self.hold[p]) * broker.RATIO[p] for p in self.hold if self.hold[p]}
@@ -401,15 +415,15 @@ F.mkt = {"TMF": 37801.0, "MXF": 37800.0}
 ok, err = broker.close("sl")
 chk("回報失敗", ok, False)
 say("微台那一腿還剩 1 口等值" in (err or "") and "小台那一腿已平掉" in (err or ""), "原因講得出哪一腿平掉、哪一腿還在", err)
-# ⭐ 2026-11-06 品管 M6：IOC「已取消＋明細 0」可能是明細晚到 ⇒ 這一輪那一腿不補送（冷卻後下一輪再送）
-chk("送單：小台 2 一張；微台 1 一張（取消＋明細 0 ⇒ 這一輪不補送）", S(F, n0),
-    [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")])
+# ⭐ 2026-11-06（PM 定）：「已取消＋明細 0」跟 main 的 _sent_dealt 一樣當成沒成交 ⇒ 同一輪補送（急跌時不能等 15 秒）
+chk("送單：小台 2 一次；微台 1 同一輪送 CLOSE_TRIES 次", S(F, n0),
+    [("MXF", "Sell", 2, "Cover", "MKP")] + [("TMF", "Sell", 1, "Cover", "MKP")] * broker.CLOSE_TRIES)
 p = pos()
 chk("部位留下微台 1 口（降成單一合約、mix0 還在）", (p["product"], p["qty"], "mix" in p, p["mix0"]),
     ("TMF", 1, False, {"MXF": 10, "TMF": 1}))
 chk("平掉的小台那一段記成 leg", [(l["qty"], l["px"], l["src"]) for l in p["legs"]], [(10, 37800.0, "sl")])
 ok2, err2 = broker.close("sl")
-chk("冷卻中 ⇒ 不送", (ok2, len(F.sent)), (False, n0 + 2))
+chk("冷卻中 ⇒ 不送", (ok2, len(F.sent)), (False, n0 + 1 + broker.CLOSE_TRIES))
 cool()
 F.policy = None
 n1 = len(F.sent)
@@ -442,6 +456,87 @@ for lag in (0.0, 6.0, 10.0):
          ("MXF", "Sell", 1, "Cover", "MKP"), ("TMF", "Sell", 2, "Cover", "MKP")])
     chk("  ⛔ 沒有平過頭、券商空手", (F.bad, F.eq()), ([], {}))
     chk("  成績單一筆 13 口", [t["qty"] for t in trades()], [13])
+
+
+print("\n=== t. 「他加碼」要持續證據（一次暫時的舊資料不可以變成永久不停損）===")
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+broker._LAST_CLOSE_SEND["at"] = 0.0
+F.ghost_more(1)                                   # 一次舊資料：小台多 1 口
+got = broker.reconcile()
+chk("一次口數變多 ⇒ 只記懷疑、⛔ 不標 touched、口數不改", (got.get("touched"), got["qty"], bool(got.get("touch_susp"))),
+    (None, 11, True))
+CLK.t += broker.CLOSE_COOLDOWN + 1
+got = broker.reconcile()
+chk("  下一次對帳回到正常 ⇒ 懷疑取消", (got.get("touched"), got.get("touch_susp"), got["qty"]), (None, None, 11))
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損照常兩腿都平", (ok, S(F, n0), F.bad), (True, [("MXF", "Sell", 2, "Cover", "MKP"), ("TMF", "Sell", 1, "Cover", "MKP")], []))
+
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+broker._LAST_CLOSE_SEND["at"] = 0.0
+F._apply("MXF", 1, 38020.0)                       # 他真的在大戶投加了 1 口小台
+got = broker.reconcile()
+chk("他真的加碼：第一次 ⇒ 只是懷疑", (got.get("touched"), bool(got.get("touch_susp"))), (None, True))
+CLK.t += 5
+got = broker.reconcile()
+chk("  不到 CLOSE_COOLDOWN ⇒ 還是懷疑", (got.get("touched"), bool(got.get("touch_susp"))), (None, True))
+CLK.t += broker.CLOSE_COOLDOWN
+got = broker.reconcile()
+chk("  相隔 ≥ CLOSE_COOLDOWN 還是比我們多 ⇒ 標 touched", got.get("touched"), True)
+
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+F.policy = lambda pr, r: (0, F.mkt[pr]) if (pr == "TMF" and r["oc"] == "Cover") else (r["q"], F.mkt[pr])
+broker.close("sl")                                # 小台平掉、微台平不掉 ⇒ 部位留微台 1 口
+F.policy = None
+F.ghost_more(3)                                   # 剛平過倉：券商回報還停在舊的（比本機多）
+got = broker.reconcile()
+chk("剛送過平倉單（靜默期）⇒ 口數變多不拿來判、也不記懷疑", (got.get("touched"), got.get("touch_susp"), got["qty"]),
+    (None, None, 1))
+CLK.t += broker.TOUCH_QUIET_S + 1
+cool()
+F.ghost = []
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  之後停損照常平剩下的微台", (ok, S(F, n0), F.bad), (True, [("TMF", "Sell", 1, "Cover", "MKP")], []))
+
+print("  -- main 也有的路（單一合約微台多口，開關關著）--")
+F = fresh(mini=False)
+broker.enter("long", 38000, 60, sl_points=200, qty=3)
+broker._LAST_CLOSE_SEND["at"] = 0.0
+F.ghost_more(1)
+got = broker.reconcile()
+chk("微台 3 口：一次舊資料比本機多 ⇒ ⛔ 不標 touched（main 原本會直接標）", (got.get("touched"), got["qty"]), (None, 3))
+CLK.t += broker.CLOSE_COOLDOWN + 1
+got = broker.reconcile()
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("  停損照常平 3 口", (ok, S(F, n0), F.bad), (True, [("TMF", "Sell", 3, "Cover", "MKP")], []))
+
+print("  -- 補送前的確認：狀態先到（已取消＋明細 0）、但券商部位已經變少 ⇒ ⛔ 不補送 --")
+F = fresh()
+broker.enter("long", 38000, 60, sl_points=200, qty=11)
+_o = F.place_order
+
+
+def _po(c, o, F=F, _o=_o):
+    t = _o(c, o)
+    if str(o.octype).endswith("Cover") and str(o.price_type).endswith("MKP") and CODE2P[c.code] == "MXF" \
+            and t.status.deals:
+        t.hidden = (t.status.deals, t.status.status, 50)   # 明細很久以後才到
+        t.status.deals, t.status.status = [], "OrderStatus.Cancelled"
+    return t
+
+
+F.place_order = _po
+F.policy = lambda pr, r: (1, F.mkt[pr]) if (pr == "MXF" and r["oc"] == "Cover") else (r["q"], F.mkt[pr])
+n0 = len(F.sent)
+ok, err = broker.close("sl")
+chk("小台送 2 口實際成交 1 口、明細沒到、狀態已取消；券商部位已經剩 1 口 ⇒ 同一輪 ⛔ 不補送",
+    [r for r in S(F, n0) if r[0] == "MXF"], [("MXF", "Sell", 2, "Cover", "MKP")])
+chk("  ⛔ 沒有平過頭", F.bad, [])
 
 
 print("\n=== h. 平倉前券商已經少了一腿（他自己平掉小台）⇒ 只平剩下那腿 ===")
@@ -720,6 +815,9 @@ for it in range(N_PROP):
         if rng.random() < 0.15:
             F.pos_fail = rng.choice([1, 3, 8])
         cool()
+        if rng.random() < 0.2:
+            # ⭐ 2026-11-06（PM）：一兩次暫時的舊資料（口數比實際多）⇒ ⛔ 不可以變成 touched／平過頭
+            F.ghost_more(rng.choice([1, 2]))
         if rng.random() < 0.25:
             # ⭐ 品管 M9：冷卻之後才開始回報慢 ⇒ 平倉一開始讀到的就是舊部位
             F.lag, F._hist = rng.choice([3.0, 6.0, 10.0]), []
@@ -735,7 +833,7 @@ for it in range(N_PROP):
         r = broker.close("sl")
         if pos() is None and not F.eq():
             break
-    F.lag, F.pos_fail, F.hide = 0, 0, None
+    F.lag, F.pos_fail, F.hide, F.ghost = 0, 0, None, []
     F.update_status()
     F.update_status()
     F._hist = []
@@ -743,6 +841,8 @@ for it in range(N_PROP):
         broker.reconcile()
     viol += [(it,) + tuple(b) for b in F.bad]
     p, eq = pos(), F.eq()
+    if isinstance(p, dict) and p.get("touched"):
+        incons.append((it, "⛔ 他沒有加碼卻被標成 touched（舊資料變成永久不停損）"))
     if p is None:
         if eq:
             incons.append((it, "本機空手、券商還有", eq))

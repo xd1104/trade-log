@@ -1020,9 +1020,12 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   回報後停損／13:43:30／04:58 照常認得、平掉，整趟一筆成績單。
   ⭐ **品管退件修正（2026-11-06）**：`_cancel_targets` 連單張 `target_trade` 一起撤（M1）；開關關著時只有本機／落地檔是混搭開的
   才把兩種合約合成 MIX、單一合約進場只看送出那種合約那一腿（M3）；平倉每一腿再跟 `_leg_caps`（進場量 − 停利已成交 `tgt_fill`
-  − 我們之前平掉的 `closed_by_leg`）取小，停利剛成交沒回報 ⇒ 補記 tp leg（M4）；IOC「已取消＋明細 0」當成可能成交、
-  這一輪不補送，冷卻後再來（M6）；整筆小台也走 `_close_mix`。品管攻擊測試：`test_qa_mix.py`（QA-D 的微台 10 口等 main 修
-  `_close_multi`、QA-F 重啟後停利單撤不到是 main 既有限制）。
+  − 我們之前平掉的 `closed_by_leg`）取小，停利剛成交沒回報 ⇒ 補記 tp leg（M4）；整筆小台也走 `_close_mix`。
+  ⭐ PM 定：`_close_pend` 直接用 main 的 `_sent_dealt`（「已取消＋明細 0」＝沒成交、同一輪補送；急跌時不能等 15 秒），
+  補送前再看一次券商那一腿比「上一張送出前 − 明細」少 ⇒ 不補。⚠️ 因此 QA-G（狀態先到、明細晚到＋部位慢）會平過頭，PM 接受。
+  ⭐ **「他加碼過」（touched）要持續證據**（main 的單一合約多口也是這條路）：券商口數比我們該有的多 ⇒ 先記 `touch_susp`、⛔ 不改本機；
+  相隔 ≥ CLOSE_COOLDOWN 兩次對帳都還多、而且不在平倉中／最後一張平倉單 `TOUCH_QUIET_S`（30 秒）內 ⇒ 才標 touched。
+  晚到腿只認「明細比已算進部位的多」那一段（舊資料不會被當成晚到腿）。品管攻擊測試：`test_qa_mix.py`（QA-F 是 main 既有限制）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：

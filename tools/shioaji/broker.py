@@ -1341,6 +1341,14 @@ def reconcile():
 LATE_LEG_S = 300.0
 
 
+def _leg_have(p):
+    """⭐ 2026-11-06：這一趟每一腿**已經算進部位**的進場量（mix0；單一合約＝entry_qty）⇒ {合約: 等值}。"""
+    if isinstance(p.get("mix0"), dict):
+        return {k: int(v or 0) for k, v in p["mix0"].items()}
+    k = p.get("product") if p.get("product") in RATIO else "TMF"
+    return {k: int(p.get("entry_qty") or p.get("qty") or 0)}
+
+
 def _late_leg(cur, pos):
     """⇒ {合約: {"up": 多出來的等值, "px": 那張進場單的成交均價, "lo","hi"}}；不是晚到的腿 ⇒ None。⛔ 鎖外面叫（會問券商明細）。"""
     ms = cur.get("mix_sent")
@@ -1362,6 +1370,7 @@ def _late_leg(cur, pos):
         return None
     _update_status()
     ets = cur.get("entry_trades") or {}
+    have = _leg_have(cur)
     out = {}
     for p, up in ups.items():
         if bm[p] > int(ms.get(p) or 0):
@@ -1369,6 +1378,10 @@ def _late_leg(cur, pos):
         s = _deal_sums(ets.get(p))
         if s is None or s[1] <= 0 or s[1] + 1e-9 < bm[p]:
             return None                       # 那張進場單的明細沒說它成交了這麼多 ⇒ 不是它 ⇒ 不認
+        if up > s[1] - int(have.get(p) or 0) + 1e-9:
+            # ⭐ 2026-11-06（性質測試抓到）：明細裡**已經算進部位**的那幾口不能再認一次 —— 平掉一部分之後券商回報退回舊資料
+            #    （口數比本機多），舊版會把它當成晚到的腿併進來 ⇒ 部位變大、之後平過頭。只認「明細比我們已經算的還多」的那一段。
+            return None
         out[p] = {"up": int(up), "px": round(s[0] / s[1], 2), "lo": s[2], "hi": s[3], "age": round(age, 1)}
     return out
 
@@ -1470,6 +1483,8 @@ def _meta_late(got, meta, lp):
             s = lp.get(p)
             if g > int(ms.get(p) or 0) or s is None or s[1] <= 0 or s[1] + 1e-9 < g:
                 return None
+            if g - mm[p] > s[1] - int(_leg_have(meta).get(p) or 0) + 1e-9:
+                return None                       # 明細裡已經算進部位的那幾口不能再認一次（同 _late_leg）
             add[p] = {"up": g - mm[p], "px": round(s[0] / s[1], 2), "lo": s[2], "hi": s[3]}
         elif g != mm[p]:
             return None                       # 另一腿也變了 ⇒ 不在這裡猜
@@ -1676,10 +1691,33 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
                                              "why": "進場那張單其實成交了 %d 口（部位回報慢）—— 這幾口是我們的，"
                                                     "收盤照樣平；⚠️ 停利單只掛了 %d 口" % (pos["qty"], oq)})
                 else:
+                    # ⭐ 2026-11-06（PM）：一次暫時的舊資料不可以變成「永久不停損／收盤不平」。
+                    #    券商口數比我們該有的多 ⇒ 先記「懷疑」，⛔ 這一次什麼都不改（口數、均價照本機）；
+                    #    相隔 ≥ CLOSE_COOLDOWN 的兩次對帳都還是比我們多、而且不在我們剛送平倉單的那段時間（_touch_quiet）
+                    #    ⇒ 才標「他動過」（touched）。中間回到正常 ⇒ 懷疑取消。
+                    #    ⚠️ main 的單一合約多口路徑原本也是看到一次就標（券商回報退回舊資料時會誤判），這裡一起修。
+                    now = time.time()
+                    sp = cur.get("touch_susp")
+                    if _touch_quiet(now):
+                        cur.pop("touch_susp", None)
+                        return _state["position"]
+                    if not isinstance(sp, dict) or int(sp.get("oq") or -1) != int(oq):
+                        # 第一次看到；或懷疑之後本機口數變了（中間平過倉）⇒ 之前那次不算數、重新起算
+                        #    （性質測試抓到：兩次互不相干的暫時舊資料，中間隔著一次平倉，被湊成「持續 15 秒」）
+                        cur["touch_susp"] = {"since": now, "qty": int(pos["qty"]), "oq": int(oq)}
+                        _log("position_touch_suspect", {"ok": None, "was": oq, "now": pos["qty"],
+                                                        "why": "券商口數比我們的多 —— 先不判他加碼（可能是舊資料），"
+                                                               "%g 秒後還是這樣才判" % CLOSE_COOLDOWN})
+                        return _state["position"]
+                    if now - float(sp.get("since") or now) < CLOSE_COOLDOWN:
+                        return _state["position"]
+                    cur.pop("touch_susp", None)
                     cur["touched"] = True
                     _log("position_touched", {"ok": False, "was": oq, "now": pos["qty"],
                                               "why": "券商口數比我們開的多（他自己加碼？）—— 收盤不幫他平，"
                                                      "停損只平我們剩下的 %d 口" % _ours_left(cur)})
+            elif cur.get("touch_susp") and not (pos["qty"] > oq and pos["qty"] > _ours_left(cur)):
+                cur.pop("touch_susp", None)          # 回到正常 ⇒ 剛才那次是舊資料，懷疑取消
             cur["dir"] = pos["dir"]
             cur["entry"] = pos["entry"]
             if _multi_pos(cur) or cur.get("handover"):
@@ -1762,9 +1800,21 @@ def _order(action, price, price_type, order_type, octype, qty=None, product=None
     return sj.FuturesOrder(**kw)
 
 
+TOUCH_QUIET_S = 2 * CLOSE_COOLDOWN   # 送出平倉單之後幾秒內，券商口數變多不拿來判「他加碼」（部位回報慢的舊資料）
+_LAST_CLOSE_SEND = {"at": 0.0}
+
+
+def _touch_quiet(now=None):
+    """⭐ 2026-11-06：現在是不是「我們剛送過平倉單」的那段時間（正在平倉、或最後一張平倉單送出後 TOUCH_QUIET_S 秒內）。"""
+    now = time.time() if now is None else now
+    return bool(_CLOSE_INFLIGHT["on"]) or now - _LAST_CLOSE_SEND["at"] < TOUCH_QUIET_S
+
+
 def _send(order, why, product=None):
     """真正送出去的唯一出口。dry run 時只記錄不送。⭐ 2026-11-06 `product`＝送到哪一種合約（沒給 ⇒ 部位的那種）。"""
     api = _state["api"]
+    if str(why).startswith("close_"):
+        _LAST_CLOSE_SEND["at"] = time.time()  # ⭐ 2026-11-06：記下最後一張平倉單的時刻（判「他加碼」要避開這段，見 _touch_quiet）
     prod = product or _cur_product()
     body = {"action": str(order.action), "price": order.price, "qty": order.quantity,
             "price_type": str(order.price_type), "order_type": str(order.order_type),
@@ -2499,29 +2549,13 @@ def _cancel_targets(pos):
 def _close_pend(trades):
     """
     ⭐ 2026-11-06 混搭平倉：同一腿已經送出去的平倉單 ⇒ (確定成交了幾口等值, **保守估計**可能成交了幾口等值)。
-    保守估計：明細滿了 ⇒ 送出的口數；IOC 已經結束（已成交／已取消／失敗）**而且明細有成交** ⇒ 明細的口數（部分成交、剩的取消了）；
-    **其他（還沒回報、問不到、⭐ 取消了但明細是 0）⇒ 當成全部成交**。
-    ⛔ 為什麼要保守：券商部位回報會慢（09-23、10-15 實測），只看部位會把「其實已經成交」的那張再送一次 ⇒ 平過頭變反向新倉。
-    ⭐ 2026-11-06 品管 M6：「狀態先變取消、明細晚幾秒才到」實測得出來 ⇒ 取消＋明細 0 不能當成沒成交；
-       代價：IOC 真的沒撮到時，這一輪那一腿不再補送，冷卻（CLOSE_COOLDOWN）後下一輪重新問券商再送。
+    ⛔ 直接用 main 的 _sent_dealt（PM 定：兩條平倉路同一把尺）：明細滿了 ⇒ 送出量；IOC 已經結束
+       （'OrderStatus.Filled'〔含部分成交，模擬帳戶實測〕／Cancelled／Failed）⇒ 明細量；其他（還沒回報、問不到）⇒ 當成全部成交。
+    ⚠️ 「已取消＋明細 0」當成沒成交、同一輪可以補送（PM：急跌時每 15 秒才送一張太慢）。模擬帳戶實測狀態與明細是同一次
+       update 一起回來的；萬一「狀態先到、明細晚到」，_close_mix 補送前還有一道：那一腿券商部位比「上一張送出前 − 明細」少 ⇒ 不補。
     ⛔ 呼叫端先 _update_status。
     """
-    dealt = pend = 0.0
-    for t, n in trades:
-        s = _deal_sums(t)
-        d = s[1] if s is not None else 0.0
-        st = str(getattr(getattr(t, "status", None), "status", "") or "")
-        dealt += d
-        if s is not None and d >= n - 1e-9:
-            pend += n
-        elif s is not None and d > 0 and ("Cancel" in st or "Fail" in st or "Filled" in st):
-            # ⭐ 2026-11-06 模擬帳戶實測（scripts/probe_ioc_status.py）：IOC 送 3 口只成交 1 口，狀態是
-            #    'OrderStatus.Filled'（⛔ 不是 Cancelled）⇒ Filled 也算結束、照明細量算（跟 main 的 _sent_dealt 同一把尺）。
-            #    ⚠️ 跟 _sent_dealt 唯一的差別：結束了但明細是 0 ⇒ 這裡仍當成可能成交（品管 M6：狀態先到、明細晚到）。
-            pend += d
-        else:
-            pend += n
-    return dealt, pend
+    return _sent_dealt(trades)
 
 
 def _leg_caps(pos):
@@ -2620,6 +2654,7 @@ def _close_mix(pos, reason):
                        % (sum(h0.values()), _ours_left(pos)))
     _tp_untracked(pos, sum(h0.values()))
     sent = {p: [] for p in h0}
+    before = {}
     errs, last_err = {}, None
     _CLOSE_INFLIGHT["on"] = True
     bl = legs0
@@ -2643,10 +2678,15 @@ def _close_mix(pos, reason):
                 continue                      # 這一腿平完了（券商說沒了，或明細說全部成交了）
             n = int(min(held, h0[p] - pend))
             n = (n // RATIO[p]) * RATIO[p]      # 小台那一腿一定是 5 的倍數（不然 _order 進位會多平）
+            if n > 0 and p in before and held < before[p][0] - (dealt - before[p][1]) - 1e-9:
+                # ⭐ 2026-11-06（PM）：補送前再確認一次 —— 這一腿券商部位比「上一張送出前 − 那之後明細說成交的」還少
+                #    ⇒ 有成交是明細沒講的（狀態先到、明細晚到）⇒ ⛔ 不補，冷卻後下一輪重新問
+                n = 0
             if n <= 0:
                 unsure.append(p)              # 券商還顯示有，但上一張可能已經成交、只是回報慢 ⇒ ⛔ 不送
             else:
                 todo[p] = n
+                before[p] = (held, dealt)     # 這一張送出前：券商那一腿口數、累計明細
         if not todo:
             if unsure:
                 last_err = "上一張平倉單的成交還沒回報（%s）—— 先不送下一張（避免平過頭），稍後會再試" % "、".join(unsure)

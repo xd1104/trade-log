@@ -213,6 +213,21 @@ def connect(api):
     broker._close_fail["at"] = 0.0
     broker._LAST_RECONCILE["at"] = 0.0
     broker._CLOSE_INFLIGHT["on"] = False
+    if hasattr(broker, "_LAST_CLOSE_SEND"):
+        broker._LAST_CLOSE_SEND["at"] = 0.0
+
+
+
+def _touch_confirm():
+    """
+    ⭐ 2026-11-06（PM）：「他加碼」改成要持續證據 —— 相隔 ≥ CLOSE_COOLDOWN 的兩次對帳都還是比我們多才標 touched。
+    這裡模擬「過了 CLOSE_COOLDOWN 再對一次帳」（把懷疑的起點往前推），⛔ 期待值不變。
+    """
+    p = broker._state.get("position")
+    if isinstance(p, dict) and isinstance(p.get("touch_susp"), dict):
+        p["touch_susp"]["since"] -= broker.CLOSE_COOLDOWN + 1
+        broker._LAST_RECONCILE["at"] = 0.0
+        broker.reconcile()
 
 
 def live(on=True):
@@ -1508,6 +1523,7 @@ for tag, add_px in (("不同價", 12040.0), ("同價", 12010.0)):
     api.lots.append(add_px)                         # 他在大戶投自己加 1 口
     broker._LAST_RECONCILE["at"] = 0.0
     broker.reconcile()
+    _touch_confirm()
     p = broker._state["position"]
     chk("  [%s] 對帳：口數變多、明細對不上 ⇒ 標「他動過」、⛔ 不蓋進場價、我們剩 1 口" % tag,
         (p.get("touched"), p.get("entry"), broker._ours_left(p), p.get("qty")), (True, 12010.0, 1, 2))
@@ -1533,6 +1549,7 @@ broker.reconcile()
 api.lots.append(12040.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 api.lots.pop()                                     # 他把自己加的那口平掉
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
@@ -1553,6 +1570,7 @@ broker.reconcile()
 api.lots.append(12040.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 api.fill_target(1, 12071.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
@@ -1843,6 +1861,7 @@ chk("  前置：6＋3、振幅不知道 ⇒ 規則 B 送 2 口", (qtys(api, "new
 api.lots.append(12003.0)                            # 他自己加 1 口（價錢只差 2 點）
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 ok, err = broker.close("sl")
 p = broker._state["position"]
 chk("  停損只平我們的 2 口；剩他 1 口交接成手動部位（handover）",
@@ -1860,6 +1879,7 @@ ok, err = broker.close("sl")                        # 停損出場（成績單�
 api.lots.append(12002.0)                            # 他自己又開 1 口、價錢跟我們差不多
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 NF._eod(EN, _EOD_AT)
 chk("  ⭐ 今晚那一筆已經出場 ⇒ 04:58 ⛔ 不碰他後來開的那口（done_elsewhere、0 張新平倉單）",
     (nf_eod_rows()[-1:], qtys(api, "close"), len(api.lots)), (["done_elsewhere"], [1], 1))
@@ -1871,6 +1891,7 @@ say((broker.ORDER_DIR / broker.META_NAME).exists(), "  多口部位一成立就�
 api.lots.append(12040.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 broker._state["position"] = None                    # 看門狗重啟：記憶體清空
 AF._MEM.update({"date": None, "entry": None, "state": None})
 broker._LAST_RECONCILE["at"] = 0.0
@@ -1910,6 +1931,7 @@ r = af_send(api, 3)
 api.lots.append(12040.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 _mp = broker.ORDER_DIR / broker.META_NAME
 _mo = json.loads(_mp.read_text(encoding="utf-8"))
 _mp.write_text(json.dumps(dict(_mo, day=str(date.today() - timedelta(days=3)))), encoding="utf-8")
@@ -1928,6 +1950,7 @@ r = af_send(api, 3)
 api.lots.append(12040.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 broker._state["position"] = None
 (broker.ORDER_DIR / broker.META_NAME).unlink()
 broker._META.update(last=None)
@@ -1958,6 +1981,7 @@ r = af_send(api, 3)
 api.lots.append(12040.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
+_touch_confirm()
 _sn = broker.snapshot()["position"]
 say(_sn.get("no_auto_exit") and _sn.get("own_left") == 3 and "自己加碼過" in _sn.get("lot_note", "")
     and "停損只會平程式開的 3 口" in _sn["lot_note"], "  部位卡資料：不會自動平、我們剩 3 口、一句實話", _sn.get("lot_note"))
@@ -2048,6 +2072,7 @@ for keep in (True, False):
     api.lots.append(12040.0)
     broker._LAST_RECONCILE["at"] = 0.0
     broker.reconcile()
+    _touch_confirm()
     api.fill_target(2, 12070.0)
     restart_all(keep)
     ok, err = broker.close("sl")
