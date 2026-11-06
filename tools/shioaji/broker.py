@@ -978,7 +978,7 @@ _META = {"last": None}
 
 
 def _meta_wanted(p):
-    return isinstance(p, dict) and (_multi_pos(p) or bool(p.get("handover")))
+    return isinstance(p, dict) and (_multi_pos(p) or bool(p.get("handover")) or bool(p.get("own")))
 
 
 def _meta_sync():
@@ -989,7 +989,8 @@ def _meta_sync():
         if _meta_wanted(p) and p.get("multi_unknown"):
             return                          # 分不出（含等對帳中）⇒ ⛔ 不覆蓋落地檔（再重啟一次還是照原本那份比）
         if _meta_wanted(p):
-            m = {k: p.get(k) for k in _META_KEYS if p.get(k) is not None}
+            # ⭐ 第三輪品管：帳本部位落地帳本（每一張單的明細數字＋委託單編號）
+            m = _own_meta(p) if p.get("own") else {k: p.get(k) for k in _META_KEYS if p.get(k) is not None}
             m["day"] = str(date.today())
             key = json.dumps(m, ensure_ascii=False, sort_keys=True, default=str)
             if key == _META["last"]:
@@ -1008,8 +1009,8 @@ def _meta_sync():
             # 部位沒了 ⇒ 清掉（這支程式第一次看到空手時也掃一次：上次當掉前留下的舊檔）
             # ⭐ 2026-11-06 第二輪品管 QA2-6：重啟時那一筆正在等晚到的腿（late_pending、LATE_LEG_S 內）⇒ 券商「空手」是假的，⛔ 不刪
             _m = _meta_load() if _META["last"] is None else None
-            if not (isinstance(_m, dict) and _m.get("late_pending")
-                    and time.time() - float(_m.get("late_pending_at") or 0) <= LATE_LEG_S):
+            if not (isinstance(_m, dict) and (_m.get("own") or (_m.get("late_pending")
+                    and time.time() - float(_m.get("late_pending_at") or 0) <= LATE_LEG_S))):
                 path.unlink(missing_ok=True)
             _META.update(last=None, swept=True)
     except Exception:                       # noqa: BLE001  ⛔ 寫不進去不影響停損與平倉
@@ -1306,9 +1307,31 @@ def _sum_deals(trades):
 
 def reconcile():
     """啟動時／每次要動作之前叫。把券商的實況寫回 _state。"""
+    if is_live():
+        # ⭐ 第三輪品管：帳本部位（含重啟後從落地檔補回）走自己的對帳（⛔ 不拿舊資料決定任何事）
+        cur = _state["position"]
+        if cur is None:
+            m = _meta_load()
+            if isinstance(m, dict) and m.get("own"):
+                r = _own_restore(m)
+                if r is not None:
+                    with _lock:
+                        if _state["position"] is None:
+                            _state["position"] = r
+                            _log("own_restored", {"ok": True, "qty": r.get("qty"), "why": "重啟後從落地的帳本補回部位"})
+                    cur = _state["position"]
+        if isinstance(cur, dict) and cur.get("own"):
+            out = _own_reconcile(cur)
+            _meta_sync()
+            return out
     pos = broker_position()
     if pos == "unknown":
         return "unknown"
+    if isinstance(pos, dict) and _state["position"] is None and time.time() - _RECENT_CLOSE["at"] < RECENT_CLOSE_S \
+            and pos.get("dir") == _RECENT_CLOSE["dir"] \
+            and all(int(v) <= int(_RECENT_CLOSE["legs"].get(p) or 0) for p, v in _mix_of(pos).items()):
+        # ⭐ 第三輪品管 #3：帳本部位剛平完，券商還顯示同方向、不超過剛平掉的口數 ⇒ 舊資料，⛔ 不撿回
+        return None
     _cur0 = _state["position"]
     if isinstance(pos, dict) and isinstance(_cur0, dict) and isinstance(_cur0.get("mix_sent"), dict):
         # ⭐ 2026-11-06 晚到的腿：先認「券商多出來的那一腿是不是這一趟送出去、晚回報的成交」（⛔ 鎖外面問明細）
@@ -1651,6 +1674,8 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
                 # ⭐ 2026-11-06 券商上是同方向混搭 ⇒ 撿回成混搭部位（兩腿各幾口；平倉分腿平）
                 got["mix"] = dict(pos["mix"])
                 got["mix0"] = dict(pos["mix"])
+            # ⭐ 第三輪品管 #3：撿回來（沒有進場明細）的部位要持續確認才准平小台／混搭（_close_mix 看 rec_ok）
+            got["rec_since"], got["rec_sig"] = time.time(), [pos["qty"], got["product"], got.get("mix")]
             _recover_meta(got)
             if meta_pre is not None:
                 # ⭐ QA r2 必修 4：上次落地的多口狀態對得上 ⇒ 補回（他動過、出去過的段、後補成交、交接）
@@ -1679,6 +1704,12 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
             # 2026-09-01 就是這樣：本機記成做多、券商是空單，reconcile() 照樣回傳做多，
             # 平倉因此送出同方向的單。這一段就是在補那個洞（測試 FAIL 抓出來的）。
             cur = _state["position"]
+            if cur.get("recovered") and not cur.get("rec_ok"):
+                _sig = [pos["qty"], pos.get("product") or "TMF", pos.get("mix")]
+                if cur.get("rec_sig") == _sig and time.time() - float(cur.get("rec_since") or 0) >= CLOSE_COOLDOWN:
+                    cur["rec_ok"] = True      # 相隔 ≥ CLOSE_COOLDOWN 兩次對帳都一樣 ⇒ 確認了
+                elif cur.get("rec_sig") != _sig:
+                    cur["rec_since"], cur["rec_sig"] = time.time(), _sig
             if cur.get("late_pending") and cur is _cur0:
                 # ⭐ 2026-11-06 品管 M7：只剩晚到那一腿的部位 ⇒ 券商回報的還比它少（回報到一半）⇒ 先不動（⛔ 不記成別處平掉）；
                 #    回報齊了 ⇒ 拿掉 late_pending、照常對帳。
@@ -2018,6 +2049,8 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         return False, "口數不合理（%r）—— 一張都沒送" % (want,), None
     act = sj.Action.Buy if direction == "long" else sj.Action.Sell
     prod = product_for(want)              # ⭐ 2026-11-06 小台開著＋5 的倍數 ⇒ 整筆小台
+    # ⭐ 第三輪品管：要送新的進場單了 ⇒「剛平完、別撿回舊資料」的記憶作廢（不然這一筆晚到的成交會被當成上一筆的舊資料，沒有停損）
+    _RECENT_CLOSE["at"] = 0.0
     if prod == "MIX":
         # ⭐ 2026-11-06 混搭（例 11＝2 小台＋1 微台）⇒ 另一條路（兩張進場單、兩張停利單）。
         #    ⛔ 下面單一合約那條一個字都沒動。
@@ -2086,6 +2119,13 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         if sl_points is not None:
             # ⛔ 只有帶了才存：沒有這個欄位 ＝「用手動那一套」，那是停損迴圈的判準
             _state["position"]["sl_points"] = float(sl_points)
+        if prod != "TMF" or (want > 1 and OWN_TMF_MULTI):
+            # ⭐ 第三輪品管：整筆小台（＋微台多口，OWN_TMF_MULTI）改用帳本 ⇒ 進場單記下來；⛔ 一口微台照舊
+            _ps = _state["position"]
+            _ps["own"] = True
+            _ps["entry0"] = entry
+            _ps["mix_sent_at"] = time.time()
+            _own_add(_ps, "entry", prod, want, res)
     if want > 1 and is_live():
         _meta_sync()                    # ⭐ QA r2 必修 4：多口部位一成立就落地（重啟後補得回來）；一口的不寫
     if want > 1 and is_live():
@@ -2294,6 +2334,11 @@ def _enter_mix(direction, price, tp_points, sl_points, want, act):
             pos["tp_points"] = float(tp_points)
         if sl_points is not None:
             pos["sl_points"] = float(sl_points)
+        # ⭐ 第三輪品管：帳本部位 —— 送出去的每一張進場單都記下來（含 0 成交的那張：晚到的明細照樣讀得到）
+        pos["own"] = True
+        pos["entry0"] = entry
+        for p in legs:
+            _own_add(pos, "entry", p, legs[p][0], trades[p])
         _state["position"] = pos
     if is_live():
         _meta_sync()                         # 多口部位一成立就落地（重啟後補得回來）
@@ -2344,6 +2389,11 @@ def _place_target_mix(prices):
             tt = dict(pos.get("target_trades") or {})
             tt.update(got)
             pos["target_trades"] = tt
+            if pos.get("own"):
+                for p, res in got.items():
+                    _own_add(pos, "target", p, int(pos["mix"].get(p) or 0), res)   # ⭐ 第三輪品管：帳本記停利單
+    if pos.get("own") and is_live():
+        _meta_sync()                    # ⭐ 第三輪品管：停利單也要落地（重啟後帳本才算得到停利明細）
     return (not errs), ("；".join(errs) if errs else None)
 
 
@@ -2368,6 +2418,12 @@ def place_target(tp_price, qty=None):
     if ok:
         with _lock:
             _state["position"]["target_trade"] = res
+            if _state["position"].get("own"):
+                # ⭐ 第三輪品管：帳本記下停利單（停利明細算進「我們持有」）
+                _own_add(_state["position"], "target", _cur_product(),
+                         qty if qty is not None else _own_qty(_state["position"]), res)
+        if _state["position"].get("own") and is_live():
+            _meta_sync()                # ⭐ 第三輪品管：停利單也要落地（重啟後帳本才算得到停利明細）
     return ok, err
 
 
@@ -2405,9 +2461,16 @@ def _close_locked(reason):
             return False, "跟券商對帳失敗，不確定部位方向 —— 請自己到大戶投平倉"
         pos = fresh
     if pos is None:
+        if time.time() - _RECENT_CLOSE["at"] < RECENT_CLOSE_S and _RECENT_CLOSE.get("msg"):
+            # ⭐ 第三輪品管（模擬帳戶實測 B）：這一筆剛被平完（平倉單明細晚到、對帳時才結算）⇒ 回「已經平完」，
+            #    ⛔ 不回「沒有部位」（停損迴圈會誤判成失敗）
+            return True, _RECENT_CLOSE["msg"]
         return False, "沒有部位"
     if pos.get("dir") not in ("long", "short"):
         return False, "看不出部位方向，不敢送平倉單 —— 請自己到大戶投平倉"
+    if pos.get("own"):
+        # ⭐ 第三輪品管：帳本部位（混搭／整筆小台／微台多口）⇒ 以自家委託單明細決定送多少（_close_own）
+        return _close_own(pos, reason)
     if pos.get("multi_unknown"):
         # ⭐ QA r2 必修 4：重啟後撿回來的部位對不上程式開的多口紀錄（落地的狀態也補不回來）⇒ 分不出哪幾口是誰的。
         #    ⛔ 不准退到一口的迴圈一口一口平（QA D3：[1,1,1] 把他的也平掉）⇒ 不平、示警。
@@ -2615,6 +2678,435 @@ def _leg_caps(pos):
             for p in RATIO}
 
 
+# ══ ⭐ 2026-11-06 第三輪品管：「我們的口數」以自家委託單明細為準（帳本部位，own）════════════════════════════
+#    三輪品管下來的根因都是同一類：**拿可能是舊資料的券商部位去決定送多少單、算誰的口數**。統一規則：
+#    ① 我們每一腿持有 ＝ 進場單明細 − 停利單明細 − 平倉單明細（＋確認過的調整）。
+#       還沒結束的平倉單 ⇒ 當成全部成交（送單上限 hi 用這個，保守）；進場單只算已回報的明細（保守不加）。
+#       送平倉單 ＝ min(券商那一腿, 我們持有的保守值 hi)。撤停利單之後一定先 _update_status 再讀一次停利明細。
+#    ② 券商部位只當確認用：比我們多／少／反方向，都要「我們的單都結束了＋最後一次送單後 ≥ TOUCH_QUIET_S＋
+#       相隔 ≥ CLOSE_COOLDOWN 兩次對帳都一樣」才當真；之前照我們的明細行事（⛔ 不撿回、⛔ 不記別處平掉）。
+#    ③ 程式開的部位**永遠不轉成手動部位**（老闆不會手動加碼）：確認過券商比我們多 ⇒ 當成我們晚到的成交、照程式規則平、大聲示警；
+#       確認過比我們少 ⇒ 記一段「別處平掉」（停利明細能解釋的本來就已經算進停利那一段）。
+#    ④ 我們這一趟平完（明細說 0、單都結束）⇒ 立刻記成績單、清部位；之後 RECENT_CLOSE_S 秒內券商還顯示同方向、
+#       不超過剛平掉的口數 ⇒ 是舊資料，⛔ 不撿回。
+#    ⑤ 確認過券商是反方向 ⇒ 我們這一趟收尾（記成績單）、券商上的改成「反向殘單」（照手動單停損，收盤不碰）。
+#    帳本部位：enter() 送出去是多口、或用到小台（整筆小台／混搭）的部位（pos["own"]）。⛔ 一口微台照舊走原本那條（逐位元相同）。
+OWN_TMF_MULTI = False         # 微台多口也用帳本（⭐ 第三輪品管：取代 _close_multi；False ⇒ 只有小台／混搭用帳本）
+LEGACY_HANDOVER = False       # ⛔ 預設關：True ⇒ 確認過券商比我們多時，照舊把多的轉成「他的手動部位」（老闆不會手動加碼 ⇒ 不用）
+IOC_FINAL_S = 60.0            # 範圍市價 IOC 送出後幾秒還沒回報結束 ⇒ 照已回報的明細當成結束（IOC 不可能這麼久之後才成交）
+RECENT_CLOSE_S = 120.0        # 帳本部位平完之後幾秒內，券商同方向、不超過剛平掉的口數 ⇒ 當成舊資料、不撿回
+_RECENT_CLOSE = {"at": 0.0, "dir": None, "legs": {}, "msg": None}
+
+
+def _own_add(pos, role, p, n, trade):
+    """帳本記一張我們自己的單（role＝entry／target／close；n＝送出的微台等值）。"""
+    pos.setdefault("own_trades", []).append({
+        "role": role, "p": p, "n": int(n), "t": trade, "at": time.time(),
+        "id": getattr(getattr(trade, "order", None), "id", None)})
+
+
+def _own_rec(rec, now):
+    """一張單 ⇒ (已回報成交量, Σ價×量, 結束了嗎)。⛔ 不問券商（呼叫端先 _update_status）。"""
+    t = rec.get("t")
+    if t is None:
+        return float(rec.get("q0") or 0.0), float(rec.get("pq0") or 0.0), bool(rec.get("fin0"))
+    s = _deal_sums(t)
+    dq, dpq = (s[1], s[0]) if s is not None else (0.0, 0.0)
+    st = str(getattr(getattr(t, "status", None), "status", "") or "")
+    done = ("Cancel" in st or "Fail" in st or ("Filled" in st and "PartFilled" not in st)
+            or (s is not None and dq >= rec["n"] - 1e-9))
+    if not done and rec["role"] == "entry" and now - float(rec.get("at") or now) >= FILL_WAIT + 1.0:
+        done = True                   # 進場：enter() 已經照當下明細定案；之後晚到的明細照樣讀得到（只是不擋確認）
+    if not done and rec["role"] == "close" and now - float(rec.get("at") or now) >= IOC_FINAL_S:
+        done = True
+    return dq, dpq, done
+
+
+def _own_book(pos, now=None):
+    """
+    ⇒ {"MXF": {...}, "TMF": {...}, "_all_final": bool, "_last_send": 時刻, "_live_tgt": [rec]}；每一腿：
+       e／epq 進場、t／tpq 停利、c／cpq 平倉（已回報）、cp 平倉（保守：沒結束的當成全部成交）、
+       ours ＝ e − t − c ＋ 調整、hi ＝ e − t − cp ＋ 調整（送平倉單的上限）。
+    """
+    now = time.time() if now is None else now
+    b = {p: {"e": 0.0, "epq": 0.0, "t": 0.0, "tpq": 0.0, "c": 0.0, "cpq": 0.0, "cp": 0.0, "adj": 0.0}
+         for p in RATIO}
+    allf, last, live_t = True, 0.0, []
+    for rec in pos.get("own_trades") or []:
+        dq, dpq, done = _own_rec(rec, now)
+        x = b.setdefault(rec["p"], {"e": 0.0, "epq": 0.0, "t": 0.0, "tpq": 0.0, "c": 0.0, "cpq": 0.0,
+                                    "cp": 0.0, "adj": 0.0})
+        if rec["role"] == "entry":
+            x["e"] += dq
+            x["epq"] += dpq
+        elif rec["role"] == "target":
+            x["t"] += dq
+            x["tpq"] += dpq
+            if not done:
+                live_t.append(rec)
+        else:
+            x["c"] += dq
+            x["cpq"] += dpq
+            x["cp"] += dq if done else float(rec["n"])
+        if rec["role"] != "target":
+            allf = allf and done
+            last = max(last, float(rec.get("at") or 0.0))
+    for a in pos.get("own_adj") or []:
+        b[a["p"]]["adj"] += float(a["q"])
+    for p, x in b.items():
+        x["ours"] = x["e"] - x["t"] - x["c"] + x["adj"]
+        x["hi"] = x["e"] - x["t"] - x["cp"] + x["adj"]
+    b["_all_final"], b["_last_send"], b["_live_tgt"] = allf, last, live_t
+    return b
+
+
+def _own_fields(cur, book):
+    """帳本 ⇒ 部位上給人看／給停損用的欄位（口數、合約、兩腿、進場均價）。⛔ 呼叫端拿著 _lock。"""
+    ours = {p: max(0, int(round(book[p]["ours"]))) for p in RATIO}
+    cur["qty"] = sum(ours.values())
+    has = [p for p in ("MXF", "TMF") if ours[p] > 0]
+    if len(has) == 2:
+        cur["product"], cur["mix"] = "MIX", {p: ours[p] for p in ("MXF", "TMF")}
+    elif len(has) == 1:
+        cur["product"] = has[0]
+        cur.pop("mix", None)
+    eq = sum(book[p]["e"] for p in RATIO)
+    epq = sum(book[p]["epq"] for p in RATIO)
+    for a in cur.get("own_adj") or []:
+        if a["q"] > 0 and a.get("pq") is not None:
+            eq, epq = eq + a["q"], epq + float(a["pq"])
+    if eq > 0:
+        ef = round(epq / eq, 2)
+        cur["entry_fill"] = ef
+        cur["entry"] = ef
+        cur["entry_qty"] = int(round(eq))
+        if cur.get("entry0") is not None and abs(ef - float(cur["entry0"])) > 0.005:
+            cur["late_leg"] = True    # 進場價跟帳本當初記的不一樣（晚到的腿）⇒ auto_fire／night_fire 認人改比 entry0
+    m0 = {p: int(round(book[p]["e"] + max(0.0, sum(a["q"] for a in cur.get("own_adj") or []
+                                                      if a["p"] == p and a["q"] > 0)))) for p in RATIO}
+    if all(m0.values()) or cur.get("product") == "MIX":
+        cur["mix0"] = m0              # 成績單記 MIX（兩腿都進過場）
+
+
+def _own_finish(cur, now):
+    """
+    這一趟結束（帳本說我們每一腿都 0、單都結束了）⇒ 記一筆成績單（整趟）、清部位、記下「剛平掉」（不撿回舊資料）。
+    ⛔ 呼叫端拿著 _lock。成績單：停利那段、別處平掉那段當 legs，平倉那段當最後一段（出場價都照各自的明細）。
+    """
+    try:
+        # 先刪落地檔再記成績單：當在中間 ⇒ 少一筆（看得出來），⛔ 不會重啟後再記一次（重複）
+        (ORDER_DIR / META_NAME).unlink(missing_ok=True)
+        _META.update(last=None, swept=True)
+    except OSError:
+        pass
+    book = _own_book(cur, now)
+    tq = sum(book[p]["t"] for p in RATIO)
+    tpq = sum(book[p]["tpq"] for p in RATIO)
+    cq = sum(book[p]["c"] for p in RATIO)
+    cpq = sum(book[p]["cpq"] for p in RATIO)
+    gone = -sum(a["q"] for a in cur.get("own_adj") or [] if a["q"] < 0)
+    legs = []
+    if tq > 0:
+        legs.append({"qty": int(round(tq)), "px": round(tpq / tq, 2), "src": "tp", "at": datetime.now().strftime("%H:%M:%S")})
+    if gone > 0:
+        legs.append({"qty": int(round(gone)), "px": None, "src": "elsewhere", "at": datetime.now().strftime("%H:%M:%S")})
+    reason = cur.get("close_reason") or ("tp" if tq > 0 and gone <= 0 else "closed_elsewhere")
+    rp = dict(cur, legs=legs)
+    rp.pop("own_trades", None)
+    rec = record_trade(rp, round(cpq / cq, 2) if cq > 0 else None, reason, qty=int(round(cq)))
+    _RECENT_CLOSE.update(at=now, dir=cur.get("dir"),
+                         legs={p: int(round(book[p]["e"])) + int(round(sum(a["q"] for a in cur.get("own_adj") or []
+                                                                         if a["p"] == p and a["q"] > 0)))
+                               for p in RATIO},
+                         msg="這一筆已經平完了（%s）" % reason)
+    _state["position"] = None
+    _log("own_finished", {"ok": True, "reason": reason, "qty": (rec or {}).get("qty"), "exit": (rec or {}).get("exit"),
+                          "points": (rec or {}).get("points"), "tp": tq, "close": cq, "elsewhere": gone})
+    return rec
+
+
+def _own_signed_legs(legs, direction):
+    """券商每一腿 ⇒ 帶正負號的微台等值（同方向＋、反方向－）。"""
+    out = {p: 0 for p in RATIO}
+    for p, l in (legs or {}).items():
+        q = int(l.get("qty") or 0)
+        out[p] = q if l.get("dir") == direction else -q
+    return out
+
+
+def _own_reconcile(cur):
+    """帳本部位的對帳（⛔ 不准拿舊資料決定任何事；差異要持續才採信）。⇒ 部位／None（這一趟結束）／"unknown"。"""
+    legs = _broker_legs()
+    if legs == "unknown":
+        return "unknown"
+    _update_status()                           # ⛔ 鎖外面
+    now = time.time()
+    book = _own_book(cur, now)
+    if not mini_on() and "MXF" in legs and book["MXF"]["e"] <= 0 and not any(
+            r["p"] == "MXF" for r in cur.get("own_trades") or []):
+        # ⭐ 第三輪品管 #6：開關關著、本機是微台、券商上有小台 ⇒ 跟 main 一樣 unknown＋示警（⛔ 不動）
+        _state["last_error"] = "本機部位是微台、券商上有小台 —— 分不出來，不敢動，請自己確認"
+        return "unknown"
+    sb = _own_signed_legs(legs, cur.get("dir"))
+    diff = {p: sb[p] - int(round(book[p]["ours"])) for p in RATIO}
+    with _lock:
+        if _state["position"] is not cur:
+            return _state["position"]
+        seen = cur.setdefault("own_seen", {})
+        for p in RATIO:
+            if sb[p] > int(seen.get(p) or 0):
+                seen[p] = sb[p]
+        _own_fields(cur, book)
+        if not any(diff.values()):
+            cur.pop("diff_susp", None)
+            if cur["qty"] <= 0 and book["_all_final"]:
+                _own_finish(cur, now)
+                return None
+            return cur
+        sig = [diff["MXF"], diff["TMF"]]
+        can = book["_all_final"] and not _CLOSE_INFLIGHT["on"] and now - book["_last_send"] >= TOUCH_QUIET_S
+        for p in RATIO:
+            if diff[p] < 0 and int(seen.get(p) or 0) < int(round(book[p]["e"])) \
+                    and now - float(cur.get("mix_sent_at") or book["_last_send"] or now) < LATE_LEG_S:
+                can = False           # 那一腿券商從來沒顯示到我們的進場量（晚到的腿）⇒ LATE_LEG_S 內不採信「比較少」
+        sp = cur.get("diff_susp")
+        if not can:
+            cur["diff_susp"] = {"sig": sig, "since": None, "wait": True}
+            return cur
+        if not isinstance(sp, dict) or sp.get("sig") != sig or sp.get("since") is None:
+            cur["diff_susp"] = {"sig": sig, "since": now}
+            _log("own_diff_suspect", {"ok": None, "diff": diff, "why": "券商部位跟程式明細算的不一樣 —— 先照明細，%g 秒後還一樣才採信"
+                                      % CLOSE_COOLDOWN})
+            return cur
+        if now - float(sp["since"]) < CLOSE_COOLDOWN:
+            return cur
+        cur.pop("diff_susp", None)
+        if any(v < 0 for v in sb.values()):
+            return _own_residual(cur, legs, sb, now)
+        for p in RATIO:
+            d = diff[p]
+            if d > 0:
+                if LEGACY_HANDOVER:
+                    continue
+                px = float((legs.get(p) or {}).get("entry") or cur.get("entry") or 0)
+                cur.setdefault("own_adj", []).append({"p": p, "q": d, "pq": px * d, "src": "late"})
+                _state["last_error"] = ("券商上%s比程式明細多 %d 口等值（確認 %g 秒以上）⇒ 當成程式晚到的成交，照程式停損／收盤平掉 —— "
+                                        "請到大戶投確認" % ({"MXF": "小台", "TMF": "微台"}[p], d, CLOSE_COOLDOWN))
+                _log("own_adopt", {"ok": False, "p": p, "q": d, "px": px, "why": _state["last_error"]})
+                print("⚠️ [真實] " + _state["last_error"], flush=True)
+            elif d < 0:
+                cur.setdefault("own_adj", []).append({"p": p, "q": d, "pq": None, "src": "elsewhere"})
+                _log("own_gone", {"ok": False, "p": p, "q": -d,
+                                  "why": "券商上%s比程式明細少 %d 口等值（確認 %g 秒以上、單都結束了）⇒ 記成別處平掉" %
+                                         ({"MXF": "小台", "TMF": "微台"}[p], -d, CLOSE_COOLDOWN)})
+        _own_fields(cur, _own_book(cur, now))
+        if cur["qty"] <= 0 and book["_all_final"]:
+            _own_finish(cur, now)
+            return None
+        return cur
+
+
+def _own_residual(cur, legs, sb, now):
+    """⭐ 第三輪品管 #4：確認過券商是反方向 ⇒ 這一趟收尾（我們剩的記成別處平掉）、券商上的改成「反向殘單」。⛔ 呼叫端拿著 _lock。"""
+    book = _own_book(cur, now)
+    for p in RATIO:
+        o = int(round(book[p]["ours"]))
+        if o > 0:
+            cur.setdefault("own_adj", []).append({"p": p, "q": -o, "pq": None, "src": "elsewhere"})
+    _own_finish(cur, now)
+    opp = {p: -v for p, v in sb.items() if v < 0}
+    same = {p: v for p, v in sb.items() if v > 0}
+    if same:
+        _state["last_error"] = "券商上兩種合約方向相反 —— 分不出來，不敢動，請自己確認"
+        return "unknown"
+    d = "short" if cur.get("dir") == "long" else "long"
+    q = sum(opp.values())
+    px = sum(float((legs.get(p) or {}).get("entry") or 0) * v for p, v in opp.items()) / q
+    rp = {"dir": d, "entry": round(px, 2), "qty": q, "entry_time": None, "target_trade": None, "recovered": True,
+          "residual": True, "rec_ok": True, "sl_src": "manual", "bpx": round(px, 2),
+          "product": "MIX" if len(opp) == 2 else next(iter(opp)),
+          "sl_warn": "券商上是反方向 %d 口等值（反向殘單）—— 照手動單的停損規矩處理，收盤／04:58 不會自動平，請到大戶投確認" % q}
+    if len(opp) == 2:
+        rp["mix"] = {p: opp.get(p, 0) for p in ("MXF", "TMF")}
+    _state["position"] = rp
+    _state["last_error"] = rp["sl_warn"]
+    _log("own_residual", {"ok": False, "dir": d, "qty": q, "why": rp["sl_warn"]})
+    return rp
+
+
+def _own_meta(p):
+    """帳本部位的落地內容（重啟後補回帳本；委託單物件存不了 ⇒ 存當下的明細數字＋委託單編號，重啟後再用編號問回來）。"""
+    now = time.time()
+    recs = []
+    for r in p.get("own_trades") or []:
+        q, pq, fin = _own_rec(r, now)
+        recs.append({"role": r["role"], "p": r["p"], "n": r["n"], "at": r.get("at"), "id": r.get("id"),
+                     "q0": q, "pq0": pq, "fin0": fin})
+    keep = ("dir", "entry", "entry_fill", "entry0", "entry_qty", "qty", "qty_sent", "product", "mix", "mix0",
+            "entry_time", "entry_day", "sl_points", "tp_points", "no_tp", "fill_lo", "fill_hi", "mix_sent_at",
+            "late_leg", "own_adj", "own_seen", "close_reason", "fill_warn", "bpx")
+    m = {k: p.get(k) for k in keep if p.get(k) is not None}
+    m.update(own=True, own_recs=recs)
+    return m
+
+
+def _own_restore(m):
+    """⇒ 從落地的帳本補回部位（⛔ 鎖外面叫：會用委託單編號跟券商問回委託單）；補不回 ⇒ None。"""
+    try:
+        age = (date.today() - date.fromisoformat(str(m.get("day")))).days
+    except ValueError:
+        return None
+    if not (0 <= age <= 1):
+        return None
+    byid = {}
+    try:
+        if _state["api"] is not None and is_live():
+            _update_status()
+            for t in _state["api"].list_trades() or []:
+                byid[str(getattr(getattr(t, "order", None), "id", None))] = t
+    except Exception:                       # noqa: BLE001  問不到 ⇒ 用落地時的數字
+        byid = {}
+    cur = {k: v for k, v in m.items() if k not in ("own_recs", "day", "own")}
+    cur.update(own=True, recovered=False, sl_src="meta", target_trade=None, own_trades=[])
+    for r in m.get("own_recs") or []:
+        rr = dict(r)
+        rr["t"] = byid.get(str(r.get("id"))) if r.get("id") is not None else None
+        cur["own_trades"].append(rr)
+    # 停機期間停利已經全部成交（帳本算出 0 口）也照樣補回 ⇒ 對帳時立刻結算、記成績單（⛔ 不可以當成「已經記過」丟掉）
+    return cur
+
+
+def _close_own(pos, reason):
+    """
+    ⭐ 第三輪品管：帳本部位平倉（混搭／整筆小台／微台多口）。⛔ 呼叫端已拿 _close_lock、已對帳。
+    每一輪：問券商每一腿 ⇒ 每一腿送 min(券商那一腿, 我們持有的保守值 hi)；上一張還沒結束 ⇒ hi 已經當成全部成交扣掉 ⇒ ⛔ 不會再送。
+    我們的明細說全部平完（單都結束）⇒ 記成績單、清部位（⛔ 不等券商部位回報空手：那是舊資料，RECENT_CLOSE_S 內不撿回）。
+    """
+    import shioaji as sj
+    act = sj.Action.Sell if pos["dir"] == "long" else sj.Action.Buy
+    if not is_live():
+        for p, n in _mix_of(pos).items():
+            if n > 0:
+                _send(_order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.Cover,
+                             qty=n, product=p), "close_" + reason, product=p)
+        with _lock:
+            _state["position"] = None
+        return True, None
+    stray = _own_cancel_targets(pos)
+    _update_status()                          # ⭐ #1／#8：撤完停利單一定再讀一次停利明細（撤單那一瞬間成交的那段）
+    with _lock:
+        pos["close_reason"] = reason
+    _CLOSE_INFLIGHT["on"] = True
+    errs, last_err, unsure = {}, None, []
+    before = {}
+    word = {"MXF": "小台", "TMF": "微台"}
+    for attempt in range(CLOSE_TRIES):
+        legs = _broker_legs()
+        if legs == "unknown":
+            last_err = "跟券商確認不到每一腿還剩多少 —— 先不送平倉單（避免平過頭），稍後會再試"
+            break
+        sb = _own_signed_legs(legs, pos["dir"])
+        _update_status()
+        book = _own_book(pos)
+        if any(sb[p] < 0 and book[p]["hi"] > 0 for p in RATIO):
+            last_err = "券商上有一腿是反方向 —— 那一腿先不送平倉單，對帳確認後會改成反向殘單處理"
+        todo, unsure = {}, []
+        for p in ("MXF", "TMF"):
+            hi = int(round(book[p]["hi"]))
+            b = max(0, sb[p])
+            n = (min(b, hi) // RATIO[p]) * RATIO[p]
+            if n > 0 and p in before and b < before[p][0] - (book[p]["c"] - before[p][1]) - 1e-9:
+                # 補送前確認：券商那一腿比「上一張送出前 − 那之後明細說成交的」還少 ⇒ 有明細沒講到的成交 ⇒ ⛔ 不補，冷卻後再問。
+                # ⚠️ 券商比較多（還沒反映剛成交的舊資料）⇒ 照規則 ① 送 min(券商, 帳本保守值)：帳本是真的（老闆不會手動交易）
+                n = 0
+            if n > 0:
+                todo[p] = n
+                before[p] = (b, book[p]["c"])
+            elif hi > 0:
+                unsure.append(p)
+        if not todo:
+            break
+        sent_now = []
+        for p, n in todo.items():
+            try:
+                o = _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.Cover, qty=n, product=p)
+            except ValueError as e:
+                errs[p] = str(e)
+                continue
+            ok, err, res = _send(o, "close_" + reason, product=p)
+            if ok:
+                with _lock:
+                    _own_add(pos, "close", p, n, res)
+                sent_now.append(pos["own_trades"][-1])
+            else:
+                errs[p] = err
+        if not sent_now:
+            last_err = "；".join("%s：%s" % (p, e) for p, e in errs.items()) or last_err
+            break
+        for _ in range(int(FILL_WAIT / 0.4)):
+            time.sleep(0.4)
+            _update_status()
+            now = time.time()
+            if all(_own_rec(r, now)[2] for r in sent_now):
+                break
+    _update_status()
+    now = time.time()
+    book = _own_book(pos, now)
+    with _lock:
+        if _state["position"] is pos:
+            _own_fields(pos, book)
+            if pos["qty"] <= 0 and book["_all_final"]:
+                _own_finish(pos, now)
+                msg = []
+                if stray:
+                    msg.append("有停利單沒撤掉，請自己到大戶投刪除")
+                return True, ("平倉成功，但" + "；".join(msg)) if msg else None
+    _close_fail["at"] = time.time()
+    parts = []
+    for p in ("MXF", "TMF"):
+        o = int(round(book[p]["ours"]))
+        if o > 0:
+            hi = int(round(book[p]["hi"]))
+            parts.append("%s那一腿還剩 %d 口等值%s" % (word[p], o, "（平倉單的成交還沒回報，先不再送）" if hi <= 0 else
+                                                  ("（%s）" % errs[p] if errs.get(p) else "")))
+        elif book[p]["c"] > 0:
+            parts.append("%s那一腿已平掉（%d 口等值）" % (word[p], int(round(book[p]["c"]))))
+    msg = ("；".join(parts) or "平倉單的成交還沒回報完") + "—— 部位還在，%.0f 秒後會再處理；等不及請立刻自己到大戶投平倉" % CLOSE_COOLDOWN
+    if last_err:
+        msg = last_err + "；" + msg
+    if stray:
+        msg += "；另外有停利單沒撤掉，請自己到大戶投刪除"
+    _log("close_failed", {"ok": False, "err": last_err, "own": True,
+                          "left": {p: int(round(book[p]["ours"])) for p in RATIO}, "why": msg})
+    return False, msg
+
+
+def _own_cancel_targets(pos):
+    """撤掉帳本裡還掛著的停利單 ⇒ 有沒有撤不掉的。⛔ 不拿 _lock 問券商。"""
+    if not is_live() or _state["api"] is None:
+        return False
+    _update_status()
+    now = time.time()
+    stray = False
+    for r in list(pos.get("own_trades") or []):
+        if r["role"] != "target" or r.get("t") is None:
+            continue
+        dq, _dpq, done = _own_rec(r, now)
+        if done:
+            continue
+        try:
+            _state["api"].cancel_order(r["t"])
+            _log("cancel_target", {"ok": True, "product": r["p"], "why": "平倉前先撤掉還掛著的停利單"})
+        except Exception as e:
+            stray = True
+            _log("cancel_target", {"ok": False, "product": r["p"], "err": str(e)[:200],
+                                   "why": "撤不掉，平倉後請自己到大戶投刪掉那張停利單"})
+    with _lock:
+        pos["target_trade"] = None
+        pos["target_trades"] = {}
+    return stray
+
+
 def _close_mix(pos, reason):
     """
     ⭐ 2026-11-06 混搭平倉（停損／收盤／04:58／手動都走 close() ⇒ 部位是混搭、這一趟是混搭開的〔mix0／mix_sent〕、
@@ -2633,6 +3125,12 @@ def _close_mix(pos, reason):
     """
     import shioaji as sj
     act = sj.Action.Sell if pos["dir"] == "long" else sj.Action.Buy
+    if is_live() and pos.get("recovered") and not pos.get("rec_ok") and not pos.get("own") \
+            and (pos.get("product") in ("MXF", "MIX")):
+        # ⭐ 第三輪品管 #3：撿回來（沒有進場明細）的小台／混搭，還沒持續確認（相隔 ≥ CLOSE_COOLDOWN 兩次對帳都一樣）
+        #    ⇒ ⛔ 不准一次送整筆（可能是剛平完的舊資料）
+        _close_fail["at"] = time.time()
+        return False, "剛撿回來的部位還在跟券商確認（%g 秒內兩次對帳都一樣才平）—— 等不及請自己到大戶投處理" % CLOSE_COOLDOWN
     if not is_live():
         # 演練：照本機記的兩腿各送一張（跟單一合約那條一樣，送了就當平掉）
         for p, n in _mix_of(pos).items():
