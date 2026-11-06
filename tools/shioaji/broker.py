@@ -1293,9 +1293,14 @@ def qty_ok(q):
     """
     一筆的口數（微台等值）合不合理：整數（⛔ 不收 bool／小數／字串）、1 ≤ q ≤ QTY_MAX。
     ⭐ 2026-11-06：小台開著 ⇒ 上限放寬到 QTY_MAX_EQ（＝ 10 口小台）；沒開 ⇒ 跟以前一樣 10。
+    ⛔ 2026-11-06 補：超過 10 口的只收「整筆小台湊得成」的（5 的倍數）—— 11～14 口這種
+       微台一張單送不了、小台又湊不成 ⇒ 一開始就判不合理（⛔ 不准走到 _order 才炸例外）。
     """
-    top = QTY_MAX_EQ if mini_on() else QTY_MAX
-    return isinstance(q, int) and not isinstance(q, bool) and 1 <= q <= top
+    if not (isinstance(q, int) and not isinstance(q, bool) and q >= 1):
+        return False
+    if q <= QTY_MAX:
+        return True
+    return mini_on() and q <= QTY_MAX_EQ and q % RATIO["MXF"] == 0
 
 
 def _own_qty(pos):
