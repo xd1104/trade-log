@@ -13827,7 +13827,17 @@ def main():
         else:
             broker.CA_OK["ok"] = False
             broker.CA_OK["msg"] = "還沒設定憑證（.env 裡的 SHIOAJI_CA_PATH / SHIOAJI_CA_PASSWD）"
-        broker.configure(api, contract)      # 真實下單要用同一個連線與同一個合約
+        # ⭐ 2026-11-06 小台：跟微台**同一個交割月**的小台也交給 broker（開關 MINI_ON 沒開就只是備著，
+        #    但對帳一定兩種都看 ⇒ 重啟時券商上的小台部位不會被當成「沒部位」）。找不到 ⇒ None（只用微台）。
+        mxf = None
+        try:
+            want = getattr(contract, "delivery_month", None)
+            mxf = next((c for c in getattr(api.Contracts.Futures, "MXF")
+                        if getattr(c, "delivery_month", None) == want
+                        and not str(c.code).startswith("MXFR")), None)
+        except Exception as e:                # noqa: BLE001
+            print("⚠️ [小台] 找不到跟微台同月的小台合約：%s" % str(e)[:120])
+        broker.configure(api, contract, {"MXF": mxf})   # 真實下單要用同一個連線與同一組合約
         api.set_on_tick_fop_v1_callback(on_tick)
         api.set_on_bidask_fop_v1_callback(on_bidask)
         # 成交 + 五檔都訂：成交價進模型，五檔負責讓畫面跟得上市場

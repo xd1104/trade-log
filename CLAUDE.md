@@ -998,6 +998,10 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   要檢查「會不會亂送單」只需要讀那一個檔。**預設是 dry run** —— 要真的送單，
   必須有 `tools/shioaji/REAL_ORDERS_ON` 這個檔存在，而那個檔**只有 Benson 自己建**。
   改過 `broker.py` 一定要重跑 `test_broker.py`（離線、不連永豐、不送單，120 項）。
+- ⭐ **小台（2026-11-06）**：`tools/shioaji/MINI_ON` 存在（⛔ 只有 Benson 建）＋這一筆微台等值是 5 的倍數 ⇒ 整筆用小台
+  （1 小台＝5 微台，⛔ 不混搭）。broker 裡**所有口數都是微台等值**，只在送單（÷5）與讀券商（×5）兩個邊界換算 ⇒
+  auto_fire／night_fire／lots／risk_cap／cashflow 不用改。對帳兩種合約都看；兩種同時有部位、或本機與券商合約對不上 ⇒ unknown（不動）。
+  ⚠️ 停損判斷仍用微台成交價（跟小台差約 1 點）。測試：`test_mini.py`。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：

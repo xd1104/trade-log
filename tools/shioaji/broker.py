@@ -51,6 +51,16 @@ TRADE_DIR = HERE / "real_trades"
 QTY = 1                                   # 沒指定口數時的預設（手動真單永遠是這個）。不從介面讀
 QTY_MAX = 10                              # ⭐ 2026-10-14：一張單最多幾口（階梯最高一級聯軍 10 口）；超過一律不送
 MAX_ENTRIES = 3                           # 每天最多進場幾次
+# ══ 小台（2026-11-06 Benson：權益到 52 萬、階梯 10＋4 到頂 ⇒ 換小台）════════════════════════════════
+# ⛔⛔ 這一支裡所有「口數」一律是**微台等值**（1 小台＝5 微台）：部位的 qty、成交明細、對帳、成績單、已實現損益
+#    全部用微台等值 ⇒ auto_fire／night_fire／lots／risk_cap／cashflow／畫面**一個字都不用改**、也不會把小台少算 5 倍。
+#    只有兩個邊界會換算：送單（_order：微台等值 ÷ 5 ＝ 小台口數）與讀券商（部位／成交明細／已實現：小台口數 × 5）。
+# ⛔ 開關 MINI_ON（檔案存在才用小台；**只有 Benson 能開**，跟 REAL_ORDERS_ON 同一套規矩，gitignore）。
+#    沒開 ⇒ 跟 11-06 以前一模一樣（只用微台）。
+# 用小台的條件：開關開著、小台合約有拿到、這一筆微台等值是 5 的倍數 ⇒ 整筆用小台（⛔ 不混搭：一個部位只有一種合約）。
+MINI_FLAG = HERE / "MINI_ON"
+RATIO = {"TMF": 1, "MXF": 5}              # 一口＝幾口微台
+QTY_MAX_EQ = QTY_MAX * RATIO["MXF"]       # 開了小台之後，一筆最多幾口微台等值（＝ 10 口小台）
 STALE_ALARM = 20                          # 有真實部位時，報價超過幾秒沒更新就示警
 
 # 憑證狀態。真實下單一定要憑證，模擬帳戶不用 —— 所以模擬跑再多輪也測不到這一關
@@ -73,6 +83,7 @@ CLOSE_COOLDOWN = 15.0     # 秒。平倉失敗後隔多久才准再試（不然�
 _state = {
     "api": None,
     "contract": None,
+    "contracts": {},      # ⭐ 2026-11-06 {"TMF": 微台合約, "MXF": 小台合約}；"contract" 永遠＝微台（舊路照舊）
     "account": None,
     "position": None,     # {'dir','entry','qty','entry_time','target_trade'}
     "last_error": None,
@@ -86,11 +97,45 @@ def is_live():
     return REAL_FLAG.exists()
 
 
-def configure(api, contract):
-    """面板連上永豐之後叫一次。"""
+def mini_on():
+    """小台開關開著、而且這次連線有拿到小台合約。"""
+    return MINI_FLAG.exists() and _state["contracts"].get("MXF") is not None
+
+
+def product_of(code):
+    """合約代碼 ⇒ "TMF"／"MXF"；認不得 ⇒ None。"""
+    c = str(code or "")
+    for k in RATIO:
+        if c.startswith(k):
+            return k
+    return None
+
+
+def product_for(qty):
+    """這一筆（微台等值）要用哪一種合約。⛔ 不是 5 的倍數、或小台沒開 ⇒ 微台。"""
+    if mini_on() and isinstance(qty, int) and not isinstance(qty, bool) and qty >= RATIO["MXF"] \
+            and qty % RATIO["MXF"] == 0 and qty // RATIO["MXF"] <= QTY_MAX:
+        return "MXF"
+    return "TMF"
+
+
+def _ratio_of_trade(trade):
+    """一張委託單是哪種合約 ⇒ 一口＝幾口微台（讀不到 ⇒ 1，＝ 11-06 以前的行為）。"""
+    try:
+        return RATIO.get(product_of(getattr(getattr(trade, "contract", None), "code", None)), 1)
+    except Exception:
+        return 1
+
+
+def configure(api, contract, extra=None):
+    """面板連上永豐之後叫一次。`extra`＝{"MXF": 小台合約}（⭐ 2026-11-06；沒給 ⇒ 只有微台）。"""
     with _lock:
         _state["api"] = api
         _state["contract"] = contract
+        _state["contracts"] = {"TMF": contract}
+        for k, c in (extra or {}).items():
+            if k in RATIO and c is not None:
+                _state["contracts"][k] = c
         acc = None
         try:
             import shioaji as sj
@@ -154,8 +199,9 @@ def _deal_sums(trade):
         deals = list(getattr(getattr(trade, "status", None), "deals", None) or [])
         pq = q = 0.0
         lo = hi = None
+        r = _ratio_of_trade(trade)           # ⭐ 2026-11-06 小台一口＝5 口微台等值
         for d in deals:
-            dq, dp = float(getattr(d, "quantity", 0) or 0), float(d.price)
+            dq, dp = float(getattr(d, "quantity", 0) or 0) * r, float(d.price)
             if dq <= 0:
                 continue
             pq += dp * dq
@@ -356,11 +402,15 @@ def _realized_day(d):
     for r in rows:
         try:
             act = str(getattr(r, "direction", "")).lower()
+            prod = product_of(getattr(r, "code", None))
+            if prod is None and getattr(r, "code", None):
+                continue                  # ⭐ 2026-11-06 不是微台也不是小台（別的商品）⇒ 不是我們的
             out.append({
                 "entry": float(getattr(r, "entry_price", 0) or 0),
                 "exit": float(getattr(r, "cover_price", 0) or 0),
                 "pnl": float(getattr(r, "pnl", 0) or 0),
-                "qty": int(getattr(r, "quantity", 0) or 0),
+                "qty": int(getattr(r, "quantity", 0) or 0) * RATIO.get(prod, 1),   # 微台等值
+                "product": prod or "TMF",
                 # 期貨的 direction 是**進場**那一邊：Buy ＝ 做多
                 "dir": "long" if "buy" in act else ("short" if "sell" in act else None),
                 "id": getattr(r, "id", None)})
@@ -607,13 +657,37 @@ def broker_position():
     #    會一直掛在真單卡上，看起來像現在出事）。⛔ 只清對帳自己寫的那種，別的錯誤留著。
     if str(_state.get("last_error") or "").startswith("對帳失敗"):
         _state["last_error"] = None
-    code = getattr(_state["contract"], "code", None)
+    # ⭐ 2026-11-06 小台：微台、小台兩種都看（⛔ 只看一種的話，重啟時券商上的小台部位會被當成「沒部位」⇒ 沒有停損）。
+    #    兩種同時都有 ⇒ unknown（⛔ 不猜哪一筆是我們的、什麼都不動、示警）。
+    codes = {}
+    _cs = dict(_state["contracts"] or {})
+    _cs["TMF"] = _state["contract"]         # ⛔ 微台永遠以 _state["contract"] 為準（舊路／測試直接設它）
+    for k, c in _cs.items():
+        cc = getattr(c, "code", None)
+        if cc:
+            codes[cc] = k
+    if not codes:
+        cc = getattr(_state["contract"], "code", None)
+        if cc:
+            codes[cc] = "TMF"
+    found = None
     for p in rows or []:
-        if code and getattr(p, "code", None) != code:
+        pc = getattr(p, "code", None)
+        if codes and pc not in codes:
             continue
         qty = int(getattr(p, "quantity", 0) or 0)
         if qty == 0:
             continue
+        prod = codes.get(pc, "TMF")
+        if found is not None and found[0] != prod:
+            _state["last_error"] = "券商上微台和小台同時有部位 —— 分不出哪一筆是程式的，不敢動，請自己確認"
+            return "unknown"
+        if found is None:
+            found = (prod, p, qty)
+    if found is None:
+        return None
+    prod, p, qty = found
+    if prod in RATIO:                      # 下面是原本認方向那一段（縮排沿用）
         # 【2026-09-01 出過大事】舊寫法是
         #     "long" if ("buy" in d or qty > 0) else "short"
         # qty > 0 對任何部位都成立 ⇒ **永遠回報做多**。他做空的那一筆因此：
@@ -635,7 +709,8 @@ def broker_position():
         else:
             _state["last_error"] = "券商回報的部位看不出方向，不敢動它"
             return "unknown"
-        return {"dir": side, "qty": abs(qty), "entry": float(getattr(p, "price", 0) or 0)}
+        return {"dir": side, "qty": abs(qty) * RATIO[prod], "entry": float(getattr(p, "price", 0) or 0),
+                "product": prod}
     return None
 
 
@@ -726,6 +801,7 @@ def _his_manual(bp):
     """
     q = int(bp.get("qty") or 0)
     return {"dir": bp["dir"], "entry": float(bp.get("entry") or 0), "qty": q,
+            "product": bp.get("product") or "TMF",
             "entry_time": None, "target_trade": None, "recovered": True, "sl_src": "manual",
             "handover": True, "bpx": float(bp.get("entry") or 0),
             "sl_warn": "程式開的那幾口已經出場；剩下 %d 口是你自己加碼的 —— 面板照手動單的規矩用 %g 點停損，"
@@ -776,7 +852,7 @@ def pos_note(p=None):
 META_NAME = "_open_multi.json"
 _META_KEYS = ("dir", "entry_fill", "entry_qty", "qty_sent", "legs", "tgt_used", "touched", "late_fill",
               "handover", "entry_time", "sl_points", "tp_points", "no_tp", "fill_warn", "qty",
-              "bpx", "fill_lo", "fill_hi", "entry_day", "real_base")
+              "bpx", "fill_lo", "fill_hi", "entry_day", "real_base", "product")
 _META = {"last": None}
 
 
@@ -1057,6 +1133,12 @@ def reconcile():
     if pos == "unknown":
         return "unknown"
     _cur0 = _state["position"]
+    if isinstance(pos, dict) and isinstance(_cur0, dict) \
+            and (_cur0.get("product") or "TMF") != (pos.get("product") or "TMF"):
+        # ⭐ 2026-11-06：本機記的是一種合約、券商上的是另一種 ⇒ ⛔ 不猜、不清本機部位、不平、示警
+        _state["last_error"] = ("本機部位是%s、券商上的是%s —— 分不出來，不敢動，請自己確認"
+                                % (_cur0.get("product") or "TMF", pos.get("product")))
+        return "unknown"
     pre = _reconcile_prefetch(_cur0, pos)          # ⛔ 鎖外面問券商
     # ⭐ QA r2 必修 4：要撿回部位時，先把上次落地的多口狀態讀好（⛔ 鎖外面讀檔）
     meta_pre = _meta_load() if (_cur0 is None and isinstance(pos, dict)) else None
@@ -1111,7 +1193,8 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre):
             # 重啟後撿回部位：只知道方向與均價，停利單的下落要另外查
             got = {"dir": pos["dir"], "entry": pos["entry"],
                    "qty": pos["qty"], "entry_time": None,
-                   "target_trade": None, "recovered": True}
+                   "target_trade": None, "recovered": True,
+                   "product": pos.get("product") or "TMF"}
             _recover_meta(got)
             if meta_pre is not None:
                 # ⭐ QA r2 必修 4：上次落地的多口狀態對得上 ⇒ 補回（他動過、出去過的段、後補成交、交接）
@@ -1207,8 +1290,12 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre):
 # ---------------------------------------------------------------- 下單
 
 def qty_ok(q):
-    """一張單的口數合不合理：整數（⛔ 不收 bool／小數／字串）、1 ≤ q ≤ QTY_MAX。"""
-    return isinstance(q, int) and not isinstance(q, bool) and 1 <= q <= QTY_MAX
+    """
+    一筆的口數（微台等值）合不合理：整數（⛔ 不收 bool／小數／字串）、1 ≤ q ≤ QTY_MAX。
+    ⭐ 2026-11-06：小台開著 ⇒ 上限放寬到 QTY_MAX_EQ（＝ 10 口小台）；沒開 ⇒ 跟以前一樣 10。
+    """
+    top = QTY_MAX_EQ if mini_on() else QTY_MAX
+    return isinstance(q, int) and not isinstance(q, bool) and 1 <= q <= top
 
 
 def _own_qty(pos):
@@ -1221,31 +1308,47 @@ def _own_qty(pos):
     return v if qty_ok(v) else QTY
 
 
-def _order(action, price, price_type, order_type, octype, qty=None):
+def _cur_product():
+    return (_state["position"] or {}).get("product") or "TMF"
+
+
+def _order(action, price, price_type, order_type, octype, qty=None, product=None):
     import shioaji as sj
     q = QTY if qty is None else qty
     if not qty_ok(q):
         # ⛔ 口數看不懂／超過上限 ⇒ 組不出單（呼叫端的 _send 不會被叫到）
         raise ValueError("口數不合理（%r），不送" % (q,))
-    kw = {"action": action, "price": price, "quantity": q,
+    prod = product or _cur_product()
+    r = RATIO.get(prod, 1)
+    # ⭐ 2026-11-06 微台等值 ⇒ 這種合約的口數。小台部位一定是 5 的倍數；不是（例：撿回部位時的預設 1 口）
+    #    ⇒ 無條件進位成 1 口小台（＝「每張平 1 口」的那條舊路），⛔ 不會送出 0 口。
+    n = -(-q // r)
+    if not (1 <= n <= QTY_MAX):
+        raise ValueError("口數不合理（%r 口%s），不送" % (n, prod))
+    kw = {"action": action, "price": price, "quantity": n,
           "price_type": price_type, "order_type": order_type, "octype": octype}
     if _state["account"] is not None:
         kw["account"] = _state["account"]
     return sj.FuturesOrder(**kw)
 
 
-def _send(order, why):
-    """真正送出去的唯一出口。dry run 時只記錄不送。"""
+def _send(order, why, product=None):
+    """真正送出去的唯一出口。dry run 時只記錄不送。⭐ 2026-11-06 `product`＝送到哪一種合約（沒給 ⇒ 部位的那種）。"""
     api = _state["api"]
+    prod = product or _cur_product()
     body = {"action": str(order.action), "price": order.price, "qty": order.quantity,
             "price_type": str(order.price_type), "order_type": str(order.order_type),
-            "octype": str(order.octype), "why": why}
+            "octype": str(order.octype), "why": why, "product": prod}
     if not is_live():
         return True, None, _log(why, {**body, "ok": True, "dry_run": True})
     if api is None:
         return False, "尚未連線", _log(why, {**body, "ok": False, "err": "no api"})
     try:
-        trade = api.place_order(_state["contract"], order)
+        c = (_state["contracts"] or {}).get(prod) if prod != "TMF" else _state["contract"]
+        if c is None:
+            _log(why, {**body, "ok": False, "err": "沒有%s合約" % prod})
+            return False, "沒有%s合約（連線時沒拿到）" % prod, None
+        trade = api.place_order(c, order)
         _log(why, {**body, "ok": True,
                    "ordno": getattr(getattr(trade, "order", None), "id", None),
                    "status": str(getattr(getattr(trade, "status", None), "status", ""))})
@@ -1400,10 +1503,11 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         _log("entry_bad_qty", {"ok": False, "qty": repr(want)[:20], "why": "口數不合理，不送"})
         return False, "口數不合理（%r）—— 一張都沒送" % (want,), None
     act = sj.Action.Buy if direction == "long" else sj.Action.Sell
+    prod = product_for(want)              # ⭐ 2026-11-06 小台開著＋5 的倍數 ⇒ 整筆小台
     ok, err, res = _send(
         _order(act, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.New,
-               qty=want),
-        "entry")
+               qty=want, product=prod),
+        "entry", product=prod)
     if not ok:
         return False, err, None
 
@@ -1438,7 +1542,7 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         if s is not None and s[2] is not None:
             rng = {"fill_lo": s[2], "fill_hi": s[3]}
     with _lock:
-        _state["position"] = {"dir": direction, "entry": entry, "qty": k,
+        _state["position"] = {"dir": direction, "entry": entry, "qty": k, "product": prod,
                               "entry_time": datetime.now().strftime("%H:%M:%S"),
                               "target_trade": None, "recovered": False,
                               "ref_price": float(price),

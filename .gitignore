@@ -31,6 +31,8 @@ tools/shioaji/monitor_push.log
 tools/shioaji/real_orders/
 tools/shioaji/sim_orders/
 tools/shioaji/REAL_ORDERS_ON
+# ⭐ 2026-11-06 小台開關（存在＝5 的倍數整筆用小台；只有 Benson 自己建）
+tools/shioaji/MINI_ON
 
 # 憑證：絕對不進版控
 *.pfx
