@@ -77,6 +77,10 @@ chk("10 口 ⇒ 小台", broker.product_for(10), "MXF")
 chk("5 口 ⇒ 小台", broker.product_for(5), "MXF")
 chk("4／7／1 口 ⇒ 微台（不混搭）", [broker.product_for(q) for q in (4, 7, 1)], ["TMF", "TMF", "TMF"])
 chk("上限放寬到 50（＝10 口小台）", (broker.qty_ok(50), broker.qty_ok(51)), (True, False))
+chk("⛔ 11～14 口湊不成（微台一張送不了、小台不整除）⇒ 不合理", [broker.qty_ok(q) for q in (11, 12, 14, 15)],
+    [False, False, False, True])
+ok, err, _p = broker.enter("long", 38000, None, sl_points=470, qty=11)
+chk("⛔ 叫它下 11 口 ⇒ 一張都不送、不炸例外", (ok, "口數不合理" in (err or "")), (False, True))
 o = broker._order(sj.Action.Buy, 0, sj.FuturesPriceType.MKP, sj.OrderType.IOC, sj.FuturesOCType.New,
                   qty=10, product="MXF")
 chk("微台等值 10 ⇒ 送 2 口小台", o.quantity, 2)
