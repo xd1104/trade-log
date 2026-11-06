@@ -161,10 +161,15 @@ class MultiAPI:
         self.target = None
         self.overclosed = 0
         self.pnl = []
+        self.all_trades = []      # ⭐ 2026-11-06 第三輪品管：永豐 SDK 的 list_trades()（重啟後 broker 用委託單編號問回帳本）
+
+    def list_trades(self):
+        return list(self.all_trades)
 
     def place_order(self, contract, order):
         self.orders.append(order)
         t = Trade()
+        self.all_trades.append(t)
         oc, pt = str(order.octype), str(order.price_type)
         if oc.endswith("New"):
             k = order.quantity if not self.new_fill else self.new_fill.pop(0)
@@ -590,8 +595,10 @@ ok, err, pos = broker.enter("long", 12010.0, 60, sl_points=60, qty=3)
 api.fill_target(1, 12070.0)                       # 停利單先成交 1 口
 broker.reconcile()
 p = broker._state["position"]
-chk("  對帳：部位剩 2 口、記一段 leg（1 口 @12070 停利）",
-    (p["qty"], [(l["qty"], l["px"], l["src"]) for l in p.get("legs", [])]), (2, [(1, 12070.0, "tp")]))
+# ⭐ 2026-11-06 第三輪品管（帳本部位）：停利那段在帳本（停利單明細），不再掛 legs 在部位上；成績單照樣有 legs
+_bk = broker._own_book(p)
+chk("  對帳：部位剩 2 口、停利那段在帳本（1 口 @12070）",
+    (p["qty"], _bk["TMF"]["t"], _bk["TMF"]["tpq"]), (2, 1.0, 12070.0))
 chk("  ⛔ 進場價（停損基準）維持成交那一刻的均價", p["entry"], 12010.0)
 ok, err = broker.close("sl")
 chk("  停損：撤停利 → 平倉單只送剩下的 2 口、平到 0", (ok, api.cancels, qtys(api, "close"), api.lots, api.overclosed),
@@ -1471,8 +1478,9 @@ try:
 finally:
     broker.RECOVER_HOOK = _hook
 p = broker._state["position"]
-chk("  重啟後撿回 3 口、補回 entry_qty 3（帳本 fill_unsure ⇒ 最多認到送出去的 3 口）",
-    (p.get("qty"), p.get("entry_qty"), p.get("recovered")), (3, 3, True))
+# ⭐ 第三輪品管：多口改成帳本部位 ⇒ 重啟後從落地的帳本補回（own、不是「撿回」），口數照進場單明細
+chk("  重啟後從落地的帳本補回 3 口、entry_qty 3",
+    (p.get("qty"), p.get("entry_qty"), p.get("recovered"), p.get("own")), (3, 3, False, True))
 AF._eod(DAY, 0, time.time(), "13:43:30")
 _eod = [o for o in AF._rows_of(DAY) if o.get("rec") == "eod"]
 chk("  ⭐ 重啟過也照樣平掉 3 口（一張 3 口）、⛔ 不留倉過夜",
@@ -1509,8 +1517,14 @@ chk("  成績單記 3 口", trades_file()[-1]["qty"], 3)
 api = UnkAPI(cover_fill=[0])
 r = af_send(api, 3)
 ok, err = broker.close("sl")
-chk("  問不到部位、但明細說第一張 0 口 ⇒ 才補送下一張 ⇒ 平完、⛔ 沒平過頭",
-    (ok, qtys(api, "close"), api.overclosed, broker._state["position"]), (True, [3, 3], 0, None))
+# ⭐ 第三輪品管規則 ①：送單 ＝ min(券商那一腿, 帳本) ⇒ 問不到券商就 ⛔ 不補送（舊版靠明細就補）；冷卻後下一輪再送
+chk("  問不到部位、明細說第一張 0 口 ⇒ 這一輪不補送、回報沒平完、⛔ 沒平過頭",
+    (ok, qtys(api, "close"), api.overclosed, (broker._state["position"] or {}).get("qty")), (False, [3], 0, 3))
+broker._close_fail["at"] = 0.0
+api.unk = 0                                         # 網路恢復
+ok, err = broker.close("sl")
+chk("  下一輪問得到券商 ⇒ 補送 3 口、平完", (ok, qtys(api, "close"), api.overclosed, broker._state["position"]),
+    (True, [3, 3], 0, None))
 live(False)
 
 print("  -- 必修 3：停利部分成交後他自己加碼 ⇒ 收盤⛔ 不平、停損只平我們剩下的、成績單不多算 --")
@@ -1525,17 +1539,17 @@ for tag, add_px in (("不同價", 12040.0), ("同價", 12010.0)):
     broker.reconcile()
     _touch_confirm()
     p = broker._state["position"]
-    chk("  [%s] 對帳：口數變多、明細對不上 ⇒ 標「他動過」、⛔ 不蓋進場價、我們剩 1 口" % tag,
-        (p.get("touched"), p.get("entry"), broker._ours_left(p), p.get("qty")), (True, 12010.0, 1, 2))
+    # ⭐ 第三輪品管（帳本＋規則 ②③）：券商多出來的那口還沒持續確認 ⇒ 照帳本（我們 1 口），⛔ 不標「他動過」、不轉手動
+    chk("  [%s] 對帳：券商多 1 口（沒確認）⇒ 照帳本 1 口、記下差異、⛔ 不蓋進場價" % tag,
+        (p.get("touched"), p.get("entry"), p.get("qty"), bool(p.get("diff_susp"))), (None, 12010.0, 1, True))
     AF._eod(DAY, 0, time.time(), "13:43:30")
     _eod = [o for o in AF._rows_of(DAY) if o.get("rec") == "eod"]
-    chk("  [%s] ⭐ 收盤：混在一起 ⇒ ⛔ 不平（eod_not_ours、0 張平倉單、券商還是 2 口）" % tag,
-        ([o.get("why") for o in _eod], qtys(api, "close"), len(api.lots)), (["eod_not_ours"], [], 2))
+    chk("  [%s] 收盤：平帳本的 1 口（多的那口沒確認 ⇒ 不碰）" % tag,
+        ([o.get("why") for o in _eod], qtys(api, "close"), len(api.lots)), (["eod_closed"], [1], 1))
     ok, err = broker.close("sl")
     p = broker._state["position"]
-    chk("  [%s] 停損：⛔ 只平我們的 1 口、他的 1 口留著（改成他的手動部位）" % tag,
-        (ok, qtys(api, "close"), len(api.lots), (p or {}).get("qty"), (p or {}).get("sl_src")),
-        (True, [1], 1, 1, "manual"))
+    chk("  [%s] 再按停損 ⇒ 這一趟已經平完（不再送單、不轉手動部位）" % tag,
+        (ok, "已經平完" in (err or ""), qtys(api, "close"), len(api.lots), p), (True, True, [1], 1, None))
     _tr = trades_file()[-1]
     chk("  [%s] ⭐ 成績單記 3 口（停利 2＋停損 1）、⛔ 不是 4 口" % tag, (_tr["qty"], [l["qty"] for l in _tr["legs"]]),
         (3, [2, 1]))
@@ -1554,9 +1568,9 @@ api.lots.pop()                                     # 他把自己加的那口平
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
 p = broker._state["position"]
-chk("  他動過後自己減 1 口（不是停利）⇒ 算他的：我們還剩 1 口、legs 只有停利那一段、照樣標「他動過」",
-    (broker._ours_left(p), [l["qty"] for l in p.get("legs") or []], p.get("touched"), p.get("sl_src")),
-    (1, [2], True, None))
+# ⭐ 第三輪品管：券商多的那口一直沒確認就又不見了 ⇒ 跟帳本一致（1 口）、差異取消、⛔ 不標「他動過」
+chk("  多出來那口沒確認就不見了 ⇒ 照帳本 1 口、差異取消",
+    (p.get("qty"), p.get("diff_susp"), p.get("touched")), (1, None, None))
 live(False)
 chk("  夜盤 04:58 那一把尺也一樣：他動過 ⇒ ⛔ 不碰（沒動過照舊認得出來）",
     (NF.looks_ours({"dir": "long", "entry": 12010.0, "qty": 2, "touched": True}, {"dir": "long", "entry": 12010.0}),
@@ -1576,8 +1590,9 @@ broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
 p = broker._state["position"]
 _tr = trades_file()[-1]
-chk("  我們的口數都出場了 ⇒ 成績單整趟 3 口、剩下的改成他的手動部位（1 口）",
-    (_tr["qty"], _tr["reason"], (p or {}).get("qty"), (p or {}).get("sl_src")), (3, "legs", 1, "manual"))
+# ⭐ 第三輪品管規則 ③④：帳本說我們 0 口 ⇒ 這一趟結束（成績單整趟 3 口、停利）；多的那口沒確認 ⇒ ⛔ 不轉手動部位、剛平完不撿回
+chk("  帳本的口數都出場了 ⇒ 成績單整趟 3 口（停利）、部位清掉（⛔ 不轉手動部位）",
+    (_tr["qty"], _tr["reason"], p), (3, "tp", None))
 live(False)
 
 print("  -- B3：平倉後券商變成反向部位 ⇒ 停手 --")
@@ -1595,9 +1610,13 @@ class FlipAPI(MultiAPI):
 api = FlipAPI()
 r = af_send(api, 3)
 ok, err = broker.close("sl")
-say(not ok and "反向" in str(err) and qtys(api, "close") == [3]
-    and any(o.get("kind") == "close_flipped" for o in order_log()),
-    "  ⛔ 反向 ⇒ 回失敗、只送過一張、委託 log 記 close_flipped", (ok, err, qtys(api, "close")))
+# ⭐ 第三輪品管規則 ①⑤：帳本（平倉單明細 3 口）說平完了 ⇒ 這一趟結束；券商之後顯示的反向 1 口不是這一趟 ⇒ 對帳撿回成部位（有停損）
+say(ok and qtys(api, "close") == [3] and broker._state["position"] is None,
+    "  平倉單明細說平完 ⇒ 成功、只送一張", (ok, err, qtys(api, "close")))
+broker._LAST_RECONCILE["at"] = 0.0
+_rp = broker.reconcile()
+chk("  券商上的反向 1 口 ⇒ 撿回成部位（方向照券商、有停損）、⛔ 不會因為「剛平完」被忽略",
+    ((_rp or {}).get("dir"), (_rp or {}).get("qty"), (_rp or {}).get("recovered")), ("short", 1, True))
 live(False)
 
 print("  -- B4：我們自己的平倉單在路上時，對帳看到少了幾口 ⇒ ⛔ 不記成 leg（那是我們在平）--")
@@ -1607,8 +1626,9 @@ api.lots.pop(0)                                    # 平倉單剛吃掉 1 口
 broker._CLOSE_INFLIGHT["on"] = True
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
-chk("  平倉中：部位 2 口、legs 沒有多一段", (broker._state["position"]["qty"], broker._state["position"].get("legs")),
-    (2, None))
+# ⭐ 第三輪品管（帳本）：沒有我們自己的平倉單明細 ⇒ 照帳本 3 口、⛔ 不記成 leg／別處平掉（券商少了要持續確認才算）
+chk("  平倉中：部位照帳本 3 口、legs 沒有多一段", (broker._state["position"]["qty"], broker._state["position"].get("legs")),
+    (3, None))
 broker._CLOSE_INFLIGHT["on"] = False
 live(False)
 
@@ -1631,8 +1651,9 @@ api.fill_target(1, 12070.0)
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
 p = broker._state["position"]
-chk("  停利部分成交那次對帳：leg 價錢照樣算得出來（tp），update_status 在鎖裡被叫 0 次",
-    ([(l["qty"], l["px"], l["src"]) for l in p.get("legs") or []], api.us_locked), ([(1, 12070.0, "tp")], 0))
+_bk = broker._own_book(p)        # ⭐ 第三輪品管（帳本）：停利那段在帳本
+chk("  停利部分成交那次對帳：停利明細照樣算得出來（1 口 @12070），update_status 在鎖裡被叫 0 次",
+    (_bk["TMF"]["t"], _bk["TMF"]["tpq"], api.us_locked), (1.0, 12070.0, 0))
 live(False)
 
 print("  -- 2026-11-02：部位少 2 口，問明細時停利單已經 3 口全成交 ⇒ 不可以留白 --")
@@ -1654,10 +1675,8 @@ api.race = True
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
 p = broker._state["position"]
-chk("  第一段：2 口算停利、價錢在", [(l["qty"], l["px"], l["src"]) for l in p.get("legs") or []],
-    [(2, 12070.0, "tp")])
-broker._LAST_RECONCILE["at"] = 0.0
-broker.reconcile()
+# ⭐ 第三輪品管（帳本）：問明細那一刻停利單已經 3 口全成交 ⇒ 帳本 0 口 ⇒ 這一次對帳就結算（價錢照停利明細）
+chk("  問明細時停利單已經全成交 ⇒ 這一次對帳就結算", p, None)
 rows = [json.loads(x) for x in (broker.TRADE_DIR / (str(date.today()) + ".jsonl")).read_text(encoding="utf-8").splitlines()]
 chk("  整趟：3 口、出場價算得出來、理由停利", (rows[-1]["qty"], rows[-1]["exit"], rows[-1]["reason"]),
     (3, 12070.0, "tp"))
@@ -1864,13 +1883,12 @@ broker.reconcile()
 _touch_confirm()
 ok, err = broker.close("sl")
 p = broker._state["position"]
-chk("  停損只平我們的 2 口；剩他 1 口交接成手動部位（handover）",
-    (qtys(api, "close"), list(api.lots), p.get("handover"), p.get("sl_src")), ([2], [12003.0], True, "manual"))
-chk("  ⭐ 04:58 那一把尺：交接出去的 ⇒ ⛔ 不是我們的（價錢只差 2 點也一樣）", NF.looks_ours(p, ent), False)
-chk("  日盤收盤那一把尺也一樣", AF._looks_ours(dict(p), dict(ent, entry_time=None))[0], False)
+# ⭐ 第三輪品管（帳本＋規則 ③④）：停損照帳本平我們的 2 口 ⇒ 這一趟結束；多出來的那口沒確認 ⇒ ⛔ 不轉手動部位、剛平完不撿回
+chk("  停損只平帳本的 2 口；這一趟結束（⛔ 不轉手動部位）",
+    (qtys(api, "close"), list(api.lots), p), ([2], [12003.0], None))
 NF._eod(EN, _EOD_AT)
-chk("  ⭐ 04:58：0 張平倉單、他那口還在", (qtys(api, "close"), list(api.lots), nf_eod_rows()[-1:]),
-    ([2], [12003.0], ["done_elsewhere"]))
+chk("  ⭐ 04:58：0 張平倉單、那口還在（剛平完的舊資料不撿回 ⇒ 04:58 看到空手）", (qtys(api, "close"), list(api.lots), nf_eod_rows()[-1:]),
+    ([2], [12003.0], ["flat"]))
 live(False)
 print("  -- 必修 1：夜盤也補「成績單已經有這一趟 ⇒ 不平」（一口那條也受保護）--")
 api = MultiAPI(px=12001.0, exit_px=11700.0)
@@ -1898,23 +1916,20 @@ broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
 AF._recover_poll()
 p = broker._state["position"]
-chk("  撿回來：他動過、我們剩 3 口、進場價是我們的成交價、停損點數補回",
-    (p.get("touched"), broker._ours_left(p), p.get("entry"), p.get("sl_points"), p.get("sl_src")),
-    (True, 3, 12010.0, 60.0, "meta"))
+# ⭐ 第三輪品管（帳本＋規則 ②③）：重啟後從落地的帳本補回我們的 3 口（⛔ 沒有「他動過」這回事；多的那口沒確認 ⇒ 不碰）
+chk("  重啟後從落地的帳本補回：我們 3 口、進場價、停損點數、⛔ 不標他動過",
+    (p.get("touched"), p.get("qty"), p.get("entry"), p.get("sl_points"), p.get("sl_src"), p.get("own")),
+    (None, 3, 12010.0, 60.0, "meta", True))
 AF._eod(DAY, 0, time.time(), "13:43:30")
-chk("  收盤照樣不平（他動過）", ([o.get("why") for o in AF._rows_of(DAY) if o.get("rec") == "eod"], qtys(api, "close")),
-    (["eod_not_ours"], []))
+chk("  收盤照帳本平我們的 3 口（多的那口沒確認 ⇒ 不碰）",
+    ([o.get("why") for o in AF._rows_of(DAY) if o.get("rec") == "eod"], qtys(api, "close"), len(api.lots)),
+    (["eod_closed"], [3], 1))
 ok, err = broker.close("sl")
-chk("  ⭐ 停損：只平我們的 3 口（一張）、他那口留著", (ok, qtys(api, "close"), len(api.lots)), (True, [3], 1))
 p = broker._state["position"]
-chk("  剩下的交接成他的手動部位（落地狀態也跟著改成交接）",
-    (p.get("handover"), json.loads((broker.ORDER_DIR / broker.META_NAME).read_text(encoding="utf-8")).get("handover")),
-    (True, True))
-broker._state["position"] = None                    # 再重啟一次：交接狀態也要補得回來
+chk("  再按停損 ⇒ 已經平完、不再送、⛔ 不轉手動部位", (ok, "已經平完" in (err or ""), qtys(api, "close"), p), (True, True, [3], None))
+broker._state["position"] = None                    # 再重啟一次（剛平完 ⇒ 舊資料不撿回）
 broker._LAST_RECONCILE["at"] = 0.0
-broker.reconcile()
-p = broker._state["position"]
-chk("  交接之後再重啟 ⇒ 撿回來還是「他的、交接過的」（收盤／04:58 不碰）", (p.get("handover"), p.get("sl_src")), (True, "manual"))
+chk("  剛平完再重啟 ⇒ 券商上那口不撿回（RECENT_CLOSE_S 內、同方向、不超過剛平掉的）", broker.reconcile(), None)
 api.lots = []
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
@@ -1983,16 +1998,11 @@ broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
 _touch_confirm()
 _sn = broker.snapshot()["position"]
-say(_sn.get("no_auto_exit") and _sn.get("own_left") == 3 and "自己加碼過" in _sn.get("lot_note", "")
-    and "停損只會平程式開的 3 口" in _sn["lot_note"], "  部位卡資料：不會自動平、我們剩 3 口、一句實話", _sn.get("lot_note"))
-_PN = LP.lots_panel_now()
-say(any(a.get("kind") == "pos_touched" and "自己加碼過" in a.get("text", "") for a in _PN.get("alarm") or [])
-    and _PN.get("dot") and "自己加碼過" in str((_PN.get("phone") or {}).get("warn")) and (_PN.get("phone") or {}).get("att"),
-    "  ⭐ 【自動下單】頂部金條＋小金點＋手機「要注意的事」都有那一句", (_PN.get("phone") or {}).get("warn"))
+# ⭐ 第三輪品管（帳本＋規則 ②③）：券商多出來的口數 ⇒ 部位卡照實講「確認中、照程式明細平」，⛔ 沒有「他加碼過／交接」這回事
+say("確認中" in _sn.get("lot_note", "") and not _sn.get("no_auto_exit") and _sn.get("qty") == 3,
+    "  部位卡：券商跟程式明細不一樣 ⇒ 一句實話（確認中）、照帳本 3 口、收盤照常平", _sn.get("lot_note"))
 ok, err = broker.close("sl")
-_sn = broker.snapshot()["position"]
-say(_sn.get("lot_note_kind") == "handover" and "130 點停損" in _sn.get("lot_note", "") and _sn.get("no_auto_exit"),
-    "  ⭐ 交接之後：「剩下 1 口是你的，面板照手動單的規矩用 130 點停損」", _sn.get("lot_note"))
+chk("  停損照帳本平 3 口 ⇒ 這一趟結束（⛔ 不轉手動部位）", (ok, qtys(api, "close"), broker.snapshot()["position"]), (True, [3], None))
 api.lots = []
 broker._LAST_RECONCILE["at"] = 0.0
 broker.reconcile()
@@ -2063,8 +2073,9 @@ for keep in (True, False):
     restart_all(keep)
     p = broker._state["position"]
     AF._eod(DAY, 0, time.time(), "13:43:30")
-    chk("  [%s] R1 停機時停利 2 口＋他加 1 口 ⇒ 分不出、收盤 0 張單、券商還是 2 口" % tag,
-        (p.get("multi_unknown"), qtys(api, "close"), len(api.lots)), (True, [], 2))
+    # ⭐ 第三輪品管：有落地檔 ⇒ 從帳本補回（停利 2 口用委託單編號問回來 ⇒ 我們剩 1 口）；多出來那口沒確認 ⇒ 收盤只平帳本的 1 口
+    chk("  [%s] R1 停機時停利 2 口＋多 1 口 ⇒ %s" % (tag, "帳本補回、收盤平我們的 1 口" if keep else "分不出、收盤 0 張單"),
+        (p.get("multi_unknown"), qtys(api, "close"), len(api.lots)), (None, [1], 1) if keep else (True, [], 2))
     live(False)
     # R3：先他動過（落地記成 touched），停機期間停利成交 2 口
     api = MultiAPI()
@@ -2076,8 +2087,9 @@ for keep in (True, False):
     api.fill_target(2, 12070.0)
     restart_all(keep)
     ok, err = broker.close("sl")
-    chk("  [%s] R3 他動過後停機、停利成交 2 口 ⇒ 分不出、停損 0 張單" % tag,
-        (broker._state["position"].get("multi_unknown"), ok, qtys(api, "close"), len(api.lots)), (True, False, [], 2))
+    chk("  [%s] R3 多 1 口後停機、停利成交 2 口 ⇒ %s" % (tag, "帳本補回、停損平我們的 1 口" if keep else "分不出、停損 0 張單"),
+        ((broker._state["position"] or {}).get("multi_unknown"), ok, qtys(api, "close"), len(api.lots)),
+        (None, True, [1], 1) if keep else (True, False, [], 2))
     live(False)
     # R5：停機期間他把我們 3 口平掉、自己另開 3 口（均價不同）
     api = MultiAPI()
@@ -2086,23 +2098,27 @@ for keep in (True, False):
     restart_all(keep)
     AF._eod(DAY, 0, time.time(), "13:43:30")
     ok, err = broker.close("sl")
-    chk("  [%s] R5 他平掉我們的、另開 3 口 ⇒ 分不出、收盤與停損都 0 張單" % tag,
-        (broker._state["position"].get("multi_unknown"), qtys(api, "close"), len(api.lots)), (True, [], 3))
+    # ⭐ 第三輪品管規則 ③（老闆不會手動交易）：有落地檔 ⇒ 帳本 3 口＝券商 3 口 ⇒ 照程式規則平
+    chk("  [%s] R5 停機期間券商上的 3 口換了均價 ⇒ %s" % (tag, "帳本 3 口＝券商 3 口 ⇒ 收盤照平" if keep else "分不出、0 張單"),
+        ((broker._state["position"] or {}).get("multi_unknown"), qtys(api, "close"), len(api.lots)),
+        (None, [3], 0) if keep else (True, [], 3))
     live(False)
 # 停機期間「均價」沒變、「口數」變了 ／ 口數沒變、均價變了 —— 各一個（落地檔要真的有在比）
 api = MultiAPI()
 r = af_send(api, 3)
 api.lots = [12010.0, 12010.0]                      # 停機期間他平掉一口（均價一樣）
 restart_all(True)
-chk("  口數 3 → 2（均價一樣、在區間內）⇒ 第六輪 G3：跟已實現對帳（沒有多出來的）⇒ 認回 2 口",
-    (broker._state["position"].get("multi_unknown"), broker._ours_left(broker._state["position"])), (None, 2))
+# ⭐ 第三輪品管規則 ②：券商比帳本少 ⇒ 確認前照帳本（3 口）、⛔ 不記別處平掉
+chk("  口數 3 → 2 ⇒ 帳本補回 3 口、記下差異（確認中）",
+    (broker._state["position"].get("multi_unknown"), broker._state["position"].get("qty"),
+     bool(broker._state["position"].get("diff_susp"))), (None, 3, True))
 live(False)
 api = MultiAPI()
 r = af_send(api, 3)
 api.lots = [12010.0, 12010.0, 12010.6]             # 口數一樣、均價動了 0.2（在帳本 ±1 的尺內，但落地比對要抓得到）
 restart_all(True)
-chk("  口數一樣、均價 12010 → 12010.2 ⇒ 分不出（落地比對看均價，⛔ 不是只看帳本 ±1）",
-    broker._state["position"].get("multi_unknown"), True)
+# ⭐ 第三輪品管：帳本照自家委託單明細，⛔ 不拿券商均價判斷（口數一樣 ⇒ 跟帳本一致）
+chk("  口數一樣、均價動了 ⇒ 帳本補回 3 口（不是分不出）", broker._state["position"].get("multi_unknown"), None)
 live(False)
 # 對照組：停機期間什麼都沒變 ⇒ 照樣補回、照樣是我們的
 api = MultiAPI(spread=2.0)
@@ -2133,8 +2149,9 @@ NF._MEM.update(E=EN, entry=NF._entry_of(NF.rows_of(EN)))
 NF._recover_poll()
 p = broker._state["position"]
 NF._eod(EN, _EOD_AT)
-chk("  ⭐ 有落地檔：均價 12001 → 12003 ⇒ 分不出、夜盤帳本⛔ 蓋不回來、04:58 0 張單",
-    (p.get("multi_unknown"), p.get("unknown_src"), qtys(api, "close"), len(api.lots)), (True, "meta", [], 2))
+# ⭐ 第三輪品管：有落地檔 ⇒ 帳本補回 2 口（＝券商 2 口）⇒ 04:58 照平（老闆不會手動交易）
+chk("  有落地檔：帳本補回 2 口 ⇒ 04:58 照平 2 口",
+    (p.get("multi_unknown"), p.get("unknown_src"), qtys(api, "close"), len(api.lots)), (None, None, [2], 0))
 live(False)
 
 print("  -- 必修 2：真的是夜盤的 2 口 ⇒ 不管兩支誰先補，都要認得出來（QA r3_night）--")
@@ -2191,8 +2208,9 @@ _mo = json.loads(_mp.read_text(encoding="utf-8"))
 api.lots = [12030.0] * 3
 _mp.write_text(json.dumps(dict(_mo, bpx=12030.0)), encoding="utf-8")
 restart_all(True)
-chk("  落地記的均價跟現在一樣（12030），但不在我們的成交價區間 12010～12014 ⇒ 分不出（第 ④ 道）",
-    (broker._state["position"].get("multi_unknown"), broker._state["position"].get("unknown_src")), (True, "meta"))
+# ⭐ 第三輪品管：帳本部位不拿均價比 ⇒ 帳本 3 口＝券商 3 口 ⇒ 補回（老闆不會手動交易）
+chk("  落地檔的均價被改過 ⇒ 帳本照委託單明細補回（不是分不出）",
+    (broker._state["position"].get("multi_unknown"), broker._state["position"].get("own")), (None, True))
 live(False)
 # 夜盤蓋回來只限「帳本對不上」那一種：落地比對出變化的（meta）⛔ 不蓋
 _pu = {"dir": "long", "entry": 12001.0, "qty": 2, "recovered": True, "multi_unknown": True, "unknown_src": "meta",
@@ -2204,6 +2222,10 @@ NF._recover_poll()
 chk("  落地比對出變化的「分不出」⇒ 夜盤帳本對得上也⛔ 不蓋回", (_pu.get("multi_unknown"), _pu.get("sl_src")), (True, "unmatched"))
 broker._state["position"] = None
 
+# ⭐ 2026-11-06 第三輪品管：微台多口改成帳本部位（OWN_TMF_MULTI）。下面到 ⑳ 為止測的是**舊版（非帳本）多口那一套**
+#    （落地檔比對、等對帳、shrink、resolve_shrink）——那一套還留著給「沒有帳本」的部位用（撿回來的多口、升級前留下的舊落地檔）
+#    ⇒ 這幾段暫時關掉帳本、照舊測舊那套；帳本部位的同類情境在 test_mini_mix.py／test_qa*_mix.py。
+broker.OWN_TMF_MULTI = False
 print("  -- 必修 3：分不出時畫面不畫停損、拒平只記一次（⛔ 每 15 秒刷紀錄；第六輪起放在 broker 拒平那條路）--")
 api = MultiAPI()
 r = af_send(api, 3)
@@ -2571,6 +2593,7 @@ finally:
     broker.realized_today = _RT0
     broker._realized_day = _RD0
 
+broker.OWN_TMF_MULTI = True                         # 測完舊版那一套 ⇒ 帳本開回來
 print("\n=== ㉑ 老闆 10-21：試車通過同一輪就出跳級建議；確認後立刻生效 ===")
 print("  -- 10-21 真實情境：10-20 確認試車（舊規則留下 pending 10-21 生效）、10-21 09:15 日盤 2 口滑價 −3、權益 251,561 --")
 clear_state()

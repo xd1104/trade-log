@@ -82,7 +82,10 @@ ok, err = broker.close("sl")
 covers = [x for x in S(F, n0) if x[3] == "Cover" and x[4] != "LMT"]
 chk("只送一張", len(covers), 1)
 chk("沒有平過頭", F.bad, [])
-chk("回報「稍後再試」而不是成功", (ok, "還沒回報" in (err or "")), (False, True))
+# ⭐ 2026-11-06 第三輪品管（feat/mini-mix）：微台多口改成帳本部位 ⇒ 等成交期間每 0.4 秒 update_status 讀明細，
+#    明細在等待期間就回報了（這個假券商 3 次 update 後才給）⇒ 照明細結算「平完」（舊版不讀明細 ⇒ 回「稍後再試」）。
+#    要守的兩件事（只送一張、沒有平過頭）不變。
+chk("明細在等成交期間就回報 ⇒ 照明細結算成功（只送一張）", (ok, broker._state["position"]), (True, None))
 cool()
 CLK.t += 30
 chk("之後對帳：空手", broker.reconcile(), None)

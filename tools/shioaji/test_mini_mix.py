@@ -513,7 +513,9 @@ broker.enter("long", 38000, 60, sl_points=200, qty=3)
 broker._LAST_CLOSE_SEND["at"] = 0.0
 F.ghost_more(1)
 got = broker.reconcile()
-chk("微台 3 口：一次舊資料比本機多 ⇒ ⛔ 不標 touched（main 原本會直接標）", (got.get("touched"), got["qty"]), (None, 4))
+# ⭐ 第三輪品管：微台多口也是帳本部位 ⇒ 口數照帳本（3）、差異確認中、⛔ 不標 touched（main 原本會直接標）
+chk("微台 3 口：一次舊資料比本機多 ⇒ 照帳本 3 口、⛔ 不標 touched", (got.get("touched"), got["qty"], bool(got.get("diff_susp"))),
+    (None, 3, True))
 CLK.t += broker.CLOSE_COOLDOWN + 1
 got = broker.reconcile()
 n0 = len(F.sent)
@@ -603,12 +605,13 @@ chk("（3 口 ⇒ 微台）", pos()["product"], "TMF")
 F._apply("MXF", 1, 38000.0)
 # ⭐ 第二輪品管（PM 拍板）：分得出我們每一腿的上限（進場是微台 3 口）⇒ ⛔ 不再 unknown；多出來的小台先記懷疑，平倉只平我們的
 got = broker.reconcile()
-chk("本機 TMF 3、券商多了小台 1 口 ⇒ 照常對帳（合約照券商、記懷疑、記下進場是微台 3 口）",
-    (got.get("product"), got["qty"], bool(got.get("touch_susp")), got.get("mix0")), ("MIX", 8, True, {"TMF": 3}))
+# ⭐ 第三輪品管：微台多口也是帳本部位 ⇒ 多出來的小台還沒確認 ⇒ 照帳本（微台 3）、記下差異
+chk("本機 TMF 3、券商多了小台 1 口 ⇒ 照帳本微台 3 口、差異確認中",
+    (got.get("product"), got["qty"], bool(got.get("diff_susp"))), ("TMF", 3, True))
 n0 = len(F.sent)
 ok, err = broker.close("sl")
-chk("  停損只平我們的微台 3 口、⛔ 不碰小台；剩的轉成他的手動部位", (ok, S(F, n0), F.hold, pos().get("handover")),
-    (True, [("TMF", "Sell", 3, "Cover", "MKP")], {"TMF": 0, "MXF": 1}, True))
+chk("  停損只平帳本的微台 3 口、⛔ 不碰沒確認的小台；這一趟結束（⛔ 不轉手動部位）", (ok, S(F, n0), F.hold, pos()),
+    (True, [("TMF", "Sell", 3, "Cover", "MKP")], {"TMF": 0, "MXF": 1}, None))
 F = fresh()
 broker.enter("long", 38000, None, sl_points=200, qty=11)
 F._apply("MXF", 1, 38000.0)

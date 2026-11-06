@@ -947,6 +947,11 @@ def pos_note(p=None):
     if p.get("touched"):
         return ("你在這一筆上自己加碼過 ⇒ 收盤／04:58 不會自動平，記得自己處理；停損只會平程式開的 %d 口"
                 "（你加的那幾口不動）" % _ours_left(p)), "touched"
+    if p.get("own") and isinstance(p.get("diff_susp"), dict):
+        # ⭐ 第三輪品管：帳本部位 ⇒ 券商部位跟程式明細算的不一樣，確認中（⛔ 不採信、照明細平）
+        _d = p["diff_susp"].get("sig") or [0, 0]
+        return ("券商部位跟程式明細算的不一樣（小台 %+d、微台 %+d 口等值），確認中 —— 停損、收盤照程式明細的 %s 口等值平"
+                % (_d[0], _d[1], p.get("qty"))), "fill"
     if p.get("late_pending"):
         # ⭐ 2026-11-06 品管 M7：看得到的已經平掉、只剩晚到那一腿（委託單明細說成交了、券商部位還沒回報）
         return ("進場時%s的成交券商還沒回報（委託單明細說成交了）—— 回報之前平倉單送不出去（看不到就不送），"
@@ -2069,6 +2074,15 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
         # **不要清掉部位**（清掉畫面會顯示空手，但帳上其實有東西）。
         _log("entry_mismatch", {"ok": False, "err": str(e)})
         return False, str(e), None
+    if is_live() and fill is None and (prod != "TMF" or (want > 1 and OWN_TMF_MULTI)):
+        # ⭐ 第三輪品管規則 ①（帳本部位）：我們的口數以自家委託單明細為準 ⇒ 券商部位 FILL_WAIT 內沒出現，
+        #    但進場單自己的明細說成交了（部位回報慢）⇒ 照明細當部位（⛔ 不當成沒成交、讓它變成沒人顧的撿回部位）
+        _update_status()
+        _s = _deal_sums(res)
+        if _s is not None and _s[1] > 0:
+            fill, got = round(_s[0] / _s[1], 2), int(round(_s[1]))
+            fill_warn = ((fill_warn + "；") if fill_warn else "") + \
+                "券商部位 %g 秒內還沒回報，照委託單明細記成交 %d 口等值" % (FILL_WAIT, got)
     if is_live() and fill is None:
         # IOC 沒成交。**絕對不可以掛停利** —— 那張 Cover 單留在場上，
         # 成交之後就變成一個反向的新部位。
@@ -2275,6 +2289,14 @@ def _enter_mix(direction, price, tp_points, sl_points, want, act):
     else:
         # 演練：當成兩腿全部成交在參考價（跟單一合約那條一樣）
         filled = {p: (float(price), legs[p][0], None) for p in legs}
+    if not filled and is_live():
+        # ⭐ 第三輪品管規則 ①：券商部位沒出現，但進場單自己的明細說成交了（回報慢）⇒ 照明細
+        _update_status()
+        for p in legs:
+            _s = _deal_sums(legs[p][1])
+            if _s is not None and _s[1] > 0:
+                filled[p] = (round(_s[0] / _s[1], 2), int(round(_s[1])),
+                             "券商部位還沒回報，照委託單明細記 %s 成交 %d 口等值" % (p, int(round(_s[1]))))
     if not filled:
         _log("entry_nofill", {"ok": False, "product": "MIX", "why": "IOC 兩腿都沒有成交，不掛停利"})
         with _lock:
@@ -2691,7 +2713,7 @@ def _leg_caps(pos):
 #       不超過剛平掉的口數 ⇒ 是舊資料，⛔ 不撿回。
 #    ⑤ 確認過券商是反方向 ⇒ 我們這一趟收尾（記成績單）、券商上的改成「反向殘單」（照手動單停損，收盤不碰）。
 #    帳本部位：enter() 送出去是多口、或用到小台（整筆小台／混搭）的部位（pos["own"]）。⛔ 一口微台照舊走原本那條（逐位元相同）。
-OWN_TMF_MULTI = False         # 微台多口也用帳本（⭐ 第三輪品管：取代 _close_multi；False ⇒ 只有小台／混搭用帳本）
+OWN_TMF_MULTI = True          # 微台多口也用帳本（⭐ 第三輪品管：取代 _close_multi；False ⇒ 只有小台／混搭用帳本）
 LEGACY_HANDOVER = False       # ⛔ 預設關：True ⇒ 確認過券商比我們多時，照舊把多的轉成「他的手動部位」（老闆不會手動加碼 ⇒ 不用）
 IOC_FINAL_S = 60.0            # 範圍市價 IOC 送出後幾秒還沒回報結束 ⇒ 照已回報的明細當成結束（IOC 不可能這麼久之後才成交）
 RECENT_CLOSE_S = 120.0        # 帳本部位平完之後幾秒內，券商同方向、不超過剛平掉的口數 ⇒ 當成舊資料、不撿回
@@ -2700,8 +2722,9 @@ _RECENT_CLOSE = {"at": 0.0, "dir": None, "legs": {}, "msg": None}
 
 def _own_add(pos, role, p, n, trade):
     """帳本記一張我們自己的單（role＝entry／target／close；n＝送出的微台等值）。"""
+    # 進場單一律在 enter() 等完成交、定案之後才記（decided）⇒ 不擋「單都結束了」的判斷；之後晚到的明細照樣讀得到
     pos.setdefault("own_trades", []).append({
-        "role": role, "p": p, "n": int(n), "t": trade, "at": time.time(),
+        "role": role, "p": p, "n": int(n), "t": trade, "at": time.time(), "decided": role == "entry",
         "id": getattr(getattr(trade, "order", None), "id", None)})
 
 
@@ -2715,7 +2738,7 @@ def _own_rec(rec, now):
     st = str(getattr(getattr(t, "status", None), "status", "") or "")
     done = ("Cancel" in st or "Fail" in st or ("Filled" in st and "PartFilled" not in st)
             or (s is not None and dq >= rec["n"] - 1e-9))
-    if not done and rec["role"] == "entry" and now - float(rec.get("at") or now) >= FILL_WAIT + 1.0:
+    if not done and rec["role"] == "entry" and (rec.get("decided") or now - float(rec.get("at") or now) >= FILL_WAIT + 1.0):
         done = True                   # 進場：enter() 已經照當下明細定案；之後晚到的明細照樣讀得到（只是不擋確認）
     if not done and rec["role"] == "close" and now - float(rec.get("at") or now) >= IOC_FINAL_S:
         done = True
@@ -2779,7 +2802,12 @@ def _own_fields(cur, book):
         ef = round(epq / eq, 2)
         cur["entry_fill"] = ef
         cur["entry"] = ef
+        if cur.get("entry_qty0") is None:
+            cur["entry_qty0"] = int(cur.get("entry_qty") or round(eq))
         cur["entry_qty"] = int(round(eq))
+        if cur["entry_qty"] > int(cur["entry_qty0"]):
+            # 進場單的明細比 enter() 定案時多（成交回報慢）⇒ 那幾口也是我們的；auto_fire／night_fire 收盤認人靠 late_fill＋entry_qty
+            cur["late_fill"] = True
         if cur.get("entry0") is not None and abs(ef - float(cur["entry0"])) > 0.005:
             cur["late_leg"] = True    # 進場價跟帳本當初記的不一樣（晚到的腿）⇒ auto_fire／night_fire 認人改比 entry0
     m0 = {p: int(round(book[p]["e"] + max(0.0, sum(a["q"] for a in cur.get("own_adj") or []
@@ -2813,7 +2841,14 @@ def _own_finish(cur, now):
     reason = cur.get("close_reason") or ("tp" if tq > 0 and gone <= 0 else "closed_elsewhere")
     rp = dict(cur, legs=legs)
     rp.pop("own_trades", None)
-    rec = record_trade(rp, round(cpq / cq, 2) if cq > 0 else None, reason, qty=int(round(cq)))
+    if cur.get("restored") or cur.get("recovered"):
+        rp["recovered"] = True               # 成績單「重啟後撿回」那一欄照舊（跟 main 一樣：這一趟中間重啟過）
+    if cq <= 0 and gone <= 0 and tq > 0:
+        # 整趟都是停利單吃掉的 ⇒ 成績單寫成跟以前一樣的一列（不掛 legs；main 那條「部位不見 ⇒ 記 tp」同一個格式）
+        rp["legs"] = []
+        rec = record_trade(rp, round(tpq / tq, 2), "tp", qty=int(round(tq)))
+    else:
+        rec = record_trade(rp, round(cpq / cq, 2) if cq > 0 else None, reason, qty=int(round(cq)))
     _RECENT_CLOSE.update(at=now, dir=cur.get("dir"),
                          legs={p: int(round(book[p]["e"])) + int(round(sum(a["q"] for a in cur.get("own_adj") or []
                                                                          if a["p"] == p and a["q"] > 0)))
@@ -2857,11 +2892,13 @@ def _own_reconcile(cur):
             if sb[p] > int(seen.get(p) or 0):
                 seen[p] = sb[p]
         _own_fields(cur, book)
+        if cur["qty"] <= 0 and book["_all_final"] and not any(v < 0 for v in sb.values()):
+            # 帳本說我們每一腿都 0、單都結束 ⇒ 這一趟結束（券商若還顯示同方向的口數：舊資料或不是這一趟的 ⇒
+            # RECENT_CLOSE_S 內不撿回；之後還在才當成另一筆撿回、有停損）
+            _own_finish(cur, now)
+            return None
         if not any(diff.values()):
             cur.pop("diff_susp", None)
-            if cur["qty"] <= 0 and book["_all_final"]:
-                _own_finish(cur, now)
-                return None
             return cur
         sig = [diff["MXF"], diff["TMF"]]
         can = book["_all_final"] and not _CLOSE_INFLIGHT["on"] and now - book["_last_send"] >= TOUCH_QUIET_S
@@ -2944,7 +2981,7 @@ def _own_meta(p):
                      "q0": q, "pq0": pq, "fin0": fin})
     keep = ("dir", "entry", "entry_fill", "entry0", "entry_qty", "qty", "qty_sent", "product", "mix", "mix0",
             "entry_time", "entry_day", "sl_points", "tp_points", "no_tp", "fill_lo", "fill_hi", "mix_sent_at",
-            "late_leg", "own_adj", "own_seen", "close_reason", "fill_warn", "bpx")
+            "late_leg", "own_adj", "own_seen", "close_reason", "fill_warn", "bpx", "entry_qty0", "late_fill", "restored")
     m = {k: p.get(k) for k in keep if p.get(k) is not None}
     m.update(own=True, own_recs=recs)
     return m
@@ -2967,7 +3004,7 @@ def _own_restore(m):
     except Exception:                       # noqa: BLE001  問不到 ⇒ 用落地時的數字
         byid = {}
     cur = {k: v for k, v in m.items() if k not in ("own_recs", "day", "own")}
-    cur.update(own=True, recovered=False, sl_src="meta", target_trade=None, own_trades=[])
+    cur.update(own=True, recovered=False, restored=True, sl_src="meta", target_trade=None, own_trades=[])
     for r in m.get("own_recs") or []:
         rr = dict(r)
         rr["t"] = byid.get(str(r.get("id"))) if r.get("id") is not None else None
@@ -3017,7 +3054,8 @@ def _close_own(pos, reason):
             n = (min(b, hi) // RATIO[p]) * RATIO[p]
             if n > 0 and p in before and b < before[p][0] - (book[p]["c"] - before[p][1]) - 1e-9:
                 # 補送前確認：券商那一腿比「上一張送出前 − 那之後明細說成交的」還少 ⇒ 有明細沒講到的成交 ⇒ ⛔ 不補，冷卻後再問。
-                # ⚠️ 券商比較多（還沒反映剛成交的舊資料）⇒ 照規則 ① 送 min(券商, 帳本保守值)：帳本是真的（老闆不會手動交易）
+                # ⚠️ 券商比較多（還沒反映剛成交的舊資料）⇒ 照規則 ① 送 min(券商, 帳本保守值)：帳本是真的（老闆不會手動交易；
+                #    main 的 test_close_multi_lag ② 也要求部分成交＋回報慢時同一輪補送剩下的）
                 n = 0
             if n > 0:
                 todo[p] = n
