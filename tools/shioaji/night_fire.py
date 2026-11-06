@@ -559,8 +559,10 @@ def looks_ours(pos, ent):
         #    （跟日盤收盤同一條「寧可不平」；停損照樣只平我們剩下的口數）。只有多口部位會被標，一口那條不受影響。
         return False
     try:
+        # ⭐ 2026-11-06 混搭進場一腿晚回報、併進來之後進場價重新加權過 ⇒ 改比帳本那一刻的價（entry0，broker 留的）
+        pe = pos.get("entry0") if (pos.get("late_leg") and pos.get("entry0") is not None) else pos.get("entry")
         return (pos.get("dir") == ent.get("dir")
-                and abs(float(pos.get("entry")) - float(ent.get("entry"))) <= EOD_PX_TOL)
+                and abs(float(pe) - float(ent.get("entry"))) <= EOD_PX_TOL)
     except Exception:
         return False
 

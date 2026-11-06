@@ -1011,6 +1011,12 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   混搭上他加碼過（touched）⇒ 分不出哪一腿是他的 ⇒ ⛔ 停損／收盤都不平、畫面示警。
   成績單記 `product`（小台 `MXF`／混搭 `MIX`＋`mix`；**微台不寫**＝跟以前逐欄位相同），cashflow 手續費照合約口數估。
   測試：`test_mini_mix.py`（含 300 輪隨機成交／回報慢的「不平過頭」性質測試）。
+  ⭐ **進場一腿晚回報**（PM 不接受 unknown）：進場記 `mix_sent`（兩腿送出等值）／`mix_sent_at`／`mix_sent_ids`／`entry_trades`／`entry0`。
+  券商多出來的那一腿：同方向、≤ 送出量、**那張進場單自己的成交明細**說成交了 ≥ 那一腿、送出後 `LATE_LEG_S`（300 秒）內、
+  沒被他動過 ⇒ `_late_merge` 併進部位（進場價重新加權、`late_leg`；晚到那幾口**沒有停利單**，fill_warn 講）；
+  任何一項不過 ⇒ 照舊 unknown。重啟時用委託單編號 `api.list_trades()` 問回明細（`_meta_late`），問不到 ⇒ 分不出。
+  ⚠️ 併過晚到腿的成績單 `entry`＝帳本那個價（entry0，auto_fire／night_fire／risk_cap 靠它認），加權均價在 `entry_w`、points 用它算。
+  晚到腿還沒回報就觸發平倉 ⇒ 只平看得到的、回報裡講「還有一腿沒回報」，回報後那一腿會被撿回成部位（照撿回規矩有停損）。
 - ⛔ **永豐的 API 沒有停損單**（2026-08-28 查證）。`FuturesOrder` 只有
   LMT / MKT / MKP ＋ ROD / IOC / FOK，**沒有觸發價**（SDK 裡唯一的 `trigger_price`
   是報價掃描器的欄位）。所以：

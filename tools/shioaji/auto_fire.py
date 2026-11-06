@@ -2199,6 +2199,10 @@ def _looks_ours(pos, ent):
         return False, "方向不一樣（現在是 %s，自動下單開的是 %s）" % (
             pos.get("dir"), ent.get("dir"))
     pe, ee = _num(pos.get("entry")), _num(ent.get("entry"))
+    if pos.get("late_leg") and _num(pos.get("entry0")) is not None:
+        # ⭐ 2026-11-06 混搭進場一腿晚回報、broker 用那張進場單的明細確認後併進來 ⇒ 部位的進場價重新加權過了；
+        #    帳本記的是當初那一刻的價 ⇒ 改比 broker 留下的那一份（entry0）。口數照上面 fill_unsure 那條（最多認到送出去的）。
+        pe = _num(pos.get("entry0"))
     if pe is None or ee is None:
         return False, "沒有進場價可以比對"
     lo, hi = _ent_px_range(ent)
