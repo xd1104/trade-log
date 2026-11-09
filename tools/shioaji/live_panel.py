@@ -11374,8 +11374,22 @@ function sysHTML(s){
    頁面上的一般金條（口數那幾則）已經收進來、不再出現在頁面；只有「有部位又出事」的緊急警報（#xal）畫面上照樣跳。
    「有空再看」可以按知道了（記在 lt_seen，跟原本金條的 ✕ 同一把鑰匙）；要馬上處理／要你決定 ⛔ 不給關。 */
 const BELL={items:[],err:''};
+/* ⭐ 2026-11-09 Benson：「這個提醒看過就可以關掉了」⇒ 每一則都能按「知道了」。
+   ・有空再看（hide）：照舊永久記在 lt_seen。
+   ・要馬上處理／要你決定：只在**這件事還在的這段時間**收起來（BELLACK）；後端那則消失 ⇒ 鑰匙自動忘掉，
+     下次再出事會重新亮。鑰匙把數字拿掉（「報價斷了 37 秒」秒數一直在變，⛔ 不然按了等於沒按）。
+   ⛔ 畫面上有部位又出事的緊急警報（#xal）不歸鈴鐺管，照樣跳；手機推播也不受影響。 */
+const BELLACK_KEY='bell_ack';
+let BELLACK=(()=>{ try{ const v=JSON.parse(localStorage.getItem(BELLACK_KEY)||'[]'); return Array.isArray(v)?v:[]; }catch(e){ return []; } })();
+function bellAckKey(x){ return String(x.key||'').replace(/[0-9][0-9,.:]*/g,'#'); }
+function bellAckSave(){ try{ localStorage.setItem(BELLACK_KEY,JSON.stringify(BELLACK.slice(-60))); }catch(_){} }
+function bellAckPrune(){
+ const live=new Set((BELL.items||[]).filter(x=>!x.hide).map(bellAckKey));
+ const keep=BELLACK.filter(k=>live.has(k));
+ if(keep.length!==BELLACK.length){ BELLACK=keep; bellAckSave(); }
+}
 const BELL_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
-function bellVisible(){ return (BELL.items||[]).filter(x=>!(x.hide&&LTSEEN.includes(x.key))); }
+function bellVisible(){ return (BELL.items||[]).filter(x=>x.hide?!LTSEEN.includes(x.key):!BELLACK.includes(bellAckKey(x))); }
 function bellPaintBtn(){
  const b=document.getElementById('anbell'); if(!b) return;
  const n=bellVisible().length;
@@ -11384,7 +11398,7 @@ function bellPaintBtn(){
 }
 function bellFetch(){
  return fetch('/api/notice',{cache:'no-store'}).then(r=>r.json()).then(x=>{
-   if(x&&x.ok){ BELL.items=x.items||[]; BELL.err=''; } else BELL.err=(x&&x.msg)||'讀不到要注意的事';
+   if(x&&x.ok){ BELL.items=x.items||[]; BELL.err=''; bellAckPrune(); } else BELL.err=(x&&x.msg)||'讀不到要注意的事';
    bellPaintBtn(); if(!document.getElementById('bellpop').hidden) bellList();
  }).catch(()=>{ BELL.err='連不上面板'; bellPaintBtn(); });
 }
@@ -11400,17 +11414,19 @@ function bellList(){
    const L=V.filter(x=>x.lvl===g[0]); if(!L.length) return;
    h+='<div class="bl-grp">'+g[1]+'</div>'+L.map(x=>'<div class="bl-n '+esc(x.lvl)+'"><i></i><div><div class="t">'+esc(x.text)+'</div>'+
      (x.act?'<div class="a">→ '+esc(x.act)+'</div>':'')+'</div>'+
-     (x.hide?'<button data-bellx="'+esc(x.key)+'" title="知道了，不再顯示這則">知道了 ✕</button>':'<span></span>')+'</div>').join('');
+     '<button data-bellx="'+esc(x.key)+'" title="'+(x.hide?'知道了，不再顯示這則':'知道了，先收起來（這件事解決後又發生會再亮）')+'">知道了 ✕</button></div>').join('');
  });
- h+='<div class="bl-ft">跟手機「要注意的事」是同一份清單。要馬上處理、要你決定的事情沒解決前不能關。</div>';
+ h+='<div class="bl-ft">跟手機「要注意的事」是同一份清單。要馬上處理、要你決定的事情按了「知道了」會先收起來，解決後再發生會重新亮。</div>';
  p.innerHTML=h; p.hidden=false;
 }
 document.addEventListener('click',function(e){
  const bb=e.target.closest('#anbell');
  if(bb){ const p=document.getElementById('bellpop'); if(p.hidden){ bellList(); bellFetch(); } else p.hidden=true; return; }
  const x=e.target.closest('[data-bellx]');
- if(x){ const k=x.getAttribute('data-bellx'); if(!LTSEEN.includes(k)) LTSEEN.push(k);
-   LTSEEN=LTSEEN.slice(-60); try{ localStorage.setItem(LTSEEN_KEY,JSON.stringify(LTSEEN)); }catch(_){}
+ if(x){ const k=x.getAttribute('data-bellx'); const it=(BELL.items||[]).find(i=>i.key===k);
+   if(it&&!it.hide){ const ak=bellAckKey(it); if(!BELLACK.includes(ak)) BELLACK.push(ak); bellAckSave(); }
+   else { if(!LTSEEN.includes(k)) LTSEEN.push(k);
+   LTSEEN=LTSEEN.slice(-60); try{ localStorage.setItem(LTSEEN_KEY,JSON.stringify(LTSEEN)); }catch(_){} }
    bellPaintBtn(); bellList(); return; }
  const p=document.getElementById('bellpop');
  if(p&&!p.hidden&&!e.target.closest('#bellpop')) p.hidden=true;
