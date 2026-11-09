@@ -1831,6 +1831,21 @@ def qty_ok(q):
     return mini_on() and q <= QTY_MAX_EQ
 
 
+def fit_qty(q):
+    """
+    ⭐ 2026-11-09 延長階梯（11＋4 起口數超過 10）：階梯口數 ⇒ 這一盤實際能送的口數（微台等值）。
+    ・qty_ok ⇒ 原樣。
+    ・超過 10、但小台開關沒開（或這次連線沒拿到小台合約）⇒ **壓回 QTY_MAX（10 口微台）**
+      —— ⛔ 不是整盤不送（舊行為：qty_ok 不過 ⇒ skip lots_zero，等於 Benson 刪掉 MINI_ON 那天起就完全停單）。
+    ・其他（0／負數／不是整數／超過 QTY_MAX_EQ）⇒ 原樣，讓呼叫端的 qty_ok 照舊擋掉（⛔ 不猜）。
+    """
+    if qty_ok(q):
+        return q
+    if isinstance(q, int) and not isinstance(q, bool) and QTY_MAX < q <= QTY_MAX_EQ and not mini_on():
+        return QTY_MAX
+    return q
+
+
 def _own_qty(pos):
     """
     這一口部位裡「我們自己開的」有幾口（平倉每一張單最多送這麼多）。

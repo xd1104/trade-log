@@ -287,7 +287,8 @@ for hi in (True, False, None):
 for bad, why in (('{"level": 3', "JSON 壞掉"), ('{"level": 99}', "級數超過階梯"), ('{"level": true}', "bool"),
                  ('{"level": "2"}', "字串"), ('{"level": 2, "cap": {"union": 5}}', "cap 不合理"),
                  ('[2]', "不是物件"), ('{"level": 2, "pending": {"to": 2, "eff": "2026-11-03"}}', "pending 沒往上"),
-                 ('{"level": 2, "pending": {"to": 11, "eff": "2026-11-03"}}', "pending 超過階梯"),
+                 ('{"level": 2, "pending": {"to": %d, "eff": "2026-11-03"}}' % (len(goal.LADDER) + 1),
+                  "pending 超過階梯"),
                  ('{"level": 2, "month_max": {"month": "2026-10", "ab": [99, 99, 1]}}', "month_max 壞")):
     lots._LAST_GOOD.clear()
     lots.LEVEL_FILE.write_text(bad, encoding="utf-8")

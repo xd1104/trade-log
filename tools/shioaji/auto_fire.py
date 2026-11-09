@@ -1452,6 +1452,8 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
         rb, rmsg = True, "風控算不出本月損益 —— 不猜，這次不送（%s）" % str(e)[:80]
     if rb:
         return _skip(d, "risk_cap", base, WHY["risk_cap"] + "：" + rmsg, cand=_cand_of(base))
+    # ⭐ 2026-11-09 延長階梯：超過 10 口但小台開關沒開 ⇒ 壓回 10 口照送（⛔ 不是整天不送）
+    qty = broker.fit_qty(qty)
     if not broker.qty_ok(qty):
         # 退休歸零（RETIRE_ZERO）才會走到這裡 ⇒ 這一條今天不送
         return _skip(d, "lots_zero", dict(base, qty=qty, lots_level=lvl), cand=_cand_of(base))

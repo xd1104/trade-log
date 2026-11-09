@@ -359,6 +359,8 @@ def _decide(E, now):
     if rb:
         _skip(E, "risk_cap", WHY["risk_cap"] + "：" + rmsg, {"method": m})
         return True
+    # ⭐ 2026-11-09 延長階梯：超過 10 口但小台開關沒開 ⇒ 壓回 10 口照送（⛔ 不是整晚不送）
+    lp["qty"] = broker.fit_qty(lp["qty"])
     if not broker.qty_ok(lp["qty"]):
         _skip(E, "lots_zero", extra=dict(lp, method=m))
         return True
