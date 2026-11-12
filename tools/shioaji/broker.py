@@ -38,7 +38,7 @@ import json
 import pathlib
 import time
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 HERE = pathlib.Path(__file__).resolve().parent
 REAL_FLAG = HERE / "REAL_ORDERS_ON"      # 這個檔存在＝真的送單；不存在＝dry run
@@ -2610,6 +2610,61 @@ def place_target(tp_price, qty=None):
     return ok, err
 
 
+def _logged_target_ids(pos, days=2):
+    """
+    ⭐ 2026-11-12 QA-F：落地的送單紀錄裡，最近 `days` 天**我們自己送出、券商收下**的停利單編號（真單、這個部位的平倉方向、單一合約）。
+    ⛔ 只認自己的紀錄：他在大戶投自己掛的單不在這裡面 ⇒ 不會被撤。
+    """
+    want = "Sell" if pos.get("dir") == "long" else "Buy"
+    prod = pos.get("product") if pos.get("product") in RATIO else "TMF"
+    ids = []
+    for k in range(days):
+        f = ORDER_DIR / ("%s.jsonl" % (date.today() - timedelta(days=k)))
+        try:
+            lines = f.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for l in lines:
+            try:
+                r = json.loads(l)
+            except ValueError:
+                continue
+            if r.get("kind") == "target" and r.get("ok") and r.get("live") and not r.get("dry_run") \
+                    and r.get("ordno") and want in str(r.get("action") or "") \
+                    and (r.get("product") or "TMF") == prod:
+                ids.append(str(r["ordno"]))
+    return ids
+
+
+def _cancel_logged_targets(pos):
+    """⇒ True＝有一張還掛著的停利單撤不掉（要他自己去刪）。問不到委託清單 ⇒ 講出來、照樣平倉（裸部位比殘單危險）。"""
+    ids = set(_logged_target_ids(pos))
+    if not ids:
+        return False
+    try:
+        _state["api"].update_status(_state["account"])
+        trades = [t for t in (_state["api"].list_trades() or [])
+                  if str(getattr(getattr(t, "order", None), "id", None)) in ids]
+    except Exception as e:                  # noqa: BLE001
+        _log("cancel_target", {"ok": False, "err": str(e)[:200],
+                               "why": "重啟後問不到委託清單，認不出之前的停利單還在不在 —— 平倉後請到大戶投確認"})
+        return True
+    stray = False
+    for t in trades:
+        st = str(getattr(getattr(t, "status", None), "status", "") or "")
+        if "Cancel" in st or "Fail" in st or ("Filled" in st and "PartFilled" not in st):
+            continue                          # 已經結束的不用撤
+        try:
+            _state["api"].cancel_order(t)
+            _log("cancel_target", {"ok": True, "ordno": getattr(t.order, "id", None),
+                                   "why": "重啟後撿回的部位：平倉前先撤掉之前送的停利單"})
+        except Exception as e:              # noqa: BLE001
+            stray = True
+            _log("cancel_target", {"ok": False, "err": str(e)[:200],
+                                   "why": "重啟後找到之前送的停利單但撤不掉，平倉後請自己到大戶投刪掉"})
+    return stray
+
+
 def close(reason):
     """
     立刻平倉（停損、手動、收盤）。範圍市價＋IOC。
@@ -2688,6 +2743,10 @@ def _close_locked(reason):
             stray = True
             _log("cancel_target", {"ok": False, "err": str(e)[:200],
                                    "why": "撤不掉，平倉後請自己到大戶投刪掉那張停利單"})
+    elif t is None and pos.get("recovered") and is_live() and _state["api"] is not None:
+        # ⭐ 2026-11-12 QA-F（一口微台那條）：重啟後撿回的部位記憶體裡沒有停利單 ⇒ 舊版停損後那張停利 ROD 還掛著
+        #    （之後成交＝反向新倉）。用落地的送單紀錄（real_orders）認回**我們自己送的**停利單編號，還掛著就先撤。
+        stray = _cancel_logged_targets(pos) or stray
     # ⭐ 2026-10-14 多口：own ＝ 我們自己開了幾口（每張平倉單最多送這麼多）；left ＝ 券商上還剩幾口。
     #    ⛔ 一口（own＝1，含手動真單與撿回來對不上的部位）⇒ 每張 1 口、下面每一行都跟 10-14 以前一樣。
     own = _own_qty(pos)

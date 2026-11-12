@@ -436,6 +436,25 @@ ok, err = broker.close("sl")
 print("  close:", ok, (err or "")[:60], S(F, n0), "cancels:", F.cancels, "live targets:", live_targets(F))
 chk("QA-F (shared) no live TP order after close following restart", len(live_targets(F)), 0)
 
+# ⭐ 2026-11-12 QA-F 一口微台那條（不走帳本）：重啟撿回後停損 ⇒ 用落地的送單紀錄認回自己的停利單、撤掉
+for _q, _mini in ((1, False), (3, False), (5, True)):
+    tag("F%d  restart with %d lot(s) open then stop-loss (mini=%s)" % (_q, _q, _mini))
+    F = fresh(mini=_mini)
+    broker.enter("long", 38000, 60, sl_points=200, qty=_q)
+    connect(F, _mini)
+    broker.reconcile()
+    ok, err = broker.close("sl")
+    chk("QA-F%d no live TP order after close following restart" % _q, (ok, live_targets(F)), (True, []))
+tag("F1b  same, but the send log is gone -> ours cannot be identified -> nothing cancelled (his orders are never touched)")
+F = fresh(mini=False)
+broker.enter("long", 38000, 60, sl_points=200, qty=1)
+for f in broker.ORDER_DIR.glob("*"):
+    f.unlink()
+connect(F, False)
+broker.reconcile()
+broker.close("sl")
+chk("QA-F1b only orders in our own send log get cancelled", len(live_targets(F)), 1)
+
 tag("G  IOC close: status Cancelled first, deals arrive 3 updates later, lag 6s")
 F = fresh()
 broker.enter("long", 38000, 60, sl_points=200, qty=11)
