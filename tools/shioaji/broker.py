@@ -1948,7 +1948,7 @@ def can_enter(price, quote_live):
     t0 = time.time()
     pos = reconcile()
     if pos == "unknown":
-        return False, "跟券商對帳失敗，這種時候不送單"
+        return False, RECON_FAIL_MSG
     if pos:
         return False, "已經有部位了，先平倉才能再進場"
     if float(_RECENT_CLOSE.get("hid_at") or 0.0) >= t0:
@@ -1956,6 +1956,41 @@ def can_enter(price, quote_live):
         #    （這時進場，確認成交會被舊部位騙 ⇒ 停損送太多口平過頭；main 這裡也會擋）
         return False, "剛平倉、券商部位還沒更新，稍後再進"
     return True, None
+
+
+RECON_FAIL_MSG = "跟券商對帳失敗，這種時候不送單"
+# ⭐ 2026-11-12（Benson 同意）：自動下單送單前問不到券商部位 ⇒ 不是馬上放棄，ENTER_RETRY_S 秒內每 ENTER_RETRY_GAP 秒再問。
+#    那晚 22:35～22:40 永豐「查詢」那條回應逾時（報價照常），22:40 夜盤跟勢訊號 +664 點（門檻 177）只問一次就放棄 ⇒ 整筆漏掉。
+#    ⛔ 只有「對帳失敗」這一個原因會重試；其他理由（沒報價、已有部位、達上限、憑證…）照舊一次就擋。
+#    ⛔「確定空手才送」不變：重試到時間還是問不到 ⇒ 照舊不送。⛔ 手動按鈕、畫面那顆燈不走這條（不能卡住）。
+ENTER_RETRY_S = 20.0
+ENTER_RETRY_GAP = 3.0
+
+
+def can_enter_retry(price, quote_live, refresh=None, sleep=None, clock=None):
+    """
+    自動下單用的 can_enter：只有「對帳失敗」會在 ENTER_RETRY_S 秒內重試。⇒ (可以嗎, 原因, 問了幾次, 價格)。
+    `refresh()` ⇒ (價格, 報價新不新鮮)：重試之後用現在的報價（等了幾秒，舊價不能再用）；沒給 ⇒ 沿用原本的。
+    ⛔ 會睡覺 ⇒ 只能在自動下單自己的執行緒叫（⛔ 不可以在面板主迴圈／HTTP 執行緒叫）。
+    """
+    sleep = sleep or time.sleep
+    clock = clock or time.time
+    t0 = clock()
+    ok, why = can_enter(price, quote_live)
+    n = 1
+    while not ok and why == RECON_FAIL_MSG and clock() - t0 + ENTER_RETRY_GAP <= ENTER_RETRY_S:
+        _log("enter_retry", {"ok": False, "n": n, "why": "送單前問不到券商部位 —— %g 秒後再問" % ENTER_RETRY_GAP,
+                             "err": str(_state.get("last_error") or "")[:160]})
+        sleep(ENTER_RETRY_GAP)
+        if refresh is not None:
+            price, quote_live = refresh()
+        ok, why = can_enter(price, quote_live)
+        n += 1
+    if n > 1:
+        _log("enter_retry_done", {"ok": bool(ok), "n": n, "why": why})
+    if not ok and why == RECON_FAIL_MSG and n > 1:
+        why = "%s（%g 秒內問了 %d 次都問不到）" % (why, round(clock() - t0), n)
+    return ok, why, n, price
 
 
 FILL_WAIT = 5.0        # 送出後最多等幾秒確認成交
@@ -2098,8 +2133,9 @@ def enter(direction, price, tp_points, sl_points=None, qty=None):
     base = _entry_base(direction) if (own_path and is_live()) else None
     if base and "?" in base:
         # ⭐ 第七輪品管：進場前跟券商確認不到部位（重問過）⇒ ⛔ 不送單（不知道送出後券商部位增加多少，只能照明細／估計，太慢）
-        _log("entry_blocked", {"ok": False, "why": "進場前跟券商確認不到部位（問了 %d 次）—— 不送" % ENTRY_BASE_TRIES})
-        return False, "進場前跟券商確認不到部位（問了 %d 次都失敗）—— 一張都沒送，稍後再試" % ENTRY_BASE_TRIES, None
+        _n = _ENTRY_BASE_N["n"]
+        _log("entry_blocked", {"ok": False, "why": "進場前跟券商確認不到部位（%g 秒內問了 %d 次）—— 不送" % (ENTER_RETRY_S, _n)})
+        return False, "進場前跟券商確認不到部位（%g 秒內問了 %d 次都失敗）—— 一張都沒送" % (ENTER_RETRY_S, _n), None
     # ⭐ 第三輪品管：要送新的進場單了 ⇒「剛平完、別撿回舊資料」的記憶作廢（不然這一筆晚到的成交會被當成上一筆的舊資料，沒有停損）
     #    ⭐ 第五輪品管：這一筆最後沒有部位（沒成交）⇒ 還原（券商上的舊部位照樣不撿回）
     _RECENT_CLOSE.pop("unsure", None)
@@ -2309,6 +2345,7 @@ def _wait_fill_legs(direction, legs):
 
 
 ENTRY_BASE_TRIES = 3   # ⭐ 第七輪品管：進場前查券商部位，問不到最多問幾次（第一次＋重問 2 次）
+_ENTRY_BASE_N = {"n": 0}   # 上一次 _entry_base 問了幾次（給「問了幾次都失敗」那句話用）
 
 
 def _entry_base(direction):
@@ -2317,13 +2354,21 @@ def _entry_base(direction):
     ⭐ 第七輪品管：問不到 ⇒ 重問（最多 ENTRY_BASE_TRIES 次、間隔 0.4 秒）；問到「確定沒有」⇒ 呼叫端走正常的部位確認；
        還是問不到 ⇒ 呼叫端⛔ 不送單（保守估計那條明細不回報時要等 60 秒才交給撿回，太慢）。
     """
+    # ⭐ 2026-11-12（Benson 同意「改成重試」）：前 ENTRY_BASE_TRIES 次照舊間隔 0.4 秒；還問不到 ⇒ 改每 ENTER_RETRY_GAP 秒再問，
+    #    問到 ENTER_RETRY_S 秒為止（跟 can_enter_retry 同一把尺）。⛔ 那晚查詢通道逾時好幾分鐘，0.8 秒的重問等於沒有。
     legs = "unknown"
-    for i in range(ENTRY_BASE_TRIES):
-        if i:
-            time.sleep(0.4)
+    t0 = time.time()
+    i = 0
+    while True:
         legs = _broker_legs()
+        i += 1
         if legs != "unknown":
             break
+        gap = 0.4 if i < ENTRY_BASE_TRIES else ENTER_RETRY_GAP
+        if time.time() - t0 + gap > ENTER_RETRY_S:
+            break
+        time.sleep(gap)
+    _ENTRY_BASE_N["n"] = i
     if legs == "unknown":
         return {"?": 1}
     return {p: int(l.get("qty") or 0) for p, l in (legs or {}).items()

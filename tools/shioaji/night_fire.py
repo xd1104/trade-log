@@ -420,7 +420,9 @@ def _decide(E, now):
     if not (WIDTH_MIN * px <= w <= WIDTH_MAX * px):
         _skip(E, "bad_width", "框寬 %g 點不合理（進場價 %g）" % (w, px), info)
         return True
-    ok, why = broker.can_enter(px, True)
+    ok, why, _n, px = broker.can_enter_retry(px, True, refresh=lambda: _fresh_quote(now))
+    if _n > 1:
+        info.update(retry=_n)
     if not ok:
         _skip(E, "cannot", "現在不能進場：%s" % why, info)
         return True
@@ -470,6 +472,14 @@ def _filled(pos, sent):
     return out
 
 
+def _fresh_quote(now):
+    """⭐ 2026-11-12：送單前重試等了幾秒 ⇒ 重新拿報價。⇒ (價格, 新不新鮮)；不新鮮／不是夜盤 ⇒ can_enter 會擋「沒有即時報價」。"""
+    qf, sf = _CFG["quote_fn"], _CFG["session_fn"]
+    px, age = qf() if qf else (None, None)
+    live = px is not None and age is not None and age <= QUOTE_MAX_AGE and not (sf and sf(now) != "night")
+    return (float(px) if px is not None else None), live
+
+
 def _decide_trend(E, now, lp=None):
     """
     ⭐ 夜盤跟勢（R）。⛔ 每一道「不做」都落地一列理由，⛔ 不猜。
@@ -516,7 +526,10 @@ def _decide_trend(E, now, lp=None):
     if not (WIDTH_MIN * px <= sl0 <= WIDTH_MAX * px):
         _skip(E, "bad_width", "停損 %g 點不合理（進場價 %g）" % (sl0, px), info)
         return True
-    ok, why = broker.can_enter(px, True)
+    # ⭐ 2026-11-12（Benson 同意）：問不到券商部位 ⇒ 20 秒內再問（那晚 +664 點就是只問一次漏掉的）
+    ok, why, _n, px = broker.can_enter_retry(px, True, refresh=lambda: _fresh_quote(now))
+    if _n > 1:
+        info.update(retry=_n)
     if not ok:
         _skip(E, "cannot", "現在不能進場：%s" % why, info)
         return True

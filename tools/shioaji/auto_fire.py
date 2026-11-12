@@ -509,6 +509,9 @@ _ST = {
 _CFG = {"signal_at": None, "signal_sec": None, "late_ms": None, "gap_s": None,
         "sig_fn": None, "dirs_fn": None, "eod_at": None, "pctl": None,
         "rev_at": None, "rev_sec": None}
+# ⭐ 2026-11-12：送單前重試之後重拿報價用（面板接 live_panel._nf_quote）。⛔ 刻意不放 _CFG：_CFG 全部非 None 才算 wired，
+#    這個沒接只會讓重試後擋「沒有即時報價」，不該讓整天變 not_wired。
+_QUOTE = {"fn": None}
 
 # 今天帳本裡「自動下單開出來的那一口」的記憶體副本（重啟撿回部位時補 sl_points 用）。
 #   date  這份是哪一天的（⛔ 不是今天就不准拿來用 ⇒ 交給工作執行緒去讀檔）
@@ -1469,7 +1472,10 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
 
     fresh = (snap.get("quote_age_ms") is not None
              and snap["quote_age_ms"] <= _CFG["gap_s"] * 1000)
-    ok, why = broker.can_enter(px, fresh)
+    # ⭐ 2026-11-12（Benson 同意）：問不到券商部位 ⇒ 20 秒內再問，不是只問一次就放棄（送出用範圍市價，px 只是參考價）
+    ok, why, _n, _px = broker.can_enter_retry(px, fresh, refresh=_fresh_quote)
+    if _n > 1:
+        base["retry"] = _n
     if not ok:
         # 沒報價／報價不新鮮／還沒連上永豐／對帳失敗／券商已有部位／當天已達上限
         why = str(why or "沒有說原因")
@@ -2675,6 +2681,17 @@ def _recover_poll():
 
 
 # ---------------------------------------------------------------- 接線
+
+def _fresh_quote():
+    """
+    ⭐ 2026-11-12：送單前問不到券商部位、等了幾秒再問 ⇒ 用**現在**的報價判斷新不新鮮（⛔ 不沿用 09:03:30 快照的「新鮮」）。
+    ⇒ (價, 新不新鮮)。面板沒接 quote_fn ⇒ (None, False) ⇒ can_enter 擋「沒有即時報價」（⛔ 不猜）。
+    """
+    qf = _QUOTE["fn"]
+    px, age = qf() if qf else (None, None)
+    live = px is not None and age is not None and _CFG.get("gap_s") is not None and age <= _CFG["gap_s"]
+    return (float(px) if px is not None else None), live
+
 
 def configure(signal_at, signal_sec, late_ms, gap_s, sig_fn, dirs_fn, eod_at, pctl,
               rev_at=None, rev_sec=None):

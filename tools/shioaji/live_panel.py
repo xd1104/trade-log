@@ -5703,6 +5703,7 @@ def main():
                         late_ms=AUTO_LATE_MS, gap_s=AUTO_GAP_S,
                         sig_fn=auto_sig, dirs_fn=auto_dirs, eod_at=EOD_CLOSE_AT,
                         pctl=FAST_PCTL, rev_at=REV_AT, rev_sec=REV_SEC)
+    auto_fire._QUOTE["fn"] = _nf_quote   # ⭐ 2026-11-12：送單前重試之後重拿報價（同停損那一個價）
     # ⛔⛔ 重啟撿回部位時補「自動下單那一口自己的停損點數」（沒補就掉回 SL_POINTS ⇒ 提早被洗掉）。
     #    **只有 main() 會接**（治具與 --replay 不接 ⇒ 撿回來的部位照舊用 SL_POINTS）。
     #    掛上去的 recover_meta 只讀記憶體（它在主迴圈的 reconcile 裡被叫）。

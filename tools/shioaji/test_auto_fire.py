@@ -1110,8 +1110,9 @@ print("\n=== ⑨ ⛔ 下單一定要走 broker.py，不准自己組單 ===")
 names = sorted({n.attr for n in ast.walk(tree)
                 if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
                 and n.value.id == "broker"})
-say("enter" in names and "can_enter" in names,
-    "  auto_fire 是透過 broker.can_enter / broker.enter 下單的", names)
+# ⭐ 2026-11-12：送單前改走 broker.can_enter_retry（裡面叫 broker.can_enter，對帳失敗 20 秒內重試）
+say("enter" in names and ("can_enter" in names or "can_enter_retry" in names),
+    "  auto_fire 是透過 broker.can_enter(_retry) / broker.enter 下單的", names)
 say("place_order" not in src and "FuturesOrder" not in src,
     "  ⛔ auto_fire 裡沒有 place_order／FuturesOrder（不自己組單、不自己送）")
 say("REAL_ORDERS_ON" not in src.replace("`REAL_ORDERS_ON`", ""),
