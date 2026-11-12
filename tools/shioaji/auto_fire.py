@@ -2021,6 +2021,21 @@ def _orb_step(d=None, now_ms=None):
             "bid": _ORB["bid"], "ask": _ORB["ask"]}
     q = _quote_why(snap)
     if q:
+        # ⭐ 2026-11-12 稽核：突破那一筆讀到時已經太舊（送單執行緒剛好在忙）⇒ 看**現在**的報價：
+        #    新鮮、而且現在還在箱子上緣之上 ⇒ 突破還成立，用現在的價送（⛔ 舊價不拿來下單）；否則照舊今天不做。
+        _cpx, _live = _fresh_quote()
+        if _live and _cpx is not None and _cpx > float(box["hi"]):
+            base["orb_late_ms"] = age
+            fill, at, age = _cpx, datetime.now().strftime("%H:%M:%S"), 0
+            _sl2 = orb_sl_points(dv, fill, box["hi"], box["lo"])   # 停損照舊＝箱子下緣 ⇒ 點數照新的價重算
+            if _sl2 is None:
+                _orb_end(d, "orb_bad_sl", base)
+                return True
+            sl = _sl2
+            base.update(px=fill, sl_points=sl)
+            snap = {"px": fill, "quote_age_ms": 0, "at": at, "bid": _ORB["bid"], "ask": _ORB["ask"]}
+            q = _quote_why(snap)
+    if q:
         _orb_end(d, q, base,
                  "開箱：突破那一筆（%s）距離現在已經 %.1f 秒，不能拿舊價下單 —— 今天不做"
                  % (at, age / 1000.0))
@@ -2790,14 +2805,20 @@ def _worker():
         except queue.Empty:
             item = None
         if item is not None:
-            try:
-                _fire(*item)
-            except Exception as e:
-                # ⛔ 不可以安靜地吞：計數 ＋ 主控台 ＋ 端點端出去（畫面上看得到）
-                _ST["err"] = "fire: " + str(e)[:150]
-                _ST["err_n"] += 1
-                print("⚠️ [自動下單] 送單那一段出錯（停損不受影響）：%s" % str(e)[:200],
-                      flush=True)
+            # ⭐ 2026-11-12 稽核：出錯 ⇒ 0.5 秒後同一件再跑一次（舊版吞掉就沒了，那一刻的訊號整筆消失、帳本也沒有一列）。
+            #    ⛔ 不會重送：_fire 一開頭就看帳本（送過 ⇒ _sent／_cand_done 擋；先落地 sending 再送）；遲到檢查照 put_at 算。
+            for _try in (1, 2):
+                try:
+                    _fire(*item)
+                    break
+                except Exception as e:
+                    # ⛔ 不可以安靜地吞：計數 ＋ 主控台 ＋ 端點端出去（畫面上看得到）
+                    _ST["err"] = "fire: " + str(e)[:150]
+                    _ST["err_n"] += 1
+                    print("⚠️ [自動下單] 送單那一段出錯（第 %d 次，停損不受影響）：%s" % (_try, str(e)[:200]),
+                          flush=True)
+                    if _try == 1:
+                        time.sleep(0.5)
         # ⭐⭐ 開箱（ORB）：09:05~09:30 之間每 POLL_S 秒看一次 tick_logs 有沒有突破。
         #    ⛔ 一定在**這條執行緒**上（要讀檔、可能送單）；⛔ 不准搬進 4Hz 主迴圈，
         #    ⛔ 也不准動 on_tick 熱路徑。出錯不可以把這條執行緒帶掉（下一輪還要送單）。

@@ -284,7 +284,9 @@ def read_state(path=None):
     """
     p = path or LEVEL_FILE
     o, last = None, None
-    for i in range(IO_TRIES):
+    # ⭐ 2026-11-12 稽核：剛重啟、還沒有「上一次讀成功的那份」可以退 ⇒ 多試幾次（約 2 秒），⛔ 別一下就退回 1＋1
+    _tries = IO_TRIES if _LAST_GOOD.get(str(p)) is not None else max(IO_TRIES, int(2.0 / IO_WAIT) + 1)
+    for i in range(_tries):
         try:
             if not p.exists():
                 return _fresh(), None
@@ -294,7 +296,7 @@ def read_state(path=None):
             #    稍等再讀；⛔ 還是讀不到也**不退回 1＋1**（那會讓 3＋1 的那天突然只送 1 口、風控上限也變小）
             #    ⇒ 用上一次讀成功的那份（同一支程式裡寫入者只有 lots.py 自己，上一次讀到／寫下的就是現況）。
             last = e
-            if i + 1 < IO_TRIES:
+            if i + 1 < _tries:
                 time.sleep(IO_WAIT)
             continue
         try:
@@ -808,7 +810,8 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
                        "line": thr * DOWN_FRAC, "from_ab": list(old), "to_ab": list(new),
                        "lots_changed": old != new,
                        # ⭐ QA 10-14：白話、照規格那一句（「權益 8.31 萬，低於這一級的保護線 8.5 萬 ⇒ 明天起退回 1＋1。」）
-                       "msg": "權益 %s，低於這一級的保護線 %s ⇒ 明天起退回 %s。" % (
+                       # ⭐ 2026-11-12 稽核：daily_check 14:00 就把 level 寫下去 ⇒ 當晚夜盤已經用新的級（舊字「明天起」不對）
+                       "msg": "權益 %s，低於這一級的保護線 %s ⇒ 今晚夜盤起退回 %s。" % (
                            wan2(eq), wan2(thr * DOWN_FRAC), label(new))})
             st["level"] = nl
             st["since"] = str(today)

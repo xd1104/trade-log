@@ -168,24 +168,52 @@ def configure(api, contract, extra=None):
         for k, c in (extra or {}).items():
             if k in RATIO and c is not None:
                 _state["contracts"][k] = c
-        acc = None
-        try:
-            import shioaji as sj
-            want = getattr(sj.AccountType, "Future", None)
-            for a in api.list_accounts():
-                t = getattr(a, "account_type", None)
-                # 先比 enum 本身，比不出來才退回比字串。
-                # ⚠️ 不可以用「字串裡有沒有 F」這種寫法 —— Stock / Intl 剛好都沒有 F
-                #    只是運氣好，哪天多一個帳號型別就會抓錯帳號下單。
-                if (want is not None and t == want) or str(t).endswith("Future"):
-                    acc = a
-                    break
-            # ⚠️ 不看 signed 旗標：實測簽署完成之後它仍然是 False（2026-08 踩過），
-            #    拿它當條件會變成明明能下單卻一直說沒簽。真的沒簽會在送單時報錯。
-        except Exception as e:
-            _state["last_error"] = f"讀不到帳號清單：{str(e)[:120]}"
+        acc = _find_account(api)
         _state["account"] = acc
     return acc
+
+
+def _find_account(api):
+    """期貨帳號 ⇒ 帳號物件；讀不到 ⇒ None（並寫 last_error）。"""
+    acc = None
+    try:
+        import shioaji as sj
+        want = getattr(sj.AccountType, "Future", None)
+        for a in api.list_accounts():
+            t = getattr(a, "account_type", None)
+            # 先比 enum 本身，比不出來才退回比字串。
+            # ⚠️ 不可以用「字串裡有沒有 F」這種寫法 —— Stock / Intl 剛好都沒有 F
+            #    只是運氣好，哪天多一個帳號型別就會抓錯帳號下單。
+            if (want is not None and t == want) or str(t).endswith("Future"):
+                acc = a
+                break
+        # ⚠️ 不看 signed 旗標：實測簽署完成之後它仍然是 False（2026-08 踩過），
+        #    拿它當條件會變成明明能下單卻一直說沒簽。真的沒簽會在送單時報錯。
+    except Exception as e:
+        _state["last_error"] = f"讀不到帳號清單：{str(e)[:120]}"
+    return acc
+
+
+def heal(api, account=False, mxf=None):
+    """
+    ⭐ 2026-11-12 稽核：連線還在、但這次連線時帳號清單／小台合約剛好沒拿到 ⇒ 面板背景補（⛔ 舊版要等報價斷 90 秒重連才會恢復）。
+    `api` 不是現在這條連線 ⇒ 什麼都不做。⇒ 補到了什麼。⛔ 會呼叫券商 API ⇒ 只能在背景執行緒叫。
+    """
+    got = []
+    if api is None or _state["api"] is not api:
+        return got
+    if account and _state["account"] is None:
+        acc = _find_account(api)
+        with _lock:
+            if acc is not None and _state["api"] is api and _state["account"] is None:
+                _state["account"] = acc
+                got.append("account")
+    if mxf is not None:
+        with _lock:
+            if _state["api"] is api and _state["contracts"].get("MXF") is None:
+                _state["contracts"]["MXF"] = mxf
+                got.append("MXF")
+    return got
 
 
 def _log(kind, payload):
@@ -1957,12 +1985,15 @@ def can_enter(price, quote_live):
     if price is None or not quote_live:
         return False, "現在沒有即時報價，不能用舊價下單"
     if _state["api"] is None:
-        return False, "還沒連上永豐"
+        return False, NOT_CONNECTED_MSG
     if _state["account"] is None:
-        return False, "找不到期貨帳號（可能是 API 還沒簽署完成）"
+        return False, NO_ACCOUNT_MSG
     # 憑證沒啟用就先擋在這裡，不要讓他長按完才吃到永豐的錯誤訊息
     if is_live() and not CA_OK["ok"]:
         return False, CA_OK["msg"] or "憑證沒啟用，不能真實下單"
+    _sk = clock_skew()
+    if _sk is not None and abs(_sk) > CLOCK_SKEW_MAX:
+        return False, "本機時鐘跟交易所差 %+.0f 秒（超過 %g 秒）—— 送單時刻會錯，先不送；請校正電腦時間" % (_sk, CLOCK_SKEW_MAX)
     n = entries_today()
     if n >= MAX_ENTRIES:
         return False, f"今天真實進場已經 {n} 次，達到上限 {MAX_ENTRIES} 次"
@@ -1979,7 +2010,26 @@ def can_enter(price, quote_live):
     return True, None
 
 
+# ⭐ 2026-11-12 稽核：本機時鐘比交易所快／慢多少秒（面板 on_tick 每分鐘更新一次「那一分鐘的最小差」＝扣掉網路延遲）。
+#    s＝上一分鐘的估計（None＝還沒有）；at＝那一分鐘開始的時刻。差超過 CLOCK_SKEW_MAX ⇒ can_enter 擋（09:03:30／22:40 會在錯的時刻送）。
+CLOCK_SKEW = {"s": None, "at": 0.0, "win_min": None, "win_at": 0.0}
+CLOCK_SKEW_MAX = 30.0
+CLOCK_SKEW_WARN = 3.0
+
+
+def clock_skew():
+    """⇒ 本機時鐘比交易所快幾秒（負＝慢）；超過 3 分鐘沒更新（沒成交、休市）⇒ None（⛔ 不拿舊的判斷）。"""
+    ck = CLOCK_SKEW
+    if ck["s"] is None or time.time() - ck["at"] > 180:
+        return None
+    return ck["s"]
+
+
 RECON_FAIL_MSG = "跟券商對帳失敗，這種時候不送單"
+NOT_CONNECTED_MSG = "還沒連上永豐"
+NO_ACCOUNT_MSG = "找不到期貨帳號（可能是 API 還沒簽署完成）"
+# ⭐ 2026-11-12 稽核：這三個原因都可能是暫時的（查詢逾時／剛重連、正在登入／帳號清單剛好沒讀到）⇒ 20 秒內重試
+_RETRY_WHY = (RECON_FAIL_MSG, NOT_CONNECTED_MSG, NO_ACCOUNT_MSG)
 # ⭐ 2026-11-12（Benson 同意）：自動下單送單前問不到券商部位 ⇒ 不是馬上放棄，ENTER_RETRY_S 秒內每 ENTER_RETRY_GAP 秒再問。
 #    那晚 22:35～22:40 永豐「查詢」那條回應逾時（報價照常），22:40 夜盤跟勢訊號 +664 點（門檻 177）只問一次就放棄 ⇒ 整筆漏掉。
 #    ⛔ 只有「對帳失敗」這一個原因會重試；其他理由（沒報價、已有部位、達上限、憑證…）照舊一次就擋。
@@ -1999,8 +2049,8 @@ def can_enter_retry(price, quote_live, refresh=None, sleep=None, clock=None):
     t0 = clock()
     ok, why = can_enter(price, quote_live)
     n = 1
-    while not ok and why == RECON_FAIL_MSG and clock() - t0 + ENTER_RETRY_GAP <= ENTER_RETRY_S:
-        _log("enter_retry", {"ok": False, "n": n, "why": "送單前問不到券商部位 —— %g 秒後再問" % ENTER_RETRY_GAP,
+    while not ok and why in _RETRY_WHY and clock() - t0 + ENTER_RETRY_GAP <= ENTER_RETRY_S:
+        _log("enter_retry", {"ok": False, "n": n, "why": "%s —— %g 秒後再問" % (why, ENTER_RETRY_GAP),
                              "err": str(_state.get("last_error") or "")[:160]})
         sleep(ENTER_RETRY_GAP)
         if refresh is not None:
@@ -2009,7 +2059,7 @@ def can_enter_retry(price, quote_live, refresh=None, sleep=None, clock=None):
         n += 1
     if n > 1:
         _log("enter_retry_done", {"ok": bool(ok), "n": n, "why": why})
-    if not ok and why == RECON_FAIL_MSG and n > 1:
+    if not ok and why in _RETRY_WHY and n > 1:
         why = "%s（%g 秒內問了 %d 次都問不到）" % (why, round(clock() - t0), n)
     return ok, why, n, price
 
@@ -4327,7 +4377,7 @@ def snapshot():
             # ⚠️ 一定要由**伺服器**給：瀏覽器自己算 new Date() 在跨午夜那一刻會跟
             #    trades_today() 讀的檔案不同一天 ⇒ 同一筆交易在兩個清單裡各出現一次。
             "today": str(date.today()),
-            "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"],
+            "ca_ok": CA_OK["ok"], "ca_msg": CA_OK["msg"], "clock_skew": clock_skew(),
             "entries_today": entries_today(), "max_entries": MAX_ENTRIES,
             "account": str(getattr(_state["account"], "account_id", "")) or None,
             "last_error": _state["last_error"]}

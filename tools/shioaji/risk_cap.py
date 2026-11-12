@@ -24,6 +24,7 @@
    已經平倉但券商沒給出場價（points 是空的）⇒ ⛔ 不擋，算成「對不到點數」並寫在畫面上。
 """
 import json
+import time
 import pathlib
 import sys
 from datetime import date, timedelta
@@ -54,8 +55,17 @@ def _jsonl(p):
     """讀一個 jsonl。⛔ 檔案不存在 ＝ 空的；讀檔失敗 ⇒ 丟出去（上層擋單）。壞列跳過。"""
     if not p.exists():
         return []
+    # ⭐ 2026-11-12 稽核：讀檔一時失敗（防毒／同步軟體剛好鎖住）⇒ 隔 0.2 秒再讀，最多 3 次；還是失敗才丟出去（上層擋單）
+    for _i in range(3):
+        try:
+            _txt = p.read_text(encoding="utf-8")
+            break
+        except OSError:
+            if _i == 2:
+                raise
+            time.sleep(0.2)
     out = []
-    for ln in p.read_text(encoding="utf-8").splitlines():
+    for ln in _txt.splitlines():
         if not ln.strip():
             continue
         try:
@@ -119,7 +129,9 @@ def _trades_between(d0, d1, trade_dir):
 def _match(ent, trades, used):
     """帳本那一口 ⇒ 成績單那一列（進場時間一樣、進場價差 ≤ PX_TOL、出場日在合理範圍）。"""
     d = date.fromisoformat(ent["d"])
-    lo, hi = (d, d) if ent["sess"] == "day" else (d, d + timedelta(days=NIGHT_EXIT_MAX_D))
+    # ⭐ 2026-11-12 稽核：日盤那一口也看到 d＋NIGHT_EXIT_MAX_D（13:43:30 沒平掉、隔天才平的那筆 ⇒ 舊版對不到 ⇒
+    #    虧損不進本月風控、也不進停損失靈事故）。比對還要進場時間＋進場價都對上，⛔ 不會配錯別筆。
+    lo, hi = d, d + timedelta(days=NIGHT_EXIT_MAX_D)
     for i, t in enumerate(trades):
         if i in used:
             continue

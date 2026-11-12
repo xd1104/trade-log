@@ -216,5 +216,32 @@ rows, n = eod_run([("unknown", "x")] * 50)
 chk("一直問不到 ⇒ 窗口內問完才記 eod_cant_tell（不是問一次）", (rows, n > 5), (["eod_cant_tell"], True))
 chk("沒有進場價（確定性的）⇒ 不重試", eod_run([("unknown", "沒有進場價")] * 5, entry=None), (["eod_cant_tell"], 1))
 
+print("\n=== ⑩ 第 4 批：還沒連上也重試、時鐘差太多不送 ===")
+(ok, why, n, px), seen, clk = run([(False, broker.NOT_CONNECTED_MSG), (True, None)])
+chk("「還沒連上永豐」（剛重連）⇒ 也會重試、問到就放行", (ok, n), (True, 2))
+(ok, why, n, px), seen, clk = run([(False, broker.NO_ACCOUNT_MSG), (True, None)])
+chk("「找不到期貨帳號」⇒ 也會重試", (ok, n), (True, 2))
+_ck = dict(broker.CLOCK_SKEW)
+try:
+    broker.CLOCK_SKEW.update(s=45.0, at=__import__("time").time())
+    chk("時鐘差 45 秒 ⇒ clock_skew 回 45", broker.clock_skew(), 45.0)
+    _src_ce = (HERE / "broker.py").read_text(encoding="utf-8")
+    chk("can_enter 有擋「時鐘差太多」那一道", "本機時鐘跟交易所差" in _src_ce, True)
+    broker.CLOCK_SKEW.update(s=45.0, at=__import__("time").time() - 600)
+    chk("時鐘估計 10 分鐘沒更新（休市）⇒ 不拿舊的判斷", broker.clock_skew(), None)
+finally:
+    broker.CLOCK_SKEW.clear()
+    broker.CLOCK_SKEW.update(_ck)
+
+print("\n=== ⑪ 第 4 批：模擬資料洞不定論、風控日盤隔天平也對得到 ===")
+import risk_cap as RC  # noqa: E402
+_e = {"sess": "day", "d": "2026-11-13", "entry_time": "09:03:31", "entry": 44000.0}
+_t = [{"_file": "2026-11-16", "entry_time": "09:03:31", "entry": 44000.0, "points": -100}]
+chk("日盤 11-13 進場、11-16 才平（13:43:30 沒平掉）⇒ 對得到", RC._match(_e, _t, set()) is not None, True)
+_t2 = [{"_file": "2026-11-16", "entry_time": "09:15:02", "entry": 44000.0, "points": -100}]
+chk("  進場時間不同 ⇒ 不會配錯", RC._match(_e, _t2, set()), None)
+_sl = (HERE / "sim_lanes.py").read_text(encoding="utf-8")
+chk("模擬：進場時刻前沒有資料 ⇒ pending('hole')，不記不做", '_pending("hole"' in _sl, True)
+
 print("\n總結：" +("全部通過 ✅" if not FAIL else "%d 項沒過 ❌：%s" % (len(FAIL), "；".join(FAIL))))
 sys.exit(1 if FAIL else 0)

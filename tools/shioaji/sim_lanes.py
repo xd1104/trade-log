@@ -1081,6 +1081,10 @@ def trend_eval(E, bars, ctx):
     base = {"us_open": _hm(T), "us_dst": us_dst(E)}
     i0, entry = _trend_at(mm, C, T + trend_rule.ENTRY_OFFSET)
     j0, p0 = _trend_at(mm, C, T + trend_rule.ENTRY_OFFSET - trend_rule.LOOKBACK)
+    if (i0 is None or p0 is None) and int(mm[0]) > T + trend_rule.ENTRY_OFFSET - trend_rule.LOOKBACK:
+        # ⭐ 2026-11-12 稽核：這一晚的 1 分 K 從進場時刻**之後**才開始有 ⇒ 是資料洞（例：2026-09-02 只有 00:00 起），
+        #    ⛔ 不是「那時沒有成交」⇒ 不下定論（舊版永久記成不做，退休標準少算一晚）
+        return _pending("hole", "這一晚的 1 分 K 從 %s 才開始（進場時刻前沒有資料，資料有洞）" % _hm(int(mm[0])))
     if i0 is None or p0 is None:
         return _none_row("trend", E, "no_entry", "台指在 %s 前後沒有成交 K 棒"
                          % _hm(T + trend_rule.ENTRY_OFFSET), base)
@@ -1547,6 +1551,9 @@ def min1_store(raw):
             if c not in new.columns:
                 new[c] = np.nan
         new = new[MIN1_COLS]
+        # ⭐ 2026-11-12 稽核：還沒收完的那一根（盤中補抓時最後一根）⛔ 不存 —— 存了之後完整的那根會被 keep="first" 丟掉，
+        #    那晚的振幅／走幅歷史永遠是半成品。只留一分鐘以前就收完的。
+        new = new[new["ts"] <= pd.Timestamp(datetime.now()) - pd.Timedelta(minutes=1)]
         if MIN1_CSV.exists():
             old = pd.read_csv(MIN1_CSV)
             old["ts"] = pd.to_datetime(old["ts"])

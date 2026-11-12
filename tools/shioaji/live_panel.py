@@ -1279,9 +1279,7 @@ def _auto_snap(st, now, at_sec=None):
     #    ⚠️ 跟上面 p0900 是**同兩個來源、順序相反**：方向（做法 A）沿用既有的「09:00 那一分鐘第一筆」，
     #       走幅要的是「09:00 以前最後一筆」—— ⛔ 不要為了少一個欄位把兩個併成一個（那會改到模擬的方向）。
     #    拿不到 minute_close[539] 才退到 minute_bar[540]["o"]，用了哪一種記在 ref_src。
-    #    ⚠️ 已知：盤中重啟時 minute_close 是 seed_from_bars() 拿 1 分 K 補的（K 棒用**結束時間**標記），
-    #       那時的 [539] 其實是 08:58~08:59 那根的收盤 —— 早了一分鐘。只影響「09:00 之後才重啟、
-    #       又還趕得上 09:03:30」那幾分鐘，跟 p0900 的 prev_min_close 退路是同一個既有性質。
+    #    ⭐ 2026-11-12：盤中重啟時 seed_from_bars() 補的 minute_close 已改成「K 棒結束時間 − 1 分鐘」⇒ [539] 是 08:59 那一分鐘。
     ref0900, ref_src = None, None
     if st is not None and isinstance(st.minute_close.get(539), (int, float)):
         ref0900, ref_src = float(st.minute_close[539]), "prev_min_close"
@@ -1680,7 +1678,15 @@ def _auto_tick(st, now, sess):
     if TICK_SEC0 <= secs < SIGNAL_SEC and st is not None:
         if st.last_recv is None or time.time() - st.last_recv > AUTO_GAP_S:
             AUTO["gaps"] += 0.25
+    # ⭐ 2026-11-12 稽核：09:03:30 那一刻報價剛好斷了（> AUTO_GAP_S 沒更新）⇒ 先不拍快照，下一圈（0.25 秒後）再看，
+    #    最多等到 AUTO_LATE_MS − 500 毫秒；恢復了就照常拍（舊版那一刻不新鮮就整天 quote_stale 不送）。
+    #    ⛔ 等到上限還是不新鮮 ⇒ 照舊拍下去（auto_fire 記 quote_stale、不送）。只有整數比較與屬性讀取（⛔ 不加 I/O）。
+    _sig_wait = False
     if not AUTO["done"] and secs >= SIGNAL_SEC:
+        _lag0 = (secs - SIGNAL_SEC) * 1000 + now.microsecond // 1000
+        _sig_wait = (_lag0 <= AUTO_LATE_MS - 500 and st is not None
+                     and (st.last_recv is None or time.time() - st.last_recv > AUTO_GAP_S))
+    if not AUTO["done"] and secs >= SIGNAL_SEC and not _sig_wait:
         AUTO["done"] = True
         lag = (secs - SIGNAL_SEC) * 1000 + now.microsecond // 1000
         if lag > AUTO_LATE_MS:
@@ -5517,6 +5523,19 @@ def main():
             # 這一句排在落地之前 —— 停損看的價要先更新，其他事都排在後面。
             st.feed(price, vol, ts, in_session=SESSION_OPEN <= ts.time() < DAY_END)
         TICKS.tick(ts, price, vol)      # 只 append，不碰磁碟
+        # ⭐ 2026-11-12 稽核：本機時鐘 vs 交易所時間（09:03:30／22:40 都用本機時鐘）。只做幾個加減（⛔ 不加 I/O）。
+        #    一分鐘內取最小值（濾掉網路延遲）⇒ broker.CLOCK_SKEW；差太多 can_enter 會擋。
+        try:
+            _now = time.time()
+            _sk = _now - ts.timestamp()
+            ck = broker.CLOCK_SKEW
+            if _now - ck["win_at"] > 60:
+                ck["s"], ck["at"] = ck["win_min"], ck["win_at"]
+                ck["win_min"], ck["win_at"] = _sk, _now
+            elif ck["win_min"] is None or _sk < ck["win_min"]:
+                ck["win_min"] = _sk
+        except Exception:               # noqa: BLE001
+            pass
 
     def on_bidask(exchange: Exchange, ba: BidAskFOPv1):
         DEPTH_WD["last_ba"] = time.time()   # ⭐ 五檔看門狗：只記一個時間（⛔ 不加任何 I/O）
@@ -5645,6 +5664,58 @@ def main():
             print(f"[{datetime.now():%H:%M:%S}] 重連失敗：{msg[:200]}")
             return False
 
+    HEAL = {"at": 0.0, "th": None}
+
+    def heal_tick():
+        """
+        ⭐ 2026-11-12 稽核：連線還在（報價正常、不會觸發重連），但憑證啟用／期貨帳號／小台合約這次沒拿到
+        ⇒ 背景每 60 秒補一次（⛔ 舊版要等報價斷 90 秒才重連，報價正常時可以卡好幾個小時 ⇒ 每一筆都「憑證沒啟用」不送）。
+        ⛔ 主迴圈只做判斷與開執行緒（不呼叫券商 API）；⛔ 正在送單／平倉時不動。
+        """
+        if time.time() - HEAL["at"] < 60:
+            return
+        th = HEAL["th"]
+        if th is not None and th.is_alive():
+            return
+        api = session.get("api")
+        if api is None or not CONN.get("ok") or broker.busy():
+            return
+        ca = get_ca()
+        need_ca = bool(ca) and not broker.CA_OK["ok"]
+        need_acc = broker._state.get("account") is None
+        need_mxf = broker.MINI_FLAG.exists() and (broker._state.get("contracts") or {}).get("MXF") is None
+        if not (need_ca or need_acc or need_mxf):
+            return
+        HEAL["at"] = time.time()
+        contract = session.get("contract")
+
+        def run():
+            try:
+                if need_ca:
+                    try:
+                        api.activate_ca(ca_path=ca[0], ca_passwd=ca[1], person_id=ca[2])
+                        if session.get("api") is api:
+                            broker.CA_OK["ok"], broker.CA_OK["msg"] = True, None
+                            print("[憑證] 背景補啟用成功，可以真實下單", flush=True)
+                    except Exception as e:      # noqa: BLE001
+                        broker.CA_OK["msg"] = f"憑證啟用失敗（背景每分鐘重試中）：{str(e)[:120]}"
+                mxf = None
+                if need_mxf:
+                    try:
+                        want = getattr(contract, "delivery_month", None)
+                        mxf = next((c for c in getattr(api.Contracts.Futures, "MXF")
+                                    if getattr(c, "delivery_month", None) == want
+                                    and not str(c.code).startswith("MXFR")), None)
+                    except Exception:           # noqa: BLE001
+                        mxf = None
+                got = broker.heal(api, account=need_acc, mxf=mxf)
+                if got:
+                    print("[連線] 背景補到：%s" % "、".join(got), flush=True)
+            except Exception as e:              # noqa: BLE001
+                print("⚠️ [連線] 背景補憑證／帳號出錯：%s" % str(e)[:120], flush=True)
+        HEAL["th"] = threading.Thread(target=run, name="conn-heal", daemon=True)
+        HEAL["th"].start()
+
     def seed_from_bars(st, today):
         """
         盤中啟動時，用當天已經發生的 1 分 K 把開盤價／最高／最低／量補起來。
@@ -5655,6 +5726,26 @@ def main():
         """
         api = SESSION_REF.get("api")
         now_t = datetime.now().time()
+        if api is not None and NIGHT_OPEN <= now_t:
+            # ⭐ 2026-11-12 稽核：夜盤（15:00～23:59）重啟 ⇒ 只補 minute_close（夜盤跟勢要 30 分鐘前那一分鐘的收盤；
+            #    舊版只補日盤 ⇒ 22:07～22:40 之間當機重開，今晚 no_ref 整晚不做）。⛔ 開高低量是日盤的數字，不碰。
+            #    ⛔ 已經有的（重啟後即時收到的）不覆蓋。
+            try:
+                contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
+                df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
+                if not df.empty:
+                    df["ts"] = pd.to_datetime(df["ts"])
+                    g = df[(df["ts"].dt.time > NIGHT_OPEN) & (df["ts"].dt.time <= now_t)]
+                    n = 0
+                    for r in g.itertuples():
+                        k = r.ts.hour * 60 + r.ts.minute - 1      # K 棒結束時間 − 1 分鐘（同日盤）
+                        if k not in st.minute_close:
+                            st.minute_close[k] = float(r.Close)
+                            n += 1
+                    print(f"  夜盤重啟：已用 {n} 根 1 分 K 補回分鐘收盤（夜盤跟勢的參考價用）")
+            except Exception as e:              # noqa: BLE001
+                print(f"  夜盤補分鐘收盤失敗：{str(e)[:100]}")
+            return
         if api is None or not (SESSION_OPEN <= now_t < DAY_END):
             return
         try:
@@ -5673,7 +5764,9 @@ def main():
             st.vol = float(g["Volume"].sum())
             st.price = float(g["Close"].iloc[-1])
             for r in g.itertuples():
-                st.minute_close[r.ts.hour * 60 + r.ts.minute] = float(r.Close)
+                # ⭐ 2026-11-12 稽核：永豐 1 分 K 用**結束時間**標記（09:00 那根＝08:59～09:00）⇒ 減 1 分鐘才是
+                #    minute_close 的「那一分鐘」（跟 on_tick 寫的同一把尺）。舊版早一分鐘 ⇒ 盤中重啟後 09:00 參考價拿到 08:58。
+                st.minute_close[r.ts.hour * 60 + r.ts.minute - 1] = float(r.Close)
             print(f"  已用當日 {len(g)} 根 K 棒補齊開高低與量（開 {st.open:.0f}）")
         except Exception as e:
             print(f"  補齊當日資料失敗：{str(e)[:100]}")
@@ -5823,6 +5916,10 @@ def main():
                 STATE["loop_at"] = time.time()
                 try:
                     auto_restart_tick(now)            # ⭐ 2026-11-05 自動重啟（條件跟重啟鈕同一支）
+                except Exception:                     # noqa: BLE001  ⛔ 不准擋停損迴圈
+                    pass
+                try:
+                    heal_tick()                       # ⭐ 2026-11-12 憑證／帳號／小台合約沒拿到 ⇒ 背景補
                 except Exception:                     # noqa: BLE001  ⛔ 不准擋停損迴圈
                     pass
 

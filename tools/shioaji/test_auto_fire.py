@@ -379,6 +379,9 @@ def run_signal(st, hh=None, mm=None, ss=None, ms=100):
     else:
         now = datetime.datetime.combine(TODAY, datetime.time(hh, mm, ss, ms * 1000))
     LP._auto_tick(st, now, "day")
+    if not LP.AUTO["done"]:
+        # ⭐ 2026-11-12：那一刻報價不新鮮 ⇒ 主迴圈先等（最多 AUTO_LATE_MS − 500）⇒ 再跑一圈「等過了上限」
+        LP._auto_tick(st, now + datetime.timedelta(milliseconds=LP.AUTO_LATE_MS - 400), "day")
     while not AF._Q.empty():
         AF._fire(*AF._Q.get())
     while not LP._AUTO_Q.empty():
@@ -691,6 +694,24 @@ no_send("報價中斷（超過 5 秒沒更新）", "quote_stale", lambda: arm_wr
         st=FakeToday(age=30.0))
 no_send("從來沒收到過報價", "quote_stale", lambda: arm_write("A"),
         st=FakeToday(age=None))
+# ⭐ 2026-11-12：09:03:30 那一刻報價斷了、0.5 秒後恢復 ⇒ 主迴圈等了一下，照常拍快照（不是整天 quote_stale）
+reset()
+live_on()
+arm_write("A")
+connect(ExplodeAPI())
+LP.AUTO["started"] = True
+LP.AUTO.update({"day": DAY, "done": False, "settled": True, "gaps": 0.0})
+_stq = FakeToday(age=30.0)
+_t0 = datetime.datetime.combine(TODAY, _sig_time(100))
+LP._auto_tick(_stq, _t0, "day")
+say(LP.AUTO["done"] is False, "  ⭐ 09:03:30 報價不新鮮 ⇒ 先不拍快照（等下一圈）")
+_stq.last_recv = time.time() - 0.2
+LP._auto_tick(_stq, _t0 + datetime.timedelta(milliseconds=500), "day")
+say(LP.AUTO["done"] is True and not LP._AUTO_Q.empty(), "  ⭐ 0.5 秒後報價恢復 ⇒ 照常拍快照、排進佇列")
+while not LP._AUTO_Q.empty():
+    LP._AUTO_Q.get()
+while not AF._Q.empty():
+    AF._Q.get()
 no_send("只有中價、還沒有成交", "mid_only", lambda: arm_write("A"),
         st=FakeToday(is_mid=True))
 no_send("算不出訊號（拿不到 09:00 的價，做法 A）", "no_signal", lambda: arm_write("A"),

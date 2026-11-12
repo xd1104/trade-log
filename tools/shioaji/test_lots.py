@@ -1863,8 +1863,8 @@ shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)
 
 print("  -- 建議：減級那一句白話、照規格 --")
 _sd, _evd = lots.downgrade(dict(json.loads(json.dumps(lots.DEFAULT)), level=2), 83100.0, today=date(2026, 11, 17))
-chk("  「權益 8.31 萬，低於這一級的保護線 8.5 萬 ⇒ 明天起退回 1＋1。」", _evd[0]["msg"],
-    "權益 8.31 萬，低於這一級的保護線 8.5 萬 ⇒ 明天起退回 1＋1。")
+chk("  「權益 8.31 萬，低於這一級的保護線 8.5 萬 ⇒ 今晚夜盤起退回 1＋1。」（11-12：14:00 就生效）", _evd[0]["msg"],
+    "權益 8.31 萬，低於這一級的保護線 8.5 萬 ⇒ 今晚夜盤起退回 1＋1。")
 broker.CLOSE_COOLDOWN = _save_cd
 broker.MAX_ENTRIES = _save_max
 
