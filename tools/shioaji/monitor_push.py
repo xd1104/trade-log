@@ -271,7 +271,7 @@ def _pos_extra(snap, day, night, now=None):
                     or hms >= eod_at[:8])
     else:
         past = any(x.get("rec") == "eod" and x.get("E") == ours_E for x in night.get("recent") or []) \
-            or ("04:58:00" <= hms < "15:00:00")
+            or ((_night_eod_hm(qty) + ":00") <= hms < "15:00:00")
     dw = {"long": "做多", "short": "做空"}.get(p.get("dir"))
     bits = [("%s %d 口" % (dw, qty)) if dw else ("%d 口（方向不明）" % qty)]
     if et:
@@ -279,10 +279,16 @@ def _pos_extra(snap, day, night, now=None):
     if p.get("no_auto_exit"):
         bits.append("收盤不會自動平")
     elif ours and not past:
-        bits.append("%s 前自動平" % ("04:58" if sess == "night" else eod_at[:5]))
+        bits.append("%s 前自動平" % (_night_eod_hm(qty) if sess == "night" else eod_at[:5]))
     p["sess"] = sess
     p["short"] = "・".join(bits)
     r["float_total"] = _total(r.get("float_pts"), qty)
+
+
+def _night_eod_hm(qty):
+    """⭐ 2026-11-12：夜盤那一筆幾點自動平（≥ 5 口 04:50、其他 04:58；跟 night_fire.eod_from 同一條，這裡不 import 免得推播拖進下單模組）。"""
+    ok = isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty >= 5
+    return "04:50" if ok else "04:58"
 
 
 def _panel_hms(day, now_ts=None):
@@ -304,7 +310,7 @@ def _stuck(p, day, hms):
         ed = p.get("entry_day")
         return hms >= eod_at or hms < "08:45:00" or (isinstance(ed, str) and ed and day.get("today") and ed != day.get("today"))
     if sess == "night":
-        return "04:58:00" <= hms < "15:00:00"
+        return (_night_eod_hm(p.get("qty")) + ":00") <= hms < "15:00:00"
     return False
 
 

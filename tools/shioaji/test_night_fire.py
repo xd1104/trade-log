@@ -209,6 +209,48 @@ chk("  已經沒部位 ⇒ 記 flat、不送平倉", ([o["why"] for o in NF.rows
 chk("  週五晚 ⇒ 週六 04:58 屬於週五那一晚", NF.evening_of(datetime(2026, 6, 13, 4, 58)), date(2026, 6, 12))
 chk("  週日晚沒有夜盤", NF.evening_of(datetime(2026, 6, 14, 21, 35)), None)
 
+print("\n=== ④b 2026-11-12：≥ 5 口 04:50 起平、4 口以下照舊 04:58 ===")
+
+
+def _set_qty(q):
+    """把今晚 result 那一列與券商部位改成 q 口（⛔ 只動暫存帳本）。"""
+    f = NF._path(E)
+    rows = [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+    for o in rows:
+        if o.get("rec") == "result" and o.get("ok"):
+            o["qty"] = q
+    f.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in rows), encoding="utf-8")
+    broker._state["position"]["qty"] = q
+
+
+chk("  eod_from：5、13 口 ⇒ 04:50；4、1 口、看不懂 ⇒ 04:58",
+    [NF.eod_from(q) for q in (5, 13, 4, 1, None, True, 5.0)],
+    [(4, 50, 0), (4, 50, 0), (4, 58, 0), (4, 58, 0), (4, 58, 0), (4, 58, 0), (4, 58, 0)])
+chk("  eod_hm", (NF.eod_hm(5), NF.eod_hm(4)), ("04:50", "04:58"))
+chk("  成交口數沒定案 ⇒ 看送出去的口數", NF._ent_qty({"qty": 1, "fill_unsure": True, "qty_sent": 5}), 5)
+reset()
+run_until(T5, T5 + timedelta(seconds=10))
+_set_qty(5)
+run_until(datetime(2026, 6, 11, 4, 49, 50), datetime(2026, 6, 11, 4, 49, 59))
+chk("  5 口：04:49:59 還不平", CALLS["close"], [])
+run_until(datetime(2026, 6, 11, 4, 50, 0), datetime(2026, 6, 11, 4, 50, 3))
+chk("  5 口：04:50 平掉", CALLS["close"], ["night_eod"])
+chk("  5 口：帳本寫 04:50 平倉完成", [o["msg"] for o in NF.rows_of(E) if o.get("rec") == "eod"], ["04:50 平倉完成"])
+reset()
+run_until(T5, T5 + timedelta(seconds=10))
+_set_qty(4)
+run_until(datetime(2026, 6, 11, 4, 50, 0), datetime(2026, 6, 11, 4, 57, 59), step_s=7)
+chk("  4 口：04:50～04:57:59 不平、也還沒定論",
+    (CALLS["close"], [o for o in NF.rows_of(E) if o.get("rec") == "eod"]), ([], []))
+run_until(datetime(2026, 6, 11, 4, 58, 0), datetime(2026, 6, 11, 4, 58, 3))
+chk("  4 口：04:58 平掉", CALLS["close"], ["night_eod"])
+reset()
+run_until(T5, T5 + timedelta(seconds=10))
+_set_qty(5)
+broker._state["position"] = None
+run_until(datetime(2026, 6, 11, 4, 50, 0), datetime(2026, 6, 11, 4, 50, 3))
+chk("  5 口但之前已停損出場 ⇒ 04:50 記 flat", [o["why"] for o in NF.rows_of(E) if o.get("rec") == "eod"], ["flat"])
+
 print("\n=== ⑤ 重啟撿回部位 ===")
 reset()
 run_until(T5, T5 + timedelta(seconds=10))

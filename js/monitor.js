@@ -323,7 +323,7 @@
   // ⚠️ 舊快照（面板還沒重啟、沒有新欄位）要退回合理畫面：短句沒有就只寫結果、todo 沒有就用舊的「要注意的事」湊（legacyTodo）。
   var LV = { now: '現在', decide: '要你決定', later: '有空再看' };
   var WK = '日一二三四五六';
-  var EXIT_WORD = { sl: '停損出場', tp: '停利出場', eod: '收盤平倉', night_eod: '04:58 平倉', manual: '手動平倉',
+  var EXIT_WORD = { sl: '停損出場', tp: '停利出場', eod: '收盤平倉', night_eod: '夜盤收盤平倉', manual: '手動平倉',
     closed_elsewhere: '已經平掉', legs: '分段出場' };
   var DETAILS_OPEN = {};    // 他正在展開的細節（重畫前記下、畫完補回；⛔ 不存 localStorage：每次打開 App 都是收起）
   function md(iso) { var p = String(iso || '').split('-'); if (p.length < 3) return esc(iso);
@@ -411,7 +411,7 @@
     var res = rows.filter(function (x) { return x.rec === 'result'; })[0];
     var sk = rows.filter(function (x) { return x.rec === 'skip'; })[0];
     if (res && res.ok) {
-      if (R && R.state === 'ok') { var tot = totalOf(R), w = R.why === 'sl' || R.why === 'tp' || R.why === 'manual' ? EXIT_WORD[R.why] + ' ' + hhmm(R.exit_time) : '04:58 平倉';
+      if (R && R.state === 'ok') { var tot = totalOf(R), w = R.why === 'sl' || R.why === 'tp' || R.why === 'manual' ? EXIT_WORD[R.why] + ' ' + hhmm(R.exit_time) : '夜盤收盤平倉';
         return tot == null ? (notExited(s, w) || { v: '已出場', n: 1, m: w }) : { v: pm(tot) + ' 點', c: cls(tot), m: w + qtyTxt(qtyOf(R.qty)) }; }
       if (R && R.state === 'drill') return { v: '演練', n: 1, m: '不是真單' };
       // ⭐ QA r2 必修 2：04:58 沒平掉、過了 05:00 那一晚變成「上一晚」也一樣 ⇒ 持有中
@@ -485,7 +485,7 @@
     return '還有 ' + (h ? h + ' 小時 ' + mi + ' 分' : mi ? mi + ' 分 ' + se + ' 秒' : se + ' 秒');
   }
   // 第二頁：金流明細（資料＝電腦帳戶頁同一份，後端算好 ⇒ s.cash）。⛔ 手機不自己算錢。
-  var WHY_WORD = { tp: '停利', sl: '停損', eod: '收盤平', night_eod: '04:58 平' };
+  var WHY_WORD = { tp: '停利', sl: '停損', eod: '收盤平', night_eod: '夜盤收盤平' };
   function money(x) { return x == null || isNaN(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(Math.round(x)).toLocaleString(); }
   // ⭐ 2026-10-22 B 版「每日卡片」（跟電腦帳戶頁同一套樣式）：本月一個主角大數字＋三個組成；每天一張小卡、右上當天賺賠
   function cashHTML(C) {

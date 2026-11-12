@@ -84,7 +84,7 @@ chk("策略名：fast ⇒ 快攻、rev ⇒ 純回馬、orb ⇒ 開箱",
     (t["name"], D["2026-10-01"]["items"][1]["name"], D["2026-10-05"]["items"][0]["name"]), ("快攻", "純回馬", "開箱"))
 n = D["2026-10-03"]["items"][0]
 chk("夜盤：盤別、名字、方向、哪一晚", (n["sess"], n["name"], n["dir"], n["night"]), ("夜盤", "跟勢", "做空", "10-02 晚"))
-chk("出場原因翻成中文", (n["why"], t["why"]), ("04:58 平", "停損"))
+chk("出場原因翻成中文", (n["why"], t["why"]), ("夜盤收盤平", "停損"))
 chk("對不到帳本 ⇒ 手動", C._trade_item(dict(trades["2026-10-01"][0], entry=1.0), day_res, night_res)["name"], "手動")
 
 print("\n  ── 對不起來要照實列 ──")
@@ -114,7 +114,7 @@ chk("月：start＝第一筆前一天的日期與結餘", P["start"], ["09-30", 
 pd = {d["d"]: d for d in P["days"]}
 chk("日：d／w／bal／diff", (pd["10-05"]["w"], pd["10-05"]["bal"], pd["10-05"]["diff"]), ("一", 17524, None))
 pn = pd["10-03"]["items"][0]
-chk("夜盤：why 是代碼、why_txt 是中文、night_of＝那一晚", (pn["why"], pn["why_txt"], pn["night_of"]), ("night_eod", "04:58 平", "10-02"))
+chk("夜盤：why 是代碼、why_txt 是中文、night_of＝那一晚", (pn["why"], pn["why_txt"], pn["night_of"]), ("night_eod", "夜盤收盤平", "10-02"))
 chk("日盤 night_of＝None", pd["10-02"]["items"][0]["night_of"], None)
 
 print("\n  ── ⭐ 2026-11-06 小台／混搭的手續費估算（小台單邊 25 元／口合約、微台 18 元；稅照等值）──")

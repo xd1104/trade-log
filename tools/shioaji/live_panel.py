@@ -181,7 +181,7 @@ DEPTH_SUBS = {"contracts": [], "codes": [], "paused_day": None, "err": None, "at
 #    ⛔ 有部位時**只示警不重連**：重連會卡住主迴圈幾秒，而主迴圈就是停損。等平倉後下一輪再重連。
 DEPTH_STALE_S = 180
 DEPTH_RETRY_EVERY = 600
-DEPTH_QUIET_ZONES = ("09:03:30", "09:15:00", "13:43:30", "04:58:00")   # 夜盤那兩刻見 night_moments()
+DEPTH_QUIET_ZONES = ("09:03:30", "09:15:00", "13:43:30", "04:50:00", "04:58:00")   # 04:50＝夜盤 ≥ 5 口提早平（11-12）；夜盤那兩刻見 night_moments()
 
 
 def night_moments(now):
@@ -10221,7 +10221,7 @@ function alPaint(){
        (nOn?('<p><i>&#9888;</i><span>夜盤'+ltYi('n')+'的停損<b>一樣活在這台面板裡</b>'+
                '（永豐沒有停損單）。</span></p>'+
              '<p><i>&#9888;</i><span>所以有部位的晚上<b>面板要整晚開著</b> —— '+
-               '04:58 才會自動平倉。</span></p>'):'')+
+               '04:58 才會自動平倉（5 口以上 04:50）。</span></p>'):'')+
        /* ⭐ 夜盤那一條有特別的出場安排（夜盤跟勢：不設停利、2% 保護停損）時的第三重揭露
           （⛔ 只有那一條在跑時才出現；⛔ 句子是後端 NIGHT_METHOD_INFO 的 risk，前端不寫第二份）。 */
        (nOn&&nfRisk(nfd)?('<p><i>&#9888;</i><span>夜盤選的是<b>'+esc(nfName(nfd,nfd.method))+
@@ -10315,7 +10315,7 @@ function alNightHTML(){
      '<div class="d">進場 <b>'+esc(alF(r.entry))+'</b>　'+
      (R?('出場 <b>'+esc(alF(R.exit))+'</b>（'+esc(String(R.exit_time||'').slice(0,5))+'）　<b class="'+sgn(p)+'">'+
           (p==null?'—':pm(p))+' 點</b>')
-       :(eod?('已平倉'+(why(eod)?'（'+why(eod)+'）':'')):'04:58 自動平倉'))+'</div>';
+       :(eod?('已平倉'+(why(eod)?'（'+why(eod)+'）':'')):(((alN(r.qty)||1)>=5?'04:50':'04:58')+' 自動平倉')))+'</div>';
  }
  if(r&&r.rec==='result') return '<div class="t off">沒有送成</div><div class="d">'+why(r)+'</div>';
  if(r&&nfClosed(x,E)) return '<div class="t off">今晚休市</div><div class="d">國定假日沒有夜盤。</div>';
@@ -10359,7 +10359,7 @@ function alPosHTML(D,row){
  const dir=P.dir==='long'?'做多':(P.dir==='short'?'做空':'方向不明');
  const qty=esc(String(P.qty==null?1:P.qty));
  /* ⚠️ 夜盤時段手上那一口是夜盤自動下單開的 ⇒ 04:58 平（⛔ 不是日盤的 13:43:30）。 */
- const exitAt=night?'04:58':(D&&D.eod_at?String(D.eod_at):'');
+ const exitAt=night?((alN(P.qty)||1)>=5?'04:50':'04:58'):(D&&D.eod_at?String(D.eod_at):'');
  const en=alN(P.entry), sl=alN(R.sl), tp=P.no_tp?null:alN(R.tp);
  let gauge='';
  if(en!=null&&sl!=null&&sgnDir){

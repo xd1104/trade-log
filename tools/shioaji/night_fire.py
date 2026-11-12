@@ -69,6 +69,10 @@ LATE_S = 120            # 面板比 done_at 晚 2 分鐘以上才走到這一步
 QUOTE_MAX_AGE = 5       # 台指報價超過 5 秒沒更新就不送
 WIDTH_MIN, WIDTH_MAX = 0.001, 0.03      # 框寬占進場價的合理範圍；超出 ⇒ 資料一定有問題 ⇒ 不送
 EOD_FROM = (4, 58, 0)   # 04:58:00 起平倉
+# ⭐ 2026-11-12 Benson 定「還是提早」：今晚那一筆 ≥ 5 口（微台等值，13＋5 起）⇒ 04:50:00 起平（CLAUDE.md 09-26 那條、
+#    tick-research/night_exit_mxf_results_2026-11-12.md：我建議維持 04:58，他知情選提早）。4 口以下照舊 04:58。
+EOD_EARLY_FROM = (4, 50, 0)
+EOD_EARLY_QTY = 5
 EOD_UNTIL = (4, 59, 50)
 EOD_LATE_UNTIL = dtime(8, 45)   # 05:00 到這一刻之間補看 04:58 有沒有漏掉
 EOD_RETRY_S = 5.0
@@ -168,6 +172,27 @@ def _mem_evening(now):
 
 
 _EOD_SETTLED = ("closed", "flat", "done_elsewhere", "not_ours")   # 04:58 已經有定論 ⇒ 白天不再認那一口
+
+
+def eod_from(qty):
+    """這一筆（微台等值口數）幾點開始收盤平倉 ⇒ (時, 分, 秒)。看不懂的口數 ⇒ 照舊 04:58。"""
+    if isinstance(qty, int) and not isinstance(qty, bool) and qty >= EOD_EARLY_QTY:
+        return EOD_EARLY_FROM
+    return EOD_FROM
+
+
+def eod_hm(qty):
+    """畫面／推播用的「幾點平」字串（HH:MM）。"""
+    h, m, _s = eod_from(qty)
+    return "%02d:%02d" % (h, m)
+
+
+def _ent_qty(ent):
+    """帳本那一筆的口數（成交口數沒定案 ⇒ 取送出去的跟成交的大的那個；舊帳本沒有 ⇒ 1）。"""
+    q = ent.get("qty") if isinstance(ent.get("qty"), int) and not isinstance(ent.get("qty"), bool) else 1
+    if ent.get("fill_unsure") and isinstance(ent.get("qty_sent"), int) and not isinstance(ent.get("qty_sent"), bool):
+        q = max(q, ent["qty_sent"])
+    return q
 
 
 def _in(now, a, b):
@@ -577,22 +602,26 @@ def _eod(E, now):
     ent = _entry_of(rows)
     if ent is None:
         return True                                   # 今晚沒開出部位 ⇒ 沒事
+    start = eod_from(_ent_qty(ent))                 # ⭐ 11-12：≥ 5 口 04:50、其他 04:58
+    hm = "%02d:%02d" % start[:2]
+    if now.hour < 5 and not _in(now, start, (5, 0, 0)):
+        return False                                  # 還沒到這一筆的平倉時刻
     # ⭐ 2026-11-02：跟日盤收盤同一個作法，問券商不信記憶體 —— 04:58 剛重啟時記憶體是空的，
     #    舊版會把還開著的部位寫成「已經沒有部位」然後收工，留倉到 08:45 都沒有停損。
     pos = broker.reconcile() if broker.is_live() else broker._state.get("position")
     if pos == "unknown":
-        if _in(now, EOD_FROM, EOD_UNTIL):
+        if _in(now, start, EOD_UNTIL):
             return False                              # 問不到 ≠ 沒有部位 ⇒ 下一輪再問
-        msg = "04:58 問不到券商部位 —— 請立刻自己到大戶投確認有沒有部位"
+        msg = hm + " 問不到券商部位 —— 請立刻自己到大戶投確認有沒有部位"
         _append({"E": str(E), "rec": "eod", "why": "failed", "msg": msg})
         _ST["eod_alarm"] = msg
         return True
     if pos is None:
-        if (_ST.get("eod_shell") == E or broker.recent_unclean()) and _in(now, EOD_FROM, EOD_UNTIL):
+        if (_ST.get("eod_shell") == E or broker.recent_unclean()) and _in(now, start, EOD_UNTIL):
             # ⭐ 2026-11-06 第六輪品管 #2：空殼剛結算（晚到那一腿逾時才當成結束）⇒「沒有部位」不一定是真的：
             #    那一腿可能晚一點才出現在券商上 ⇒ ⛔ 先不定案 flat，04:59:50 前每一輪再問；出現了就照撿回部位平掉
             return False
-        _append({"E": str(E), "rec": "eod", "why": "flat", "msg": "04:58 已經沒有部位（之前已停利或停損）"})
+        _append({"E": str(E), "rec": "eod", "why": "flat", "msg": hm + " 已經沒有部位（之前已停利或停損）"})
         return True
     if broker.own_shell(pos):
         _ST["eod_shell"] = E                       # 第六輪品管 #2：記下這一晚碰過空殼（結算後「沒有部位」先不定案）
@@ -606,19 +635,19 @@ def _eod(E, now):
         return True
     if not looks_ours(pos, ent):
         _append({"E": str(E), "rec": "eod", "why": "not_ours",
-                 "msg": "04:58 的部位不是夜盤自動下單那一口 ⇒ ⛔ 不碰"})
+                 "msg": hm + " 的部位不是夜盤自動下單那一口 ⇒ ⛔ 不碰"})
         return True
     if time.time() - _ST["eod_try_at"] < EOD_RETRY_S:
         return False
     _ST["eod_try_at"] = time.time()
     ok, err = broker.close("night_eod")
     if ok:
-        _append({"E": str(E), "rec": "eod", "why": "closed", "msg": "04:58 平倉完成"})
-        print("[夜盤自動下單] %s 04:58 平倉完成" % E, flush=True)
+        _append({"E": str(E), "rec": "eod", "why": "closed", "msg": hm + " 平倉完成"})
+        print("[夜盤自動下單] %s %s 平倉完成" % (E, hm), flush=True)
         return True
-    print("⚠️ [夜盤自動下單] %s 04:58 平倉沒成功：%s（%g 秒後再試）" % (E, err, EOD_RETRY_S), flush=True)
-    if not _in(now, EOD_FROM, EOD_UNTIL):
-        msg = "04:58 平不掉（%s）—— 請立刻自己到大戶投平倉" % err
+    print("⚠️ [夜盤自動下單] %s %s 平倉沒成功：%s（%g 秒後再試）" % (E, hm, err, EOD_RETRY_S), flush=True)
+    if not _in(now, start, EOD_UNTIL):
+        msg = hm + " 平不掉（%s）—— 請立刻自己到大戶投平倉" % err
         _append({"E": str(E), "rec": "eod", "why": "failed", "msg": msg})
         _ST["eod_alarm"] = msg
         return True
@@ -879,7 +908,7 @@ def step(now=None):
             if now >= decide_at(E, a1["method"] if a1["on"] else "T"):
                 if _decide(E, now):
                     _DONE["decide"] = E
-        if _DONE["eod"] != E and now.hour < 5 and _in(now, EOD_FROM, (5, 0, 0)):
+        if _DONE["eod"] != E and now.hour < 5 and _in(now, EOD_EARLY_FROM, (5, 0, 0)):
             if _eod(E, now):
                 _DONE["eod"] = E
     except Exception as e:
@@ -916,10 +945,10 @@ def start():
 # 每一條做法那句話的**正本**（畫面上的單選清單、確認條都讀這裡）。
 RULE_LINE = {
     "T": ("美股開盤第一根 5 分 K 台積電 ADR 走幅 ≥ 過去 %d 晚的 %g 成 ⇒ 順勢做台指 1 口；"
-          "停利停損 ＝ 進場價 × 過去 %d 晚振幅平均；04:58 平"
+          "停利停損 ＝ 進場價 × 過去 %d 晚振幅平均；04:58 平（5 口以上 04:50）"
           % (tsm_rule.WIN, tsm_rule.PCTL / 10, tsm_rule.RNG_N)),
     "R": ("美股開盤後 %d 分鐘，台指前 %d 分鐘走幅 ≥ 過去 %d 晚的 %g 成 ⇒ 順勢做台指 1 口；"
-          "不設停利、停損 ＝ 進場價的 %g%%；04:58 平"
+          "不設停利、停損 ＝ 進場價的 %g%%；04:58 平（5 口以上 04:50）"
           % (trend_rule.ENTRY_OFFSET, trend_rule.LOOKBACK, trend_rule.WIN,
              trend_rule.PCTL / 10, R_SL_PCT * 100)),
 }
