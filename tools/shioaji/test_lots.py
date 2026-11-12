@@ -2035,7 +2035,7 @@ _r = lots.daily_check([{"date": "2026-11-13", "equity": 105000.0}], now=datetime
                       ctx=ctx_ok(retire={"union": "watch", "trend": "ok"}), busy=False)
 chk("  沒部位了 ⇒ 照跑（策略掉了 ⇒ 作廢）", [e["kind"] for e in _r["events"]], ["pending_void"])
 _lpsrc = __import__("testkit").panel_source(LP.__file__)
-say('busy=broker._state.get("position") is not None' in _lpsrc, "  面板呼叫時帶 busy（有部位）")
+say('busy=broker.has_position()' in _lpsrc, "  面板呼叫時帶 busy（有部位）")
 print("  -- QA r2 T9：試車沒過就想跳級 ⇒ apply 拒絕、講得出原因 --")
 write_state(level=2, checked="2026-11-13", trial={"status": "on", "start": "2026-11-10", "n": 2},
             suggest={"ok": True, "id": "2026-11-13:2>4", "kind": "jump", "from": 2, "to": 4, "lots": "4＋2", "why": [],

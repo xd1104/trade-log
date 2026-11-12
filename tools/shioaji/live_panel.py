@@ -575,6 +575,9 @@ class Today:
         self.last_recv = None      # 最後一次真的收到 tick 的本機時間（判斷斷線用）
         self.minute_close = {}     # 分鐘索引 → 該分鐘最後成交價（算 mom5 / mom15 用）
         self.minute_bar = {}       # 分鐘索引 → 該分鐘的 OHLCV（給最新那根 K 棒即時累加用）
+        # ⭐ 2026-11-12 整理第 4 批（Benson 選「只修畫面」）：同一分鐘索引最後一筆成交的完整時間（帶日期）。
+        #    ⛔ 只給 K 線圖（overlay_live）用；自動下單讀的 minute_bar／minute_close 一個字都沒動。
+        self.minute_ts = {}
 
     def feed_quote(self, bid, ask, when):
         """
@@ -610,6 +613,7 @@ class Today:
             b = self.minute_bar[mi]
         b["h"] = max(b["h"], price); b["l"] = min(b["l"], price)
         b["c"] = price; b["v"] += float(volume)
+        self.minute_ts[mi] = when
         if not in_session:
             return
         if self.open is None:
@@ -1484,9 +1488,14 @@ def overlay_live(g):
         t0 = dtime(hh, mm)
         if not (SESSION_OPEN <= t0 < DAY_END or t0 >= NIGHT_OPEN or t0 <= NIGHT_TAIL):
             continue                                   # 13:45~15:00 沒在交易
-        # minute_bar 的鍵只有「分鐘」沒有日期：08:45 之前看到的「15:00 以後」是昨晚的
-        d0 = (today - timedelta(days=1)
-              if (now.time() < SESSION_OPEN and t0 >= NIGHT_OPEN) else today)
+        # minute_bar 的鍵只有「分鐘」沒有日期 ⇒ ⭐ 11-12 改看 minute_ts（那一分鐘最後一筆成交的完整時間）；
+        #    舊的 Today（還沒有 minute_ts）才退回原本的猜法：08:45 之前看到的「15:00 以後」是昨晚的
+        w = (getattr(st, "minute_ts", None) or {}).get(mi)
+        if hasattr(w, "date"):
+            d0 = w.date()
+        else:
+            d0 = (today - timedelta(days=1)
+                  if (now.time() < SESSION_OPEN and t0 >= NIGHT_OPEN) else today)
         rows.append({"ts": pd.Timestamp.combine(d0, t0) + pd.Timedelta(minutes=1),
                      "Open": float(b["o"]), "High": float(b["h"]),
                      "Low": float(b["l"]), "Close": float(b["c"]),
@@ -6221,7 +6230,7 @@ def _equity_lot1(m):
     im = m.get("initial_margin")
     if not isinstance(im, (int, float)) or im <= 0:
         return
-    pos = broker._state.get("position")
+    pos = broker.held_position()
     qty = int((pos or {}).get("qty") or 0)
     if qty != 1:
         return
@@ -6705,13 +6714,13 @@ def poll_equity():
             if _closed:
                 lots.KNOWN_CLOSED = _closed           # ⛔ 只換整個集合（讀的人拿到的是舊的或新的那一份，不會半套）
             _lr = lots.daily_check(equity_hist_read(), now, closed=_closed,
-                                   busy=broker._state.get("position") is not None)   # 有部位 ⇒ 06:00 那道先不跑
+                                   busy=broker.has_position())   # 有部位 ⇒ 06:00 那道先不跑
             if _lr.get("err"):
                 LOTS_ERR["err"] = _lr["err"]
             # ⭐ 2026-11-02 入金當下就重算升級條件（⛔ 有部位、送單那幾刻不跑；只出建議，升級仍要他按確認）
             if not _eq_quiet(now):
                 _lr = lots.live_check((EQUITY.get("m") or {}).get("equity_amount"), now,
-                                      busy=broker._state.get("position") is not None)
+                                      busy=broker.has_position())
                 if _lr.get("err"):
                     LOTS_ERR["err"] = _lr["err"]
             _small = lots_state_small()               # ⛔ 讀檔在鎖外面，鎖裡只指派
@@ -6874,7 +6883,7 @@ def restart_check(now=None):
         return False, "面板剛開，還在確認是誰開的（約半分鐘）"
     if not SUPERVISOR["who"]:
         return False, "這次面板不是用桌面捷徑開的，關掉不會自己開回來 —— 請手動重開"
-    if broker._state.get("position") is not None:
+    if broker.has_position():
         return False, "現在有部位，平倉後才能重啟（重開那一分鐘停損沒人顧）"
     if ENTER_LOCK.locked():
         return False, "單子正在送，等一下再按"
@@ -7163,7 +7172,7 @@ def run_replay(hist, day_str):
 
 def _lab_has_position():
     """只讀 broker 記憶體裡的部位狀態，⛔ 不呼叫任何會送單／對帳的函式"""
-    return broker._state.get("position") is not None
+    return broker.has_position()
 
 
 def start_strategy_lab_fetch():
@@ -7203,7 +7212,7 @@ def _sim_has_position():
     ⚠️ 跟 `_lab_has_position`（strategy_lab 用、只讀記憶體）刻意分開，不動那一條。
     """
     try:
-        if broker._state.get("position") is not None:
+        if broker.has_position():
             return True
         return broker.broker_position() is not None
     except Exception:           # noqa: BLE001  ⛔ 問不到 ⇒ 當成有部位
@@ -7754,7 +7763,7 @@ def main():
                     try_reconnect(f"{where}已 {int(quiet) if quiet else '?'} 秒沒收到報價")
                 # ⭐ 2026-10-14 五檔看門狗（見 DEPTH_WD）。⛔ 包 try：研究用的東西出錯不可以打斷停損迴圈。
                 try:
-                    _has_pos = broker._state.get("position") is not None
+                    _has_pos = broker.has_position()
                     _dq, _go = depth_check(time.time(), DEPTH_WD["last_ba"], quiet, market_open,
                                            CONN["ok"] and not lost, _has_pos, DEPTH_WD["last_retry"], now)
                     DEPTH_WD["stale_s"], DEPTH_WD["held"] = _dq, bool(_dq and _has_pos)

@@ -228,5 +228,32 @@ finally:
     else:
         LP.CURRENT_STATE["today"] = _old_state
 
+print("\n=== ⑧ 2026-11-12 整理第 4 批：即時分鐘資料帶日期（minute_ts，只給 K 線圖）===")
+_t = LP.Today(23000.0, 100.0)
+_t.feed(23100.0, 1, dt.datetime(2026, 11, 4, 9, 1, 10), in_session=True)     # 昨天日盤 09:01
+_t.feed(23150.0, 1, dt.datetime(2026, 11, 4, 23, 50, 5), in_session=False)   # 昨晚夜盤 23:50
+_t.feed(23200.0, 1, dt.datetime(2026, 11, 5, 0, 2, 5), in_session=False)     # 今天凌晨 00:02
+_t.feed(22900.0, 1, dt.datetime(2026, 11, 3, 0, 1, 5), in_session=False)     # 兩天前凌晨 00:01（沒換掉的舊資料）
+chk("  minute_ts 記到完整時間", _t.minute_ts.get(9 * 60 + 1), dt.datetime(2026, 11, 4, 9, 1, 10))
+chk("  ⛔ 自動下單讀的 minute_bar／minute_close 照舊", (_t.minute_bar[9 * 60 + 1]["o"], _t.minute_close[9 * 60 + 1]),
+    (23100.0, 23100.0))
+_old_state = LP.CURRENT_STATE.get("today")
+LP.CURRENT_STATE["today"] = _t
+LP.datetime = _MidnightDT
+try:
+    _g = pd.DataFrame({"ts": [pd.Timestamp("2026-11-04 23:50")], "Open": [1.0], "High": [1.0], "Low": [1.0],
+                       "Close": [1.0], "Volume": [1]})
+    _o = LP.overlay_live(_g)
+    chk("  照真的日期擺：昨晚 23:50 那根＋今天 00:02 那根；昨天日盤 09:01 不會變成今天的",
+        sorted(str(t)[:16] for t in _o["ts"] if t >= pd.Timestamp("2026-11-04 23:51")),
+        ["2026-11-04 23:51", "2026-11-05 00:03"])
+finally:
+    LP.datetime = dt.datetime
+    if _old_state is None:
+        LP.CURRENT_STATE.pop("today", None)
+    else:
+        LP.CURRENT_STATE["today"] = _old_state
+
 print("\n總結:", "全部通過" if not FAIL else f"{FAIL} 項失敗")
 sys.exit(1 if FAIL else 0)
+

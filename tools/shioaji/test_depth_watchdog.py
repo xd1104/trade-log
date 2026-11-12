@@ -101,7 +101,7 @@ chk("  on_bidask 第一行只記時間（⛔ 沒有 I/O）", first.split("#")[0]
 i = src.index("五檔看門狗（見 DEPTH_WD）")
 blk = src[i:i + 900]
 say(blk.splitlines()[1].strip() == "try:" and "except Exception" in blk, "  主迴圈那段包在 try 裡（出錯不打斷停損）")
-say('broker._state.get("position") is not None' in blk, "  有沒有部位看的是 broker 的真部位")
+say('broker.has_position()' in blk, "  有沒有部位看的是 broker 的真部位")
 i = src.index("        depth_subscribe(api, contract)\n")
 say('DEPTH_WD["last_ba"] = time.time()' in src[i:i + 200], "  連線一建好就重設時間（⛔ 不拿舊連線的時間判斷）")
 

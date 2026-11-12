@@ -4194,6 +4194,19 @@ def _close_multi(pos, reason, act, stray):
                                 "請立刻自己到大戶投平倉" % CLOSE_TRIES))
 
 
+def held_position():
+    """
+    ⭐ 2026-11-12 整理第 4 批：面板其他地方（帳戶、重啟檢查、模擬、實驗室）讀「現在記著的部位」的唯一入口。
+    ⛔ 純讀記憶體、不問券商、不改任何東西（要問券商用 reconcile()／broker_position()）。⇒ dict 或 None。
+    """
+    return _state.get("position")
+
+
+def has_position():
+    """held_position() 不是 None。"""
+    return _state.get("position") is not None
+
+
 def snapshot():
     """
     給面板顯示用。
