@@ -113,7 +113,11 @@ NIGHT_VOL_N = 22            # 要有前 22 晚才算得出預測
 # 最新那一晚離今晚隔了超過幾個**交易日** ⇒ 資料太舊（面板／排程沒跑）⇒ 當成不偏高。
 # ⭐ QA 10-14 建議：用交易日算（舊版用日曆天 4 天 ⇒ 春節／連假之後第一晚會被誤判太舊）。
 #    交易日 ＝ 平日、而且不在 KNOWN_CLOSED（面板把 closed_days() 認得的休市平日餵進來）。
-NIGHT_VOL_MAX_GAP_TD = 2
+NIGHT_VOL_MAX_GAP_TD = 1    # ⭐ 2026-11-12 稽核（Benson：有問題的都要修）：2 ⇒ 1。最新一晚必須是「上一個交易日」那晚；
+#    舊版容許落後一晚 ⇒ 1 分 K 沒補到昨晚時拿前天當最新一晚照算（真實資料離線算：約 11% 的晚上偏高／不偏高判反）。
+#    落後 ⇒ 當成「不知道」⇒ 規則 B：max(1, b−1)（少送是安全方向）。
+NIGHT_VOL_MIN_BARS = 500    # ⭐ 2026-11-12：一晚少於這麼多根 1 分 K ⇒ 只抓到一小段（真實資料有 299、301 根的晚上）⇒ 振幅不準 ⇒ 不算。
+#    ⚠️ 只套在口數這裡（⛔ 不改 health.NIGHT_MIN_BARS，那是健檢／模擬共用的口徑）。539 根（15:00～23:59）那種連假前一晚照舊算。
 KNOWN_CLOSED = set()        # 'YYYY-MM-DD'；live_panel.poll_equity 每輪更新（⛔ 這一支不自己判斷假日）
 
 LANES = ("union", "trend")  # 聯軍（日盤，a）／跟勢（夜盤，b）—— 跟 analyst_facts.REAL_LANES 同一組代號
@@ -516,10 +520,13 @@ def night_amps(path=None):
                 rows, err = [], "%s 是空的" % p.name
             else:
                 g, _gd = health._sessions(px)
+                g = g[g["k"] >= NIGHT_VOL_MIN_BARS]
                 rows = sorted((str(k), float(v)) for k, v in g["amp"].items())
                 err = None
         except Exception as e:                  # noqa: BLE001
             rows, err = [], "算不出夜盤振幅（%s）" % str(e)[:80]
+            # ⭐ 2026-11-12：讀失敗（暫時的 IO 錯誤等）⇒ ⛔ 不用檔案鍵快取起來（不然檔案沒變就整晚不再讀 ⇒ 整晚少一口）
+            key = None
         _AMP.update(key=key, rows=rows, err=err)
         return list(rows), err
 

@@ -1142,7 +1142,7 @@ _rows = []
 for k in range(25):
     E = date(2026, 4, 1) + timedelta(days=k)
     t0 = datetime(E.year, E.month, E.day, 15, 1)
-    for m in range(300):
+    for m in range(600):        # ⭐ 11-12：≥ lots.NIGHT_VOL_MIN_BARS（500）才算一晚完整
         p = 20000.0 + (k % 3) * 10 + (m % 7)
         _rows.append({"ts": t0 + timedelta(minutes=m), "Open": 20000.0 if m == 0 else p,
                       "High": p + (40 if m == 100 else 0), "Low": p - (60 if m == 200 else 0), "Close": p,
@@ -1157,6 +1157,30 @@ _want = [(k, round(float((r.h - r.l) / r.o * 100), 6)) for k, r in _g.iterrows()
 chk("  25 晚的振幅 ＝（最高 − 最低）÷ 開盤（獨立用 pandas 算一次對照）",
     [(k, round(v, 6)) for k, v in amps], _want)
 say(len(amps) == 25 and aerr is None, "  尺的自證：真的讀到 25 晚、沒有錯誤", aerr)
+def _wk(last):
+    """2026-03-01 起到 last 的每個平日一晚（振幅 1.0）。"""
+    out, d = [], date(2026, 3, 1)
+    while d <= last:
+        if d.weekday() < 5:
+            out.append((str(d), 1.0))
+        d += timedelta(days=1)
+    return out
+
+
+# ⭐ 2026-11-12：只抓到一小段的晚上（< NIGHT_VOL_MIN_BARS 根）⇒ 不算；最新一晚必須是上一個交易日
+_short = [r for r in _rows if not (r["ts"].date() == date(2026, 4, 25) and r["ts"].hour >= 20)]
+_csv2 = TMP / "__tmp__tmf_short.csv"
+pd.DataFrame(_short).to_csv(_csv2, index=False)
+_a2, _e2 = lots.night_amps(_csv2)
+chk("  ⭐ 04-25 那晚只有 5 小時（300 根）⇒ 不算進振幅", ("2026-04-25" in [k for k, _ in _a2], len(_a2)), (False, 24))
+chk("  ⭐ 最新一晚離今晚隔 2 個交易日 ⇒ 不知道（舊版容許 2）",
+    lots.night_vol_of(date(2026, 4, 30), _wk(date(2026, 4, 28)))["vol"],
+    None)
+chk("  ⭐ 最新一晚＝上一個交易日 ⇒ 照算",
+    lots.night_vol_of(date(2026, 4, 30), _wk(date(2026, 4, 29)))["vol"]
+    is not None, True)
+lots._AMP.update(key=None, rows=None, err=None)
+amps, aerr = lots.night_amps(_csv)
 _pl = lots.night_plan(date(2026, 4, 26), rows=amps)
 chk("  night_plan：1＋1 ⇒ 1 口、⛔ 不算振幅", (_pl["qty"], _pl["vol"]), (1, None))
 write_state(level=4)

@@ -915,9 +915,13 @@ def step(now=None):
         #    ⭐ QA 必修 1：①**開關開著才暖**、而且跟上面那段分開記 ⇒ 他 21:30 才打開開關也會補暖；
         #    ② 在 lots 自己的背景執行緒讀 ⇒ ⛔ 不擋這條工作執行緒（判斷／送單不等它）；
         #    ③ 今晚 b ≤ 1（1＋1）⇒ ⛔ 根本不讀（1 口不看振幅）。
-        if (_DONE["lwarm"] != E and now.hour >= 15 and now >= done_at(E) - timedelta(minutes=20)
+        # ⭐ 2026-11-12 稽核：上一次讀失敗（lots._AMP 有 err、沒快取）⇒ 判斷時刻之前每 60 秒再暖一次（⛔ 舊版一晚只暖一次）
+        _rewarm = (_DONE["lwarm"] == E and lots._AMP.get("key") is None and lots._AMP.get("err")
+                   and time.time() - _DONE.get("lwarm_at", 0.0) >= 60 and now < trend_at(E))
+        if ((_DONE["lwarm"] != E or _rewarm) and now.hour >= 15 and now >= done_at(E) - timedelta(minutes=20)
                 and arm()["on"]):
             _DONE["lwarm"] = E
+            _DONE["lwarm_at"] = time.time()
             try:
                 if lots.base_lots(None, E)[1] >= 2:
                     lots.warm_night(E)
