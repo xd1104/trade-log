@@ -200,8 +200,11 @@ try:
     sys.modules["shioaji"] = fake_sj
     ns = {"date": dt.date, "datetime": dt.datetime, "DEPTH_OPT_STRIKES": 10, "print": lambda *a, **k: None,
           "DEPTH_SUBS": {"contracts": [], "codes": [], "paused_day": None, "err": None, "at": None}}
+    # ⭐ 2026-11-12 整理第 5 批：訂閱／退訂搬到 panel_depth.py（原樣）⇒ 從那支抽出來跑
+    dsrc = (HERE / "panel_depth.py").read_text(encoding="utf-8")
+    dfns = {n.name: n for n in ast.walk(ast.parse(dsrc)) if isinstance(n, ast.FunctionDef)}
     for name in ("depth_subscribe", "depth_pause"):
-        exec(ast.get_source_segment(src, fns[name]), ns)
+        exec(ast.get_source_segment(dsrc, dfns[name]), ns)
     ds = ns["depth_subscribe"]
     got = ds(api, C("TMFJ6", delivery_month="202610"), today=dt.date(2026, 9, 29))
     codes = [c.code for c in got]

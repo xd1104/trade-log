@@ -1167,8 +1167,8 @@ clear_state()
 # ══ ⑩ 保證金：max(a, b) 口 ═════════════════════════════════════════════
 print("\n=== ⑩ live_panel.equity_view：保證金看 max(a, b) 口 ===")
 import live_panel as LP  # noqa: E402
-REAL["LP.EQUITY_DIR"] = LP.EQUITY_DIR
-LP.EQUITY_DIR = TMP / "equity"
+REAL["LP.PA.EQUITY_DIR"] = LP.PA.EQUITY_DIR
+LP.PA.EQUITY_DIR = TMP / "equity"
 LP.EQUITY.update({"m": {"equity_amount": 90000.0, "available_margin": 90000.0, "initial_margin": 0.0},
                   "err": None, "tfx": 35050.0, "tfx_at": "2026/10/01"})
 clear_state()
@@ -2683,7 +2683,7 @@ NOW = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.TRADE_DI
        "AF.ARM_FLAG": AF.ARM_FLAG, "AF.FIRE_DIR": AF.FIRE_DIR, "AF.FAST_HIST": AF.FAST_HIST,
        "AF.ORB_HIST": AF.ORB_HIST, "AF.TICK_DIR": AF.TICK_DIR, "NF.ARM_FLAG": NF.ARM_FLAG,
        "NF.NF_DIR": NF.NF_DIR, "NF.TSM_CTX": NF.TSM_CTX, "NF.TREND_CTX": NF.TREND_CTX,
-       "risk_cap.OVERRIDE_FLAG": risk_cap.OVERRIDE_FLAG, "LP.EQUITY_DIR": LP.EQUITY_DIR}
+       "risk_cap.OVERRIDE_FLAG": risk_cap.OVERRIDE_FLAG, "LP.PA.EQUITY_DIR": LP.PA.EQUITY_DIR}
 for k, real in REAL.items():
     say(NOW[k] != real and str(TMP) in str(NOW[k]), "  %s 全程在暫存區" % k, NOW[k])
 chk("  ⛔ 真的 LOTS_LEVEL.json 存在與否跟開跑前一樣", REAL["lots.LEVEL_FILE"].exists(), REAL_LEVEL_EXISTED)

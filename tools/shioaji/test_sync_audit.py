@@ -101,8 +101,8 @@ try:
 
     # ── ② 有部位時夠不夠下一口 ─────────────────────────────────────
     print("=== ② 有部位時「夠不夠下一口」 ===")
-    eq0, lot0 = dict(LP.EQUITY), LP._lot1
-    LP._lot1 = lambda: (35050.0, "測試")
+    eq0, lot0 = dict(LP.EQUITY), LP.PA._lot1
+    LP.PA._lot1 = lambda: (35050.0, "測試")
     LP.EQUITY.update(m={"equity_amount": 50614.0, "available_margin": 14024.0, "initial_margin": 35050.0},
                      err=None, at="09:30:39")
     v = LP.equity_view()
@@ -117,15 +117,15 @@ try:
     chk("  有部位、平倉後也不夠 ⇒ 示警", (e["ok"], "平倉後也不夠" in e["msg"]), (False, True))
     LP.EQUITY.clear()
     LP.EQUITY.update(eq0)
-    LP._lot1 = lot0
+    LP.PA._lot1 = lot0
 
     # ── ③ 休市日 ───────────────────────────────────────────────────
     print("=== ③ 休市日 ===")
-    di0 = LP.day_index
-    LP.day_index = lambda n=70: [{"d": "2026-10-08"}, {"d": "2026-10-09", "closed": True},
+    di0 = LP.PK.day_index
+    LP.PK.day_index = lambda n=70: [{"d": "2026-10-08"}, {"d": "2026-10-09", "closed": True},
                                  {"d": "2026-10-12", "closed": False}]
-    chk("  只挑 closed 的那幾天", LP.closed_days(), ["2026-10-09"])
-    LP.day_index = di0
+    chk("  只挑 closed 的那幾天", LP.PK.closed_days(), ["2026-10-09"])
+    LP.PK.day_index = di0
 
     # ── ④ 手機快照＋心跳 ───────────────────────────────────────────
     print("=== ④ 手機快照帶得出夜盤點數與休市日；心跳 ===")

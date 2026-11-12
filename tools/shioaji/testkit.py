@@ -31,8 +31,11 @@ REDIRECT = {
     "sim_lanes": ["SIM_DIR", "TSM_CTX", "TREND_CTX", "MIN1_CSV"],
     "monitor_push": ["KEY_FILE", "HC_FILE", "LOG_FILE"],
     "analyst": ["DIR", "FACTS_DIR", "REPORTS_DIR", "READ_FILE"],
-    "live_panel": ["TRADE_DIR", "REPLAY_DIR", "AUTO_DIR", "AUTO_REAL_DIR", "RISK_LOG_DIR", "EQUITY_DIR", "USAGE_DIR",
-                   "TICK_DIR", "DEPTH_DIR", "AUTO_RESTART_FILE", "SYNC_FILE"],
+    "live_panel": ["TRADE_DIR", "REPLAY_DIR", "AUTO_DIR", "AUTO_REAL_DIR", "RISK_LOG_DIR", "USAGE_DIR",
+                   "TICK_DIR", "AUTO_RESTART_FILE"],
+    "panel_phone": ["SYNC_FILE"],
+    "panel_account": ["EQUITY_DIR", "USAGE_DIR"],
+    "panel_depth": ["DEPTH_DIR"],
 }
 
 # 這些模組自己只讀、不寫（寫它的是別的模組，那邊已經導走）⇒ 不導，測試照樣讀得到真的資料

@@ -104,10 +104,10 @@ REAL_PATHS = {"broker.ORDER_DIR": broker.ORDER_DIR, "broker.TRADE_DIR": broker.T
               # ⭐ 2026-10-14 口數：/api/lots/upgrade／revoke 會寫 LOTS_LEVEL.json 與 lots/ 紀錄；
               #    apply 要讀 equity/ ⇒ 三個都導走（⛔ 漏一個就是動到他真的口數狀態）
               "LP.lots.LEVEL_FILE": LP.lots.LEVEL_FILE, "LP.lots.LOG_DIR": LP.lots.LOG_DIR,
-              "LP.EQUITY_DIR": LP.EQUITY_DIR}
+              "LP.PA.EQUITY_DIR": LP.PA.EQUITY_DIR}
 LP.lots.LEVEL_FILE = TMP / "LOTS_LEVEL.json"
 LP.lots.LOG_DIR = TMP / "lots"
-LP.EQUITY_DIR = TMP / "equity"
+LP.PA.EQUITY_DIR = TMP / "equity"
 REAL_LOTS_EXISTED = REAL_PATHS["LP.lots.LEVEL_FILE"].exists()
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
@@ -840,10 +840,10 @@ _L._gather = lambda ctx: _GATHER["v"]
 from datetime import date as _date, datetime as _dt  # noqa: E402
 _today = _date.today()
 _month = str(_today)[:7]
-LP.EQUITY_DIR.mkdir(parents=True, exist_ok=True)
-(LP.EQUITY_DIR / (str(_today)[:4] + ".jsonl")).write_text(
+LP.PA.EQUITY_DIR.mkdir(parents=True, exist_ok=True)
+(LP.PA.EQUITY_DIR / (str(_today)[:4] + ".jsonl")).write_text(
     json.dumps({"date": str(_today), "equity": 106000.0}) + "\n", encoding="utf-8")
-LP._EQ_HIST["key"] = None
+LP.PA._EQ_HIST["key"] = None
 _save_m = LP.EQUITY.get("m")
 LP.EQUITY["m"] = None
 
@@ -932,7 +932,7 @@ for k, real in REAL_PATHS.items():
            "LP.AUTO_REAL_DIR": LP.AUTO_REAL_DIR, "LP.REPLAY_DIR": LP.REPLAY_DIR,
            "NF.ARM_FLAG": NF.ARM_FLAG, "NF.NF_DIR": NF.NF_DIR,
            "LP.lots.LEVEL_FILE": LP.lots.LEVEL_FILE, "LP.lots.LOG_DIR": LP.lots.LOG_DIR,
-           "LP.EQUITY_DIR": LP.EQUITY_DIR}[k]
+           "LP.PA.EQUITY_DIR": LP.PA.EQUITY_DIR}[k]
     say(now != real and str(TMP) in str(now), f"  {k} 全程都在暫存區", str(now))
 say(not REAL_ARM.exists(),
     "  ⛔⛔ 真的 AUTO_ORDERS_ON **不存在**（測試絕對不可以把它建出來）")

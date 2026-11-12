@@ -63,7 +63,7 @@ if broker.REAL_FLAG.exists():
     sys.exit(1)
 
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="acct-"))
-LP.EQUITY_DIR = TMP / "equity"
+LP.PA.EQUITY_DIR = TMP / "equity"
 broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"
 broker.ORDER_DIR = TMP / "real_orders"
 broker.TRADE_DIR = TMP / "real_trades"
@@ -122,7 +122,7 @@ def wire(api):
 def reset_eq():
     LP.EQUITY.update({"at": None, "m": None, "err": "還在問", "lot1": None, "lot1_at": None,
                       "tfx": None, "tfx_at": None, "tfx_day": None, "tfx_err": None})
-    LP._EQ_HIST["key"] = None
+    LP.PA._EQ_HIST["key"] = None
 
 
 print("=== ① 問得到：數字端得出來，而且 api 只被叫一次 ===")
@@ -227,17 +227,17 @@ chk("  同一天再叫一次 ⇒ 不重複寫", LP._equity_write_day(mm, late), 
 rows = LP.equity_hist_read()
 chk("  歷史剛好 1 列", len(rows), 1)
 chk("  那一列是今天的權益", rows[0]["equity"], 250000.0)
-say((LP.EQUITY_DIR / "2026.jsonl").exists(), "  檔名按年份分")
+say((LP.PA.EQUITY_DIR / "2026.jsonl").exists(), "  檔名按年份分")
 
 print("\n=== ⑦ 本月變化：⛔ 出入金要扣掉（匯錢進去不是賺到）===")
 reset_eq()
-LP.EQUITY_DIR.mkdir(parents=True, exist_ok=True)
-(LP.EQUITY_DIR / "2026.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [
+LP.PA.EQUITY_DIR.mkdir(parents=True, exist_ok=True)
+(LP.PA.EQUITY_DIR / "2026.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [
     {"date": "2026-09-01", "equity": 200000.0, "deposit": 0.0},
     {"date": "2026-09-10", "equity": 205000.0, "deposit": 0.0},
     {"date": "2026-09-18", "equity": 305000.0, "deposit": 100000.0},
 ]), encoding="utf-8")
-LP._EQ_HIST["key"] = None
+LP.PA._EQ_HIST["key"] = None
 LP.EQUITY.update({"m": dict(mm, equity_amount=308000.0), "err": None})
 v = LP.equity_view(datetime(2026, 9, 21, 15, 0))
 mo = v["month"]
@@ -245,11 +245,11 @@ chk("  帳戶帳面變化", mo["change"], 108000.0)
 chk("  其中出入金", mo["deposit"], 100000.0)
 chk("  ⭐ 真正賺到的（扣掉出入金）", mo["net"], 8000.0)
 # ⭐ 2026-10-07：月初＝**上個月最後一列**（⛔ 不是這個月第一列 —— 那樣會漏掉那一天自己的賺賠）
-(LP.EQUITY_DIR / "2026.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [
+(LP.PA.EQUITY_DIR / "2026.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [
     {"date": "2026-09-30", "equity": 37560.0, "deposit": 0.0, "settle_pl": 0.0, "fee": 0, "tax": 0, "float_pl": 0},
     {"date": "2026-10-01", "equity": 52924.0, "deposit": 0.0, "settle_pl": 2420.0, "fee": 36, "tax": 20, "float_pl": 0},
 ]), encoding="utf-8")
-LP._EQ_HIST["key"] = None
+LP.PA._EQ_HIST["key"] = None
 LP.EQUITY.update({"m": dict(mm, equity_amount=52924.0), "err": None})
 mo = LP.equity_view(datetime(2026, 10, 1, 15, 0))["month"]
 chk("  月初是九月最後一列", mo["base"], 37560.0)
@@ -277,7 +277,7 @@ for hh, mm_, ss, want, name in ((9, 3, 30, True, "09:03:30 快攻送單"),
 print("\n=== ⑩ ⛔ 收尾 ===")
 chk("  ⛔ broker.enter / broker.close 全程 0 次", [c for c in CALLS if "." not in c], [])
 chk("  ⛔ 假的 api 只被叫過 margin()", [c for c in CALLS if c.startswith("api.")], [])
-say(str(TMP) in str(LP.EQUITY_DIR), "  權益紀錄全程都在暫存區", str(LP.EQUITY_DIR))
+say(str(TMP) in str(LP.PA.EQUITY_DIR), "  權益紀錄全程都在暫存區", str(LP.PA.EQUITY_DIR))
 say(not (HERE / "equity").exists(),
     "  ⛔⛔ 真的 tools/shioaji/equity/ 沒有被這支測試建出來")
 say("tools/shioaji/equity/" in (HERE.parent.parent / ".gitignore").read_text(encoding="utf-8"),
@@ -332,9 +332,9 @@ chk("  數字不合理（維持 > 原始）⇒ None", LP.parse_taifex_margin(
     '<td>微型臺指期貨</td><td>1</td><td>50,000</td><td>35,050</td>', "TMF"), None)
 reset_eq()
 LP.EQUITY.update({"lot1": 13000.0, "lot1_at": "2026-09-01", "tfx": 35050.0, "tfx_at": "2026/08/12"})
-chk("  期交所有 ⇒ 用期交所的", LP._lot1()[0], 35050.0)
+chk("  期交所有 ⇒ 用期交所的", LP.PA._lot1()[0], 35050.0)
 LP.EQUITY["tfx"] = None
-chk("  期交所沒有 ⇒ 退回學到的", LP._lot1()[0], 13000.0)
+chk("  期交所沒有 ⇒ 退回學到的", LP.PA._lot1()[0], 13000.0)
 LP.EQUITY.update({"tfx": 35050.0, "m": dict(FakeMargin(available_margin=37560.0).__dict__), "err": None})
 LP.EQUITY["m"].pop("status", None)
 v = LP.equity_view(datetime(2026, 9, 29, 11, 0))

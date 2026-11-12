@@ -166,7 +166,7 @@ SIM_TRADES = [
 #    全部導到暫存區（面板鐵律：測試會寫檔時，每一個路徑常數都要導走，漏一個就污染真實
 #    資料 —— 2026-09-01 真的發生過，成績單多了 6 筆假交易）。
 # ⛔ 價格一律 12000 附近（他的真實行情在 46xxx~47xxx，那個區間會撞到他的紀錄）。
-# ⚠️ 走的是**面板真正的後端函式**（LP.tick_days / LP.tick_day），不是另外寫一份假的
+# ⚠️ 走的是**面板真正的後端函式**（LP.PK.tick_days / LP.PK.tick_day），不是另外寫一份假的
 #    —— 假的後端只會證明「假的後端沒問題」。
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import tick_synth                                  # noqa: E402
@@ -230,7 +230,7 @@ LP.broker.TRADE_DIR = TICKREAL
 #    ⛔ 金額全是**捏造的整數**（repo 是公開的，跟假帳號 0000000 同一條規矩）。
 #    ⛔ 導到暫存區，絕不碰 tools/shioaji/equity/。
 EQROOT = pathlib.Path(tempfile.gettempdir()) / "trade-log-equity-harness"
-LP.EQUITY_DIR = EQROOT
+LP.PA.EQUITY_DIR = EQROOT
 EQROOT.mkdir(parents=True, exist_ok=True)
 (EQROOT / "2026.jsonl").write_text("".join(
     json.dumps({"date": d, "equity": e, "deposit": dep}, ensure_ascii=False) + "\n"
@@ -240,14 +240,14 @@ EQROOT.mkdir(parents=True, exist_ok=True)
                       ("2026-09-10", 304100, 100000), ("2026-09-11", 305600, 0),
                       ("2026-09-14", 304900, 0), ("2026-09-15", 307300, 0)]),
     encoding="utf-8")
-LP._EQ_HIST["key"] = None
+LP.PA._EQ_HIST["key"] = None
 LP.EQUITY.update({
     "at": "09:31:00", "err": None, "lot1": 13000.0, "lot1_at": "2026-09-15",
     "m": {"equity_amount": 308450.0, "available_margin": 262300.0,
           "initial_margin": 13000.0, "risk_indicator": 999.0, "margin_call": 0.0,
           "future_open_position": 1200.0, "future_settle_profitloss": 800.0,
           "fee": 60.0, "tax": 6.0, "deposit_withdrawal": 0.0}})
-LP.TICK_CACHE.clear()
+LP.PK.TICK_CACHE.clear()
 LP.TODAY_TRADES[:] = [{
     "date": TICKDATES["full"], "dir": "short", "entry": 12030, "exit": 11930,
     "time": "09:21", "note": "", "mode": "sim", "_exit_time": "09:26:40",
@@ -256,7 +256,7 @@ LP.TODAY_TRADES[:] = [{
 # 注入時鐘：`_tick_complete()` 決定「今天還在長 vs 已完成」，而探針可能在任何時間跑。
 # ⚠️ 測試的綠紅只能反映程式的狀態，不能反映**牆上時鐘**的狀態 —— 所以把時間注進去，
 #    但**保留真正的判斷邏輯**（不是把 complete 直接寫死）。
-_REAL_COMPLETE = LP._tick_complete
+_REAL_COMPLETE = LP.PK._tick_complete
 FAKE_NOW = {"v": None}
 
 
@@ -264,7 +264,7 @@ def _tick_complete(d, now=None):
     return _REAL_COMPLETE(d, now or FAKE_NOW["v"])
 
 
-LP._tick_complete = _tick_complete
+LP.PK._tick_complete = _tick_complete
 
 
 def tick_clock(hhmm):
@@ -284,7 +284,7 @@ GROWAT = {"v": 34200}      # 下一批要接在哪一秒（/tick/short 會把它
 def tick_grow(n=400):
     """讓「今天」那個檔再長 n 列（模擬盤中還在錄）。⛔ 一定是 append。"""
     f = TICKLOGS / f"{TICKDATES['full']}.jsonl"
-    D = LP.TICK_CACHE.get(TICKDATES["full"])
+    D = LP.PK.TICK_CACHE.get(TICKDATES["full"])
     # 從目前檔案的尾端秒數往後接，讓新桶真的是新的
     base = GROWAT["v"]
     if D and D["b"]:
@@ -436,7 +436,7 @@ class H(BaseHTTPRequestHandler):
             return LP.Handler._lab_get(self)
         # ⚠️ days 要排在 day 前面 —— "/api/tick/days" 也 startswith("/api/tick/day")
         if self.path.startswith("/api/tick/days"):
-            return self._send(200, json.dumps(LP.tick_days(), ensure_ascii=False))
+            return self._send(200, json.dumps(LP.PK.tick_days(), ensure_ascii=False))
         if self.path.startswith("/api/tick/day"):
             q = self.path.split("?", 1)[1] if "?" in self.path else ""
             want, frm = None, None
@@ -448,7 +448,7 @@ class H(BaseHTTPRequestHandler):
                         frm = int(kv[5:])
                     except ValueError:
                         frm = None
-            out = LP.tick_day(want, frm) if want else None
+            out = LP.PK.tick_day(want, frm) if want else None
             if out is None:
                 return self._send(404, json.dumps({"error": "這天沒有逐筆紀錄"},
                                                   ensure_ascii=False))
@@ -581,19 +581,19 @@ class Ctl(H):
                                  ticks=30000 if TICK_BIG else 3000,
                                  bidask=15000 if TICK_BIG else 1500,
                                  first=31502, last=33120, seed=20260908)
-            LP.TICK_CACHE.pop(TICKDATES["full"], None)
+            LP.PK.TICK_CACHE.pop(TICKDATES["full"], None)
             GROWAT["v"] = 33121
             return self._send(200, "{}")
         if p.startswith("/tick/gappy/"):
             # clean ＝負控組：補滿缺的時段、拿掉痕跡列 ⇒ 那三句話必須全部消失
             tick_synth.write_gappy(TICKLOGS, TICKDATES["gappy"],
                                    clean=p.endswith("clean"), big=TICK_BIG)
-            LP.TICK_CACHE.pop(TICKDATES["gappy"], None)
+            LP.PK.TICK_CACHE.pop(TICKDATES["gappy"], None)
             return self._send(200, "{}")
         if p.startswith("/tick/reset"):
-            LP.TICK_CACHE.clear()
-            LP._TICK_SNIFFED.clear()
-            LP._TICK_SAID.clear()
+            LP.PK.TICK_CACHE.clear()
+            LP.PK._TICK_SNIFFED.clear()
+            LP.PK._TICK_SAID.clear()
             _tick_fixtures()
             GROWAT["v"] = 34200
             return self._send(200, json.dumps({"dates": TICKDATES}, ensure_ascii=False))

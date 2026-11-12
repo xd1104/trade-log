@@ -106,23 +106,23 @@ finally:
 
 print("=== ④ 備份不可以安靜壞掉 ===")
 from datetime import datetime as _dt   # noqa: E402
-_rb = LP._backup_read
+_rb = LP.PA._backup_read
 try:
     now = _dt(2026, 11, 5, 12, 0, 0)
-    LP._backup_read = lambda: {"running": True, "started": "2026-11-05T05:30:00", "at": "2026-11-04T05:32:00"}
+    LP.PA._backup_read = lambda: {"running": True, "started": "2026-11-05T05:30:00", "at": "2026-11-04T05:32:00"}
     v = LP.backup_view(now)
     say(v["warn"] and "中斷" in v["msg"], "05:30 開始、中午還在 running ⇒ 警告可能中斷了", v)
-    LP._backup_read = lambda: {"running": True, "started": "2026-11-05T05:30:00"}
+    LP.PA._backup_read = lambda: {"running": True, "started": "2026-11-05T05:30:00"}
     v = LP.backup_view(_dt(2026, 11, 5, 5, 31, 0))
     say(not v["warn"] and "正在跑" in v["msg"], "剛開始跑 ⇒ 照常寫正在跑", v)
-    LP._backup_read = lambda: {"ok": True, "at": "2026-11-05T05:32:00", "n_skipped": 1, "skipped": ["2026-11-04.jsonl.gz"]}
+    LP.PA._backup_read = lambda: {"ok": True, "at": "2026-11-05T05:32:00", "n_skipped": 1, "skipped": ["2026-11-04.jsonl.gz"]}
     v = LP.backup_view(now)
     say(v["warn"] and "太大" in v["msg"] and v["ok"] is False, "有檔太大被跳過 ⇒ 不准寫成功", v)
-    LP._backup_read = lambda: {"ok": True, "at": "2026-11-05T05:32:00", "pushed_files": 3}
+    LP.PA._backup_read = lambda: {"ok": True, "at": "2026-11-05T05:32:00", "pushed_files": 3}
     v = LP.backup_view(now)
     say(v["ok"] and not v["warn"], "對照組：正常成功 ⇒ 不警告", v)
 finally:
-    LP._backup_read = _rb
+    LP.PA._backup_read = _rb
 import backup_data as BD           # noqa: E402
 say(hasattr(BD, "SKIPPED"), "backup_data 會記下被跳過的檔")
 
