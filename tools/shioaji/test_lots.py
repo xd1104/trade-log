@@ -2424,8 +2424,14 @@ if _head_lp:
         return None
     _cur_src = __import__("testkit").panel_source(LP.__file__)
     _head_src = _head_lp.decode("utf-8")
+    # ⭐ 2026-11-12 稽核第 4 批（Benson：「有問題的都要修」）刻意改了 _auto_tick（09:03:30 報價斷先等）與 on_tick（估時鐘差）
+    #    ⇒ 這兩支改跟 b86e98991（那一批核准的版本）比；其他四支照舊跟多口改版前比。⛔ 之後再動這兩支，這裡的基準要跟著換。
+    _rev11 = "b86e98991" if subprocess.run(["git", "-C", str(_repo), "rev-parse", "--verify", "-q", "b86e98991"],
+                                           capture_output=True).returncode == 0 else "HEAD"
+    _src11 = subprocess.run(["git", "-C", str(HERE), "show", _rev11 + ":tools/shioaji/live_panel.py"],
+                            capture_output=True).stdout.decode("utf-8")
     _diff = [f for f in ("_auto_tick", "_auto_tick_guarded", "check_real_position", "on_tick", "_auto_snap", "_auto_put")
-             if _fn_dump(_cur_src, f) != _fn_dump(_head_src, f)]
+             if _fn_dump(_cur_src, f) != _fn_dump(_src11 if f in ("_auto_tick", "on_tick") else _head_src, f)]
     chk("  ⭐ _auto_tick／_auto_tick_guarded／check_real_position／on_tick／_auto_snap／_auto_put 跟 HEAD 相同", _diff, [])
 else:
     say(False, "  ⛔ 拿不到 git HEAD 的 live_panel.py（這一段沒驗到 ⛔ 不當成通過）")
