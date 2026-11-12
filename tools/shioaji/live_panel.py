@@ -11285,7 +11285,7 @@ function cashHTML(C){
    (i===ks.length-1?'現在 ':'月底 ')+Math.round(first.bal).toLocaleString('en-US')):'';
  let h=head(nav)+'<div class="hero'+(Number(M.net)<0?' down':'')+'"><div class="hl"><div class="k">本月實際賺賠</div>'+
    '<div class="big '+cfCls(M.net)+'">'+cfAmt(M.net)+'<small>元</small></div>'+(bl?'<div class="bl">'+bl+'</div>':'')+'</div>'+
-   '<div class="hr"><div><span class="pt k1"></span>入金<b>'+cfAmt(M.dep)+'</b></div>'+
+   '<div class="hr"><div><span class="pt k1"></span>'+(DS.some(d=>(d.items||[]).some(x=>x.k==='dep'&&Number(x.amt)<0))?'出入金':'入金')+'<b>'+cfAmt(M.dep)+'</b></div>'+
    '<div><span class="pt k2"></span>交易損益<b class="'+cfCls(M.trade)+'">'+cfAmt(M.trade)+'</b></div>'+
    '<div><span class="pt k3"></span>手續費＋稅<b class="dim">'+cfAmt(M.fee)+'</b></div></div></div>'+
    '<div class="scroll">';
@@ -11297,7 +11297,9 @@ function cashHTML(C){
    let fee=0;
    (d.items||[]).forEach((x,j)=>{
      if(x.k==='dep'){
-       h+='<div class="row2"><span class="ico dep">＋</span><span class="nm"><b>入金</b>'+(x.inferred?'<small>券商沒記，用權益推算</small>':'')+'</span>'+
+       /* ⭐ 2026-11-12 出金（金額 < 0）標「出金」、圖示「－」；原本一律寫入金 */
+       const wd=Number(x.amt)<0;
+       h+='<div class="row2"><span class="ico dep">'+(wd?'－':'＋')+'</span><span class="nm"><b>'+(wd?'出金':'入金')+'</b>'+(x.inferred?'<small>券商沒記，用權益推算</small>':'')+'</span>'+
           '<span class="amt gold">'+cfAmt(x.amt)+'</span><span></span></div>';
      }else if(x.k==='fee'){
        fee+=Number(x.amt)||0;

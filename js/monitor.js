@@ -500,7 +500,7 @@
       (i < keys.length - 1 ? '<button data-cm="' + esc(keys[i + 1]) + '">›</button>' : '<button disabled>›</button>') + '</div>' +
       '<div class="chero' + (M.net < 0 ? ' neg' : '') + '"><div class="k">本月實際賺賠</div><div class="big num ' + cls(M.net) + '">' + money(M.net) + '<small>元</small></div>' +
       (bl ? '<div class="bl num">' + bl + '</div>' : '') +
-      '<div class="parts"><div><i class="p1"></i>入金<b class="num">' + money(M.dep) + '</b></div>' +
+      '<div class="parts"><div><i class="p1"></i>' + ((M.days || []).some(function (d) { return (d.items || []).some(function (x) { return x.k === 'dep' && Number(x.amt) < 0; }); }) ? '出入金' : '入金') + '<b class="num">' + money(M.dep) + '</b></div>' +
       '<div><i class="p2"></i>交易損益<b class="num ' + cls(M.pl) + '">' + money(M.pl) + '</b></div>' +
       '<div><i class="p3"></i>手續費＋稅<b class="num dim">' + money(M.fee) + '</b></div></div></div>';
     h += DS.map(function (d) {
@@ -508,7 +508,7 @@
       var fee = (d.items || []).filter(function (x) { return x.k === 'fee'; }).reduce(function (a, x) { return a + (+x.amt || 0); }, 0);
       var net = tr.reduce(function (a, x) { return a + (+x.amt || 0); }, 0) + fee;
       var rows = (d.items || []).map(function (x) {
-        if (x.k === 'dep') return '<div class="crow"><span class="ico dep">＋</span><span class="nm"><b>入金</b>' + (x.inferred ? '<small>券商沒寫，照權益推算</small>' : '') + '</span><span class="amt num gold">' + money(x.amt) + '</span></div>';
+        if (x.k === 'dep') return '<div class="crow"><span class="ico dep">' + (Number(x.amt) < 0 ? '－' : '＋') + '</span><span class="nm"><b>' + (Number(x.amt) < 0 ? '出金' : '入金') + '</b>' + (x.inferred ? '<small>券商沒寫，照權益推算</small>' : '') + '</span><span class="amt num gold">' + money(x.amt) + '</span></div>';
         if (x.k !== 'trade') return '';
         var nt = x.sess === '夜盤';
         return '<details class="ctr"><summary class="crow"><span class="ico ' + (nt ? 'n' : 'd') + '">' + (nt ? '☾' : '☀') + '</span>' +
