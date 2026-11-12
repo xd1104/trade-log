@@ -1336,8 +1336,9 @@ for _p in sorted(HERE.glob("*.py")):
             if _nm == "_write_state":
                 _writers.append(_p.name)
         # ⚠️ backup_data.py 的白名單寫了 "LOTS_LEVEL.json"：那是**從這裡複製出去**備份（唯讀），不是寫入者
+        # ⚠️ run_tests.py 也寫了 "LOTS_LEVEL.json"：只看檔案大小／修改時間（守測試沒寫到真的狀態檔），不讀不寫內容
         if isinstance(_n, ast.Constant) and isinstance(_n.value, str) and "LOTS_LEVEL" in _n.value \
-                and _p.name != "lots.py" and not (_p.name == "backup_data.py" and _n.value == "LOTS_LEVEL.json"):
+                and _p.name != "lots.py" and not (_p.name in ("backup_data.py", "run_tests.py") and _n.value == "LOTS_LEVEL.json"):
             _writers.append(_p.name + "（字面 LOTS_LEVEL）")
         if isinstance(_n, ast.Attribute) and _n.attr == "LEVEL_FILE" and _p.name != "lots.py":
             _writers.append(_p.name + "（碰 LEVEL_FILE）")

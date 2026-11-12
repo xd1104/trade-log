@@ -1033,6 +1033,7 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   撤掉／成交完的停利單留在 `target_done_trades`（對帳算停利明細用，撤單瞬間成交那段才有價錢）；之前幾輪的平倉單留在
   `close_hist_trades`（每一腿上限跨輪扣掉）。重啟時那一筆正在等晚到腿（late_pending）⇒ 落地檔不刪。
   品管攻擊測試：`test_qa_mix.py`、`test_qa2_mix.py`（QA-F、QA2-7 的單一微台 3 口與「他先加再減同一腿」是 main 的 `_close_multi` 範圍）。
+  ⭐ 2026-11-12 **一鍵跑全部測試**：`.venv\Scripts\python.exe -X utf8 tools\shioajiun_tests.py`（可加檔名關鍵字；`*_sim.py` 會登入永豐，要 `--sim` 才跑）。結果分「過／已知／⛔ 壞了」，已知失敗寫在 `run_tests.py` 的 `KNOWN`（每筆要寫原因，修好就刪）；另外比對真的資料檔有沒有被測試改到。**改完程式一律跑它，⛔ 壞了＝0 才推。**
   ⭐⭐ **第三輪品管（2026-11-06 晚）：帳本部位（own）——「我們的口數」以自家委託單明細為準**，取代上面多數補丁：
   ・帳本部位＝混搭／整筆小台（`OWN_TMF_MULTI=True` 時連微台多口也是；一口微台照舊）。部位上 `own_trades`（每一張進場／停利／平倉單）、
     `own_adj`（確認過的調整：晚到 +、別處平掉 −）、`own_seen`（券商每一腿看過的最大口數）、`diff_susp`（差異確認中）。
