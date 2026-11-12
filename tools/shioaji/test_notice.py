@@ -52,7 +52,7 @@ chk("補進來的那則：有空再看、鑰匙跟原本金條的 ✕ 同一把�
     ("later", "lifted|停損失靈的判法更正 ⇒ 暫停已解除。", True))
 
 print("\n  ── 畫面守門 ──")
-src = (Path(__file__).parent / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(Path(__file__).parent / "live_panel.py")
 tabs = src[src.index('<div class="tabs">'):src.index('</div>', src.index('<div class="tabs">'))]
 order = [t for t in ("data-tab=\"live\"", "data-tab=\"acct\"", "data-tab=\"sim\"", "data-tab=\"hc\"", "data-tab=\"sys\"", "data-tab=\"fire\"")]
 chk("分頁順序：即時／帳戶／模擬／健檢／系統／自動下單（自動下單最右）", [tabs.index(o) for o in order] == sorted(tabs.index(o) for o in order), True)

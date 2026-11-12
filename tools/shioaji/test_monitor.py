@@ -117,7 +117,7 @@ gi = (HERE.parent.parent / ".gitignore").read_text(encoding="utf-8")
 say("tools/shioaji/MONITOR_KEY.json" in gi, "  ⛔ 金鑰檔在 .gitignore 裡")
 
 print("\n=== ⑤ 面板接線 ===")
-lp = (HERE / "live_panel.py").read_text(encoding="utf-8")
+lp = __import__("testkit").panel_source(HERE / "live_panel.py")
 m = lp[lp.index("def main():"):]
 i = m.index("monitor_push.start(PORT)")
 say(m.rfind("try:", 0, i) > m.rfind("\n    print(", 0, i) and "except Exception" in m[i:i + 200],

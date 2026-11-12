@@ -376,7 +376,7 @@ print("\n=== ⑥ 面板真的有接上去，而且 on_tick 裡沒有半點 I/O =
 import ast
 
 BANNED = {"write", "flush", "open", "print", "fsync", "dump", "writelines"}
-src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(HERE / "live_panel.py")
 tree = ast.parse(src)
 cbs = {n.name: n for n in ast.walk(tree)
        if isinstance(n, ast.FunctionDef) and n.name in ("on_tick", "on_bidask")}

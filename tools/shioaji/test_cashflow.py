@@ -129,7 +129,7 @@ chk("混搭 11（10＋1）⇒ 2×25×2＋1×18×2＋11 份稅",
     100 + 36 + 11 * _tx)
 
 print("\n  ── 守門：面板有接、前端只畫 ──")
-src = (Path(__file__).parent / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(Path(__file__).parent / "live_panel.py")
 chk("/api/account/hist 端出 cash", '"cash": cashflow_view()' in src, True)
 chk("前端有金流明細卡", "function cashHTML(" in src, True)
 

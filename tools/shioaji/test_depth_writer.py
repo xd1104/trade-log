@@ -130,7 +130,7 @@ try:
 
     # ================================================================ ⑤
     print("\n=== ⑤ ⛔⛔ 接線：別的合約不可以進 Today ===")
-    src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+    src = __import__("testkit").panel_source(HERE / "live_panel.py")
     tree = ast.parse(src)
     fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     ob = fns["on_bidask"]

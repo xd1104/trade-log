@@ -1357,7 +1357,7 @@ say(_lsrc.count("tmp.replace(p)") == 1 and "open(" not in _lsrc.split("def _writ
     "  寫法是原子換檔（tmp → replace），⛔ 沒有就地覆寫")
 
 print("\n=== ⑮ 前端（原始碼量尺）===")
-_LPS = pathlib.Path(LP.__file__).read_text(encoding="utf-8")   # ⚠️ 突變時讀的是 MUT_DIR 那一份
+_LPS = __import__("testkit").panel_source(LP.__file__)   # ⚠️ 突變時讀的是 MUT_DIR 那一份
 _page = _LPS[_LPS.index('PAGE = r"""'):]
 _fire_html = _page[_page.index('<div id="tab-fire" hidden>'):_page.index("【自動下單】到此")]
 say('<div id="allots"></div>' in _fire_html and '<div id="allotsbar"></div>' in _fire_html,
@@ -2034,7 +2034,7 @@ chk("  有部位 ⇒ 跳過（pending 還在）", (_r["events"], (lots.read_stat
 _r = lots.daily_check([{"date": "2026-11-13", "equity": 105000.0}], now=datetime(2026, 11, 14, 7, 10),
                       ctx=ctx_ok(retire={"union": "watch", "trend": "ok"}), busy=False)
 chk("  沒部位了 ⇒ 照跑（策略掉了 ⇒ 作廢）", [e["kind"] for e in _r["events"]], ["pending_void"])
-_lpsrc = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+_lpsrc = __import__("testkit").panel_source(LP.__file__)
 say('busy=broker._state.get("position") is not None' in _lpsrc, "  面板呼叫時帶 busy（有部位）")
 print("  -- QA r2 T9：試車沒過就想跳級 ⇒ apply 拒絕、講得出原因 --")
 write_state(level=2, checked="2026-11-13", trial={"status": "on", "start": "2026-11-10", "n": 2},
@@ -2235,7 +2235,7 @@ api.lots = [12030.0] * 3
 restart_all(True)
 _sn = broker.snapshot()["position"]
 chk("  snapshot：stop_off、一句實話", (_sn.get("stop_off"), "分不出" in str(_sn.get("lot_note"))), (True, True))
-_LPS2 = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+_LPS2 = __import__("testkit").panel_source(LP.__file__)
 say('if pos.get("stop_off"):' in _LPS2 and 'snap["sl"] = snap["tp"] = snap["tp_pts"] = snap["sl_pts"] = None' in _LPS2,
     "  /api/state：分不出 ⇒ 不端停損價／停利價（畫面才不會畫刻度、寫離停損 N 點）")
 say("P.stop_off?'<span><b style=\"color:var(--gold)\">停損不會執行，請自己處理</b></span>'" in _LPS2
@@ -2398,7 +2398,7 @@ if _head_lp:
             if isinstance(_n, _ast.FunctionDef) and _n.name == name:
                 return _ast.dump(_n)
         return None
-    _cur_src = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+    _cur_src = __import__("testkit").panel_source(LP.__file__)
     _head_src = _head_lp.decode("utf-8")
     _diff = [f for f in ("_auto_tick", "_auto_tick_guarded", "check_real_position", "on_tick", "_auto_snap", "_auto_put")
              if _fn_dump(_cur_src, f) != _fn_dump(_head_src, f)]

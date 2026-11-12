@@ -268,7 +268,7 @@ say(not hits, "  所有訊息都沒有預測字眼", str(hits[:3]))
 say(any(msgs), "  （尺的自證：上面真的有話可以檢查）", "%d 句" % len([m for m in msgs if m]))
 
 print("\n=== ⑫ ⛔ 它壞掉不可以把整份狀態帶掉 ===")
-say("out[\"gap\"] = fire_gap(out)" in pathlib.Path(LP.__file__).read_text(encoding="utf-8"),
+say("out[\"gap\"] = fire_gap(out)" in __import__("testkit").panel_source(LP.__file__),
     "  端點有接上 fire_gap")
 _real = LP.fire_gap
 LP.fire_gap = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("故意壞的"))

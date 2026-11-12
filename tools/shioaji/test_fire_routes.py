@@ -57,7 +57,7 @@ import live_panel as LP             # noqa: E402
 
 # ⚠️ 只拿來對「路由名單有沒有列全」——⛔ 這一支的斷言一律是行為面的（真的打進去），
 #    ⛔ 不准用「某個字串在原始碼裡」當某個端點存在的證據（那是退件 M1 的形狀）。
-LPSRC = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+LPSRC = __import__("testkit").panel_source(LP.__file__)
 
 FAIL = 0
 

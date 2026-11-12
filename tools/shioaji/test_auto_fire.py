@@ -869,7 +869,7 @@ AF._ST["err_n"] = 0
 
 # ══ ⑧ 接線（AST）：⛔ 只有 main() 會把掛勾接上去 ═══════════════════════
 print("\n=== ⑧ 接線：⛔ 掛勾預設是 no-op，只有 main() 會接 ===")
-LPSRC = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+LPSRC = __import__("testkit").panel_source(LP.__file__)
 
 
 def wiring_fails(text):

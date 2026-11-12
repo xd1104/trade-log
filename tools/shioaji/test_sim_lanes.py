@@ -1657,7 +1657,7 @@ say(any(isinstance(n, ast.Import) and any(a.name == "numpy" for a in n.names) fo
 _sl = ast.parse((HERE / "strategy_lab.py").read_text(encoding="utf-8"))
 chk("  sim_lanes 借用的 strategy_lab 也沒有 import broker／auto_fire",
     sorted({a.name for n in ast.walk(_sl) if isinstance(n, ast.Import) for a in n.names} & {"broker", "auto_fire"}), [])
-src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(HERE / "live_panel.py")
 lp_tree = ast.parse(src)
 fn = {n.name: n for n in ast.walk(lp_tree) if isinstance(n, ast.FunctionDef)}
 chk("  Handler._sim_get 裡沒有 broker／auto_fire",

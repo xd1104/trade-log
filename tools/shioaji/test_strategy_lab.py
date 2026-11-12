@@ -537,7 +537,7 @@ finally:
 #          （⛔ 改了要三個檔一起改）。
 print("\n=== ⑥ 【策略實驗室】的畫面整頁移除 ＋ 新【健檢】頁的紅線 ===")
 page = LP.PAGE
-LPSRC = (HERE / "live_panel.py").read_text(encoding="utf-8")
+LPSRC = __import__("testkit").panel_source(HERE / "live_panel.py")
 import re as _re
 
 # ── (a) 那一頁真的不見了（⛔ 不是被 CSS 藏起來）
@@ -607,7 +607,7 @@ for n in ast.walk(tree):
     elif isinstance(n, ast.Name) and n.id in ("broker", "auto_fire"):
         imps.add("name:" + n.id)
 chk("  strategy_lab.py 沒有 import／引用 broker、auto_fire", sorted(imps & {"broker", "auto_fire", "name:broker", "name:auto_fire"}), [])
-src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(HERE / "live_panel.py")
 lp_tree = ast.parse(src)
 fn = [n for n in ast.walk(lp_tree) if isinstance(n, ast.FunctionDef) and n.name == "_lab_get"][0]
 chk("  Handler._lab_get 裡沒有 broker／auto_fire",

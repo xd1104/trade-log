@@ -1033,6 +1033,7 @@ tools/probe/autotest_synth.py     合成資料產生器（⛔ 價格一律 12000
   撤掉／成交完的停利單留在 `target_done_trades`（對帳算停利明細用，撤單瞬間成交那段才有價錢）；之前幾輪的平倉單留在
   `close_hist_trades`（每一腿上限跨輪扣掉）。重啟時那一筆正在等晚到腿（late_pending）⇒ 落地檔不刪。
   品管攻擊測試：`test_qa_mix.py`、`test_qa2_mix.py`（QA-F、QA2-7 的單一微台 3 口與「他先加再減同一腿」是 main 的 `_close_multi` 範圍）。
+  ⭐ 2026-11-12 **網頁畫面搬出主程式**（整理第 3 批）：整頁 HTML／CSS／JS 在 `tools/shioaji/panel_page.html`（原 `live_panel.PAGE` 字串，6,374 行），live_panel.py 開機讀進來、照舊替換 `__RULE_*__`；主程式 14,208 ⇒ 7,836 行。**改畫面只動 panel_page.html**；測試要找網頁字串用 `testkit.panel_source()`（組回單檔原始碼）；只改網頁檔 code_stamp 也會說有新版（自動重啟會換上）。
   ⭐ 2026-11-12 **交易時刻正本 `tools/shioaji/market_clock.py`**（整理第 2 批）：開收盤、訊號、回馬、收盤平倉、結算日、夜盤平倉（含 ≥5 口 04:50）只寫在這裡；live_panel／night_fire／monitor_push 讀它，auto_fire／sim_lanes／decision_log／tick_writer 還自己寫但 `test_market_clock.py` 守一致；重啟擋時段、問帳戶避開、五檔安靜都從 `ORDER_MOMENTS` 來。⛔ 改這裡任何數字＝改交易行為，要他同意。測試一律先 `testkit.sandbox()`（run_tests.py 自動做）：真資料檔與開關檔都導到暫存區，新加的資料檔常數要登記進 testkit.REDIRECT／READONLY。
   ⭐ 2026-11-12 **一鍵跑全部測試**：`.venv\Scripts\python.exe -X utf8 tools\shioaji\run_tests.py`（可加檔名關鍵字；`*_sim.py` 會登入永豐，要 `--sim` 才跑）。結果分「過／已知／⛔ 壞了」，已知失敗寫在 `run_tests.py` 的 `KNOWN`（每筆要寫原因，修好就刪）；另外比對真的資料檔有沒有被測試改到。**改完程式一律跑它，⛔ 壞了＝0 才推。**
   ⭐⭐ **第三輪品管（2026-11-06 晚）：帳本部位（own）——「我們的口數」以自家委託單明細為準**，取代上面多數補丁：

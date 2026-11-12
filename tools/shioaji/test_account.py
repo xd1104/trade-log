@@ -284,7 +284,7 @@ say("tools/shioaji/equity/" in (HERE.parent.parent / ".gitignore").read_text(enc
     "  ⛔⛔ equity/ 有在 .gitignore 裡（真實金額不上傳）")
 
 print("\n=== ⑪ 【帳戶】是自己一個分頁（2026-09-21 他改的）===")
-SRC = (HERE / "live_panel.py").read_text(encoding="utf-8")
+SRC = __import__("testkit").panel_source(HERE / "live_panel.py")
 say('data-tab="acct"' in SRC, "  分頁列上有那顆鈕")
 say('id="tab-acct"' in SRC, "  有那一頁的容器")
 say("document.getElementById('tab-acct').hidden" in SRC, "  切分頁時會跟著開關")

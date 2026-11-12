@@ -297,7 +297,7 @@ finally:
 # ⛔ 「今天是結算日」那句話**在不確定時不准出現**（PM 2026-09-17 裁示 3）。
 #    ⚠️ 這裡比的是**原始碼**（那句話印在 main() 的啟動訊息裡，測試起不了 main）——
 #       所以另外要求它跟 `_ep["sure"]` 綁在一起，⛔ 不是只有 `_ep["expiry"]`。
-_src_main = pathlib.Path(LP.__file__).read_text(encoding="utf-8")
+_src_main = __import__("testkit").panel_source(LP.__file__)
 _i_line = _src_main.find("今天是結算日，日盤 13:30 收盤")
 _win = _src_main[_i_line - 200:_i_line + 400] if _i_line > 0 else ""
 say(_i_line > 0 and '_ep["expiry"]' in _win and 'not _ep["sure"]' in _win

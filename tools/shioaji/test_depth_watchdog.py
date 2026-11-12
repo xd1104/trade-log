@@ -94,7 +94,7 @@ js = (HERE.parent.parent / "js" / "monitor.js").read_text(encoding="utf-8")
 say("e.depth && e.depth.warn" in js, "  手機「要注意的事」會列出來")
 
 print("=== ⑤ 接線（原始碼量尺） ===")
-src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(HERE / "live_panel.py")
 i = src.index("def on_bidask(exchange: Exchange, ba: BidAskFOPv1):")
 first = src[i:].splitlines()[1].strip()
 chk("  on_bidask 第一行只記時間（⛔ 沒有 I/O）", first.split("#")[0].strip(), 'DEPTH_WD["last_ba"] = time.time()')

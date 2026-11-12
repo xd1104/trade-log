@@ -289,7 +289,7 @@ try:
                 (isinstance(n, ast.Attribute) and n.attr == "state_lock") for n in ast.walk(tree)),
         "不碰 state_lock（AST，註解不算）")
     # 接線：main() 裡用 try 包著 decision_log.start()
-    lp = ast.parse((HERE / "live_panel.py").read_text(encoding="utf-8"))
+    lp = ast.parse(__import__("testkit").panel_source(HERE / "live_panel.py"))
     main = next(n for n in ast.walk(lp) if isinstance(n, ast.FunctionDef) and n.name == "main")
     wrapped = [t for t in ast.walk(main) if isinstance(t, ast.Try)
                and any(isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "start"

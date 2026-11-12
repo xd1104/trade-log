@@ -200,7 +200,7 @@ try:
 
     # ── ⑤ 原始碼層：K 線圖、夜盤列、本月合計 ─────────────────────
     print("=== ⑤ 前端（原始碼量尺；這台沒有 node） ===")
-    src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+    src = __import__("testkit").panel_source(HERE / "live_panel.py")
     i = src.index("function idxAll(t){")
     body = src[i:src.index("\n}\n", i)]
     say("'eve'" in body and "'dawn'" in body, "  idxAll 先認時段（前一晚／凌晨／日盤）再找")

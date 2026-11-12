@@ -298,7 +298,7 @@ for n in ast.walk(tree):
             bad.append(n.attr)
 chk("  ⛔ night_fire 對開關檔只做 exists／read_bytes／replace／with_name", bad, [])
 say("open(" not in src.split("def _append")[0].split("def disarm")[0], "  開關那段沒有 open()")
-lp = (HERE / "live_panel.py").read_text(encoding="utf-8")
+lp = __import__("testkit").panel_source(HERE / "live_panel.py")
 
 # ══ ⑦b ⭐⭐ 2026-09-23：**不變式換新的**（PM 授權）══════════════════════
 #

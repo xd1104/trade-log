@@ -88,6 +88,27 @@ def still_real():
     return out
 
 
+PAGE_LINE = 'PAGE = (HERE / "panel_page.html").read_text(encoding="utf-8")'
+
+
+def panel_source(lp_file=None):
+    """
+    ⭐ 2026-11-12 整理第 3 批：網頁搬到 panel_page.html 之後，把「主程式＋網頁」組回搬家前的單一原始碼
+    （PAGE = r\"\"\"…\"\"\"）。測試拿它找網頁字串、ast.parse 都照舊；突變工具也拿它寫出自給自足的單檔突變版。
+    lp_file 沒給 ⇒ tools/shioaji/live_panel.py；網頁檔一律找 lp_file 旁邊的 panel_page.html，找不到就用正本那一份。
+    已經是單檔（舊版／突變版）⇒ 原樣回傳。
+    """
+    lp = Path(lp_file) if lp_file else HERE / "live_panel.py"
+    src = lp.read_text(encoding="utf-8")
+    if PAGE_LINE not in src:
+        return src
+    page_f = lp.parent / "panel_page.html"
+    if not page_f.exists():
+        page_f = HERE / "panel_page.html"
+    page = page_f.read_text(encoding="utf-8")
+    return src.replace(PAGE_LINE, 'PAGE = r"""' + page + '"""', 1)
+
+
 class FakeClock:
     """假時鐘：clk = FakeClock(datetime(2026, 6, 10, 21, 35)); clk.advance(5); clk.now(); clk.time()。"""
 

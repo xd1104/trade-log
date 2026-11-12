@@ -26,7 +26,8 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 SHIO = HERE.parent / "shioaji"
 SRC = (SHIO / "auto_fire.py").read_text(encoding="utf-8")
-LPSRC = (SHIO / "live_panel.py").read_text(encoding="utf-8")
+sys.path.insert(0, str(SHIO)); import testkit  # noqa: E402  ⭐ 11-12 網頁搬到 panel_page.html ⇒ 組回單檔再突變（突變版自給自足）
+LPSRC = testkit.panel_source(SHIO / "live_panel.py")
 TEST = SHIO / "test_auto_fire.py"
 ROUTE_TEST = SHIO / "test_fire_routes.py"
 PY = sys.executable

@@ -217,7 +217,7 @@ chk("  ⛔ 讀不到開關 ⇒ 照舊三條（不猜）", [x["key"] for x in st[
 say("讀不到" in (st.get("armed_note") or ""), "  ⇒ 而且講出來", st.get("armed_note"))
 H.ARMED_FN = None
 chk("  ⛔ 沒注入（週報、測試）⇒ 照舊三條", [x["key"] for x in H.strategies()["strategies"]], ["union", "tsm", "trend"])
-_lp = (HERE / "live_panel.py").read_text(encoding="utf-8")
+_lp = __import__("testkit").panel_source(HERE / "live_panel.py")
 say("health.configure(real_fn=_health_real, armed_fn=_health_armed)" in _lp, "  面板真的有接上開關")
 say('NIGHT_LANE = {"T": "tsm", "R": "trend"}' in _lp, "  夜盤代號對應：T＝台積電快攻、R＝夜盤跟勢")
 
@@ -419,7 +419,7 @@ say(_c4 == 403, "  ⛔ Origin 是別的網站 ⇒ 403", f"{_c4} {_b4[:50]}")
 _c5, _ct5, _b5 = get("/api/health/state", {"Sec-Fetch-Site": "cross-site"})
 say(_c5 == 403, "  ⛔ Sec-Fetch-Site: cross-site ⇒ 403", f"{_c5} {_b5[:50]}")
 # ⛔ 它是 GET／唯讀 ⇒ do_POST 裡不准有這一條
-_posts = pathlib.Path(LP.__file__).read_text(encoding="utf-8") \
+_posts = __import__("testkit").panel_source(LP.__file__) \
     .split("def do_POST")[1].split("def do_GET")[0]
 say("/api/health" not in _posts, "  ⛔ do_POST 裡沒有健檢（它是唯讀的）")
 # ⛔ health 模組本身不准 import broker／auto_fire（⛔ 不碰下單那條路）

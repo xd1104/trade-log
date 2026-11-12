@@ -46,7 +46,7 @@ finally:
     LP._CAN_ENTER_VIEW.update(at=0.0, key=None, v=(False, ""))
 
 print("=== ② 09:30 雲端同步不在主迴圈上同步跑 ===")
-src = (HERE / "live_panel.py").read_text(encoding="utf-8")
+src = __import__("testkit").panel_source(HERE / "live_panel.py")
 tree = ast.parse(src)
 main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
 direct = []
