@@ -70,7 +70,10 @@ def run_one(path):
     t0 = time.time()
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     try:
-        p = subprocess.run([PY, "-X", "utf8", str(path)], cwd=str(HERE), env=env,
+        # ⭐ 第 1 批後半：先 testkit.sandbox() 把真的資料檔／開關檔導到暫存區，再照原樣跑那支測試（__main__）
+        boot = ("import sys, runpy, testkit; testkit.sandbox(); sys.argv = [%r]; "
+                "runpy.run_path(%r, run_name='__main__')" % (path.name, path.name))
+        p = subprocess.run([PY, "-X", "utf8", "-c", boot], cwd=str(HERE), env=env,
                            capture_output=True, timeout=TIMEOUT_S)
         text = (p.stdout + p.stderr).decode("utf-8", "replace")
         code = p.returncode
