@@ -68,12 +68,13 @@ FETCH_UNTIL_S = 90      # 問到 done_at + 90 秒還拿不到 ⇒ 今晚不做�
 LATE_S = 120            # 面板比 done_at 晚 2 分鐘以上才走到這一步（剛開機／看門狗）⇒ 不補單
 QUOTE_MAX_AGE = 5       # 台指報價超過 5 秒沒更新就不送
 WIDTH_MIN, WIDTH_MAX = 0.001, 0.03      # 框寬占進場價的合理範圍；超出 ⇒ 資料一定有問題 ⇒ 不送
-EOD_FROM = (4, 58, 0)   # 04:58:00 起平倉
+import market_clock as MC   # noqa: E402  ⭐ 11-12 整理第 2 批：時刻正本
+EOD_FROM = MC.NIGHT_EOD   # 04:58:00 起平倉
 # ⭐ 2026-11-12 Benson 定「還是提早」：今晚那一筆 ≥ 5 口（微台等值，13＋5 起）⇒ 04:50:00 起平（CLAUDE.md 09-26 那條、
 #    tick-research/night_exit_mxf_results_2026-11-12.md：我建議維持 04:58，他知情選提早）。4 口以下照舊 04:58。
-EOD_EARLY_FROM = (4, 50, 0)
-EOD_EARLY_QTY = 5
-EOD_UNTIL = (4, 59, 50)
+EOD_EARLY_FROM = MC.NIGHT_EOD_EARLY
+EOD_EARLY_QTY = MC.NIGHT_EOD_EARLY_QTY
+EOD_UNTIL = MC.NIGHT_EOD_UNTIL
 EOD_LATE_UNTIL = dtime(8, 45)   # 05:00 到這一刻之間補看 04:58 有沒有漏掉
 EOD_RETRY_S = 5.0
 EOD_PX_TOL = 3.0        # 認「是不是我們那一口」：方向一樣、進場價差 ≤ 3 點

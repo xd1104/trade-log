@@ -145,11 +145,13 @@ PAST_TP_POINTS = (100.0, 130.0)
 FEE_POINTS = 5.0         # 來回 NT$50 ÷ 每點 NT$10
 PORT = 8770
 
-SESSION_OPEN = pd.Timestamp("08:45").time()
-WATCH_END = pd.Timestamp("09:30").time()
-DAY_END = pd.Timestamp("13:45").time()
-NIGHT_OPEN = pd.Timestamp("15:00").time()      # 夜盤 15:00 ~ 隔天 05:00
-NIGHT_CLOSE = pd.Timestamp("05:00").time()
+# ⭐ 2026-11-12 整理第 2 批：時刻正本在 market_clock.py（⛔ 這裡不再寫數字；test_market_clock 守一致）
+import market_clock as MC  # noqa: E402
+SESSION_OPEN = MC.as_time(MC.DAY_OPEN)
+WATCH_END = MC.as_time(MC.WATCH_END)
+DAY_END = MC.as_time(MC.DAY_CLOSE)
+NIGHT_OPEN = MC.as_time(MC.NIGHT_OPEN)      # 夜盤 15:00 ~ 隔天 05:00
+NIGHT_CLOSE = MC.as_time(MC.NIGHT_CLOSE)
 # 永豐的 K 棒用「結束時間」標記，夜盤最後一根標到 05:01 —— 收夜盤尾巴要含它，
 # 否則每天都會少掉收盤前那一兩分鐘。
 NIGHT_TAIL = pd.Timestamp("05:01").time()
@@ -181,7 +183,7 @@ DEPTH_SUBS = {"contracts": [], "codes": [], "paused_day": None, "err": None, "at
 #    ⛔ 有部位時**只示警不重連**：重連會卡住主迴圈幾秒，而主迴圈就是停損。等平倉後下一輪再重連。
 DEPTH_STALE_S = 180
 DEPTH_RETRY_EVERY = 600
-DEPTH_QUIET_ZONES = ("09:03:30", "09:15:00", "13:43:30", "04:50:00", "04:58:00")   # 04:50＝夜盤 ≥ 5 口提早平（11-12）；夜盤那兩刻見 night_moments()
+DEPTH_QUIET_ZONES = tuple(MC.hms(t) for t in MC.ORDER_MOMENTS)   # ⭐ 11-12 改讀正本（多了結算日 13:28:30）；夜盤送單那兩刻見 night_moments()
 
 
 def night_moments(now):
@@ -442,7 +444,7 @@ SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 # 現貨 09:00 才開盤、13:30 收，比期貨晚開早收，所以會有「尚未開盤」的空窗。
 INDEX = {"price": None, "chg": None, "pct": None, "at": None, "contract": None, "ms": None}
 INDEX_EVERY = 2.0        # 秒。指數輪詢的目標週期（實際週期 = max(這個值, 單次耗時)）
-CASH_OPEN = pd.Timestamp("09:00").time()
+CASH_OPEN = MC.as_time(MC.CASH_OPEN)
 CASH_CLOSE = pd.Timestamp("13:35").time()
 
 state_lock = threading.Lock()
@@ -2310,8 +2312,8 @@ AUTO_REAL_DIR = HERE / "real_trades"    # ⛔ **唯讀**：他自己那一欄的
 #    ⚠️ 這兩個常數也餵【自動下單（模擬）】的底層記錄 —— **刻意共用同一份快照**（兩把尺原則），
 #       所以模擬記錄的時刻跟著變；⛔ 但模擬的 ±130 結算不動（AUTO_TP／AUTO_SL 仍是 TP_POINTS）。
 #    ⛔ 要改就三個一起改：SIGNAL_AT、SIGNAL_SEC、AUTO_SETTLE_FROM（autotest-backend.py 在守）。
-SIGNAL_AT = "09:03:30"
-SIGNAL_SEC = 9 * 3600 + 3 * 60 + 30
+SIGNAL_AT = MC.hms(MC.SIGNAL)
+SIGNAL_SEC = MC.sec(MC.SIGNAL)
 
 # ⭐⭐ 【自動下單】「快攻回馬槍」的回馬槍那一刻（2026-09-15 晚上 Benson 決定隔天起用）。
 #    **正本只有這裡**，auto_fire 靠 configure(rev_at=REV_AT, rev_sec=REV_SEC) 接過去。
@@ -2319,8 +2321,8 @@ SIGNAL_SEC = 9 * 3600 + 3 * 60 + 30
 #    研究：tick-research/scripts/defs_research.py（09:10／09:15／09:20 × 7 種定義，「09:15 方向相反就算」）。
 #    ⛔ 只管自動下單；【自動下單（模擬）】那一頁不看這個時刻。
 #    ⛔ 要改就兩個一起改（字串與秒數），test_auto_fire.py ⑰ 斷言兩個對得上。
-REV_AT = "09:15:00"
-REV_SEC = 9 * 3600 + 15 * 60
+REV_AT = MC.hms(MC.REV)
+REV_SEC = MC.sec(MC.REV)
 
 # ⭐⭐ 【自動下單】「開盤快才做」的門檻百分位。**正本只有這裡**，auto_fire 靠 configure(pctl=…) 接過去
 #    （⛔ auto_fire 裡不准再寫一份；前端從 /api/fire/state 的 rule.pctl 拿，⛔ 不准寫死）。
@@ -2347,8 +2349,8 @@ FAST_PCTL = 80
 #     ③ 【模擬】那一頁的 `eod` 取的是標籤 13:43 那根（涵蓋 13:43~13:44）的收盤價
 #        （見 AUTO_EOD_LAST 的說明）—— 在那根之內平，跟模擬的基準最接近。
 #   ⚠️ 要改的話兩件事一起改：這裡的字串與秒數，⛔ 不可以只改一個。
-EOD_CLOSE_AT = "13:43:30"
-EOD_CLOSE_SEC = 13 * 3600 + 43 * 60 + 30
+EOD_CLOSE_AT = MC.hms(MC.DAY_EOD)
+EOD_CLOSE_SEC = MC.sec(MC.DAY_EOD)
 
 # ⭐⭐⭐ 2026-09-16：**結算日日盤 13:30 就收盤**（不是 13:45）。
 #   舊版 `EOD_CLOSE_AT` 只有一個值、沒有結算日分支 ⇒ 結算日那天 13:43:30 才要平倉，
@@ -2358,8 +2360,8 @@ EOD_CLOSE_SEC = 13 * 3600 + 43 * 60 + 30
 #      13:30−90s＝13:28:30），因為 `auto_fire.EOD_WINDOW_S` 那 75 秒的重試窗口是實測值，
 #      換一個收盤時刻不會改變它要多久。
 #   ⛔ 要改的話兩件事一起改：字串與秒數（`test_auto_fire.py` 在守）。
-EOD_CLOSE_AT_EXPIRY = "13:28:30"
-EOD_CLOSE_SEC_EXPIRY = 13 * 3600 + 28 * 60 + 30
+EOD_CLOSE_AT_EXPIRY = MC.hms(MC.DAY_EOD_EXPIRY)
+EOD_CLOSE_SEC_EXPIRY = MC.sec(MC.DAY_EOD_EXPIRY)
 # 結算日的日盤收盤（＝觸發區間的上界；平常是 DAY_END 13:45）
 DAY_END_SEC_EXPIRY = 13 * 3600 + 30 * 60
 # 今天是不是結算日 —— **一天只算一次**（`_auto_tick` 在 4Hz 主迴圈上，
@@ -12504,7 +12506,7 @@ def _lot1():
 def _eq_quiet(now):
     """現在是不是「送單那幾刻」⇒ ⛔ 不去問帳戶（連線留給送單）。"""
     sec = now.hour * 3600 + now.minute * 60 + now.second
-    pts = [SIGNAL_SEC, REV_SEC, EOD_CLOSE_SEC, EOD_CLOSE_SEC_EXPIRY, 4 * 3600 + 58 * 60]
+    pts = [MC.sec(t) for t in MC.ORDER_MOMENTS]      # ⭐ 11-12 改讀正本（多了夜盤 ≥ 5 口的 04:50）
     # ⭐ 2026-11-05 健檢：原本只避開日盤三刻 ⇒ 夜盤送單（冬令 22:35／22:40）、04:58 夜盤平倉、
     #    結算日 13:28:30 都會跟送單搶同一條永豐連線。夜盤兩刻跟 night_fire 問（冬夏令自動換）。
     try:
@@ -13189,6 +13191,8 @@ RESTART_BLOCK = (                      # (起, 迄, 原因)；含頭不含尾，
     ("13:27", "13:31", "結算日收盤平倉前後"),
     ("13:42", "13:46", "收盤平倉前後（13:43:30）"),
     # 夜盤送單那段不寫在這裡：冬夏令會換（夏令 21:33～21:43、冬令 22:33～22:43），見 restart_blocks()
+    # ⭐ 11-12：夜盤 ≥ 5 口 04:50 就平（market_clock.NIGHT_EOD_EARLY）⇒ 多擋 04:48～04:52（中間沒部位照樣可以重啟）
+    ("04:48", "04:52", "夜盤 5 口以上收盤平倉前後（04:50）"),
     ("04:56", "05:01", "夜盤收盤平倉前後（04:58）"),
 )
 RESTART = {"at": None}                 # 已經要求重啟的時間（主迴圈看到就收工）

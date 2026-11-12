@@ -287,8 +287,9 @@ def _pos_extra(snap, day, night, now=None):
 
 def _night_eod_hm(qty):
     """⭐ 2026-11-12：夜盤那一筆幾點自動平（≥ 5 口 04:50、其他 04:58；跟 night_fire.eod_from 同一條，這裡不 import 免得推播拖進下單模組）。"""
-    ok = isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty >= 5
-    return "04:50" if ok else "04:58"
+    import market_clock as MC
+    ok = isinstance(qty, (int, float)) and not isinstance(qty, bool) and qty >= MC.NIGHT_EOD_EARLY_QTY
+    return MC.hm(MC.NIGHT_EOD_EARLY if ok else MC.NIGHT_EOD)
 
 
 def _panel_hms(day, now_ts=None):
