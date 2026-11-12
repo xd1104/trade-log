@@ -753,7 +753,13 @@ def _sent(d, rows=None):
        第一個候選寫完 skip 之後，當天**其餘兩個候選就永遠送不出去了**。
     """
     rows = _rows_of(d) if rows is None else rows
-    return any(o.get("rec") in ("fire", "result") for o in rows)
+    # ⭐ 2026-11-12（Benson：「有問題的都要修」）：多方聯軍某個候選**確定一張都沒送出**（result ok=False ＋ unsent）
+    #    ⇒ 那個候選的列不算「送過」⇒ 其他候選今天照常可送（舊版一個候選擋下就封整天）。
+    #    ⛔ 只認 U 的候選（A 沒有 cand ⇒ 照舊）；⛔ 只有 sending 沒有 result（送到一半當掉）⇒ 照舊算送過（寧可漏、不重送）。
+    #    那個候選自己不會再送：_cand_done 看得到它的列。
+    unsent = {_cand_of(o) for o in rows
+              if o.get("rec") == "result" and not o.get("ok") and o.get("unsent") and _cand_of(o) in CANDS}
+    return any(o.get("rec") in ("fire", "result") and _cand_of(o) not in unsent for o in rows)
 
 
 def _cand_done(d, cand, rows=None):
@@ -1488,7 +1494,8 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
                     (_CFG["rev_at"] if base.get("leg") == "reversal" else _CFG["signal_at"])
                     or "09:03:30")
                 ) if "還沒連上永豐" in why else ""
-        return _result(d, base, False, "cant_enter",
+        # ⭐ 2026-11-12：can_enter 擋下 ＝ 確定一張都沒送 ⇒ unsent（多方聯軍其他候選今天照常可送，見 _sent）
+        return _result(d, dict(base, unsent=True), False, "cant_enter",
                        WHY["cant_enter"] + "：" + why + hint)
 
     # ⚠️ A 的帳本沒有 `cand` ⇒ 那一段用 `LEG_NAME`（跟 main 同一句話）；
@@ -1504,7 +1511,13 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
     #     **這一口部位自己的** sl_points；沒帶就掉回手動真單的 SL_POINTS（130）⇒ 提早被洗掉。
     # ⭐ tp_points=None ⇒ broker 一次 place_target 都不呼叫（開箱那個候選不設停利）。
     sent_at = time.time()
+    _seq0 = broker.order_seq()
     ok, err, pos = broker.enter(direction, px, tp_points, sl_points=pts, qty=qty)
+    if not ok and broker.order_seq() == _seq0:
+        # ⭐ 2026-11-12：enter() 前後送單計數沒動 ⇒ 確定一張都沒送出去（例如進場前問不到券商部位）
+        #    ⇒ ⛔ 不留「可能成交」線索（沒有東西可接手）、標 unsent ⇒ 多方聯軍其他候選今天照常可送。
+        return _result(d, dict(base, dir=direction, px=px, qty_sent=0, unsent=True), False, "order_failed",
+                       WHY["order_failed"] + "：" + str(err or "券商沒有說原因") + "（一張都沒送出）")
     if not ok:
         # ⭐ 2026-11-05（Benson 同意健檢建議）：送出去卻沒確認到成交（券商回報慢／查不到）⇒ 留下線索。
         #    之後對帳撿到一口對得上的部位（方向、口數、價差、10 分鐘內）就接手：停損照這一口、收盤照常平。

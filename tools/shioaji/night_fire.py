@@ -67,6 +67,7 @@ ENTRY_WAIT_S = 3        # 第一根收完（done_at）之後等幾秒再問 Alpa
 FETCH_UNTIL_S = 90      # 問到 done_at + 90 秒還拿不到 ⇒ 今晚不做（⛔ 不猜）
 LATE_S = 120            # 面板比 done_at 晚 2 分鐘以上才走到這一步（剛開機／看門狗）⇒ 不補單
 QUOTE_MAX_AGE = 5       # 台指報價超過 5 秒沒更新就不送
+QUOTE_WAIT_S = 20.0                       # ⭐ 2026-11-12：判斷那一刻報價不新鮮 ⇒ 最多再等這麼久（每 0.5 秒看一次），還是不新鮮才記 no_quote
 WIDTH_MIN, WIDTH_MAX = 0.001, 0.03      # 框寬占進場價的合理範圍；超出 ⇒ 資料一定有問題 ⇒ 不送
 import market_clock as MC   # noqa: E402  ⭐ 11-12 整理第 2 批：時刻正本
 EOD_FROM = MC.NIGHT_EOD   # 04:58:00 起平倉
@@ -413,6 +414,8 @@ def _decide(E, now):
     qf, sf = _CFG["quote_fn"], _CFG["session_fn"]
     px, age = qf() if qf else (None, None)
     if px is None or age is None or age > QUOTE_MAX_AGE or (sf and sf(now) != "night"):
+        if now < decide_at(E, "T") + timedelta(seconds=QUOTE_WAIT_S):
+            return False                                  # ⭐ 11-12：報價短暫不新鮮 ⇒ 下一輪（0.5 秒後）再看，最多等 QUOTE_WAIT_S
         _skip(E, "no_quote", extra=dict(info, px=px, age=age))
         return True
     px = float(px)
@@ -500,6 +503,8 @@ def _decide_trend(E, now, lp=None):
     qf, sf = _CFG["quote_fn"], _CFG["session_fn"]
     px, age = qf() if qf else (None, None)
     if px is None or age is None or age > QUOTE_MAX_AGE or (sf and sf(now) != "night"):
+        if now < decide_at(E, "R") + timedelta(seconds=QUOTE_WAIT_S):
+            return False                                  # ⭐ 11-12：報價短暫不新鮮 ⇒ 下一輪（0.5 秒後）再看，最多等 QUOTE_WAIT_S
         _skip(E, "no_quote", extra=dict(info, px=px, age=age))
         return True
     px = float(px)
@@ -539,9 +544,12 @@ def _decide_trend(E, now, lp=None):
     base = dict(info, dir=d, px=px, pts=sl0, live=broker.is_live(), **lp)
     _append(dict(base, E=str(E), rec="sending"))          # ⛔ 先落地「送出去了」再送（中斷也看得出來）
     sent_at = time.time()
+    _seq0 = broker.order_seq()
     ok, err, pos = broker.enter(d, px, None, sl_points=sl0, qty=lp["qty"])
     res = dict(base, E=str(E), rec="result", ok=bool(ok), err=err)
-    if not ok:
+    if not ok and broker.order_seq() == _seq0:
+        res.update(unsent=True, qty_sent=0)          # ⭐ 11-12：確定一張都沒送出 ⇒ ⛔ 不留「可能成交」線索
+    elif not ok:
         # ⭐ 2026-11-05（Benson 同意健檢建議）：送出去了卻沒看到成交（回報慢／查不到）⇒ 留下「可能成交」的線索，
         #    之後對帳撿到一口對得上的部位就接手（adopt_check），⛔ 不讓它變成沒人顧 04:58 的手動單。
         res.update(maybe_filled=True, qty_sent=lp["qty"], sent_at=sent_at)

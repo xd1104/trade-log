@@ -1898,6 +1898,18 @@ def _touch_quiet(now=None, cur=None):
     return bool(_CLOSE_INFLIGHT["on"]) or now - at < TOUCH_QUIET_S
 
 
+_ORDER_SEQ = {"n": 0}
+
+
+def order_seq():
+    """
+    ⭐ 2026-11-12：到現在為止「真的叫過 place_order（或 dry run 記成送出）」幾次。
+    自動下單在 enter() 前後各讀一次：**沒變 ⇒ 確定一張都沒送出去**（⇒ 不留「可能成交」線索、多方聯軍其他候選照常可送）；
+    變了 ⇒ 送出去了、結果不明（照舊保守）。⛔ 別的執行緒剛好也送單 ⇒ 也會變 ⇒ 走保守那邊，安全。
+    """
+    return _ORDER_SEQ["n"]
+
+
 def _send(order, why, product=None):
     """真正送出去的唯一出口。dry run 時只記錄不送。⭐ 2026-11-06 `product`＝送到哪一種合約（沒給 ⇒ 部位的那種）。"""
     api = _state["api"]
@@ -1910,6 +1922,7 @@ def _send(order, why, product=None):
             "price_type": str(order.price_type), "order_type": str(order.order_type),
             "octype": str(order.octype), "why": why, "product": prod}
     if not is_live():
+        _ORDER_SEQ["n"] += 1
         return True, None, _log(why, {**body, "ok": True, "dry_run": True})
     if api is None:
         return False, "尚未連線", _log(why, {**body, "ok": False, "err": "no api"})
@@ -1918,6 +1931,7 @@ def _send(order, why, product=None):
         if c is None:
             _log(why, {**body, "ok": False, "err": "沒有%s合約" % prod})
             return False, "沒有%s合約（連線時沒拿到）" % prod, None
+        _ORDER_SEQ["n"] += 1                 # ⛔ 叫之前就算（叫到一半丟例外也可能已經送到券商）
         trade = api.place_order(c, order)
         _log(why, {**body, "ok": True,
                    "ordno": getattr(getattr(trade, "order", None), "id", None),

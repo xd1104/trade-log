@@ -145,5 +145,35 @@ chk("問不到 5 次（約 7 秒）後問到空手 ⇒ 照常送（不是「一�
 out, n, took = base_run(999)
 chk("一直問不到 ⇒ 20 秒內放棄、照舊不送", (out, took <= broker.ENTER_RETRY_S, n > broker.ENTRY_BASE_TRIES), ({"?": 1}, True, True))
 
+print("\n=== ⑦ 多方聯軍：確定一張都沒送出的候選，不封住其他候選 ===")
+D = "2026-11-13"
+
+
+def fire(c):
+    return {"rec": "fire", "stage": "sending", "cand": c, "date": D}
+
+
+def res(c, ok, **k):
+    return dict({"rec": "result", "cand": c, "ok": ok, "date": D}, **k)
+
+
+chk("快攻確定沒送出（unsent）⇒ 今天還沒送過", AF._sent(D, [fire("fast"), res("fast", False, unsent=True)]), False)
+chk("  ⇒ 快攻自己不會再送（_cand_done）", AF._cand_done(D, "fast", [fire("fast"), res("fast", False, unsent=True)]), True)
+chk("快攻送出去但結果不明（沒有 unsent）⇒ 照舊算送過", AF._sent(D, [fire("fast"), res("fast", False, maybe_filled=True)]), True)
+chk("只有 sending 沒有結果（送到一半當掉）⇒ 照舊算送過（寧可漏、不重送）", AF._sent(D, [fire("fast")]), True)
+chk("快攻沒送出、開箱成交了 ⇒ 送過",
+    AF._sent(D, [fire("fast"), res("fast", False, unsent=True), fire("orb"), res("orb", True)]), True)
+chk("舊方法 A（沒有 cand）的 unsent ⇒ 照舊算送過",
+    AF._sent(D, [{"rec": "fire", "date": D}, {"rec": "result", "ok": False, "unsent": True, "date": D}]), True)
+
+print("\n=== ⑧ 送單計數：enter 前後沒動 ⇒ 確定沒送出 ===")
+_src_b = (HERE / "broker.py").read_text(encoding="utf-8")
+chk("place_order 前一行就加計數（叫到一半丟例外也算送過）",
+    '_ORDER_SEQ["n"] += 1                 # ⛔ 叫之前就算（叫到一半丟例外也可能已經送到券商）\n'
+    '        trade = api.place_order(c, order)' in _src_b, True)
+chk("日盤、夜盤跟勢都用 order_seq 判斷有沒有送出",
+    ("broker.order_seq() == _seq0" in src["auto_fire.py"], "broker.order_seq() == _seq0" in src["night_fire.py"]),
+    (True, True))
+
 print("\n總結：" +("全部通過 ✅" if not FAIL else "%d 項沒過 ❌：%s" % (len(FAIL), "；".join(FAIL))))
 sys.exit(1 if FAIL else 0)

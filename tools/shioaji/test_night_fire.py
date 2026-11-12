@@ -149,14 +149,22 @@ print("\n=== ② 各種不送的理由 ===")
 for name, setup, when, want in [
     ("不快", lambda: FAKE.update(first=dict(FIRST, mv_pct=0.05)), 10, "not_fast"),
     ("太晚才走到（面板剛開機）", lambda: None, 300, "late"),
-    ("報價不新鮮", lambda: FAKE.update(quote=(46000.0, 12.0)), 10, "no_quote"),
-    ("不是夜盤時段", lambda: FAKE.update(sess="closed"), 10, "no_quote"),
+    ("報價不新鮮（等過 20 秒還是不新鮮）", lambda: FAKE.update(quote=(46000.0, 12.0)), 30, "no_quote"),
+    ("不是夜盤時段（等過 20 秒還是不是）", lambda: FAKE.update(sess="closed"), 30, "no_quote"),
     ("不能進場（已有部位等）", lambda: FAKE.update(can=(False, "已經有部位了")), 10, "cannot"),
 ]:
     reset()
     setup()
     NF.step(T5 + timedelta(seconds=when))
     chk("  %s ⇒ %s、不送" % (name, want), (last_skip(), CALLS["enter"]), (want, []))
+# ⭐ 2026-11-12：報價短暫不新鮮 ⇒ 20 秒內先不下定論，恢復了照送
+reset()
+FAKE.update(quote=(46000.0, 12.0))
+NF.step(T5 + timedelta(seconds=10))
+chk("  報價不新鮮、還在 20 秒內 ⇒ 先不下定論", NF.rows_of(E), [])
+FAKE.update(quote=(46000.0, 0.3))
+NF.step(T5 + timedelta(seconds=15))
+chk("  報價恢復 ⇒ 照送", len(CALLS["enter"]), 1)
 reset()
 FAKE["first"] = None
 NF.step(T5 + timedelta(seconds=10))
@@ -455,7 +463,7 @@ for name, setup, want in [
 ]:
     r_reset()
     setup()
-    run_until(TA, TA + timedelta(seconds=20))
+    run_until(TA, TA + timedelta(seconds=30))       # ⭐ 11-12：no_quote 要等過 QUOTE_WAIT_S（20 秒）才定案
     rs = [o for o in NF.rows_of(E) if o.get("rec") == "skip"]
     chk("  %s ⇒ 不送（%s）" % (name, want),
         (CALLS["enter"], rs[-1]["why"] if rs else None, rs[-1].get("method") if rs else None),
