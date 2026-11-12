@@ -175,5 +175,46 @@ chk("日盤、夜盤跟勢都用 order_seq 判斷有沒有送出",
     ("broker.order_seq() == _seq0" in src["auto_fire.py"], "broker.order_seq() == _seq0" in src["night_fire.py"]),
     (True, True))
 
+print("\n=== ⑨ 日盤收盤：問不到券商是暫時的 ⇒ 窗口內再問 ===")
+
+
+class _FT:
+    def __init__(self):
+        self.t = 9000.0
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def eod_run(seq, entry=44000.0):
+    it = iter(seq)
+    rows = []
+    calls = {"n": 0}
+
+    def ac(ent):
+        calls["n"] += 1
+        return next(it)
+    saved = (AF._eod_settled, AF._auto_entry, AF._already_closed, AF._eod_row, AF.time)
+    AF._eod_settled = lambda d: False
+    AF._auto_entry = lambda d: ({"dir": "long", "entry": entry, "entry_time": "09:03:31"}, None)
+    AF._already_closed = ac
+    AF._eod_row = lambda d, why, extra, msg=None: rows.append(why)
+    AF.time = _FT()
+    try:
+        AF._eod("2026-11-13", 0, AF.time.t, "13:43:30")
+    finally:
+        (AF._eod_settled, AF._auto_entry, AF._already_closed, AF._eod_row, AF.time) = saved
+    return rows, calls["n"]
+
+
+chk("第一次問不到、第二次問到「早就平掉」⇒ 照實記 eod_done_elsewhere",
+    eod_run([("unknown", "x"), ("closed", "y")]), (["eod_done_elsewhere"], 2))
+rows, n = eod_run([("unknown", "x")] * 50)
+chk("一直問不到 ⇒ 窗口內問完才記 eod_cant_tell（不是問一次）", (rows, n > 5), (["eod_cant_tell"], True))
+chk("沒有進場價（確定性的）⇒ 不重試", eod_run([("unknown", "沒有進場價")] * 5, entry=None), (["eod_cant_tell"], 1))
+
 print("\n總結：" +("全部通過 ✅" if not FAIL else "%d 項沒過 ❌：%s" % (len(FAIL), "；".join(FAIL))))
 sys.exit(1 if FAIL else 0)

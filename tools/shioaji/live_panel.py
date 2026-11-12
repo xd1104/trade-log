@@ -276,6 +276,8 @@ CURRENT_STATE = {"today": None}      # 讓 HTTP handler 拿得到當前的 Today
 # 所以不能用「等那個行程結束」來判斷關窗，會一開就誤判（實測 1 秒就誤判）。
 LAST_CLIENT = {"at": 0.0}
 ENTER_LOCK = threading.Lock()   # 真實進場的互斥：同一時間只准有一張新倉單在路上
+LOOP_ERR = {"n": 0, "run": 0, "last": None, "at": None}
+LOOP_ERR_GIVEUP = 150   # 連續出錯超過這麼多圈（前 20 圈 0.25 秒、之後 2 秒 ⇒ 約 4.5 分鐘）⇒ 照舊退出交給看門狗   # ⭐ 2026-11-12：主迴圈接住的例外（不讓行程退出）
 SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 
 # 加權指數（現貨）：Benson 下單時會看，所以面板一起顯示，並算出基差。
@@ -5617,6 +5619,15 @@ def main():
 
     def try_reconnect(reason):
         """斷線重連。失敗不會讓程式死掉，會留下錯誤訊息顯示在面板上。"""
+        # ⭐ 2026-11-12 稽核：工作執行緒正在送進場單／平倉單 ⇒ 這一輪不重連（送到一半換連線，
+        #    「已經送出哪幾張」的紀錄會被 broker.configure 清掉，下一張照過時的口數算 ⇒ 可能平過頭）。
+        #    下一輪（RECONNECT_EVERY 秒後）再看；送單本身最多十幾秒。
+        try:
+            if broker.busy():
+                print(f"[{datetime.now():%H:%M:%S}] {reason} —— 正在送單／平倉，這一輪先不重連")
+                return False
+        except Exception:                 # noqa: BLE001
+            pass
         CONN["retries"] += 1
         if CONN["since"] is None:
             CONN["since"] = datetime.now().strftime("%H:%M:%S")
@@ -5804,125 +5815,150 @@ def main():
             if RESTART["at"] and time.time() - RESTART["at"] > 1.5:   # 先讓「收到」那個回應送回畫面
                 print("[重啟] 主迴圈收工", flush=True)
                 break
-            now = datetime.now()
-            today, t = now.date(), now.time()
-            # ⭐ 2026-11-05 健檢：主迴圈（停損就在這條）的心跳。手機監控看它多久沒動 ⇒ 卡住就示警、停掉
-            #    Healthchecks 心跳讓外面的看門狗響。⛔ 只寫一個數字，不拿鎖（讀的人自己算差多少秒）。
-            STATE["loop_at"] = time.time()
             try:
-                auto_restart_tick(now)            # ⭐ 2026-11-05 自動重啟（條件跟重啟鈕同一支）
-            except Exception:                     # noqa: BLE001  ⛔ 不准擋停損迴圈
-                pass
-
-            # 每天 08:30 重新建立當日連線與狀態。
-            # 兩種情況要重建：跨到新的一天，或今天還沒做過開盤前的重建
-            # （例如面板是半夜啟動的，那次建立的狀態算不上「當日開盤狀態」）。
-            if t >= pd.Timestamp("08:30").time() and (
-                    session["date"] != today or not session.get("opened")):
-                start_day(today)
-                session["opened"] = True
-            elif session["date"] != today and t < pd.Timestamp("08:30").time():
-                # 過了午夜但還沒到 08:30：沿用現有連線（夜盤還在跑，不能斷），
-                # 但「昨天的日盤數字」與「昨天的練習紀錄」一定要清掉 ——
-                # 不清的話這段時間（正好是他早上開面板的時候）看到的是昨天的
-                # 開高低量、震幅、位階、量能，而且練習清單會把昨天那筆算成今天，
-                # 凌晨夜盤再下一單還會把昨天那筆一起寫進今天的檔案。
-                session["date"] = today
-                session["opened"] = False
-                if session["state"] is not None:
-                    reset_for_new_day(session["state"])
-                load_today_trades()
-                print(f"[{today}] 跨日：已清掉昨天的日盤數字與練習紀錄，"
-                      f"等 08:30 重建當日狀態")
-
-            st = session["state"]
-
-            # ---- 斷線看門狗
-            # 只要「市場應該有在交易」就要盯著：日盤 08:45~13:45、夜盤 15:00~05:00。
-            # 之前只盯日盤，夜盤斷線會顯示警告卻永遠不重連 —— 那是 bug。
-            # 星期也要看：週日晚上沒有夜盤、週一凌晨沒有夜盤尾巴，
-            # 否則整個週末都會被判成「盤中收不到報價」而一直重連（見 market_session）。
-            sess = market_session(now)
-            in_day = sess == "day"
-            market_open = sess in ("day", "night")
-
-            if market_open:
-                quiet = quiet_seconds(st.last_recv if st else None, session.get("conn_at"),
-                                      sess, time.time())
-                lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"]
-                if lost and time.time() - last_retry > RECONNECT_EVERY:
-                    last_retry = time.time()
-                    CONN["ok"] = False
-                    where = "日盤" if in_day else "夜盤"
-                    try_reconnect(f"{where}已 {int(quiet) if quiet else '?'} 秒沒收到報價")
-                # ⭐ 2026-10-14 五檔看門狗（見 DEPTH_WD）。⛔ 包 try：研究用的東西出錯不可以打斷停損迴圈。
+                now = datetime.now()
+                today, t = now.date(), now.time()
+                # ⭐ 2026-11-05 健檢：主迴圈（停損就在這條）的心跳。手機監控看它多久沒動 ⇒ 卡住就示警、停掉
+                #    Healthchecks 心跳讓外面的看門狗響。⛔ 只寫一個數字，不拿鎖（讀的人自己算差多少秒）。
+                STATE["loop_at"] = time.time()
                 try:
-                    _has_pos = broker.has_position()
-                    _dq, _go = depth_check(time.time(), DEPTH_WD["last_ba"], quiet, market_open,
-                                           CONN["ok"] and not lost, _has_pos, DEPTH_WD["last_retry"], now)
-                    DEPTH_WD["stale_s"], DEPTH_WD["held"] = _dq, bool(_dq and _has_pos)
-                    if _go:
-                        DEPTH_WD["last_retry"] = time.time()
-                        DEPTH_WD["retries"] += 1
-                        try_reconnect("五檔已 %d 秒沒進來（成交還在）" % int(_dq))
-                except Exception as _de:      # noqa: BLE001
-                    print("⚠️ 五檔看門狗出錯（不影響停損）：%s" % str(_de)[:120])
-            elif CONN["ok"] is False and time.time() - last_retry > RECONNECT_EVERY * 5:
-                # 休市時段（13:45~15:00、05:00~08:45）慢慢重試就好
-                last_retry = time.time()
-                try_reconnect("休市時段定期重試")
-            if not market_open:
-                DEPTH_WD["stale_s"] = None      # 休市時本來就沒有五檔 ⇒ 不示警
-            # 【程式下單】09:03:30 記一筆、13:47 之後補算 ±100。
-            # ⚠️ 只有整數比較與 queue.put_nowait，⛔ 一行 I/O 都沒有 ——
-            #    這條迴圈就是他的停損（永豐沒有停損單）。
-            # ⛔⛔ **一定要走 _auto_tick_guarded**（那一層 try 在裡面）：這一頁是研究功能，
-            #    它出任何差錯都不可以讓主迴圈中斷 —— 中斷了就是停損不再監控，
-            #    而且畫面上看不出來。⛔ 不可以在這裡直接呼叫 _auto_tick。
-            #    ⚠️ 但**不可以安靜地吞**：計數 ＋ 主控台警告 ＋ 畫面上看得到（禁止「安靜地少」）。
-            _auto_tick_guarded(st, now, sess)
+                    auto_restart_tick(now)            # ⭐ 2026-11-05 自動重啟（條件跟重啟鈕同一支）
+                except Exception:                     # noqa: BLE001  ⛔ 不准擋停損迴圈
+                    pass
 
-            min_idx = now.hour * 60 + now.minute
-            vol_ref = vol_ref_by_min.get(min_idx, 1.0)
+                # 每天 08:30 重新建立當日連線與狀態。
+                # 兩種情況要重建：跨到新的一天，或今天還沒做過開盤前的重建
+                # （例如面板是半夜啟動的，那次建立的狀態算不上「當日開盤狀態」）。
+                if t >= pd.Timestamp("08:30").time() and (
+                        session["date"] != today or not session.get("opened")):
+                    start_day(today)
+                    session["opened"] = True
+                elif session["date"] != today and t < pd.Timestamp("08:30").time():
+                    # 過了午夜但還沒到 08:30：沿用現有連線（夜盤還在跑，不能斷），
+                    # 但「昨天的日盤數字」與「昨天的練習紀錄」一定要清掉 ——
+                    # 不清的話這段時間（正好是他早上開面板的時候）看到的是昨天的
+                    # 開高低量、震幅、位階、量能，而且練習清單會把昨天那筆算成今天，
+                    # 凌晨夜盤再下一單還會把昨天那筆一起寫進今天的檔案。
+                    session["date"] = today
+                    session["opened"] = False
+                    if session["state"] is not None:
+                        reset_for_new_day(session["state"])
+                    load_today_trades()
+                    print(f"[{today}] 跨日：已清掉昨天的日盤數字與練習紀錄，"
+                          f"等 08:30 重建當日狀態")
 
-            if st is None:
-                # 連狀態物件都還沒建（啟動的頭幾秒）。仍然要把報價狀態填進去，
-                # 前端才分得出「休市中」與「盤中收不到報價」，K 線圖也才畫得出來。
-                q = quote_state(None, None, sess)
-                with state_lock:
-                    STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
-                                  "market": sess, "quote": q, "phase": "off",
-                                  "position": None, "today_trades": list(TODAY_TRADES),
-                                  "chips": None, "result": None, "age_sec": None,
-                                  "conn": CONN.copy(),
-                                  "msg": QUOTE_MSG.get(q, "等待第一筆成交…")})
-            elif in_day and session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
-                # 下單時段：即時顯示 + 記錄資料
-                update_state(hist, st, vol_ref, t, phase="recording")
-            elif in_day and session["date"] == today and WATCH_END < t < DAY_END:
-                # 日盤其餘時間：照常顯示價格與趨勢，但不記錄
-                if not session["saved"] and st.open is not None:
-                    session["saved"] = True
-                    # ⭐ 2026-11-05 健檢：git 推送原本在主迴圈上同步跑（每步最多 60 秒）⇒ 09:30 日盤單
-                    #    多半還開著，網路卡住時停損會有幾秒到幾分鐘沒人看 ⇒ 改丟背景執行緒。
-                    def _bg_sync(day=today):
-                        try:
-                            _ok, _msg = sync_to_cloud()
-                        except Exception as _e:          # noqa: BLE001
-                            _msg = "同步失敗：%s" % str(_e)[:120]
-                        print(f"[{day}] 09:30 下單時段結束。雲端同步：{_msg}", flush=True)
-                    threading.Thread(target=_bg_sync, name="sync-0930", daemon=True).start()
-                    # 逐筆落地的成績單。dropped 不是 0 就代表那個早上有一段是缺的
-                    # （檔案裡也有痕跡列），下次要把 max_queue 或 flush_every 調一調。
-                    ts_stat = TICKS.stats()
-                    print(f"[{today}] 逐筆落地：寫出 {ts_stat['written']} 列"
-                          f"，佇列滿丟棄 {ts_stat['dropped']} 列"
-                          f"，寫檔失敗丟失 {ts_stat['lost_io']} 列"
-                          f"（tick_logs/{today}.jsonl）")
-                update_state(hist, st, vol_ref, t, phase="live")
+                st = session["state"]
+
+                # ---- 斷線看門狗
+                # 只要「市場應該有在交易」就要盯著：日盤 08:45~13:45、夜盤 15:00~05:00。
+                # 之前只盯日盤，夜盤斷線會顯示警告卻永遠不重連 —— 那是 bug。
+                # 星期也要看：週日晚上沒有夜盤、週一凌晨沒有夜盤尾巴，
+                # 否則整個週末都會被判成「盤中收不到報價」而一直重連（見 market_session）。
+                sess = market_session(now)
+                in_day = sess == "day"
+                market_open = sess in ("day", "night")
+
+                if market_open:
+                    quiet = quiet_seconds(st.last_recv if st else None, session.get("conn_at"),
+                                          sess, time.time())
+                    lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"]
+                    if lost and time.time() - last_retry > RECONNECT_EVERY:
+                        last_retry = time.time()
+                        CONN["ok"] = False
+                        where = "日盤" if in_day else "夜盤"
+                        try_reconnect(f"{where}已 {int(quiet) if quiet else '?'} 秒沒收到報價")
+                    # ⭐ 2026-10-14 五檔看門狗（見 DEPTH_WD）。⛔ 包 try：研究用的東西出錯不可以打斷停損迴圈。
+                    try:
+                        _has_pos = broker.has_position()
+                        _dq, _go = depth_check(time.time(), DEPTH_WD["last_ba"], quiet, market_open,
+                                               CONN["ok"] and not lost, _has_pos, DEPTH_WD["last_retry"], now)
+                        DEPTH_WD["stale_s"], DEPTH_WD["held"] = _dq, bool(_dq and _has_pos)
+                        if _go:
+                            DEPTH_WD["last_retry"] = time.time()
+                            DEPTH_WD["retries"] += 1
+                            try_reconnect("五檔已 %d 秒沒進來（成交還在）" % int(_dq))
+                    except Exception as _de:      # noqa: BLE001
+                        print("⚠️ 五檔看門狗出錯（不影響停損）：%s" % str(_de)[:120])
+                elif CONN["ok"] is False and time.time() - last_retry > RECONNECT_EVERY * 5:
+                    # 休市時段（13:45~15:00、05:00~08:45）慢慢重試就好
+                    last_retry = time.time()
+                    try_reconnect("休市時段定期重試")
+                if not market_open:
+                    DEPTH_WD["stale_s"] = None      # 休市時本來就沒有五檔 ⇒ 不示警
+                # 【程式下單】09:03:30 記一筆、13:47 之後補算 ±100。
+                # ⚠️ 只有整數比較與 queue.put_nowait，⛔ 一行 I/O 都沒有 ——
+                #    這條迴圈就是他的停損（永豐沒有停損單）。
+                # ⛔⛔ **一定要走 _auto_tick_guarded**（那一層 try 在裡面）：這一頁是研究功能，
+                #    它出任何差錯都不可以讓主迴圈中斷 —— 中斷了就是停損不再監控，
+                #    而且畫面上看不出來。⛔ 不可以在這裡直接呼叫 _auto_tick。
+                #    ⚠️ 但**不可以安靜地吞**：計數 ＋ 主控台警告 ＋ 畫面上看得到（禁止「安靜地少」）。
+                _auto_tick_guarded(st, now, sess)
+
+                min_idx = now.hour * 60 + now.minute
+                vol_ref = vol_ref_by_min.get(min_idx, 1.0)
+
+                if st is None:
+                    # 連狀態物件都還沒建（啟動的頭幾秒）。仍然要把報價狀態填進去，
+                    # 前端才分得出「休市中」與「盤中收不到報價」，K 線圖也才畫得出來。
+                    q = quote_state(None, None, sess)
+                    with state_lock:
+                        STATE.update({"status": "waiting", "clock": now.strftime("%H:%M:%S"),
+                                      "market": sess, "quote": q, "phase": "off",
+                                      "position": None, "today_trades": list(TODAY_TRADES),
+                                      "chips": None, "result": None, "age_sec": None,
+                                      "conn": CONN.copy(),
+                                      "msg": QUOTE_MSG.get(q, "等待第一筆成交…")})
+                elif in_day and session["date"] == today and SESSION_OPEN <= t <= WATCH_END:
+                    # 下單時段：即時顯示 + 記錄資料
+                    update_state(hist, st, vol_ref, t, phase="recording")
+                elif in_day and session["date"] == today and WATCH_END < t < DAY_END:
+                    # 日盤其餘時間：照常顯示價格與趨勢，但不記錄
+                    if not session["saved"] and st.open is not None:
+                        session["saved"] = True
+                        # ⭐ 2026-11-05 健檢：git 推送原本在主迴圈上同步跑（每步最多 60 秒）⇒ 09:30 日盤單
+                        #    多半還開著，網路卡住時停損會有幾秒到幾分鐘沒人看 ⇒ 改丟背景執行緒。
+                        def _bg_sync(day=today):
+                            try:
+                                _ok, _msg = sync_to_cloud()
+                            except Exception as _e:          # noqa: BLE001
+                                _msg = "同步失敗：%s" % str(_e)[:120]
+                            print(f"[{day}] 09:30 下單時段結束。雲端同步：{_msg}", flush=True)
+                        threading.Thread(target=_bg_sync, name="sync-0930", daemon=True).start()
+                        # 逐筆落地的成績單。dropped 不是 0 就代表那個早上有一段是缺的
+                        # （檔案裡也有痕跡列），下次要把 max_queue 或 flush_every 調一調。
+                        ts_stat = TICKS.stats()
+                        print(f"[{today}] 逐筆落地：寫出 {ts_stat['written']} 列"
+                              f"，佇列滿丟棄 {ts_stat['dropped']} 列"
+                              f"，寫檔失敗丟失 {ts_stat['lost_io']} 列"
+                              f"（tick_logs/{today}.jsonl）")
+                    update_state(hist, st, vol_ref, t, phase="live")
+                else:
+                    # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）
+                    update_state(hist, st, vol_ref, t, phase="off")
+            except Exception as _le:          # noqa: BLE001
+                # ⭐ 2026-11-12 稽核：迴圈裡任何一處意外的例外 ⇒ 記下來、下一圈照跑（⛔ 不讓整個行程退出、
+                #    等看門狗一分鐘才重開 —— 那一分鐘停損沒人顧）。前 5 次與之後每 400 次（約 100 秒）印一次。
+                LOOP_ERR["n"] += 1
+                LOOP_ERR["run"] += 1
+                LOOP_ERR["last"] = "%s: %s" % (type(_le).__name__, str(_le)[:160])
+                LOOP_ERR["at"] = datetime.now().isoformat(timespec="seconds")
+                try:
+                    STATE["loop_err"] = dict(LOOP_ERR)        # 畫面／手機監控看得到（⛔ 不拿鎖：只換一個參照）
+                except Exception:                 # noqa: BLE001
+                    pass
+                if LOOP_ERR["run"] > LOOP_ERR_GIVEUP:
+                    # 連續錯了好幾分鐘 ⇒ 照舊版：讓行程退出、看門狗重開（重新登入、狀態全部重建，可能就好了）
+                    print("⚠️ 主迴圈連續出錯 %d 圈 —— 交給看門狗重開" % LOOP_ERR["run"], flush=True)
+                    raise
+                if LOOP_ERR["n"] <= 5 or LOOP_ERR["n"] % 400 == 0:
+                    import traceback as _tb
+                    print("⚠️ 主迴圈出錯（第 %d 次，已接住、照跑）：%s\n%s" % (
+                        LOOP_ERR["n"], LOOP_ERR["last"], _tb.format_exc()[-1200:]), flush=True)
             else:
-                # 夜盤／收盤後：只顯示價格與動能（歷史對照樣本只涵蓋日盤）
-                update_state(hist, st, vol_ref, t, phase="off")
+                LOOP_ERR["run"] = 0
+            # ⭐ 2026-11-12：連續出錯 20 圈以上（例如 08:30 重建一直失敗）⇒ 放慢到 2 秒一圈，⛔ 不要每秒對永豐連打好幾次
+            if LOOP_ERR["run"] > 20:
+                time.sleep(1.75)
             time.sleep(0.25)   # 模型查詢僅 12ms，跑 4Hz 沒有負擔
     except KeyboardInterrupt:
         print("\n收到中止訊號，關閉中…")

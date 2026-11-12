@@ -2372,12 +2372,18 @@ def _eod(day, lag_ms, put_at, at=None):
     #    寫成「已經平掉了」是**一句假話**（部位還開著、13:45 起停損也停了，
     #    而畫面告訴他已經平掉；lab-qa 實測 Y1／Y2）。
     state, how = _already_closed(ent)
+    # ⭐ 2026-11-12（Benson：「有問題的都要修」）：問不到券商／成績單是暫時的 ⇒ 窗口內每 EOD_RETRY_S 秒再問；
+    #    ⛔「帳本那一列沒有進場價」是確定性的 ⇒ 不重試（照舊直接 eod_cant_tell）。
+    while state == "unknown" and _num(ent.get("entry")) is not None             and time.time() + EOD_RETRY_S < put_at + EOD_WINDOW_S:
+        time.sleep(EOD_RETRY_S)
+        state, how = _already_closed(ent)
     if state == "closed":
         return _eod_row(d, "eod_done_elsewhere", dict(base, how=how),
                         WHY["eod_done_elsewhere"] + " —— " + str(how))
     if state != "open":
         # ⛔ 不動手（沿用「寧可不平，不可以平錯」的不對稱原則）。
-        # ⚠️ 這裡**刻意不重試**：三條路裡有一條是「帳本那列沒有進場價」——
+        # ⚠️（2026-11-12 起上面會先在窗口內重問；走到這裡＝沒有進場價，或問到窗口用完）
+        # ⚠️ 舊註解：這裡**刻意不重試**：三條路裡有一條是「帳本那列沒有進場價」——
         #    那是確定性的，重試只會把 75 秒的窗口燒光，而重試也不會送單。
         #    `eod_cant_tell` 不在 EOD_SETTLED 裡 ⇒ 看門狗在 13:43:30~13:45
         #    之間重啟時還會再試一次。

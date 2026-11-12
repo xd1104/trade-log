@@ -1333,9 +1333,16 @@ def reconcile():
                 _own_tp_fill(out)
             _meta_sync()
             return out
+    _before = _state["position"]
     pos = broker_position()
     if pos == "unknown":
         return "unknown"
+    if _before is not None and _state["position"] is None and isinstance(pos, dict):
+        # ⭐ 2026-11-12 稽核：問券商的那段時間，別的執行緒（收盤／停損／夜盤平倉）剛好把部位平完清掉了
+        #    ⇒ 手上這份券商部位是**平倉前**的舊資料 ⇒ ⛔ 這一輪不撿回（撿了就是鬼部位、之後再記一筆 closed_elsewhere）。
+        #    下一輪（3 秒後）重問就是新的。
+        _RECENT_CLOSE["hid_at"] = time.time()
+        return None
     if isinstance(pos, dict) and _state["position"] is None and time.time() - _RECENT_CLOSE["at"] < RECENT_CLOSE_S \
             and pos.get("dir") == _RECENT_CLOSE["dir"] \
             and all(int(v) <= int(_RECENT_CLOSE["legs"].get(p) or 0) for p, v in _mix_of(pos).items()):
@@ -2100,7 +2107,27 @@ def _wait_fill_n(direction, want, trade=None, product=None):
     return None, 0, None
 
 
+_ENTERING = {"n": 0}
+
+
+def busy():
+    """
+    ⭐ 2026-11-12：正在送進場單或平倉單嗎（面板重連前看：⛔ 送到一半換連線會把「送出哪幾張」的紀錄清掉）。
+    ⛔ 只讀，不拿鎖。
+    """
+    return _ENTERING["n"] > 0 or _close_lock.locked()
+
+
 def enter(direction, price, tp_points, sl_points=None, qty=None):
+    """進場（說明見 _enter_impl）。⭐ 2026-11-12：外面包一層記「正在送單」給 busy() 用，行為不變。"""
+    _ENTERING["n"] += 1
+    try:
+        return _enter_impl(direction, price, tp_points, sl_points=sl_points, qty=qty)
+    finally:
+        _ENTERING["n"] -= 1
+
+
+def _enter_impl(direction, price, tp_points, sl_points=None, qty=None):
     """
     進場。用範圍市價（MKP）＋ IOC：要就立刻成交，不要掛在那裡等。
     **確認成交之後**才把停利限價單掛到券商那邊 —— 那一張電腦關機也有效。
