@@ -1047,10 +1047,10 @@ clear_state()
 write_state(level=1, checked="2026-10-30")
 lots.daily_check([{"date": "2026-11-02", "equity": 105000.0}], now=N0, ctx=ctx_ok())
 lots.daily_check([{"date": "2026-11-04", "equity": 105000.0}], now=datetime(2026, 11, 4, 14, 5),
-                 ctx=ctx_ok(quality={"ok": False, "n": 12, "why": "目前 12 筆平均滑價 5.1 點，超過 4 點",
-                                     "slip_avg": 5.1, "errors": []}))
+                 ctx=ctx_ok(quality={"ok": False, "n": 12, "why": "目前 12 筆期間有 1 次下單錯誤",
+                                     "slip_avg": 2.0, "errors": ["日盤：券商拒絕"]}))
 st, _ = lots.read_state()
-chk("  11/4 滑價變差 ⇒ 建議收回（withdrawn）、view 不再端出 offer",
+chk("  11/4 有下單錯誤 ⇒ 建議收回（withdrawn）、view 不再端出 offer",
     (st["suggest"].get("withdrawn"), lots.view(now=datetime(2026, 11, 4, 15, 0))["offer"]), ("2026-11-04", None))
 ok, msg = lots.apply_upgrade("2026-11-02:1>2", now=datetime(2026, 11, 4, 15, 0), ctx=ctx_ok())
 say(not ok, "  收回後 apply ⇒ 拒絕", msg)

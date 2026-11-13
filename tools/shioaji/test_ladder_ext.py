@@ -116,6 +116,23 @@ chk("70 萬 ⇒ 直接跳到 14＋5（權益撐得起的那一級）", (r["ok"],
 ST33 = dict(ST, level=33)
 r = lots.upgrade_check(ST33, 9e6, "2026-11-09", date(2026, 11, 9), Q, RET)
 chk("33＋12 ⇒ 已經最高一級", (r["ok"], r["why"]), (False, ["已經是最高一級"]))
+# ⭐ 11-13 老闆拍板：升級不再看平均滑價（真實情境：12＋4、權益 65.2 萬、30 筆平均 4.2 點）
+ST12 = dict(ST, level=12, up_at="2026-11-10")
+Q42 = {"n": 30, "need": 30, "slip_avg": 4.2, "n_err": 0, "errors": [], "ok": False,
+       "why": "最近 30 筆平均滑價 4.2 點，超過 4 點"}
+r = lots.upgrade_check(ST12, 652366.0, "2026-11-13", date(2026, 11, 13), Q42, RET)
+chk("⭐ 11-13：滑價 4.2 不再擋 ⇒ 建議 13＋5、條件裡沒有「平均滑價」",
+    (r["ok"], r["to"], r["lots"], [c["k"] for c in r["conds"] if c["k"] == "slip"], r["why"]),
+    (True, 13, "13＋5", [], []))
+r = lots.upgrade_check(ST12, 652366.0, "2026-11-13", date(2026, 11, 13),
+                       dict(Q42, slip_avg=30.0, why="最近 30 筆平均滑價 30.0 點，超過 4 點"), RET)
+chk("滑價 30 點也不擋（拿掉就是拿掉）", r["ok"], True)
+r = lots.upgrade_check(ST12, 652366.0, "2026-11-13", date(2026, 11, 13),
+                       dict(Q42, n_err=1, errors=["日盤：券商拒絕"], why="最近 30 筆期間有 1 次下單錯誤"), RET)
+chk("下單錯誤照樣擋、講得出原因", (r["ok"], r["why"]), (False, ["執行品質沒過：最近 30 筆期間有 1 次下單錯誤"]))
+r = lots.upgrade_check(ST12, 652366.0, "2026-11-13", date(2026, 11, 13),
+                       {"n": 0, "need": 30, "slip_avg": None, "errors": [], "ok": False, "why": "還沒有任何自動單，算不出滑價"}, RET)
+chk("一筆自動真單都沒有 ⇒ 照樣不升", (r["ok"], r["why"]), (False, ["執行品質沒過：還沒有任何自動真單"]))
 
 print("\n=== ④ 代價表、風控上限、口數 ===")
 chk("每一級都有研究算的代價", [tuple(L[1:3]) for L in goal.LADDER if tuple(L[1:3]) not in lots.LADDER_COST], [])

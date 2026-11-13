@@ -876,7 +876,8 @@ def downgrade(st, eq, retire=None, incs=None, today=None):
 #   ⑥ 減級照舊（自動）。已經試車通過的人減級之後**不必再試車**；試車還沒過就被退回 1＋1 ⇒ 這一次試車作廢、之後重來。
 #   ⑦ 已確認、還沒生效的升級：有一條策略掉到觀察／降級（或算不出來）⇒ **作廢**（畫面講為什麼）。
 #      每天第一次跑（含生效那天開盤前）都會看一次；收盤那次也會看。
-# 其他條件（每一次升級都要）：最近 30 筆自動真單沒有下單錯誤、平均滑價 ≤ 4／兩條策略都「正常」／沒有停損失靈暫停。
+# 其他條件（每一次升級都要）：最近 30 筆自動真單沒有下單錯誤／兩條策略都「正常」／沒有停損失靈暫停。
+# ⭐ 2026-11-13 起**不看平均滑價**（老闆拍板拿掉，理由見 upgrade_check）。
 
 TRIAL_TO = 2                # 試車那一級（2＋1）
 TRIAL_N = 1                 # 試車要幾筆「實際成交 ≥ 2 口」的自動真單（⭐ 老闆 10-16：5 → 2；10-21：2 → 1）
@@ -1015,7 +1016,7 @@ def upgrade_check(st, eq, eq_date, today, quality, retire, retire_err=None, to=N
     """
     ⇒ {"ok", "id", "kind", "from", "to", "lots", "conds": [...], "why": [...]}（純函式）。⛔ 不看最近賺不賺。
     `to`（apply 用）：照建議那一級驗（權益後來又漲過更高一級也不會變成「級數對不上」）。
-    `conds` 給畫面（順序：權益／下單錯誤／平均滑價／策略狀態／試車／上次升級／事故）。
+    `conds` 給畫面（順序：權益／下單錯誤／策略狀態／試車／上次升級／事故）。⭐ 11-13 起沒有「平均滑價」那一條。
     ⚠️ 營運那幾條（自動登入、他會手動平倉、升 5＋2 前談停電備援）程式查不到 ⇒ 不在這裡判，畫面確認時要他自己看。
     """
     today = _d(today)
@@ -1050,9 +1051,11 @@ def upgrade_check(st, eq, eq_date, today, quality, retire, retire_err=None, to=N
     n_err = q.get("n_err") if _is_int(q.get("n_err")) else len(errs)
     conds.append({"k": "err", "name": "下單錯誤", "ok": (q.get("n") or 0) > 0 and not n_err,
                   "n": q.get("n"), "need_n": q.get("need", RECENT_N), "errors": n_err})
-    conds.append({"k": "slip", "name": "平均滑價", "ok": bool(q.get("ok")) or bool(
-        _num(q.get("slip_avg")) and q["slip_avg"] <= SLIP_MAX and not n_err),
-                  "avg": q.get("slip_avg"), "max": SLIP_MAX, "n": q.get("n")})
+    # ⭐⭐ 2026-11-13 老闆拍板：升級**不再看平均滑價**（拿掉這一條）。
+    #    理由：滑價主要看當下行情急不急，30 筆的平均又很容易被一兩晚拉動（4.0 過、4.2 不過多半是運氣），
+    #    卡在這一條不代表程式有問題。實際成本照樣反映在權益（真錢）裡：漲得慢就晚升、跌破 85% 就自動退級。
+    #    ⚠️ 已跟他講清楚的代價：口數大到市場接不住時不會在加口前先擋，要等權益掉到退級線才退。
+    #    ⛔ 試車那一關（trial_eval，已通過）仍照舊看滑價 ≤ SLIP_MAX；exec_quality 照算（畫面／週報可以看）。
     states = {lane: (retire or {}).get(lane) for lane in LANES}
     conds.append({"k": "strat", "name": "策略狀態", "ok": (not retire_err) and all(v == "ok" for v in states.values()),
                   "states": states, "err": retire_err})
@@ -1077,8 +1080,11 @@ def upgrade_check(st, eq, eq_date, today, quality, retire, retire_err=None, to=N
         why.append("不知道權益（equity/ 沒有紀錄）")
     elif not ok_eq:
         why.append("權益 %s 還沒到 %s 那一級的門檻 %s" % (format(int(eq), ","), res["lots"], format(int(thr), ",")))
-    if not conds[1]["ok"] or not conds[2]["ok"]:
-        why.append("執行品質沒過：%s" % (q.get("why") or "算不出來"))
+    if not conds[1]["ok"]:
+        if n_err:
+            why.append("執行品質沒過：最近 %s 筆期間有 %d 次下單錯誤" % (q.get("n"), n_err))
+        else:
+            why.append("執行品質沒過：還沒有任何自動真單")
     if retire_err:
         why.append(retire_err)
     for lane in LANES:
