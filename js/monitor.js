@@ -447,7 +447,7 @@
   //   分頁只活在記憶體（⛔ 不記：每次打開都是首頁）。看週報時整個 #main 收起來，分頁列跟著收。
   var PAGE = 'home', CASH_M = null;
   function pagePaint() {
-    ['home', 'cash', 'sys'].forEach(function (k) { var el = $('pg-' + k); if (el) el.hidden = PAGE !== k; });
+    ['home', 'cash', 'plan', 'sys'].forEach(function (k) { var el = $('pg-' + k); if (el) el.hidden = PAGE !== k; });
     var bs = document.querySelectorAll('#tabbar [data-pg]');
     for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-pg') === PAGE ? 'on' : '';
   }
@@ -523,6 +523,58 @@
         (tr.length || fee ? '<div class="cfee"><span></span><span>手續費＋稅</span><span class="num">' + money(fee) + '</span></div>' : '') +
         '<div class="cbal num">結餘 ' + (d.bal == null ? '—' : Math.round(d.bal).toLocaleString()) + '</div></div>';
     }).join('');
+    return h;
+  }
+  // ⭐ 2026-11-14 第三頁：計畫（電腦【帳戶】目標卡；資料＝面板 goal.view 算好的 s.plan）。⛔ 手機不自己算錢、不自己寫評語。
+  //   Benson 選：現在在哪＋跟計畫比、階梯表（現在那一級前 1 級＋後 4 級，其餘摺起來）、每月實際對照；曲線圖不放。
+  function wan(x) { return x == null || isNaN(x) ? '—' : (Math.round(x / 1000) / 10).toLocaleString() + ' 萬'; }
+  function ym(x) { var p = String(x || '').split('-'); return p.length < 2 ? esc(x) : p[0].slice(2) + '/' + (+p[1]); }
+  function amt(x) { return x == null || isNaN(x) ? '—' : Math.round(x).toLocaleString(); }
+  function stepRow(x) {
+    var c = x.now ? 'now' : (x.done ? 'done' : '');
+    var when = x.now ? '<small class="st">' + esc(x.state_txt || '現在在跑') + '</small>'
+      : x.done ? '✓<small>' + esc(md(x.done).split(' ')[0]) + ' 到</small>'
+      : ym(x.target_at) + (x.state_txt ? '<small class="st">' + esc(x.state_txt) + '</small>' : '<small>保守 ' + ym(x.safe_at) + '</small>');
+    return '<tr class="' + c + '"><td><b>' + esc(x.lots) + '</b><small>第 ' + esc(String(x.lvl)) + ' 級</small></td>' +
+      '<td class="num">' + wan(x.eq) + '</td>' +
+      '<td class="num">' + amt(x.monthly) + '<small>最壞 −' + wan(x.worst) + '</small></td>' +
+      '<td>' + when + '</td></tr>';
+  }
+  function planHTML(P) {
+    var h = '<h1 class="pgt">本金計畫</h1>';
+    if (!P) return h + '<section class="card"><div class="msg">還沒有資料（電腦面板更新後就會有）。</div></section>';
+    if (!P.ok) return h + '<section class="card"><div class="err">' + esc(P.msg || '目標卡讀不到') + '</div></section>';
+    var steps = P.steps || [], k = -1;
+    steps.forEach(function (x, i) { if (x.now) k = i; });
+    if (k < 0) steps.forEach(function (x, i) { if (x.done) k = i; });
+    var cur = steps[k] || null, nx = steps[k + 1] || null;
+    var lo = cur ? cur.eq : 0, hi = nx ? nx.eq : null;
+    var pct = hi ? Math.max(0, Math.min(100, (P.eq - lo) / (hi - lo) * 100)) : 100;
+    h += '<section class="card phero"><div class="k">' + esc(P.title || '') + '</div>' +
+      '<div class="big num">' + amt(P.eq) + '<small>元</small></div>' +
+      (cur ? '<span class="lvl">現在第 ' + esc(String(cur.lvl)) + ' 級・' + esc(cur.lots) + '</span>' : '') +
+      (hi ? '<div class="pbar"><i style="width:' + pct.toFixed(1) + '%"></i></div><div class="pbar-l"><span class="num">' + wan(lo) + '</span><span>' +
+        '離 ' + esc(nx.lots) + ' 還差 <b class="num">' + amt(Math.max(0, hi - P.eq)) + '</b></span><span class="num">' + wan(hi) + '</span></div>' : '') +
+      '</section>';   // ⭐ 11-14 Benson：「跟計畫比」「從 09/30 起」兩段字不要（P.vs／P.since 照樣在快照裡，不畫）
+    // 階梯表：現在那一級的前 1 級＋後 4 級；其餘摺起來
+    var a = Math.max(0, k - 1), b = Math.min(steps.length, Math.max(k, 0) + 5);
+    var head = '<tr><th>口數</th><th>門檻</th><th>每月預估</th><th>預計到</th></tr>';
+    h += '<section class="card"><div class="lbl">階梯</div><table class="ltab">' + head + steps.slice(a, b).map(stepRow).join('') + '</table>' +
+      (steps.length > b - a ? '<details class="lmore" id="dLad"><summary>看全部 ' + steps.length + ' 級</summary><table class="ltab">' + head + steps.map(stepRow).join('') + '</table></details>' : '') +
+      '</section>';
+    // 每月實際 vs 計畫（新到舊）
+    var ms = (P.months || []).slice().reverse();
+    if (ms.length) {
+      var mx = 1; ms.forEach(function (m) { mx = Math.max(mx, Math.abs(+m.net || 0), +m.goal || 0); });
+      h += '<section class="card"><div class="lbl">每月實際賺賠（已扣出入金）</div>' + ms.map(function (m) {
+        var w = Math.min(100, Math.abs(+m.net || 0) / mx * 100), g = Math.min(100, (+m.goal || 0) / mx * 100);
+        return '<div class="mrow"><span class="num">' + ym(m.ym) + '</span><div class="bars"><i class="' + (m.net < 0 ? 'neg' : '') + '" style="width:' + w.toFixed(1) + '%"></i>' +
+          (m.goal ? '<u style="left:' + g.toFixed(1) + '%"></u>' : '') + '</div>' +
+          '<span class="v num ' + cls(m.net) + '">' + money(m.net) + '<small>計畫 ' + amt(m.goal) + '</small></span></div>';
+      }).join('') + '<div class="foot" style="text-align:left;margin-top:8px">白線＝那個月照計畫該賺多少</div></section>';
+    }
+    if ((P.notes || []).length) h += '<details id="dPlanNote"><summary>這張表怎麼算</summary><div class="db">' +
+      P.notes.map(function (t) { return '<div class="pnote">' + esc(t) + '</div>'; }).join('') + '</div></details>';
     return h;
   }
   // 第三頁：系統（原本首頁「系統」那格＋跟電腦系統分頁一樣的四件事）
@@ -641,6 +693,12 @@
 
     // 第二頁：金流明細　第三頁：系統（各自包 try：一頁壞掉不拖垮首頁）
     try { $('cash').innerHTML = cashHTML(s.cash); } catch (x) { $('cash').innerHTML = '<section class="card"><div class="err">金流明細畫不出來：' + esc(x && x.message || x) + '</div></section>'; }
+    // ⭐ 計畫頁：重畫前記下他展開的（全部 33 級／說明），畫完補回
+    try {
+      var pd = $('plan').querySelectorAll('details[id]'); for (var j = 0; j < pd.length; j++) DETAILS_OPEN[pd[j].id] = pd[j].open;
+      $('plan').innerHTML = planHTML(s.plan);
+      ['dLad', 'dPlanNote'].forEach(function (id) { if (DETAILS_OPEN[id] && $(id)) $(id).open = true; });
+    } catch (x) { $('plan').innerHTML = '<section class="card"><div class="err">計畫頁畫不出來：' + esc(x && x.message || x) + '</div></section>'; }
     try { $('sys').innerHTML = sysHTML(s, age, dead); } catch (x) { $('sys').innerHTML = '<section class="card"><div class="err">系統頁畫不出來：' + esc(x && x.message || x) + '</div></section>'; }
     pagePaint();
   }

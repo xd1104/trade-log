@@ -562,6 +562,11 @@ def snapshot(port):
         snap["cash"] = _cash(port)
     except Exception as e:                      # noqa: BLE001
         _phone_err(snap, "金流明細", e)
+    # ⭐ 2026-11-14 手機第三頁「計畫」：電腦【帳戶】目標卡同一份（goal.view＋lots.goal_overlay，面板算好），⛔ 手機不自己算
+    try:
+        snap["plan"] = _plan(port)
+    except Exception as e:                      # noqa: BLE001
+        _phone_err(snap, "計畫", e)
     try:
         snap["todo"] = _todo(snap, _lots_alarm, _lots_todo)
     except Exception as e:                      # noqa: BLE001
@@ -806,6 +811,29 @@ def _cash(port=None):
             out = cashflow.build_from_dir(HERE, goal.eff_deposit)
         _CASH.update(v=cashflow.to_phone(out), day=today, at=time.time())
     return _CASH["v"]
+
+
+_PLAN = {"at": 0.0, "v": None}
+PLAN_KEYS = ("ok", "msg", "title", "start", "eq", "lvl", "lots", "gap", "next", "pos", "vs", "since", "notes")
+STEP_KEYS = ("lvl", "eq", "lots", "monthly", "worst", "safe_at", "target_at", "done", "now", "state", "state_txt")
+MONTH_KEYS = ("ym", "net", "goal", "dep", "n")
+
+
+def _plan(port):
+    """⇒ 目標卡（只挑手機要的欄位；⛔ 不帶曲線那兩大串）。10 分鐘重算一次（跟金流同一個節奏）。
+    面板拿不到 ⇒ {"ok": False, "msg": …}（手機照實講），⛔ 不自己算。"""
+    if _PLAN["v"] is None or time.time() - _PLAN["at"] > CASH_TTL:
+        g = _get(port, "/api/account/hist").get("goal")
+        if not isinstance(g, dict):
+            v = {"ok": False, "msg": "面板沒有給目標卡"}
+        elif not g.get("ok"):
+            v = {"ok": False, "msg": str(g.get("msg") or "目標卡算不出來")[:120]}
+        else:
+            v = _pick(g, PLAN_KEYS)
+            v["steps"] = [_pick(x, STEP_KEYS) for x in (g.get("steps") or []) if isinstance(x, dict)]
+            v["months"] = [_pick(x, MONTH_KEYS) for x in (g.get("months") or []) if isinstance(x, dict)]
+        _PLAN.update(v=v, at=time.time())
+    return _PLAN["v"]
 
 
 def _prog(f, n, s):

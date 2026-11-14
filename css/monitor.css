@@ -174,7 +174,7 @@ details[open] summary::after{transform:rotate(-135deg); margin-top:3px}
 /* ══ ⭐ 2026-10-21 三頁（首頁／金流明細／系統）＋「今天」＝程式下單卡（Benson 看過 demo 定案）══ */
 .app{padding-bottom:calc(96px + var(--safe-b))}
 .tabbar{position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:480px; z-index:20;
-  display:grid; grid-template-columns:repeat(3,1fr); background:rgba(21,29,41,.96); border-top:1px solid var(--line);
+  display:grid; grid-template-columns:repeat(4,1fr); background:rgba(21,29,41,.96); border-top:1px solid var(--line);
   padding:8px 0 calc(8px + var(--safe-b)); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px)}
 .tabbar button{display:flex; flex-direction:column; align-items:center; gap:3px; border:0; background:none; color:var(--faint);
   font-size:11.5px; font-family:var(--font-sans); padding:4px 0; min-height:48px}
@@ -265,3 +265,35 @@ details.ctr > summary.crow{padding:7px 8px; min-height:0; font-weight:400; font-
 .cdc .cdet{margin:0 8px 6px 50px}
 .cfee{display:grid; grid-template-columns:32px 1fr auto; gap:10px; padding:0 8px 4px; font-size:12.5px; color:var(--faint)}
 .cbal{font-size:12px; color:var(--faint); text-align:right; padding:5px 8px 0; margin:4px 8px 0; border-top:1px dashed var(--line)}
+
+/* ⭐ 2026-11-14 第三頁「計畫」：電腦【帳戶】目標卡的手機版（現在在哪＋跟計畫比、階梯表、每月實際） */
+.phero .k{font-size:12px; color:var(--dim)}
+.phero .big{font-size:30px; font-weight:750; line-height:1.15; margin:2px 0 6px}
+.phero .big small{font-size:14px; color:var(--dim); font-weight:600; margin-left:4px}
+.phero .lvl{display:inline-block; font-size:12px; font-weight:700; color:var(--gold); border:1px solid var(--gold); background:var(--gold-soft); border-radius:99px; padding:1px 9px}
+.pbar{height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:12px 0 5px}
+.pbar i{display:block; height:100%; background:var(--gold); border-radius:4px}
+.pbar-l{display:flex; justify-content:space-between; gap:8px; font-size:11.5px; color:var(--faint)}
+.pbar-l b{color:var(--text)}
+.pline{font-size:13px; color:var(--dim); line-height:1.6; padding-top:8px; margin-top:8px; border-top:1px solid var(--line)}
+.ltab{width:100%; border-collapse:collapse; font-size:13px; margin-top:6px}
+.ltab th{font-size:11px; color:var(--faint); font-weight:600; text-align:right; padding:4px 4px 6px; white-space:nowrap}
+.ltab th:first-child, .ltab td:first-child{text-align:left; padding-left:8px}
+.ltab td{padding:8px 4px; border-top:1px solid var(--line); text-align:right; white-space:nowrap; vertical-align:top}
+.ltab td b{font-weight:700}
+.ltab td small{display:block; font-size:11px; color:var(--faint); font-weight:400}
+.ltab tr.done td{color:var(--faint)}
+.ltab tr.now td{background:var(--gold-soft)}
+.ltab tr.now td:first-child{box-shadow:inset 3px 0 0 var(--gold)}
+.ltab small.st{color:var(--gold); font-weight:700}
+details.lmore{background:none; border:0; border-radius:0; margin:6px 0 0}
+details.lmore > summary{padding:10px 4px; min-height:0; font-size:13px; color:var(--dim); font-weight:500}
+.mrow{display:grid; grid-template-columns:44px 1fr 92px; gap:10px; align-items:center; padding:8px 0; border-top:1px solid var(--line); font-size:13px}
+.mrow .bars{position:relative; height:8px; background:var(--line); border-radius:4px}
+.mrow .bars i{position:absolute; left:0; top:0; bottom:0; border-radius:4px; background:var(--win)}
+.mrow .bars i.neg{background:var(--loss)}
+.mrow .bars u{position:absolute; top:-3px; bottom:-3px; width:2px; margin-left:-1px; background:var(--text); opacity:.75; border-radius:1px}
+.mrow .v{text-align:right; font-weight:700}
+.mrow .v small{display:block; font-size:11px; color:var(--faint); font-weight:400}
+.pnote{font-size:12.5px; color:var(--dim); line-height:1.65; padding:6px 0}
+.pnote + .pnote{border-top:1px dashed var(--line)}
