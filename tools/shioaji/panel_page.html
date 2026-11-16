@@ -2526,7 +2526,10 @@ function lpDay(D,s){
  }else{
    const cf=cr('fast'), co=cr('orb'), cv=cr('rev');
    const done=!!(cf&&co&&(cv||(cf.why&&cf.why!=='not_fast')));
-   if(done){ st='<div class="lp-st"><span class="big wait">今天不做</span></div>'; sum='日 不做'; }
+   if(done){
+     /* 量表過了卻沒做，最常見是方向往下（聯軍只做多）⇒ 在「今天不做」旁直接講原因，免得以為漏單 */
+     const sh=[cf,co].filter(x=>x&&/_short$/.test(String(x.why||''))).length;
+     st='<div class="lp-st"><span class="big wait">今天不做</span>'+(sh?'<span class="sub">往下，只做多</span>':'')+'</div>'; sum='日 不做'; }
    else{
      let at='', lab='';
      if(!cf){ at=D.signal_at; lab=esc(String(at||''))+' 判定'; }
@@ -2546,8 +2549,8 @@ function lpDay(D,s){
  /* 快攻 */
  { const c=cr('fast');
    if(c){ const F=c.fast||{}, ok=(c.rec==='result'&&c.ok)||c.rec==='fire', mv=lpN(F.move_pts), th=lpN(F.thr_pts);
-     const down=(F.verdict==='fast'&&c.d===-1)?'・往下':'';
-     ind+=lpInd('快攻',lpBar(mv,th,F.verdict==='fast'),ok?'ok':'no',(mv!=null&&th!=null)?mv+' ／ 要 '+th+' 點'+down:'',firedK==='fast'); }
+     const dn=c.d===-1||c.dir==='short', down=(F.verdict==='fast'&&dn)?'・往下':'';
+     ind+=lpInd('快攻',lpBar(mv,th,F.verdict==='fast'&&!dn),ok?'ok':'no',(mv!=null&&th!=null)?mv+' ／ 要 '+th+' 點'+down:'',firedK==='fast'); }
    else if(G.fast&&lpN(G.fast.now_pts)!=null){ const a=lpN(G.fast.now_pts), b=lpN(G.fast.need_pts);
      ind+=lpInd('快攻',lpBar(a,b,a>=b),'',Math.abs(a)+' ／ 要 '+b+' 點'); }
    else { const th=lpN((D.fast||{}).thr_pts);
@@ -2556,8 +2559,9 @@ function lpDay(D,s){
  { const c=cr('orb'), O=D.orb||{};
    if(c){ const ok=(c.rec==='result'&&c.ok)||c.rec==='fire', w=lpN(c.box_w), mp=lpN(c.box_med_pct), hi=lpN(c.box_hi);
      const need=(mp!=null&&hi!=null)?Math.round(mp/100*hi):null;
-     ind+=lpInd('開箱',(w!=null&&need!=null)?lpBar(w,need,w>=need):lpTxt(''),ok?'ok':'no',
-       (w!=null&&need!=null)?Math.round(w)+' ／ 要 '+need+' 點':'',firedK==='orb'); }
+     const dn=c.d===-1||c.dir==='short';
+     ind+=lpInd('開箱',(w!=null&&need!=null)?lpBar(w,need,w>=need&&!dn):lpTxt(''),ok?'ok':'no',
+       (w!=null&&need!=null)?Math.round(w)+' ／ 要 '+need+' 點'+(dn?'・往下':''):'',firedK==='orb'); }
    else if(firedK){ ind+=lpInd('開箱',lpTxt(''),''); }   /* 別的候選已經送了 ⇒ 開箱今天不會再判 */
    else if(O.hist_ok===false){ ind+=lpInd('開箱',lpTxt('歷史不夠'),'no'); }
    else if(G.orb&&G.orb.stage==='box'&&lpN(G.orb.now_pts)!=null){ const a=lpN(G.orb.now_pts), b=lpN(G.orb.need_pts);
