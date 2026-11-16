@@ -305,11 +305,16 @@ def _today_raw(d):
     hit = _TODAY_RAW.get(d)
     if hit is not None and time.time() - hit["at"] < hit["ttl"]:
         return hit["df"]
-    df = _raw_days([d])
+    rep = {}
+    df = _raw_days([d], report=rep)
     _TODAY_RAW.clear()          # 只留今天那一筆，跨日自然就沒了
     # 拿不到（多半是 kbars 逾時，一次卡 30 秒）⇒ 隔久一點再試，別讓每次畫圖都卡住
+    # ⭐ 2026-11-16 他回報「重開面板拿不到最新 K 棒」：剛重開那幾秒還沒連上永豐，
+    #    根本沒問到就被記成「拿不到」、要等 120 秒才再試 ⇒ 圖只有面板開著之後的部分。
+    #    還沒連上（沒問到）跟問了卻逾時不一樣 ⇒ 還沒連上就幾秒後再試。
     bad = df is None or df.empty
-    _TODAY_RAW[d] = {"df": df, "at": time.time(), "ttl": TODAY_RETRY_EMPTY if bad else TODAY_TTL}
+    ttl = (SESS_RETRY_PARTIAL if rep.get("incomplete") else TODAY_RETRY_EMPTY) if bad else TODAY_TTL
+    _TODAY_RAW[d] = {"df": df, "at": time.time(), "ttl": ttl}
     return df
 
 
