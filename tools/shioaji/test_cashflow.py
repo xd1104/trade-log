@@ -128,6 +128,20 @@ chk("混搭 11（10＋1）⇒ 2×25×2＋1×18×2＋11 份稅",
     C.est_fee({"qty": 11, "product": "MIX", "mix": {"MXF": 10, "TMF": 1}, "entry": 38000, "exit": 38100}),
     100 + 36 + 11 * _tx)
 
+print("\n  ── 11-18：夜盤午夜前就出場 ⇒ 記到下一個交易日（券商那天才入帳） ──")
+_r = [row("2026-11-14", 660628.0), row("2026-11-16", 658628.0, dep=-2000.0), row("2026-11-17", 540518.0, pl=-117560.0, fee=258.0, tax=292.0)]
+_t = {"2026-11-16": [{"date": "2026-11-16", "qty": 5, "entry_time": "22:40:04", "entry": 41480.0, "exit_time": "23:07:12",
+                      "exit": 40646.0, "points": -834.0, "product": "MXF"}],
+      "2026-11-17": [{"date": "2026-11-17", "qty": 13, "entry_time": "09:06:22", "entry": 40542.0, "exit_time": "13:02:29",
+                      "exit": 39958.46, "points": -583.5, "product": "MIX", "mix": {"TMF": 3, "MXF": 10}}]}
+_o = C.build(_r, _t, {}, [], G.eff_deposit)
+_D = {d["date"]: d for d in _o["months"]["2026-11"]["days"]}
+chk("11-16 只剩出金、沒有差", (_D["2026-11-16"]["trade"], _D["2026-11-16"]["diff"]), (0, None))
+chk("11-17 含 11-16 晚那筆、沒有差", (_D["2026-11-17"]["trade"], _D["2026-11-17"]["diff"]), (-41700 - 75855, None))
+chk("那筆仍註明 11-16 晚", [i.get("night") for i in _D["2026-11-17"]["items"] if i["k"] == "trade"][0], "11-16 晚")
+_o2 = C.build(_r[:2], {"2026-11-16": _t["2026-11-16"]}, {}, [], G.eff_deposit)
+chk("下一列權益還沒出來 ⇒ 先不列", sum(d["trade"] for d in _o2["months"]["2026-11"]["days"]), 0)
+
 print("\n  ── 守門：面板有接、前端只畫 ──")
 src = __import__("testkit").panel_source(Path(__file__).parent / "live_panel.py")
 chk("/api/account/hist 端出 cash", '"cash": cashflow_view()' in src, True)

@@ -95,6 +95,22 @@ def build(rows, trades, day_res, night_res, eff_deposit, live=None, today=None):
     if live and isinstance(live.get("equity"), (int, float)) and today:
         rs = [r for r in rs if str(r.get("date")) != str(today)] + [dict(live, date=str(today))]
     rs.sort(key=lambda r: str(r["date"]))
+    # ⭐ 2026-11-18 Benson 問 11-16／11-17 兩張卡的「差 ±41,8xx」：夜盤單在**當晚**（午夜前）就出場（11-16 23:07 停損）⇒
+    #   成績單記在 11-16，但券商把夜盤算進**下一個交易日**（11-16 那列是 14:00 抓的、根本還沒有這筆）⇒ 一天多一筆、隔天少一筆。
+    #   ⇒ 午夜前出場的夜盤單改記到「日期在它之後的第一列權益」（凌晨出場的本來就記在隔天，不動）。
+    rdates = [str(r["date"]) for r in rs]
+    book = {}
+    for td, lst in trades.items():
+        for t in lst:
+            bd = str(td)
+            if _is_night(t) and str(t.get("exit_time") or "") >= "15:00":
+                nx = [x for x in rdates if x > bd]
+                if nx:
+                    bd = nx[0]
+                else:
+                    bd = None              # 下一列權益還沒出來 ⇒ 先不列（出來那天就進）
+            if bd:
+                book.setdefault(bd, []).append(t)
     days = []
     for i, r in enumerate(rs):
         if i == 0:
@@ -112,11 +128,11 @@ def build(rows, trades, day_res, night_res, eff_deposit, live=None, today=None):
                 it["inferred"] = True      # 券商那欄寫 0、是用權益變化推出來的 ⇒ 畫面照實標「推算」
             items.append(it)
         tsum, est = 0, 0
-        day_tr = trades.get(d, [])
+        day_tr = book.get(d, [])
         if r.get("live_at"):
             # ⭐ 10-29：券商那一份是 live_at 那一刻抓的；之後才出場的單還沒進權益 ⇒ 先不列（下一次更新就會進來），
             #    否則會標「對不起來」（10-29 09:14 停損、帳戶是 09:13:58 抓的 ⇒ 誤標 +7,515）
-            day_tr = [t for t in day_tr if str(t.get("exit_time") or "") <= str(r["live_at"])]
+            day_tr = [t for t in day_tr if str(t.get("date")) != d or str(t.get("exit_time") or "") <= str(r["live_at"])]
         for t in sorted(day_tr, key=lambda x: str(x.get("entry_time") or "")):
             if not _is_night(t):
                 continue
