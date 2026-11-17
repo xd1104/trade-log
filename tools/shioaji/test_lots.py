@@ -97,6 +97,9 @@ broker.REAL_FLAG = TMP / "REAL_ORDERS_ON"
 lots.LEVEL_FILE = TMP / "LOTS_LEVEL.json"
 lots.LOG_DIR = TMP / "lots"
 lots.VOL_CSV = TMP / "__no_such_tmf_1min.csv"
+# ⭐ 2026-11-17 升級改自動（lots.AUTO_UPGRADE）⇒ 這一支照舊測「出建議 → 他按確認」那條（關掉自動時的退路）；
+#    自動升級另外在 test_lots_auto.py。
+lots.AUTO_UPGRADE = False
 AF.ARM_FLAG = TMP / "AUTO_ORDERS_ON"
 AF.FIRE_DIR = TMP / "autofire"
 AF.FAST_HIST = TMP / "fast_hist.jsonl"

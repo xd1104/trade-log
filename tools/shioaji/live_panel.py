@@ -4814,12 +4814,14 @@ def poll_equity():
                                    busy=broker.has_position())   # 有部位 ⇒ 06:00 那道先不跑
             if _lr.get("err"):
                 LOTS_ERR["err"] = _lr["err"]
+            lots_push(_lr.get("events"))
             # ⭐ 2026-11-02 入金當下就重算升級條件（⛔ 有部位、送單那幾刻不跑；只出建議，升級仍要他按確認）
             if not _eq_quiet(now):
                 _lr = lots.live_check((EQUITY.get("m") or {}).get("equity_amount"), now,
                                       busy=broker.has_position())
                 if _lr.get("err"):
                     LOTS_ERR["err"] = _lr["err"]
+                lots_push(_lr.get("events"))
             _small = lots_state_small()               # ⛔ 讀檔在鎖外面，鎖裡只指派
             with state_lock:
                 STATE["lots"] = _small
@@ -5073,6 +5075,28 @@ def auto_restart_tick(now=None, stamp=None):
     print("[自動重啟] 程式有新版、沒有部位、在安全時段 ⇒ 重啟換上新版", flush=True)
     code, _out = request_restart()
     return code == 200
+
+
+def lots_push(events):
+    """
+    ⭐ 2026-11-17 升級改自動 ⇒ 口數自己變了要讓他在手機上知道（自動升級、權益跌破保護線自動減級）。
+    ⛔ 背景執行緒送（不擋 poll_equity）；失敗只印一行。
+    """
+    want = [e for e in (events or []) if e.get("kind") in ("upgrade_auto", "down_equity")]
+    if not want:
+        return
+
+    def run():
+        import subprocess
+        for e in want:
+            title = "口數自動升級" if e["kind"] == "upgrade_auto" else "口數自動減級"
+            try:
+                subprocess.run(["py", "-3.11", str(HERE / "push_note.py"), title, str(e.get("msg") or "")],
+                               capture_output=True, timeout=60)
+                print("[口數] 已通知手機：%s" % title, flush=True)
+            except Exception as ex:       # noqa: BLE001
+                print("⚠️ [口數] 通知手機失敗：%s" % str(ex)[:120], flush=True)
+    threading.Thread(target=run, daemon=True).start()
 
 
 def auto_restart_notice():

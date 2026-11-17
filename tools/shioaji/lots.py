@@ -29,7 +29,7 @@
 ・**升級要 Benson 在面板上兩段式確認**（10-14 拍板；同一天晚上老闆再改規則 ⇒ 見下面「升級（試車 → 跳級）」那一段）：
     ⛔ 09-30 的「每月第一個交易日、一次一級、冷卻 3 個月」**10-14 起作廢**。
     每個交易日收盤後（daily_check）重算：在 1＋1 ⇒ 建議試車 2＋1；試車通過 ⇒ 建議跳到權益撐得起的那一級；
-    之後再升至少隔一個日曆月。建議有 `id`＝「建議那天:從>到」；條件掉了就**收回**（`withdrawn`）。⛔ 不自己升。
+    之後再升至少隔一個日曆月。建議有 `id`＝「建議那天:從>到」；條件掉了就**收回**（`withdrawn`）。⭐ 11-17 起 AUTO_UPGRADE ⇒ 建議一出來就自動升（見 _auto_upgrade）。
     `apply_upgrade(offer_id)`（面板 POST /api/lots/upgrade 呼叫；過 fire_post_guard、前端兩段式）：**只接受現在建議的那一級**，
     而且當下**重驗一次條件**（品質／策略用每日檢查存好的那一份）⇒ ⭐ 10-21 起**確認後立刻生效**（見 apply_upgrade）；
     生效前 `revoke_pending()` 可以撤回；策略在生效前掉到觀察／降級 ⇒ 自動作廢。
@@ -886,6 +886,10 @@ TRIAL_N = 1                 # 試車要幾筆「實際成交 ≥ 2 口」的自�
 def _tslip():
     """試車那幾句的「滑價」用字：只看 1 筆 ⇒「滑價」；多筆 ⇒「平均滑價」（跟著 TRIAL_N，⛔ 不寫死）。"""
     return "滑價" if TRIAL_N == 1 else "平均滑價"
+# ⭐⭐ 2026-11-17 老闆拍板：**升級改成自動**（不用他按確認）、照規則能跳就跳、入金當下到門檻就升。
+#    建議一出來（daily_check／live_check）就照 apply_upgrade 同一套重驗後直接生效，事後推播到手機。
+#    ⛔ 降級本來就是自動的，不變。False ⇒ 回到「要他在面板上兩段式確認」。
+AUTO_UPGRADE = True
 REUP_GAP_MONTHS = 0         # 再升：離上一次升級生效至少幾個日曆月（⭐ 10-27 老闆：不用等 ⇒ 0＝這個條件整條拿掉）
 PENDING_GUARD_HOUR = 6      # 已確認的升級每天幾點以後重看一次策略（夜盤 05:00 收完、05:30 備份之後）
 
@@ -1166,7 +1170,7 @@ def _apply_precheck(st, offer_id, today):
     return None
 
 
-def apply_upgrade(offer_id, now=None, rows=None, ctx=None, path=None):
+def apply_upgrade(offer_id, now=None, rows=None, ctx=None, path=None, by="you"):
     """
     ⭐ 畫面「兩段式確認」第二段之後呼叫的那一支（POST /api/lots/upgrade；撤回是 /api/lots/revoke）。⇒ (成功嗎, 一句話)。
     ⛔ 保險：
@@ -1230,11 +1234,12 @@ def apply_upgrade(offer_id, now=None, rows=None, ctx=None, path=None):
         except OSError as e:
             return False, "口數狀態檔寫不進去（%s）—— 沒有升，請再按一次" % str(e)[:60]
     before, after = ladder_lots(sug["from"]), ladder_lots(sug["to"])
-    msg = "已確認：現在起改成 %s%s（原本 %s）—— 今晚夜盤起／下一筆日盤起照新口數；手上已經有的部位照原本口數處理" % (
+    msg = "%s：現在起改成 %s%s（原本 %s）—— 今晚夜盤起／下一筆日盤起照新口數；手上已經有的部位照原本口數處理" % (
+        "自動升級" if by == "auto" else "已確認",
         label(after), "（試車）" if sug.get("kind") == "trial" else "", label(before))
     _log("upgrade_confirmed", {"from": sug["from"], "to": sug["to"], "eff": str(eff), "kind": sug.get("kind"),
-                               "from_ab": list(before), "to_ab": list(after), "by": "you", "msg": msg}, now)
-    _log("upgrade_effective", {"to": sug["to"], "to_ab": list(after), "by": "you",
+                               "from_ab": list(before), "to_ab": list(after), "by": by, "msg": msg}, now)
+    _log("upgrade_effective", {"to": sug["to"], "to_ab": list(after), "by": by,
                                "msg": "%s 起改成 %s（確認後立刻生效）" % (eff, label(after))}, now)
     if after[1] >= 2:
         warm_night()                                  # 今晚 21:40 用得到振幅（⛔ 背景執行緒，不擋這裡）
@@ -1421,7 +1426,7 @@ def daily_check(rows, now=None, ctx=None, path=None, closed=None, busy=False):
                 elif chk["ok"] and open_day:
                     st["suggest"] = dict(chk)
                     ev.append({"kind": "suggest", "ok": True, "to": chk["to"], "why": [],
-                               "msg": "可以升到 %s%s —— 要你在面板上確認才生效" % (
+                               "msg": "可以升到 %s%s" % (
                                    chk["lots"], "（試車）" if chk["kind"] == "trial" else "")})
                 elif active and not chk["ok"]:
                     st["suggest"] = dict(sug, withdrawn=str(today), why=chk["why"] or ["級數變了"])
@@ -1434,7 +1439,9 @@ def daily_check(rows, now=None, ctx=None, path=None, closed=None, busy=False):
             _log(e.get("kind"), dict(e, eq=eq, eq_date=d, by="auto"), now)
             if e.get("kind") not in ("suggest",):
                 print("[口數] " + str(e.get("msg")), flush=True)
-        return {"ran": True, "events": ev, "level": st.get("level"), "err": None}
+        ev += _auto_upgrade(now, rows=rows, ctx=ctx, path=path)
+        st1, _e1 = read_state(path)
+        return {"ran": True, "events": ev, "level": (st1 if not _e1 else st).get("level"), "err": None}
     except Exception as e:                      # noqa: BLE001  ⛔ 這條執行緒不准死
         return {"ran": False, "events": [], "level": None, "err": "口數每日檢查出錯：%s" % str(e)[:120]}
 
@@ -1443,7 +1450,7 @@ def live_check(eq, now=None, ctx=None, path=None, busy=False):
     """
     ⭐ 2026-11-02：入金不用等 14:00。券商**現在**的權益已經過下一級門檻 ⇒ 當場重算升級條件、夠了就出建議。
     daily_check 只吃 equity/ 每天那一列 ⇒ 下午入金要等到隔天收盤，畫面還一直寫舊權益。
-    ⛔ 手上有部位不跑（權益含未實現損益）；⛔ 只會出建議，升級一樣要他按確認、apply 一樣重驗。
+    ⛔ 手上有部位不跑（權益含未實現損益）；建議出來 ⇒ AUTO_UPGRADE 開著就直接升（apply 一樣重驗）。
     ⛔ 不動 `checked`（減級、試車進度照舊走 daily_check）。⛔ 同一天同一級只算一次（退休標準約 2.5 秒 CPU）。
     ⇒ {"ran", "events", "err"}。⛔ 永遠不往外丟例外。
     """
@@ -1483,14 +1490,42 @@ def live_check(eq, now=None, ctx=None, path=None, busy=False):
             if chk["ok"]:
                 st["suggest"] = dict(chk)
                 ev.append({"kind": "suggest", "ok": True, "to": chk["to"], "why": [],
-                           "msg": "可以升到 %s%s —— 要你在面板上確認才生效" % (
+                           "msg": "可以升到 %s%s" % (
                                chk["lots"], "（試車）" if chk["kind"] == "trial" else "")})
             _write_state(st, path)
         for e in ev:
             _log(e.get("kind"), dict(e, eq=eq, eq_date=str(today), by="auto"), now)
+        ev += _auto_upgrade(now, ctx=ctx, path=path)
         return {"ran": True, "events": ev, "err": None}
     except Exception as e:                      # noqa: BLE001  ⛔ 這條執行緒不准死
         return {"ran": False, "events": [], "err": "口數即時檢查出錯：%s" % str(e)[:120]}
+
+
+def _auto_upgrade(now, rows=None, ctx=None, path=None):
+    """
+    ⭐ 2026-11-17（AUTO_UPGRADE）：狀態檔裡有「可以升、還沒確認、沒收回」的建議 ⇒ 直接照 apply_upgrade 生效。
+    ⇒ [事件]（成功一則 kind="upgrade_auto"，面板拿去推播手機；條件重驗沒過 ⇒ 不升、建議留著，下次再試）。
+    ⛔ 跟手動確認走同一支 apply_upgrade（只接受現在建議的那一級、當下重驗、拿同一把鎖）。⛔ 永遠不往外丟例外。
+    """
+    if not AUTO_UPGRADE:
+        return []
+    try:
+        st, err = read_state(path)
+        if err:
+            return []
+        sug = st.get("suggest") or {}
+        if st.get("pending") or not sug.get("ok") or sug.get("withdrawn") or sug.get("confirmed"):
+            return []
+        ok, msg = apply_upgrade(sug.get("id"), now=now, rows=rows, ctx=ctx, path=path, by="auto")
+        print("[口數] " + ("" if ok else "自動升級沒成功：") + msg, flush=True)
+        if not ok:
+            return []
+        return [{"kind": "upgrade_auto", "from": sug.get("from"), "to": sug.get("to"), "eq": sug.get("eq"),
+                 "from_ab": list(ladder_lots(sug.get("from") or 0)), "to_ab": list(ladder_lots(sug.get("to"))),
+                 "msg": msg}]
+    except Exception as e:                      # noqa: BLE001
+        print("⚠️ [口數] 自動升級出錯：%s" % str(e)[:120], flush=True)
+        return []
 
 
 def _bump_month_max(st, today):
