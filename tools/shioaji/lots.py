@@ -1626,7 +1626,11 @@ def view(now=None, E=None, eq=None):
     E = E or today
     # ⭐ 跟送單路徑問同一支（rows 不給 ⇒ 只用快取、⛔ 不讀檔）⇒ 畫面寫的口數就是「現在送的話會送幾口」
     tp = night_plan(E, st)
-    tonight = {k: tp.get(k) for k in ("b", "qty", "vol", "thr", "high", "last", "why")}
+    # ⭐ 2026-11-17 Benson「為甚麼是 3 口？現在不是 11＋4 嗎」：送單路徑 21:40 前 20 分鐘才暖振幅 ⇒ 暖之前畫面一直寫 b−1 口（看起來像少一口）。
+    #   ⇒ 畫面這邊快取沒有就在背景先暖（⛔ 不擋、不等；送單路徑照舊、到時檔案有變一樣重讀），下一輪刷新就是真的口數。
+    if NIGHT_VOL_ON and (tp.get("b") or 0) >= 2 and cached_amps() is None:
+        warm_night(E)
+    tonight ={k: tp.get(k) for k in ("b", "qty", "vol", "thr", "high", "last", "why")}
     # 下一次檢查（10-14 起每個交易日收盤後都檢查）：今天是交易日、而且今天收盤那一次還沒跑 ⇒ 今天；否則下一個交易日
     done_today = str(st.get("checked") or "") >= str(today)
     if today.weekday() < 5 and str(today) not in KNOWN_CLOSED and not done_today:
