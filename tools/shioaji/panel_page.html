@@ -1570,11 +1570,13 @@ button.it{cursor:pointer} button.it:hover{background:rgba(255,255,255,.025)}
 .lp-bar{position:relative; height:6px; background:var(--line); border-radius:3px}
 .lp-bar i{position:absolute; left:0; top:0; bottom:0; border-radius:3px; background:var(--dim)}
 .lp-bar.ok i{background:var(--gold)}
+.lp-bar.dn i{background:var(--down)}
 .lp-bar u{position:absolute; top:-4px; bottom:-4px; width:2px; margin-left:-1px; background:var(--text);
   border-radius:1px; opacity:.75}
 .lp-ind .nums{grid-column:2; font-size:11px; color:var(--faint); margin-top:3px; font-family:var(--font-mono)}
 .lp-ind .v{font-size:15px; font-weight:700; text-align:right; white-space:nowrap}
-.lp-ind .v.no{color:var(--faint)} .lp-ind .v.ok{color:var(--gold)}
+.lp-ind .v.no{color:var(--faint)} .lp-ind .v.ok{color:var(--gold)} .lp-ind .v.dn{color:var(--down)}
+.lp-ind .nums .dn{color:var(--down)}
 .lp-ind .v.q{font-size:13px}
 .lp-err{font-size:12px; color:var(--faint); padding:9px 12px}
 /* ══ ⭐⭐ 2026-10-01【自動下單】改版（Benson 看過預覽：上半一眼看完、下半收起來） ══ */
@@ -2481,14 +2483,14 @@ function lpLeft(nowS,atS){
 }
 const lpN=v=>{ const n=Number(v); return (v==null||v===''||!isFinite(n))?null:n; };
 const lpHM=t=>esc(String(t||'').slice(0,5));
-function lpBar(now,need,ok){
+function lpBar(now,need,ok,dn){
  if(now==null||!(need>0)) return '<span></span>';
  const max=need*1.7, w=Math.max(0,Math.min(Math.abs(now)/max*100,100)), t=need/max*100;
- return '<div class="lp-bar'+(ok?' ok':'')+'"><i style="width:'+w.toFixed(1)+'%"></i><u style="left:'+t.toFixed(1)+'%"></u></div>';
+ return '<div class="lp-bar'+(ok?' ok':(dn?' dn':''))+'"><i style="width:'+w.toFixed(1)+'%"></i><u style="left:'+t.toFixed(1)+'%"></u></div>';
 }
 /* 一列指標。v：'ok'＝✔、'no'＝✕、其他字串＝原樣（口數）、''＝留白。 */
 function lpInd(k,mid,v,nums,fired){
- const vh=v==='ok'?'<span class="v ok">✔</span>':(v==='no'?'<span class="v no">✕</span>':
+ const vh=v==='ok'?'<span class="v ok">✔</span>':(v==='no'?'<span class="v no">✕</span>':v==='dn'?'<span class="v dn">↓</span>':
    (v?'<span class="v ok q">'+v+'</span>':'<span></span>'));
  return '<div class="lp-ind'+(fired?' fired':'')+'"><span class="k">'+esc(k)+'</span>'+mid+vh+
    (nums?'<span></span><span class="nums">'+nums+'</span><span></span>':'')+'</div>';
@@ -2549,8 +2551,9 @@ function lpDay(D,s){
  /* 快攻 */
  { const c=cr('fast');
    if(c){ const F=c.fast||{}, ok=(c.rec==='result'&&c.ok)||c.rec==='fire', mv=lpN(F.move_pts), th=lpN(F.thr_pts);
-     const dn=c.d===-1||c.dir==='short', down=(F.verdict==='fast'&&dn)?'・往下':'';
-     ind+=lpInd('快攻',lpBar(mv,th,F.verdict==='fast'&&!dn),ok?'ok':'no',(mv!=null&&th!=null)?mv+' ／ 要 '+th+' 點'+down:'',firedK==='fast'); }
+     const dn=c.d===-1||c.dir==='short', fdn=F.verdict==='fast'&&dn, down=fdn?'・<span class="dn">往下，只做多</span>':'';
+     /* ⭐ 11-20 Benson：往下過線的條子用綠色＋↓（舊版灰條＋✕ 看起來像過關又打叉） */
+     ind+=lpInd('快攻',lpBar(mv,th,F.verdict==='fast'&&!dn,fdn),ok?'ok':(fdn?'dn':'no'),(mv!=null&&th!=null)?mv+' ／ 要 '+th+' 點'+down:'',firedK==='fast'); }
    else if(G.fast&&lpN(G.fast.now_pts)!=null){ const a=lpN(G.fast.now_pts), b=lpN(G.fast.need_pts);
      ind+=lpInd('快攻',lpBar(a,b,a>=b),'',Math.abs(a)+' ／ 要 '+b+' 點'); }
    else { const th=lpN((D.fast||{}).thr_pts);
@@ -2560,8 +2563,8 @@ function lpDay(D,s){
    if(c){ const ok=(c.rec==='result'&&c.ok)||c.rec==='fire', w=lpN(c.box_w), mp=lpN(c.box_med_pct), hi=lpN(c.box_hi);
      const need=(mp!=null&&hi!=null)?Math.round(mp/100*hi):null;
      const dn=c.d===-1||c.dir==='short';
-     ind+=lpInd('開箱',(w!=null&&need!=null)?lpBar(w,need,w>=need&&!dn):lpTxt(''),ok?'ok':'no',
-       (w!=null&&need!=null)?Math.round(w)+' ／ 要 '+need+' 點'+(dn?'・往下':''):'',firedK==='orb'); }
+     ind+=lpInd('開箱',(w!=null&&need!=null)?lpBar(w,need,w>=need&&!dn,dn):lpTxt(''),ok?'ok':(dn?'dn':'no'),
+       (w!=null&&need!=null)?Math.round(w)+' ／ 要 '+need+' 點'+(dn?'・<span class="dn">往下，只做多</span>':''):'',firedK==='orb'); }
    else if(firedK){ ind+=lpInd('開箱',lpTxt(''),''); }   /* 別的候選已經送了 ⇒ 開箱今天不會再判 */
    else if(O.hist_ok===false){ ind+=lpInd('開箱',lpTxt('歷史不夠'),'no'); }
    else if(G.orb&&G.orb.stage==='box'&&lpN(G.orb.now_pts)!=null){ const a=lpN(G.orb.now_pts), b=lpN(G.orb.need_pts);
