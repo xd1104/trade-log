@@ -588,7 +588,7 @@ REAL_STALE = {"since": None}      # 有真實部位而報價中斷，從何時�
 # ⛔⛔ 部位自己帶的點數，上限 ＝ 進場價 × 這個比例（2026-09-15 QA 退件後 PM 升為必修）。
 #    自動下單正常是 ±0.5%（約 230 點）；sl_points 是 inf 或 1e11 這種值時 `entry − d × 點數`
 #    會落在永遠碰不到的地方 ⇒ **停損永遠不觸發**。超過就退回 SL_POINTS 並示警（寧可用手動那一套）。
-POS_POINTS_MAX_FRAC = 0.02
+POS_POINTS_MAX_FRAC = 0.03   # ⛔ 要 ≥ night_fire.R_SL_PCT（11-23 夜盤停損放寬到 3% ⇒ 一起改）
 POS_POINTS_BAD = {"n": 0}          # 看到壞點數的次數（示警每口每個值只印一次，這裡累計給人查）
 
 
@@ -597,7 +597,7 @@ def _pos_points(pos, key, default):
     部位自己帶的點數（sl_points／tp_points）。
       - 部位沒有這個欄位（手動真單）⇒ default，**不示警**（那是正常狀態）
       - 有但不可信 ⇒ default **並示警**：bool／非數字／NaN／inf／≤0／
-        超過進場價 × POS_POINTS_MAX_FRAC（2%）／進場價本身看不懂（無從檢查上限）
+        超過進場價 × POS_POINTS_MAX_FRAC（3%）／進場價本身看不懂（無從檢查上限）
     示警 ＝ 部位上掛 `sl_warn`（或 `tp_warn`；/api/state 與畫面端得出去）＋ 主控台一次 ＋ 計數。
     ⛔ 純記憶體（停損迴圈 4Hz 會叫）：只改這個 dict、一行 I/O 都沒有；主控台那行每口只印一次。
     ⚠️ bool 要另外擋：isinstance(True, int) 是 True。

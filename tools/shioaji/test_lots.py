@@ -1850,10 +1850,10 @@ _c1 = LP.equity_cushion(90000.0, 35050.0, px=23000.0, day_on=True, night_on=True
 write_state(level=4)
 _c4 = LP.equity_cushion(250000.0, 35050.0, px=23000.0, day_on=True, night_on=True)
 clear_state()
-chk("  1＋1：跟改版前同一句", _c1["msg"], "權益比一口保證金多 54,950 元（約 %d 點），撐得住一次停損（約 460 點）"
+chk("  1＋1：跟改版前同一句", _c1["msg"], "權益比一口保證金多 54,950 元（約 %d 點），撐得住一次停損（約 690 點）"
     % int(54950 // risk_cap.PT_NTD))
-say(_c4.get("lots") == 4 and "4 口保證金" in _c4["msg"] and _c4["stop_pts"] == 920,
-    "  4＋2：保證金 × 4、一次停損 ＝ max(夜盤 460×2, 日盤 115×4) ＝ 920 點", _c4["msg"])
+say(_c4.get("lots") == 4 and "4 口保證金" in _c4["msg"] and _c4["stop_pts"] == 1380,
+    "  4＋2：保證金 × 4、一次停損 ＝ max(夜盤 690×2, 日盤 115×4) ＝ 1380 點（11-23 起夜盤 3%）", _c4["msg"])
 
 print("  -- 建議：最近 30 筆 ⛔ 不算演練的單 --")
 shutil.rmtree(AF.FIRE_DIR, ignore_errors=True)

@@ -514,7 +514,7 @@ def equity_cushion(eq, lot1, px=None, day_on=None, night_on=None):
         out.update(warn=None, msg="權益比一口保證金多 %s 元（約 %d 點）" % (
             format(int(round(cush)), ","), out["pts"]))
         return out
-    stop = round(px * (0.02 if night_on else 0.005))
+    stop = round(px * (_night_sl() if night_on else 0.005))
     out["stop_pts"] = stop
     out["warn"] = out["pts"] < stop
     if out["warn"]:
@@ -526,6 +526,15 @@ def equity_cushion(eq, lot1, px=None, day_on=None, night_on=None):
         out["msg"] = ("權益比一口保證金多 %s 元（約 %d 點），撐得住一次停損（約 %d 點）"
                       % (format(int(round(cush)), ","), out["pts"], stop))
     return out
+
+
+def _night_sl():
+    """夜盤跟勢保護停損占成交價的比例（正本 night_fire.R_SL_PCT；讀不到 ⇒ 3%）。"""
+    try:
+        import night_fire
+        return float(night_fire.R_SL_PCT)
+    except Exception:                       # noqa: BLE001
+        return 0.03
 
 
 def _equity_cushion_multi(eq, lot1, px, day_on, night_on, a, b):
@@ -540,7 +549,7 @@ def _equity_cushion_multi(eq, lot1, px, day_on, night_on, a, b):
         out.update(warn=None, msg="權益比 %d 口保證金多 %s 元（約 %d 點）" % (
             n, format(int(round(cush)), ","), out["pts"]))
         return out
-    stop = max(round(px * 0.02) * b if night_on else 0, round(px * 0.005) * a if day_on else 0)
+    stop = max(round(px * _night_sl()) * b if night_on else 0, round(px * 0.005) * a if day_on else 0)
     out["stop_pts"] = stop
     out["warn"] = out["pts"] < stop
     if out["warn"]:

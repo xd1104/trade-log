@@ -52,6 +52,8 @@ from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -136,6 +138,7 @@ TSM_CTX = HERE / "tsm_ctx.json"       # 過去每晚的走幅與振幅（⛔ git
 #    ⛔ 不設停利停損（研究就是這樣定的）。門檻正本在 `trend_rule.py`。
 #    ⚠️ 2020-08~2024-06 每筆 −2.6（沒有效果）、2024-07 之後才明顯 ⇒ **前瞻考試中，不是結論**。
 TREND_FEE, TREND_SPREAD = 5.0, 2.0
+TREND_SL_FRAC = 0.03                    # 夜盤跟勢保護停損（跟真單 night_fire.R_SL_PCT 同一個數；11-23 起 3%）
 TREND_CTX = HERE / "trend_ctx.json"   # 過去每晚的走幅（⛔ gitignore）
 TREND_TOL = 3                         # 進場那一根最多往回找幾分鐘
 
@@ -1107,13 +1110,22 @@ def trend_eval(E, bars, ctx):
         return _pending("no_after", "進場之後沒有 K 棒")
     k = after[-1]
     ex = float(C[k])
+    why_x = "收盤"
+    # ⭐ 2026-11-23 Benson：真單保護停損放寬到 3% ⇒ 模擬也照同一個停損（之前模擬不停損、真單 2% ⇒ 11-16 對不起來）。
+    #    停損點數 ＝ floor(進場價 × TREND_SL_FRAC)（跟真單成交後同一條式子）；碰到 ⇒ 用停損價出場。
+    sl = float(math.floor(entry * TREND_SL_FRAC))
+    stop = entry - d * sl
+    hit = np.nonzero((L[after] <= stop) if d > 0 else (H[after] >= stop))[0]
+    if len(hit):
+        k = after[hit[0]]
+        ex, why_x = stop, "停損"
     cost = TREND_FEE + TREND_SPREAD
     row = {"lane": "trend", "date": es, "decision": "做多" if d > 0 else "做空", "why": "trend_fast",
            "reason": "台指 %s 前 30 分鐘走 %+.0f 點（門檻 %.0f）⇒ %s"
                      % (_hm(T + trend_rule.ENTRY_OFFSET), mv, thr, "做多" if d > 0 else "做空"),
-           "entry": round(entry, 1), "exit": round(ex, 1), "exit_reason": "收盤",
+           "entry": round(entry, 1), "exit": round(ex, 1), "exit_reason": why_x,
            "exit_label": _hm(int(mm[k])), "points": round(d * (ex - entry) - cost, 1), "cost": cost,
-           "src": SRC_NAME["trend"]}
+           "sl_points": sl, "src": SRC_NAME["trend"]}
     row.update(base)
     return row
 

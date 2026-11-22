@@ -417,8 +417,8 @@ def r_rows():
 
 # 門檻：過去 40 晚 |走幅| ＝ 一半 100、一半 50 ⇒ 第 80 百分位
 thr_want = trend_rule.threshold([100.0 if i % 2 else -50.0 for i in range(40)])
-SL0_WANT = float(math.floor(46000 * 0.02 * 0.975))   # 成交前帶的保守值
-SL_WANT = float(math.floor(46001 * 0.02))            # 成交（假券商 +1 點滑價）後換成成交價 × 2%
+SL0_WANT = float(math.floor(46000 * 0.03 * 0.975))   # 成交前帶的保守值
+SL_WANT = float(math.floor(46001 * 0.03))            # 成交（假券商 +1 點滑價）後換成成交價 × 2%
 r_reset()
 run_until(T5, TA - timedelta(seconds=1))
 chk("  ⛔ 開著 R：21:35 台積電那一刻不動、21:40 以前一張都不送", (CALLS["enter"], r_rows()), ([], []))
@@ -431,8 +431,8 @@ chk("  ⭐ 帳本那一列記下口數、振幅門檻 1.03、規則 B（之後�
     if _r0 else None, (1, 1, 1.03, "B", 1))
 c0 = CALLS["enter"][0] if CALLS["enter"] else (None,) * 4
 chk("  ⛔⛔ 不設停利：broker.enter 的 tp 是 None（券商端一張限價單都不掛）", c0[2], None)
-chk("  送單時先帶保守停損（報價 × 2% × 0.975）", c0[3], SL0_WANT)
-chk("  ⭐ 成交後部位的停損換成 成交價 × 2%（無條件捨去）",
+chk("  送單時先帶保守停損（報價 × 3% × 0.975）", c0[3], SL0_WANT)
+chk("  ⭐ 成交後部位的停損換成 成交價 × 3%（無條件捨去）",
     (broker._state["position"] or {}).get("sl_points"), SL_WANT)
 res = [o for o in NF.rows_of(E) if o.get("rec") == "result"]
 chk("  帳本那一列標 method R、tp_points None、no_tp",
@@ -474,7 +474,7 @@ chk("  走 −200 點 ⇒ 做空", [c[0] for c in CALLS["enter"]], ["short"])
 
 print("  -- ⛔⛔ 停損點數不可以超過面板的上限（超過會被換成手動 130 點）--")
 _frac = float(re.search(r"^POS_POINTS_MAX_FRAC = ([0-9.]+)", lp, re.M).group(1))
-chk("  面板的上限還是 2%（改了這裡要一起重想 R_SL_PCT）", _frac, 0.02)
+chk("  面板的上限還是 3%（11-23 起；改了這裡要一起重想 R_SL_PCT）", _frac, 0.03)
 _worst = None
 for _px in (45987.0, 46025.0, 46030.0, 46049.0, 23012.5, 61237.0):
     for _slip in (-40, -30, -3, 0, 3, 30):
@@ -487,7 +487,7 @@ for _px in (45987.0, 46025.0, 46030.0, 46049.0, 23012.5, 61237.0):
             if _v is None or _e is None or _v > _e * _frac:
                 _worst = (_px, _slip, _v, _e)
 FAKE.pop("slip", None)
-chk("  各種報價 × 滑價（做空成交比報價低 40 點也算）：送單時與成交後的停損都 ≤ 成交價 × 2%",
+chk("  各種報價 × 滑價（做空成交比報價低 40 點也算）：送單時與成交後的停損都 ≤ 成交價 × 3%",
     _worst, None)
 r_reset()
 _late = TA + timedelta(seconds=NF.LATE_S + 5)
@@ -538,12 +538,12 @@ _real_eo = NF.evening_of
 NF.evening_of = lambda now: E                       # recover_meta 看「現在」是不是同一晚
 got = NF.recover_meta(dict(pos))
 NF.evening_of = _real_eo
-chk("  ⛔ 撿回來：停損 2%、no_tp、⛔ 沒有 tp_points（不可以 float(None) 掉回手動 130）",
+chk("  ⛔ 撿回來：停損 3%、no_tp、⛔ 沒有 tp_points（不可以 float(None) 掉回手動 130）",
     got, {"sl_points": SL_WANT, "no_tp": True, "sl_src": "nightfire"})
 broker._state["position"] = dict(pos, recovered=True, tp_points=130.0, sl_points=130.0, sl_src="unmatched")
 NF._recover_poll()
 p2 = broker._state["position"]
-chk("  工作執行緒補正：停損換成 2%、no_tp、拿掉 130 的停利",
+chk("  工作執行緒補正：停損換成 3%、no_tp、拿掉 130 的停利",
     (p2.get("sl_points"), p2.get("no_tp"), "tp_points" in p2, p2.get("sl_src")),
     (SL_WANT, True, False, "nightfire"))
 broker._state["position"] = dict(pos)
@@ -605,7 +605,7 @@ NF._ST.pop("eod_alarm", None)
 print("  -- 畫面 --")
 st = NF.state(now=datetime(2026, 6, 10, 20, 0))
 chk("  開著 R ⇒ state 的 method 是 R、今晚 21:40 看", (st["method"], st["tonight"]["look_at"]), ("R", "21:40"))
-say("不設停利" in st["rules"]["R"] and "2%" in st["rules"]["R"], "  R 那句規則講得出「不設停利」與「2%」",
+say("不設停利" in st["rules"]["R"] and "3%" in st["rules"]["R"], "  R 那句規則講得出「不設停利」與「3%」",
     st["rules"]["R"])
 say(st["rules"]["T"] == st["rule"], "  舊紀錄的預設規則仍是台積電快攻那句")
 NF.ARM_FLAG.write_text("T", encoding="ascii")
