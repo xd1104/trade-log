@@ -1473,6 +1473,31 @@ body.boot .right>#zone{animation:kk-rise .46s var(--ease) both .14s}
   width:28px; height:26px; border-radius:7px; cursor:pointer}
 .cf .mon button:hover:not(:disabled){border-color:var(--line); color:var(--text)}
 .cf .mon button:disabled{opacity:.2; cursor:default}
+/* ⭐ 2026-11-23 區間統計（Benson：這週／這個月／自訂時段的出入金、獲利、虧損）—— 資料跟金流明細同一份 cash，前端只加總 */
+.ac.st{margin-top:12px}
+.st .st-hd{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px}
+.st .st-hd .t{font-size:13px; font-weight:700; color:var(--text); margin-right:auto}
+.st .chips{display:flex; gap:4px; flex-wrap:wrap}
+.st .chips button{background:none; border:1px solid var(--line); color:var(--dim); font:inherit; font-size:12px;
+  padding:3px 10px; border-radius:var(--r-xs); cursor:pointer}
+.st .chips button:hover{color:var(--text)}
+.st .chips button.on{border-color:var(--gold-line); background:var(--gold-soft); color:var(--gold)}
+.st .rng{display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; color:var(--dim)}
+.st .rng input{background:var(--surface-2); border:1px solid var(--line); color:var(--text); font:inherit; font-size:12px;
+  padding:4px 8px; border-radius:var(--r-xs); color-scheme:dark}
+.st .top{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap}
+.st .top .big{font-size:23px; font-weight:700; font-family:var(--font-mono)}
+.st .top .k{font-size:11px; color:var(--faint)}
+.st .top .bl{font-size:11.5px; color:var(--faint); margin-left:auto; font-family:var(--font-mono)}
+.st .g{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line-soft); border-radius:var(--r-md);
+  overflow:hidden; margin-top:10px}
+.st .g .c{background:var(--surface-2); padding:9px 11px; min-width:0}
+.st .g .k{font-size:10.5px; color:var(--faint)}
+.st .g .k small{margin-left:4px}
+.st .g .v{font-size:15.5px; font-weight:700; margin-top:2px; font-family:var(--font-mono)}
+.st .g .v.gold{color:var(--gold)} .st .g .v.dim{color:var(--dim)}
+.st .empty{font-size:12px; color:var(--faint); padding:8px 0}
+@media(max-width:560px){ .st .g{grid-template-columns:repeat(2,1fr)} }
 .cf .sum{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line-soft); border-radius:var(--r-md); overflow:hidden}
 .cf .sum .c{background:var(--surface-2); padding:9px 11px; min-width:0}
 .cf .sum .k{font-size:10.5px; color:var(--faint)}
@@ -2055,7 +2080,7 @@ button.row2{cursor:pointer} button.row2:hover{background:rgba(255,255,255,.03)}
         曲線另外拿 /api/account/hist（一天才多一個點，10 分鐘拿一次）。 -->
 <div id="tab-acct" hidden>
   <!-- ⭐ 2026-10-21 左欄：帳戶總覽＋金流明細（金流明細的數字跟著 /api/account/hist 的 cash 來，cashflow.py 算） -->
-  <div class="acol"><div id="acct"></div><div id="acctcash"></div></div>
+  <div class="acol"><div id="acct"></div><div id="acctstat"></div><div id="acctcash"></div></div>
   <!-- ⭐ 2026-09-30 目標卡：整份從 /api/account/hist 的 `goal` 來（goal.py 算），⛔ 前端不自己算 -->
   <div id="acctgoal"></div>
 </div>
@@ -3958,7 +3983,7 @@ function setTab(t){
  else if(t==='fire'){ alEnter(); }
  // 【帳戶】唯讀：數字跟著 500ms 的 tick 走（後端每分鐘才真的問券商），
  // 切進來先畫一次，順便把曲線拿回來（⛔ 不要等 0.5 秒才有東西，那會閃一下空白）。
- else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); setEl('acctcash', cashHTML(ACCT.cash)); setEl('acctgoal', goalHTML(ACCT.goal)); }
+ else if(t==='acct'){ acctPoll(); if(LASTS) setEl('acct', acctHTML(LASTS)); statRepaint(); setEl('acctcash', cashHTML(ACCT.cash)); setEl('acctgoal', goalHTML(ACCT.goal)); }
  else if(t==='sys'){ if(LASTS) setEl('sys', sysHTML(LASTS)); }
  // 切回即時時立刻呼叫一次 tick()（後端的報價、持倉監控、±100 自動停利停損
  // 全程都在跑，切分頁完全不影響那一條路）
@@ -6174,7 +6199,63 @@ function cashHTML(C){
  if(!DS.length) h+='<div class="empty">這個月還沒有金流。</div>';
  return h+'</div></div>';
 }
+/* ══ ⭐ 2026-11-23 區間統計 ══════════════════════════════════════════
+   ⛔ 不另外跟後端要資料：拿金流明細那一份（ACCT.cash，cashflow.py 算好的每一天）在前端加總。
+   日期＝金流明細的入帳日（夜盤單記在券商入帳那天，跟明細一致）。 */
+const ST={p:'month', a:'', b:''};
+const ST_P=[['week','本週'],['month','本月'],['last','上月'],['year','今年'],['all','全部'],['custom','自訂']];
+function stIso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function stRange(){
+ const n=new Date(), y=n.getFullYear(), m=n.getMonth();
+ if(ST.p==='week'){ const s=new Date(n); s.setDate(n.getDate()-((n.getDay()+6)%7)); const e=new Date(s); e.setDate(s.getDate()+6); return [stIso(s),stIso(e)]; }
+ if(ST.p==='month') return [stIso(new Date(y,m,1)),stIso(new Date(y,m+1,0))];
+ if(ST.p==='last') return [stIso(new Date(y,m-1,1)),stIso(new Date(y,m,0))];
+ if(ST.p==='year') return [y+'-01-01',y+'-12-31'];
+ if(ST.p==='custom') return [ST.a||'0000-00-00',ST.b||'9999-99-99'];
+ return ['0000-00-00','9999-99-99'];
+}
+function statHTML(C){
+ if(!C||!C.ok||!(C.keys||[]).length) return '';
+ const [a,b]=stRange(), DS=[];
+ (C.keys||[]).forEach(k=>(((C.months||{})[k]||{}).days||[]).forEach(d=>{ if(d.date>=a&&d.date<=b) DS.push(d); }));
+ DS.sort((x,y)=>x.date<y.date?-1:1);
+ let din=0,dout=0,win=0,nw=0,loss=0,nl=0,fee=0,diff=0;
+ DS.forEach(d=>{ diff+=Number(d.diff)||0;
+   (d.items||[]).forEach(x=>{ const v=Number(x.amt)||0;
+     if(x.k==='dep'){ if(v>0) din+=v; else dout+=v; }
+     else if(x.k==='fee') fee+=v;
+     else if(x.k==='trade'){ if(v>0){win+=v;nw++;} else if(v<0){loss+=v;nl++;} } }); });
+ const net=win+loss+fee+diff;
+ let h='<div class="ac st"><div class="st-hd"><span class="t">區間統計</span><div class="chips">'+
+   ST_P.map(([k,t])=>'<button data-stp="'+k+'"'+(ST.p===k?' class="on"':'')+'>'+t+'</button>').join('')+'</div></div>';
+ if(ST.p==='custom') h+='<div class="rng"><input type="date" data-std="a" value="'+esc(ST.a)+'">～<input type="date" data-std="b" value="'+esc(ST.b)+'"></div>';
+ if(!DS.length) return h+'<div class="empty">這段期間沒有金流。</div></div>';
+ const f=DS[0], l=DS[DS.length-1], n=nw+nl;
+ h+='<div class="top"><span class="k">實際賺賠</span><span class="big '+cfCls(net)+'">'+cfAmt(net)+'</span>'+
+   '<span class="bl">'+esc(f.date.slice(5))+' 期初 '+acctMoney(f.start_bal)+' → '+esc(l.date.slice(5))+' 期末 '+acctMoney(l.bal)+'</span></div>'+
+   '<div class="g">'+
+   '<div class="c"><div class="k">入金</div><div class="v gold">'+cfAmt(din)+'</div></div>'+
+   '<div class="c"><div class="k">出金</div><div class="v gold">'+cfAmt(dout)+'</div></div>'+
+   '<div class="c"><div class="k">手續費＋稅</div><div class="v dim">'+cfAmt(fee)+'</div></div>'+
+   '<div class="c"><div class="k">獲利<small>'+nw+' 筆</small></div><div class="v '+cfCls(win)+'">'+cfAmt(win)+'</div></div>'+
+   '<div class="c"><div class="k">虧損<small>'+nl+' 筆</small></div><div class="v '+cfCls(loss)+'">'+cfAmt(loss)+'</div></div>'+
+   '<div class="c"><div class="k">勝率</div><div class="v">'+(n?Math.round(nw/n*100)+'%':'—')+'</div></div>'+
+   '</div>'+(diff?'<div class="empty">含對不起來 '+cfAmt(diff)+'</div>':'')+'</div>';
+ return h;
+}
+function statRepaint(){ setEl('acctstat', statHTML(ACCT.cash)); }
+document.addEventListener('click',function(e){
+ const b=e.target.closest('[data-stp]'); if(!b) return;
+ ST.p=b.getAttribute('data-stp');
+ if(ST.p==='custom'&&!ST.a){ const [a,z]=(()=>{const n=new Date();return [stIso(new Date(n.getFullYear(),n.getMonth(),1)),stIso(n)];})(); ST.a=a; ST.b=z; }
+ statRepaint();
+});
+document.addEventListener('change',function(e){
+ const t=e.target.closest&&e.target.closest('[data-std]'); if(!t) return;
+ ST[t.getAttribute('data-std')]=t.value||''; statRepaint();
+});
 function cashRepaint(){
+ statRepaint();
  const sc=document.querySelector('#acctcash .scroll'), top=sc?sc.scrollTop:0;
  setEl('acctcash', cashHTML(ACCT.cash));
  const sc2=document.querySelector('#acctcash .scroll'); if(sc2) sc2.scrollTop=top;
