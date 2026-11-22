@@ -68,6 +68,21 @@ def _day_trades(d):
     return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
 
 
+def live_day(today=None):
+    """
+    【即時】沒指定日期時看哪一個交易日。平日 ＝ 今天；週六日 ＝ 下週一。
+    ⭐ 2026-11-23 Benson「為甚麼數值不同？禮拜六凌晨關盤的時候」：週末拿「今天」去抓 ⇒ 週六日沒有交易日 ⇒ 抓不到 ⇒
+      畫面退回週五日盤（13:45 收 35762），看不到週五夜盤（週六 05:00 收）。週五夜盤屬於下週一那個交易日 ⇒ 週末改看下週一。
+    """
+    #   ⛔ 週六 05:00 前週五夜盤還在跑 ⇒ 照舊看「今天」（那一段一直都是這樣看的，而且下週一那份會被快取，不能在夜盤沒收完時就抓）。
+    if today is None and datetime.now().weekday() == 5 and datetime.now().time() < dtime(5, 5):
+        return date.today()
+    t = today or date.today()
+    while t.weekday() >= 5:
+        t += timedelta(days=1)
+    return t
+
+
 def day_bars(day=None, tf=CHART_TF, full=False):
     """
     取某一天的 K 棒，附上那天的練習交易（給 K 線圖標記用）。
@@ -84,7 +99,7 @@ def day_bars(day=None, tf=CHART_TF, full=False):
     盤中即時抓得到當天的 K 棒（實測 0 分鐘延遲），所以不必自己從 tick 拼；
     直接跟永豐要，資料跟大戶投同源，也就不會對不起來。
     """
-    d = day or date.today()
+    d = day or live_day()
     tf = 1 if int(tf) == 1 else CHART_TF
 
     if full:
