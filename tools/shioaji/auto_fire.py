@@ -1479,9 +1479,21 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
     fresh = (snap.get("quote_age_ms") is not None
              and snap["quote_age_ms"] <= _CFG["gap_s"] * 1000)
     # ⭐ 2026-11-12（Benson 同意）：問不到券商部位 ⇒ 20 秒內再問，不是只問一次就放棄（送出用範圍市價，px 只是參考價）
-    ok, why, _n, _px = broker.can_enter_retry(px, fresh, refresh=_fresh_quote)
+    # ⭐ 2026-11-23（Benson：不要再因為連線漏單）：重試拉到 150 秒 ⇒ 每次重試都驗「價格沒有往反方向走超過停損的三成」，
+    #    走太多 ⇒ 不送（等太久才進，風報比已經不是訊號那一刻的樣子）。重試過才用現在的價當參考價送（範圍市價要用新價）。
+    _sgn = 1.0 if direction == "long" else -1.0
+
+    def _still(q, p0=px, sgn=_sgn, lim=float(pts) * RETRY_ADVERSE_FRAC):
+        adv = (float(p0) - float(q)) * sgn
+        if adv <= lim:
+            return True, None
+        return False, "比訊號那一刻往反方向走了 %.0f 點（超過停損的三成 %.0f 點）" % (adv, lim)
+    ok, why, _n, _px = broker.can_enter_retry(px, fresh, refresh=_fresh_quote, valid=_still)
     if _n > 1:
         base["retry"] = _n
+        if ok and _px is not None:
+            base["px_retry"] = _px
+            px = _px
     if not ok:
         # 沒報價／報價不新鮮／還沒連上永豐／對帳失敗／券商已有部位／當天已達上限
         why = str(why or "沒有說原因")
@@ -1495,6 +1507,9 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
                     or "09:03:30")
                 ) if "還沒連上永豐" in why else ""
         # ⭐ 2026-11-12：can_enter 擋下 ＝ 確定一張都沒送 ⇒ unsent（多方聯軍其他候選今天照常可送，見 _sent）
+        if broker.is_live():
+            # ⭐ 2026-11-23（Benson）：訊號成立卻送不出去 ⇒ 一定要推手機（⛔ 不准靜靜跳過）
+            _push("日盤訊號成立但沒送出", "%s %s" % (d[5:], why[:150]))
         return _result(d, dict(base, unsent=True), False, "cant_enter",
                        WHY["cant_enter"] + "：" + why + hint)
 
@@ -2048,6 +2063,17 @@ def _orb_step(d=None, now_ms=None):
     return True
 
 
+RETRY_ADVERSE_FRAC = 0.3   # ⭐ 2026-11-23：送單前重試期間，價格往反方向走超過「停損 × 這個比例」就不送
+
+
+def _push(title, body):
+    try:
+        import push_note
+        push_note.notify_bg(title, body)
+    except Exception:                    # noqa: BLE001  ⛔ 通知壞掉不准影響下單
+        pass
+
+
 def _result(d, extra, ok, why, msg):
     row = dict(extra)
     # ⛔ `stage` 一定要蓋成 done：合併是「後寫的蓋前面的」，不蓋的話那一天會一直
@@ -2058,6 +2084,8 @@ def _result(d, extra, ok, why, msg):
                 "wrote_at": datetime.now().isoformat(timespec="seconds")})
     _ST["last"] = row
     print("[%s] 自動下單：%s" % (d, msg or "已送出並記錄"), flush=True)
+    if why == "order_failed" and broker.is_live():
+        _push("日盤送單失敗", "%s %s" % (d[5:], str(msg or "")[:150]))
     out = _append(row)
     if ok:
         # 撿回部位時要用的「今天那一口」—— 剛寫進檔案的就是真相，直接放進記憶體

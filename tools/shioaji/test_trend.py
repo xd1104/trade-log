@@ -146,12 +146,15 @@ ctx2 = {"sig": dict(CTX["sig"], **{str(E): 999.0, str(E + timedelta(days=1)): 99
 chk("  ⛔ 今晚與之後的走幅不影響今晚的門檻", S.trend_eval(E, BARS, ctx2).get("thr_points"), r.get("thr_points"))
 chk("  記進歷史的走幅 ＝ 這一晚的走幅", S.trend_sig(E, BARS), 30.0)
 
-print("\n=== ④ 出場：沒有停利停損、一律 04:58 ===")
+print("\n=== ④ 出場：不設停利、3% 保護停損（11-23 起）、沒停損就 04:58 ===")
 chk("  出場原因＝收盤", r.get("exit_reason"), "收盤")
 chk("  出場標籤 04:58", r.get("exit_label"), "04:58")
-say("tpsl_points" not in r and "sl_points" not in r, "  ⛔ 這一列沒有停利停損欄位（畫面才不會畫出假的框）")
-spike = S.trend_eval(E, make_bars(E, after=lambda k, px: px - 900 if k == T + 60 else px), CTX)
-chk("  ⛔ 中途大跌也不停損（照規則抱到收盤）", spike.get("exit_reason"), "收盤")
+say("tpsl_points" not in r, "  ⛔ 這一列沒有停利欄位（畫面才不會畫出假的停利框）")
+chk("  停損點數 ＝ floor(進場價 × 3%)", r.get("sl_points"), float(int(r["entry"] * S.TREND_SL_FRAC)))
+small = S.trend_eval(E, make_bars(E, after=lambda k, px: px - (r["sl_points"] - 5) if k == T + 60 else px), CTX)
+chk("  中途跌不到停損 ⇒ 照規則抱到收盤", small.get("exit_reason"), "收盤")
+spike = S.trend_eval(E, make_bars(E, after=lambda k, px: px - (r["sl_points"] + 50) if k == T + 60 else px), CTX)
+chk("  中途跌破 3% ⇒ 停損出場", spike.get("exit_reason"), "停損")
 chk("  點數 ＝ 方向 ×（出場 − 進場）− 成本",
     r.get("points"), round(float(C[-1]) - r["entry"] - r["cost"], 1))
 

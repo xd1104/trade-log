@@ -96,8 +96,8 @@ try:
     NF._recover_poll()
     ent = NF._entry_of(NF.rows_of(E))
     say(ent is not None and ent.get("adopted"), "夜盤帳本補了一列 result ok（adopted）", ent)
-    say(npos.get("sl_src") == "nightfire" and npos.get("sl_points") == float(int(43791 * 0.02)),
-        "停損換成成交價 2%（875 點），⛔ 不是手動 130", npos)
+    say(npos.get("sl_src") == "nightfire" and npos.get("sl_points") == float(int(43791 * 0.03)),
+        "停損換成成交價 3%（1313 點，11-23 起 3%），⛔ 不是手動 130", npos)
     say(NF.looks_ours(npos, ent), "04:58 認人：這口就是帳本那一口")
     broker._state["position"] = None
 

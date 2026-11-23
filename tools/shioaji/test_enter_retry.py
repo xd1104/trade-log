@@ -4,7 +4,7 @@
 
 那晚 22:40 夜盤跟勢訊號 +664 點（門檻 177），送單前問永豐部位剛好逾時，只問一次就放棄 ⇒ 整筆漏掉。
   ① 對帳失敗 ⇒ 會再問；第二次問到空手 ⇒ 放行，回傳問了幾次
-  ② 一直問不到 ⇒ 20 秒內問完就放棄，⛔ 照舊不送（原因寫「問了幾次」）
+  ② 一直問不到 ⇒ 150 秒內問完就放棄，⛔ 照舊不送（原因寫「問了幾次」）
   ③ 其他擋下理由（已有部位、沒報價…）⇒ ⛔ 不重試，一次就擋
   ④ 重試後用 refresh() 的新報價；新報價不新鮮 ⇒ 擋「沒有即時報價」
   ⑤ 夜盤跟勢、夜盤台積電、日盤自動下單三條都改走 can_enter_retry；手動按鈕與畫面燈號 ⛔ 不走（不能卡住）
@@ -68,12 +68,12 @@ print("=== ① 問不到 ⇒ 再問；第二次問到 ⇒ 放行 ===")
 chk("放行", (ok, why), (True, None))
 chk("問了 2 次、中間等 3 秒", (n, clk.slept), (2, [3.0]))
 
-print("\n=== ② 一直問不到 ⇒ 20 秒內問完就放棄、照舊不送 ===")
-(ok, why, n, px), seen, clk = run([FAILED] * 50)
+print("\n=== ② 一直問不到 ⇒ 150 秒內問完就放棄、照舊不送（11-23 從 20 秒拉長）===")
+(ok, why, n, px), seen, clk = run([FAILED] * 100)
 chk("不放行", ok, False)
-chk("20 秒內：問 7 次（0,3,…,18 秒）", n, 7)
-chk("總共等不超過 20 秒", sum(clk.slept) <= broker.ENTER_RETRY_S, True)
-chk("原因講出問了幾次", ("問了 7 次都問不到" in why) and why.startswith(broker.RECON_FAIL_MSG), True)
+chk("150 秒內：問 51 次（0,3,…,150 秒）", n, 51)
+chk("總共等不超過 150 秒", sum(clk.slept) <= broker.ENTER_RETRY_S, True)
+chk("原因講出問了幾次", ("問了 51 次都問不到" in why) and why.startswith(broker.RECON_FAIL_MSG), True)
 
 print("\n=== ③ 其他理由 ⇒ 不重試 ===")
 for msg in ("已經有部位了，先平倉才能再進場", "現在沒有即時報價，不能用舊價下單", "今天真實進場已經 3 次，達到上限 3 次"):
@@ -96,7 +96,7 @@ chk("日盤自動下單用 can_enter_retry、不再直接叫 can_enter",
     (src["auto_fire.py"].count("broker.can_enter_retry("), src["auto_fire.py"].count("broker.can_enter(px")), (1, 0))
 chk("面板（手動按鈕、燈號）⛔ 不用會睡覺的那支", src["live_panel.py"].count("can_enter_retry"), 0)
 chk("日盤重試後重拿報價：面板有接 auto_fire._QUOTE", 'auto_fire._QUOTE["fn"] = _nf_quote' in src["live_panel.py"], True)
-chk("日盤重試帶 refresh（⛔ 不沿用 09:03:30 的「新鮮」）", "can_enter_retry(px, fresh, refresh=_fresh_quote)" in src["auto_fire.py"], True)
+chk("日盤重試帶 refresh（⛔ 不沿用 09:03:30 的「新鮮」）", "can_enter_retry(px, fresh, refresh=_fresh_quote, valid=_still)" in src["auto_fire.py"], True)
 import auto_fire as AF  # noqa: E402
 _o = AF._QUOTE["fn"], AF._CFG["gap_s"]
 try:

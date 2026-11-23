@@ -2917,7 +2917,7 @@ _closes = []
 _realclose3 = broker.close
 broker.close = lambda reason: (_closes.append(reason), (True, None))[1]
 try:
-    chk("  ⛔ 上限比例就是 2%（逐字）", LP.POS_POINTS_MAX_FRAC, 0.02)
+    chk("  ⛔ 上限比例就是 3%（逐字；11-23 跟夜盤停損一起改）", LP.POS_POINTS_MAX_FRAC, 0.03)
     # 跌 SL_POINTS−1 點：用 SL_POINTS ⇒ 不停；用壞值（0／負數把停損價放到進場價或更上面）⇒ 會停 ⇒ 分得出來
     for _nm, _v in (("0", 0), ("負數 −50", -50.0), ("0.0", 0.0)):
         _closes.clear()
@@ -2932,8 +2932,8 @@ try:
         LP.check_real_position(12000.0 - LP.SL_POINTS, 0, "day")
         chk("    跌滿 SL_POINTS ⇒ 停（SL_POINTS 生效）", len(_closes), 1)
         chk("    ⛔ 同一口同一個壞值只示警一次（主迴圈 4Hz 不刷主控台）", LP.POS_POINTS_BAD["n"], _bad0 + 1)
-    # 太大：inf／1e11／超過進場價 2%（12000 × 2% ＝ 240）／nan ⇒ 用 SL_POINTS ⇒ 跌滿就停
-    for _nm, _v in (("inf", float("inf")), ("1e11", 1e11), ("241（> 2%）", 241.0),
+    # 太大：inf／1e11／超過進場價 3%（12000 × 3% ＝ 360）／nan ⇒ 用 SL_POINTS ⇒ 跌滿就停
+    for _nm, _v in (("inf", float("inf")), ("1e11", 1e11), ("361（> 3%）", 361.0),
                     ("nan", float("nan"))):
         _closes.clear()
         broker._state["position"] = {"dir": "long", "entry": 12000.0, "qty": 1, "sl_points": _v}
@@ -2941,13 +2941,13 @@ try:
         chk(f"  ⛔ sl_points={_nm}・跌滿 SL_POINTS ⇒ 停（⛔ 不是永遠不觸發）", len(_closes), 1)
         say("壞掉" in (broker._state["position"].get("sl_warn") or ""), "    ⛔ 而且示警",
             broker._state["position"].get("sl_warn"))
-    # 邊界：剛好 2%（240）⇒ 可信 ⇒ 做空漲 239 不停、漲 240 停
+    # 邊界：剛好 3%（360）⇒ 可信 ⇒ 做空漲 359 不停、漲 360 停
     _closes.clear()
-    broker._state["position"] = {"dir": "short", "entry": 12000.0, "qty": 1, "sl_points": 240.0}
-    LP.check_real_position(12000.0 + 239, 0, "day")
-    chk("  剛好 2%（240）是可信的・做空漲 239 ⇒ 不停", len(_closes), 0)
-    LP.check_real_position(12000.0 + 240, 0, "day")
-    chk("  做空漲 240 ⇒ 停", len(_closes), 1)
+    broker._state["position"] = {"dir": "short", "entry": 12000.0, "qty": 1, "sl_points": 360.0}
+    LP.check_real_position(12000.0 + 359, 0, "day")
+    chk("  剛好 3%（360）是可信的・做空漲 359 ⇒ 不停", len(_closes), 0)
+    LP.check_real_position(12000.0 + 360, 0, "day")
+    chk("  做空漲 360 ⇒ 停", len(_closes), 1)
     chk("    ⛔ 可信的值不示警", broker._state["position"].get("sl_warn"), None)
     chk("  進場價看不懂 ⇒ 檢查不了上限 ⇒ 不信 sl_points",
         LP.pos_sl_points({"entry": None, "sl_points": 230.0}), LP.SL_POINTS)

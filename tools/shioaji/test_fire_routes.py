@@ -630,8 +630,8 @@ chk("    /api/nightfire/state：確認句每條做法各一份、名字對得上
 _ms = {m.get("k"): m for m in (j.get("methods") or [])}
 say(set(_ms) == set(NF.METHODS) and all(_ms[k].get("rule") == NF.RULE_LINE[k] for k in NF.METHODS),
     "    做法清單每條帶**自己**那句規則（⛔ 不是全部共用台積電快攻那句）")
-say("2%" in ((_ms.get("R") or {}).get("risk") or "") and (_ms.get("R") or {}).get("beta"),
-    "    夜盤跟勢帶「尚未通過前瞻驗證」與 2% 停損的揭露")
+say("3%" in ((_ms.get("R") or {}).get("risk") or "") and (_ms.get("R") or {}).get("beta"),
+    "    夜盤跟勢帶「尚未通過前瞻驗證」與 3% 停損的揭露（11-23 起 3%）")
 
 # ── ③d ⛔ Content-Length 的兩個坑（2026-09-09 lab-qa 建議 2）
 print("\n  ── ⛔ Content-Length（⛔ 不可以讓外面決定要讀幾個位元組）")

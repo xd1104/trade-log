@@ -5157,11 +5157,117 @@ def _can_enter_view(price, live, has_pos, now=None):
     return v
 
 
+# ⭐⭐ 2026-11-23（Benson：「以後不要再發生面板當掉不能交易」）══════════════════════════════════════
+#   ① 問券商（對帳＋畫面那顆「能不能進場」）全在 QUERY_BG 背景執行緒做；主迴圈（＝停損）跟 HTTP 只讀結果。
+#   ② 記查詢通道的健康：連續問不到 QUERY_BAD_N 次、而且已經壞 QUERY_BAD_S 秒 ⇒ 主迴圈換一條新連線（走 try_reconnect）。
+#      那晚報價一直正常（舊的看門狗只看報價 ⇒ 一次都沒重連），壞的是「查詢」那條 ⇒ 22:00 壞到 22:43 他手動重開才好。
+#   ③ 自動下單送單前問不到 ⇒ broker.ON_QUERY_FAIL 直接要求重連（不等 ②）。
+QUERY_BAD_N = 3
+QUERY_BAD_S = 30.0
+QUERY_SLOW_S = 15.0           # 問一次超過這麼久，就算有回答也當壞（等於那一圈停損會被拖住的長度）
+QUERY_RECONNECT_GAP = 120.0   # 因為查詢壞掉而重連，最快多久一次（⛔ 不要每分鐘重登一次把帳號登到被擋）
+QUERY = {"fail": 0, "since": None, "last_ok": None, "last_s": None, "last_err": None,
+         "kick": None, "reconn_at": 0.0, "reconn_n": 0,
+         "view": None, "view_key": None, "args": None, "th": None}
+
+
+def _query_note(ok, secs, err=None, now=None):
+    """記一次問券商的結果（背景執行緒寫；只動這個 dict）。"""
+    now = time.time() if now is None else now
+    q = QUERY
+    q["last_s"] = None if secs is None else round(secs, 1)
+    if ok and (secs is None or secs <= QUERY_SLOW_S):
+        q.update(fail=0, since=None, last_ok=now, last_err=None)
+        return
+    q["fail"] += 1
+    if q["since"] is None:
+        q["since"] = now
+    q["last_err"] = (err or ("問一次要 %.0f 秒" % secs if secs is not None else "問不到"))[:160]
+
+
+def query_kick(why):
+    """broker 送單前問不到 ⇒ 請主迴圈下一圈就重連（⛔ 這裡不自己連：只能在主迴圈換連線）。"""
+    QUERY["kick"] = str(why)[:120]
+
+
+def query_need_reconnect(now=None):
+    """⇒ 要重連的原因（字串）或 None。⛔ 純記憶體（主迴圈每圈叫）。"""
+    now = time.time() if now is None else now
+    q = QUERY
+    if now - q["reconn_at"] < QUERY_RECONNECT_GAP:
+        return None
+    if q["kick"]:
+        return "送單前問不到券商部位（%s）" % q["kick"]
+    if q["fail"] >= QUERY_BAD_N and q["since"] is not None and now - q["since"] >= QUERY_BAD_S:
+        return "跟券商查詢連續 %d 次失敗、已 %d 秒（%s）" % (q["fail"], int(now - q["since"]), q["last_err"] or "")
+    return None
+
+
+def query_reconnected(now=None):
+    QUERY.update(kick=None, reconn_at=time.time() if now is None else now)
+    QUERY["reconn_n"] += 1
+    QUERY.update(fail=0, since=None)
+
+
+def query_health_view():
+    q = QUERY
+    return {"ok": q["fail"] == 0, "fail": q["fail"], "last_s": q["last_s"], "err": q["last_err"],
+            "bad_for": (round(time.time() - q["since"]) if q["since"] else None), "reconn_n": q["reconn_n"]}
+
+
+def _query_bg_once():
+    """背景一圈：對帳（3 秒節流在 broker 裡）＋畫面那顆燈（3 秒節流在 _can_enter_view 裡）。"""
+    before = broker._LAST_RECONCILE["at"]
+    t0 = time.time()
+    try:
+        r = broker.reconcile_tick()
+        if broker._LAST_RECONCILE["at"] != before:          # 這一圈真的問了券商
+            dt = time.time() - t0
+            _query_note(r != "unknown", dt,
+                        None if r != "unknown" else ("對帳失敗：%s" % str(broker._state.get("last_error") or "")[:120]))
+    except Exception as e:                                  # noqa: BLE001
+        _query_note(False, time.time() - t0, "對帳出錯：%s" % str(e)[:120])
+    args = QUERY["args"]
+    if args is not None:
+        try:
+            v = _can_enter_view(*args)
+            QUERY["view"], QUERY["view_key"] = v, args
+        except Exception as e:                              # noqa: BLE001
+            QUERY["view"], QUERY["view_key"] = (False, "真實下單模組出錯：%s" % str(e)[:80]), args
+
+
+def _query_bg_loop():
+    while True:
+        _query_bg_once()
+        time.sleep(0.5)
+
+
+def _query_bg_ensure():
+    th = QUERY["th"]
+    if th is not None and th.is_alive():
+        return
+    broker.ON_QUERY_FAIL = query_kick
+    QUERY["th"] = threading.Thread(target=_query_bg_loop, name="broker-query", daemon=True)
+    QUERY["th"].start()
+
+
+def _can_enter_cached(price, live, has_pos):
+    """畫面那顆燈：讀背景問好的結果。部位有無／報價狀態變了、背景還沒問到 ⇒ 一律「不行、確認中」（⛔ 不拿舊答案）。"""
+    key3 = (bool(live), bool(has_pos))
+    QUERY["args"] = (price, bool(live), bool(has_pos))
+    v, k = QUERY["view"], QUERY["view_key"]
+    if v is None or k is None or (bool(k[1]), bool(k[2])) != key3:
+        return False, "正在跟券商確認…"
+    return v
+
+
 def real_state(price, quote, age):
     """真實下單那張卡要的資料。順便在這裡跑停損監控 —— 兩者看的是同一組數字。"""
     try:
         check_real_position(price, age, quote if quote in ("live", "nodata") else "closed")
-        broker.reconcile_tick()      # 【一定要獨立對帳】不能只靠 can_enter，見那個函式的說明
+        # ⭐⭐ 2026-11-23：對帳（問券商）搬到背景執行緒 QUERY_BG（每 3 秒照舊，⛔ 不再在 4Hz 停損迴圈、也不在 state_lock 裡）。
+        #    那晚永豐查詢通道壞掉，每問一次卡 30 秒 ⇒ 停損迴圈跟著停 30 秒、/api/state 也卡死（畫面凍住、重啟鈕按不動）。
+        _query_bg_ensure()
         snap = broker.snapshot()
         pos = snap.get("position")
         if pos:
@@ -5181,8 +5287,9 @@ def real_state(price, quote, age):
                 snap["sl"] = snap["tp"] = snap["tp_pts"] = snap["sl_pts"] = None
         stale = REAL_STALE["since"]
         snap["stale_sec"] = round(time.time() - stale) if stale else None
-        ok, why = _can_enter_view(price, quote == "live", bool(pos))
+        ok, why = _can_enter_cached(price, quote == "live", bool(pos))
         snap["can_enter"], snap["why"] = ok, why
+        snap["query"] = query_health_view()
         snap["code"] = code_stamp()
         return snap
     except Exception as e:
@@ -5205,6 +5312,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
     sess = market_session()
     # 重播是拿歷史資料餵的，報價當然「新鮮」—— 不要被時鐘判成休市
     quote = "live" if replay else quote_state(today_state.price, age, sess)
+    _real = real_state(today_state.price, quote, age)   # ⭐ 2026-11-23：鎖外面算（⛔ 鎖裡只放記憶體寫入）
     with state_lock:
         STATE.update({
             "period": hist.period, "n_days_total": hist.n_days,
@@ -5217,7 +5325,7 @@ def update_state(hist, today_state, vol_ref, now_time, replay=None, phase="live"
             "today_trades": list(TODAY_TRADES),
             "age_sec": 0 if replay else age,
             "conn": CONN.copy(),
-            "real": real_state(today_state.price, quote, age),
+            "real": _real,
         })
         if today_state.price is None:
             # 【Bug A】一筆報價都還沒收到 ≠ 什麼都不能顯示。
@@ -5988,6 +6096,15 @@ def main():
                         CONN["ok"] = False
                         where = "日盤" if in_day else "夜盤"
                         try_reconnect(f"{where}已 {int(quiet) if quiet else '?'} 秒沒收到報價")
+                    elif not lost:
+                        # ⭐ 2026-11-23：報價正常但「查詢」那條壞了（對帳一直逾時）⇒ 也要換連線（舊版只看報價，整晚不重連）
+                        _qwhy = query_need_reconnect()
+                        if _qwhy:
+                            last_retry = time.time()
+                            if try_reconnect(_qwhy):
+                                query_reconnected()
+                            else:
+                                QUERY["reconn_at"] = time.time()   # 這次沒連成（例如正在送單）⇒ 等 QUERY_RECONNECT_GAP 再試
                     # ⭐ 2026-10-14 五檔看門狗（見 DEPTH_WD）。⛔ 包 try：研究用的東西出錯不可以打斷停損迴圈。
                     try:
                         _has_pos = broker.has_position()

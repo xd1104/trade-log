@@ -343,7 +343,18 @@ def _minute_px(t):
 def _skip(E, why, msg=None, extra=None):
     row = dict({"E": str(E), "rec": "skip", "why": why, "msg": msg or WHY.get(why, why)}, **(extra or {}))
     print("[夜盤自動下單] %s 不送：%s" % (E, row["msg"]), flush=True)
+    if why == "cannot":
+        # ⭐ 2026-11-23（Benson）：訊號成立卻因為券商／連線送不出去 ⇒ 一定要推手機（⛔ 不准靜靜跳過）
+        _push("夜盤訊號成立但沒送出", "%s %s" % (str(E)[5:], row["msg"]))
     return _append(row)
+
+
+def _push(title, body):
+    try:
+        import push_note
+        push_note.notify_bg(title, body)
+    except Exception:                    # noqa: BLE001  ⛔ 通知壞掉不准影響下單
+        pass
 
 
 def _decide(E, now):
@@ -442,6 +453,8 @@ def _decide(E, now):
         _MEM.update(E=E, entry=out)
     print("[夜盤自動下單] %s %s %s：%s" % (E, "做多" if d == "long" else "做空", px,
                                       "已送出" if ok else ("失敗：%s" % err)), flush=True)
+    if not ok:
+        _push("夜盤送單失敗", "%s %s：%s" % (str(E)[5:], "做多" if d == "long" else "做空", str(err or "券商沒有說原因")[:120]))
     return True
 
 
@@ -531,8 +544,16 @@ def _decide_trend(E, now, lp=None):
     if not (WIDTH_MIN * px <= sl0 <= WIDTH_MAX * px):
         _skip(E, "bad_width", "停損 %g 點不合理（進場價 %g）" % (sl0, px), info)
         return True
-    # ⭐ 2026-11-12（Benson 同意）：問不到券商部位 ⇒ 20 秒內再問（那晚 +664 點就是只問一次漏掉的）
-    ok, why, _n, px = broker.can_enter_retry(px, True, refresh=lambda: _fresh_quote(now))
+    # ⭐ 2026-11-12（Benson 同意）：問不到券商部位 ⇒ 再問（那晚 +664 點就是只問一次漏掉的）
+    # ⭐ 2026-11-23：等的時間拉到 150 秒 ⇒ 每次重試都用**現在的價**重驗訊號（離 30 分鐘前那一分鐘還是同方向、還過門檻）
+    _sgn = 1.0 if mv > 0 else -1.0
+
+    def _still(q, p0=p0, thr=thr, sgn=_sgn):
+        m2 = float(q) - float(p0)
+        if m2 * sgn > 0 and trend_rule.is_fast(m2, thr):
+            return True, None
+        return False, "現在離 %s 那一分鐘只剩 %+.0f 點，沒到門檻 %.0f 點" % (p0_at, m2, thr)
+    ok, why, _n, px = broker.can_enter_retry(px, True, refresh=lambda: _fresh_quote(now), valid=_still)
     if _n > 1:
         info.update(retry=_n)
     if not ok:
@@ -566,6 +587,8 @@ def _decide_trend(E, now, lp=None):
     print("[夜盤自動下單] %s 夜盤跟勢 %s %s %d 口（停損 %g 點、不設停利）：%s" % (
         E, "做多" if d == "long" else "做空", px, lp["qty"], sl,
         "已送出" if ok else ("失敗：%s" % err)), flush=True)
+    if not ok:
+        _push("夜盤送單失敗", "%s %s：%s" % (str(E)[5:], "做多" if d == "long" else "做空", str(err or "券商沒有說原因")[:120]))
     return True
 
 

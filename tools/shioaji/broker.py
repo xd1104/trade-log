@@ -2034,14 +2034,30 @@ _RETRY_WHY = (RECON_FAIL_MSG, NOT_CONNECTED_MSG, NO_ACCOUNT_MSG)
 #    那晚 22:35～22:40 永豐「查詢」那條回應逾時（報價照常），22:40 夜盤跟勢訊號 +664 點（門檻 177）只問一次就放棄 ⇒ 整筆漏掉。
 #    ⛔ 只有「對帳失敗」這一個原因會重試；其他理由（沒報價、已有部位、達上限、憑證…）照舊一次就擋。
 #    ⛔「確定空手才送」不變：重試到時間還是問不到 ⇒ 照舊不送。⛔ 手動按鈕、畫面那顆燈不走這條（不能卡住）。
-ENTER_RETRY_S = 20.0
+# ⭐⭐ 2026-11-23（Benson：「以後不要再發生面板當掉不能交易」）：20 秒根本不夠 —— 永豐查部位一次逾時就是 30 秒，
+#    11-12 那晚跟 11-23 那晚（+882 點）都只問到一次就放棄。改成 150 秒（夜盤 22:40 ⇒ 22:42:30，還在重啟擋的窗口內；
+#    日盤 09:03:30 ⇒ 09:06），而且**第一次問不到就請面板馬上換一條新連線**（ON_QUERY_FAIL），不是乾等同一條壞掉的線。
+#    ⛔ 等了這麼久，訊號可能已經不成立 ⇒ 呼叫端給 `valid(價格)` ⇒ 每次重試都用現在的價格重驗，不成立就不送。
+ENTER_RETRY_S = 150.0
 ENTER_RETRY_GAP = 3.0
+ON_QUERY_FAIL = None      # 面板塞進來：問不到券商部位時呼叫 ⇒ 請主迴圈馬上重連（⛔ 這裡不自己重連：送單紀錄會被清）
 
 
-def can_enter_retry(price, quote_live, refresh=None, sleep=None, clock=None):
+def _kick_reconnect(why):
+    f = ON_QUERY_FAIL
+    if f is None:
+        return
+    try:
+        f(why)
+    except Exception:                    # noqa: BLE001
+        pass
+
+
+def can_enter_retry(price, quote_live, refresh=None, sleep=None, clock=None, valid=None):
     """
     自動下單用的 can_enter：只有「對帳失敗」會在 ENTER_RETRY_S 秒內重試。⇒ (可以嗎, 原因, 問了幾次, 價格)。
     `refresh()` ⇒ (價格, 報價新不新鮮)：重試之後用現在的報價（等了幾秒，舊價不能再用）；沒給 ⇒ 沿用原本的。
+    `valid(價格)` ⇒ (訊號還成立嗎, 不成立的原因)：重試過後才驗（第一次就是訊號那一刻的價）。
     ⛔ 會睡覺 ⇒ 只能在自動下單自己的執行緒叫（⛔ 不可以在面板主迴圈／HTTP 執行緒叫）。
     """
     sleep = sleep or time.sleep
@@ -2052,9 +2068,19 @@ def can_enter_retry(price, quote_live, refresh=None, sleep=None, clock=None):
     while not ok and why in _RETRY_WHY and clock() - t0 + ENTER_RETRY_GAP <= ENTER_RETRY_S:
         _log("enter_retry", {"ok": False, "n": n, "why": "%s —— %g 秒後再問" % (why, ENTER_RETRY_GAP),
                              "err": str(_state.get("last_error") or "")[:160]})
+        if why == RECON_FAIL_MSG:
+            _kick_reconnect("送單前問不到券商部位（第 %d 次）" % n)
         sleep(ENTER_RETRY_GAP)
         if refresh is not None:
             price, quote_live = refresh()
+        if valid is not None and price is not None:
+            try:
+                v_ok, v_why = valid(price)
+            except Exception as e:       # noqa: BLE001  ⛔ 驗不了 ⇒ 當不成立（不猜）
+                v_ok, v_why = False, "驗不了訊號（%s）" % str(e)[:80]
+            if not v_ok:
+                _log("enter_retry_done", {"ok": False, "n": n, "why": v_why})
+                return False, "等券商的這 %d 秒訊號已經不成立：%s" % (round(clock() - t0), v_why), n, price
         ok, why = can_enter(price, quote_live)
         n += 1
     if n > 1:
@@ -2435,6 +2461,7 @@ def _wait_fill_legs(direction, legs):
     return out
 
 
+ENTRY_BASE_S = 20.0    # ⭐ 2026-11-23：這裡已經在送單裡（busy ⇒ 面板不准重連）⇒ 維持 20 秒，⛔ 不跟著 ENTER_RETRY_S 拉到 150（送單前 can_enter_retry 那段才是長等）
 ENTRY_BASE_TRIES = 3   # ⭐ 第七輪品管：進場前查券商部位，問不到最多問幾次（第一次＋重問 2 次）
 _ENTRY_BASE_N = {"n": 0}   # 上一次 _entry_base 問了幾次（給「問了幾次都失敗」那句話用）
 
@@ -2456,7 +2483,7 @@ def _entry_base(direction):
         if legs != "unknown":
             break
         gap = 0.4 if i < ENTRY_BASE_TRIES else ENTER_RETRY_GAP
-        if time.time() - t0 + gap > ENTER_RETRY_S:
+        if time.time() - t0 + gap > ENTRY_BASE_S:
             break
         time.sleep(gap)
     _ENTRY_BASE_N["n"] = i

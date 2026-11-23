@@ -12,7 +12,10 @@ import sys
 import urllib.request
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:                              # noqa: BLE001  ⭐ 面板 import 時 stdout 可能不是主控台
+    pass
 HERE = Path(__file__).resolve().parent
 KEY = HERE / "VAPID_PRIVATE.txt"
 SUBS_URL = "https://raw.githubusercontent.com/xd1104/trade-log/main/data/push-subs.json"
@@ -27,6 +30,24 @@ def subs():
     except Exception:
         d = json.loads(local.read_text(encoding="utf-8")) if local.exists() else {}
     return [s for s in (d.get("subs") or []) if isinstance(s, dict) and s.get("endpoint") and s.get("keys")]
+
+
+def notify_bg(title, body):
+    """
+    ⭐ 2026-11-23：給面板／自動下單用 ⇒ 背景送一則手機通知（另開 py -3.11 行程，pywebpush 裝在那裡）。
+    ⛔ 不等、不丟例外：通知壞掉絕不可以影響下單或停損。
+    """
+    import subprocess
+    import threading
+
+    def run():
+        try:
+            subprocess.run(["py", "-3.11", str(HERE / "push_note.py"), str(title), str(body)],
+                           capture_output=True, timeout=60)
+            print("[通知] 已推手機：%s" % title, flush=True)
+        except Exception as e:                  # noqa: BLE001
+            print("⚠️ [通知] 推手機失敗：%s" % str(e)[:120], flush=True)
+    threading.Thread(target=run, name="push-note", daemon=True).start()
 
 
 def main():
