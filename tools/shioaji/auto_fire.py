@@ -180,6 +180,7 @@ from datetime import date, datetime
 import numpy as np       # 門檻用 numpy.percentile（跟研究同一個算法，⛔ 不自己寫內插）
 
 import broker            # ⛔ 唯一的下單出口。這個檔不自己組單、不自己送單
+import limit_room        # ⭐ 11-23 漲跌停空間保護（Benson 點頭）
 import lots              # ⛔ 口數的唯一正本（2026-10-14 多口）：今天日盤送幾口、風控上限用幾口算
 import risk_cap          # ⛔ 唯讀：本月自動單虧到上限就不送（2026-09-24 風控規則 B）
 
@@ -403,6 +404,7 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #    寫同一句一定有一句是假的（【細節】的「加權 title」踩過同一個病）。
 #    測試會斷言這裡的每一句都不一樣。
 WHY = {
+    "near_limit": "離漲跌停太近（剩下的空間比停損還小）",
     "off": "自動下單是關著的（找不到開關檔）",
     "bad_method": "開關檔的內容看不懂，不知道要用哪個做法",
     "unreadable": "開關檔讀不出來（檔案壞了或沒有權限）",
@@ -1264,6 +1266,22 @@ def _quote_why(snap):
     return None
 
 
+_PREV_CLOSE = {"d": None, "v": None}    # ⭐ 11-23：今天的漲跌停基準（昨收）；09:03:30／09:15 那份快照記下來，開箱借用
+
+
+def _note_prev_close(d, snap):
+    v = _num((snap or {}).get("prev_close"))
+    if v is not None:
+        _PREV_CLOSE.update(d=d, v=v)
+
+
+def _prev_close_of(d, snap):
+    v = _num((snap or {}).get("prev_close"))
+    if v is None and _PREV_CLOSE["d"] == d:
+        v = _PREV_CLOSE["v"]
+    return v
+
+
 def _fire(snap, day, lag_ms, put_at, leg="fast"):
     """
     ⚠️ **跑在自己的 daemon 執行緒上**（⛔ 不是主迴圈）：這裡會呼叫券商 API、
@@ -1273,6 +1291,7 @@ def _fire(snap, day, lag_ms, put_at, leg="fast"):
        ⚠️ 刻意**共用同一條佇列與同一個入口**：09:03:30 那一件一定排在 09:15 前面處理完
        （FIFO），09:15 讀帳本時一定看得到 09:03:30 寫的那一列。
     """
+    _note_prev_close(day, snap)          # ⭐ 11-23 漲跌停基準（開箱沒有自己的快照 ⇒ 從這裡記）
     if leg == "reversal":
         return _rev(snap, day, lag_ms, put_at)
     d = day
@@ -1461,6 +1480,13 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
         rb, rmsg = True, "風控算不出本月損益 —— 不猜，這次不送（%s）" % str(e)[:80]
     if rb:
         return _skip(d, "risk_cap", base, WHY["risk_cap"] + "：" + rmsg, cand=_cand_of(base))
+    # ⭐⭐ 2026-11-23 漲跌停空間保護（Benson 點頭）：順勢方向離漲／跌停剩下的點數 < 這一口的停損點數 ⇒ 不送。
+    #    基準＝昨天收盤（近似昨天結算價）；拿不到 ⇒ 判斷不了 ⇒ 照常（limit_room 不因缺資料擋單）。⛔ 在落地 sending 之前擋。
+    _lbase = _prev_close_of(d, snap)
+    lr_ok, lr_why, lr_info = limit_room.check(direction, px, _lbase, pts)
+    base.update(lr_info)
+    if not lr_ok:
+        return _skip(d, "near_limit", base, WHY["near_limit"] + "：" + lr_why, cand=_cand_of(base))
     # ⭐ 2026-11-09 延長階梯：超過 10 口但小台開關沒開 ⇒ 壓回 10 口照送（⛔ 不是整天不送）
     qty = broker.fit_qty(qty)
     if not broker.qty_ok(qty):
@@ -1485,9 +1511,10 @@ def _send(d, base, a, direction, px, pts, lag_ms, put_at, snap, how, tp_points=N
 
     def _still(q, p0=px, sgn=_sgn, lim=float(pts) * RETRY_ADVERSE_FRAC):
         adv = (float(p0) - float(q)) * sgn
-        if adv <= lim:
-            return True, None
-        return False, "比訊號那一刻往反方向走了 %.0f 點（超過停損的三成 %.0f 點）" % (adv, lim)
+        if adv > lim:
+            return False, "比訊號那一刻往反方向走了 %.0f 點（超過停損的三成 %.0f 點）" % (adv, lim)
+        ok2, why2, _i = limit_room.check(direction, q, _lbase, pts)     # ⭐ 等的時候可能往停板衝
+        return (True, None) if ok2 else (False, why2)
     ok, why, _n, _px = broker.can_enter_retry(px, fresh, refresh=_fresh_quote, valid=_still)
     if _n > 1:
         base["retry"] = _n

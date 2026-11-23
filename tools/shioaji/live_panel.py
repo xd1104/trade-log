@@ -5867,7 +5867,10 @@ def main():
                 df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
                 if not df.empty:
                     df["ts"] = pd.to_datetime(df["ts"])
-                    g = df[(df["ts"].dt.time > NIGHT_OPEN) & (df["ts"].dt.time <= now_t)]
+                    _tt = df["ts"].dt.time
+                    # ⭐ 2026-11-23：也補日盤最後那幾根（13:26～13:45）⇒ 夜盤漲跌停空間保護要用日盤收盤當基準
+                    g = df[((_tt > NIGHT_OPEN) & (_tt <= now_t))
+                           | ((_tt > dtime(13, 25)) & (_tt <= dtime(13, 45)))]
                     n = 0
                     for r in g.itertuples():
                         k = r.ts.hour * 60 + r.ts.minute - 1      # K 棒結束時間 − 1 分鐘（同日盤）

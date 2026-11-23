@@ -36,6 +36,7 @@ from pathlib import Path
 import numpy as np
 
 import broker
+import limit_room        # ⭐ 11-23 漲跌停空間保護（Benson 點頭）
 import lots              # ⛔ 口數的唯一正本（2026-10-14 多口）：今晚送幾口（含夜盤波動規則 B）、風控上限
 import risk_cap          # ⛔ 唯讀：本月自動單虧到上限就不送（2026-09-24 風控規則 B）
 import trend_rule
@@ -83,6 +84,7 @@ POLL_S = 0.5
 _MONTH_RE = re.compile(r"^\d{4}-\d{2}\.jsonl$")
 
 WHY = {"off": "夜盤自動下單是關著的（沒有 NIGHT_ORDERS_ON）",
+       "near_limit": "離漲跌停太近（剩下的空間比停損還小）",
        "bad": "開關檔看不懂", "late": "面板太晚才走到這一步（剛開機或剛重啟），今晚不補單",
        "no_us": "拿不到台積電 ADR 開盤那根 5 分 K（美股休市、Alpaca 沒回、或還沒出來）",
        "no_hist": "過去的歷史不夠", "not_fast": "不夠快", "no_quote": "台指報價不新鮮或不是夜盤時段",
@@ -322,6 +324,27 @@ def sig_price(E):
     return _minute_px(trend_at(E) - timedelta(minutes=1))
 
 
+DAY_CLOSE_MINS = range(13 * 60 + 44, 13 * 60 + 24, -1)   # 13:44 往回找到 13:25（結算日 13:30 收盤也找得到）
+
+
+def day_close():
+    """
+    ⭐ 2026-11-23：漲跌停基準（近似當天日盤結算價）＝ 當天日盤最後一分鐘的收盤 ⇒ 價或 None。
+    讀的是面板 Today.minute_close（同一個交易日；夜盤重啟時面板會補回 13:25～13:45 那幾根）。
+    """
+    fn = _CFG["minute_close_fn"]
+    if fn is None:
+        return None
+    for m in DAY_CLOSE_MINS:
+        try:
+            v = fn(m)
+        except Exception:                 # noqa: BLE001
+            v = None
+        if isinstance(v, (int, float)) and v > 0:
+            return float(v)
+    return None
+
+
 def _minute_px(t):
     """`t` 那一分鐘的收盤，往回最多找 3 分鐘（跟模擬 `_trend_at` 同一個容忍度）。"""
     fn = _CFG["minute_close_fn"]
@@ -544,15 +567,25 @@ def _decide_trend(E, now, lp=None):
     if not (WIDTH_MIN * px <= sl0 <= WIDTH_MAX * px):
         _skip(E, "bad_width", "停損 %g 點不合理（進場價 %g）" % (sl0, px), info)
         return True
+    # ⭐⭐ 2026-11-23 漲跌停空間保護（Benson 點頭）：順勢方向離漲／跌停剩下的點數 < 停損點數 ⇒ 不做
+    _d0 = "long" if mv > 0 else "short"
+    _base = day_close()
+    lr_ok, lr_why, lr_info = limit_room.check(_d0, px, _base, px * R_SL_PCT)
+    info.update(lr_info)
+    if not lr_ok:
+        _skip(E, "near_limit", lr_why, info)
+        return True
     # ⭐ 2026-11-12（Benson 同意）：問不到券商部位 ⇒ 再問（那晚 +664 點就是只問一次漏掉的）
     # ⭐ 2026-11-23：等的時間拉到 150 秒 ⇒ 每次重試都用**現在的價**重驗訊號（離 30 分鐘前那一分鐘還是同方向、還過門檻）
+    #    ＋漲跌停空間也用現價重驗（等的時候可能往停板衝）
     _sgn = 1.0 if mv > 0 else -1.0
 
-    def _still(q, p0=p0, thr=thr, sgn=_sgn):
+    def _still(q, p0=p0, thr=thr, sgn=_sgn, d0=_d0, base=_base):
         m2 = float(q) - float(p0)
-        if m2 * sgn > 0 and trend_rule.is_fast(m2, thr):
-            return True, None
-        return False, "現在離 %s 那一分鐘只剩 %+.0f 點，沒到門檻 %.0f 點" % (p0_at, m2, thr)
+        if not (m2 * sgn > 0 and trend_rule.is_fast(m2, thr)):
+            return False, "現在離 %s 那一分鐘只剩 %+.0f 點，沒到門檻 %.0f 點" % (p0_at, m2, thr)
+        ok2, why2, _i = limit_room.check(d0, q, base, float(q) * R_SL_PCT)
+        return (True, None) if ok2 else (False, why2)
     ok, why, _n, px = broker.can_enter_retry(px, True, refresh=lambda: _fresh_quote(now), valid=_still)
     if _n > 1:
         info.update(retry=_n)
