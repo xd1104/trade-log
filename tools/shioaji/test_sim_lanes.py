@@ -1782,6 +1782,11 @@ AUTH_PATCH = [
      '        decision_log.start()\n'
      '    except Exception as e:\n'
      '        print("⚠️ 【判斷快照】起不來（其他功能不受影響）：%s" % str(e)[:160])\n'),
+    # ⭐ 2026-11-24 **有授權的例外**（Benson：「兩項都做」）：停損遇停板鎖死 ⇒ 平不掉推手機＋背景改掛停板價排隊（a6e590e8e，品管三輪通過）。
+    #   ⚠️ 只動 check_real_position 的停損那一段（排隊中不送 IOC、鎖打開交給背景確認），其餘照舊；⛔ 不准把基準往前搬。
+    ("停損遇停板鎖死：排隊中不送 IOC、平不掉推手機＋背景排隊",
+     '    sl = pos["entry"] - d * pos_sl_points(pos)\n    if d * (float(price) - sl) <= 0:\n        ok, err = broker.close("sl")\n        print(f"[真實] 觸及停損 {sl:.0f} → 平倉：{\'成功\' if ok else err}")\n',
+     '    sl = pos["entry"] - d * pos_sl_points(pos)\n    # ⭐ 2026-11-24 停板排隊（broker.lock_queue，Benson 點頭）。⛔ 這裡是 4Hz 停損迴圈：問券商的事一律丟給背景 sl-lock。\n    #    ・排隊單在這一盤、價格還鎖在那個價 ⇒ ⛔ 不送 IOC（close() 會先撤掉排隊單 ⇒ 排隊位置就沒了）；每 10 秒背景確認那張單還活著。\n    #    ・價格離開停板價（鎖打開）⇒ 背景先確認排隊單有沒有成交：成交完 ⇒ 等對帳收尾（⛔ 這時送 IOC＝平過頭）；\n    #      沒成交完 ⇒ 撤掉、照常平倉（之後價格回到停損之內也照樣平：停損已經觸發）。\n    #    ・換盤（ROD 已失效）⇒ 照常平倉。\n    q = pos.get("lock_q")\n    if isinstance(q, dict):\n        if q.get("sess") == broker.sess_key():\n            if abs(float(price) - float(q.get("px") or 0)) < 0.5:\n                sl_job(lambda: lock_verify(pos), LOCK_VERIFY_S)\n            else:\n                sl_job(lambda: lock_release(pos, d, float(price)), LOCK_RELEASE_S)\n            return\n        pos.pop("lock_q", None)\n        pos["sl_armed"] = True\n    if d * (float(price) - sl) <= 0 or pos.get("sl_armed"):\n        ok, err = broker.close("sl")\n        print(f"[真實] 觸及停損 {sl:.0f} → 平倉：{\'成功\' if ok else err}")\n        if not ok:\n            sl_failed(pos, d, float(price), err)\n'),
 ]
 if head:
     print(f"  （主迴圈比對基準：{head_src}）")
