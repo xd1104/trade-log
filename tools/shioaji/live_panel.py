@@ -59,6 +59,8 @@ import broker            # 真實下單。預設 dry run，見那個檔開頭的
 import auto_fire         # 自動下單。預設**關著**（沒有 AUTO_ORDERS_ON 就完全不送）
 import night_fire        # 夜盤自動下單（台積電快攻）。預設**關著**（沒有 NIGHT_ORDERS_ON 就完全不送；跟日盤開關分開）
 import risk_cap          # 風控規則 B（2026-09-24）：本月自動單虧到上限就不送。⛔ 唯讀模組
+import limit_room        # 漲跌停算法（2026-11-24：停損遇停板鎖死要排隊）
+import push_note         # 手機通知（背景送，壞了不影響停損）
 import lots              # 口數的唯一正本（2026-10-14 多口）。狀態檔不存在 ⇒ 1＋1（跟以前一樣）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 import depth_writer      # 研究用全天五檔落地（同一條鐵律：on_bidask 只 append）
@@ -684,9 +686,185 @@ def check_real_position(price, age, sess="day"):
     # ⭐ 2026-09-15：**這一口自己的停損點數**（自動下單那一口帶 ±0.5% 算出來的 sl_points），
     #    沒有才用 SL_POINTS（手動真單那一口）。⛔ 只讀記憶體（這裡是 4Hz 主迴圈、是他的停損）。
     sl = pos["entry"] - d * pos_sl_points(pos)
-    if d * (float(price) - sl) <= 0:
+    # ⭐ 2026-11-24 停板排隊（broker.lock_queue，Benson 點頭）。⛔ 這裡是 4Hz 停損迴圈：問券商的事一律丟給背景 sl-lock。
+    #    ・排隊單在這一盤、價格還鎖在那個價 ⇒ ⛔ 不送 IOC（close() 會先撤掉排隊單 ⇒ 排隊位置就沒了）；每 10 秒背景確認那張單還活著。
+    #    ・價格離開停板價（鎖打開）⇒ 背景先確認排隊單有沒有成交：成交完 ⇒ 等對帳收尾（⛔ 這時送 IOC＝平過頭）；
+    #      沒成交完 ⇒ 撤掉、照常平倉（之後價格回到停損之內也照樣平：停損已經觸發）。
+    #    ・換盤（ROD 已失效）⇒ 照常平倉。
+    q = pos.get("lock_q")
+    if isinstance(q, dict):
+        if q.get("sess") == broker.sess_key():
+            if abs(float(price) - float(q.get("px") or 0)) < 0.5:
+                sl_job(lambda: lock_verify(pos), LOCK_VERIFY_S)
+            else:
+                sl_job(lambda: lock_release(pos, d, float(price)), LOCK_RELEASE_S)
+            return
+        pos.pop("lock_q", None)
+        pos["sl_armed"] = True
+    if d * (float(price) - sl) <= 0 or pos.get("sl_armed"):
         ok, err = broker.close("sl")
         print(f"[真實] 觸及停損 {sl:.0f} → 平倉：{'成功' if ok else err}")
+        if not ok:
+            sl_failed(pos, d, float(price), err)
+
+
+# ══ 停損平不掉（2026-11-24 Benson 點頭：兩項都做）════════════════════════════════════════
+# ① 推手機：以前平不掉只寫在面板上，人不在電腦前就不知道部位還在。同一筆部位第一次馬上推、之後最多 5 分鐘一則。
+# ② 停板鎖死：價格鎖在部位反方向的停板 ⇒ 背景改掛停板價限價單排隊（broker.lock_queue）。
+SL_FAIL = {"key": None, "at": 0.0, "q": None}
+SL_FAIL_PUSH_GAP = 300.0
+LOCK_VERIFY_S = 10.0      # 排隊中多久確認一次那張單還活著（被撤／被拒 ⇒ 清掉重排）
+LOCK_RELEASE_S = 1.0      # 鎖打開後多久再看一次排隊單成交了沒
+_SL_NOT_TRIED = ("剛剛平倉失敗", "正在平倉中", "沒有部位", "停板排隊中")   # 這一輪沒有真的試／部位已經不在 ⇒ 不推、不排隊
+SL_JOB = {"th": None, "at": 0.0}
+
+
+def sl_job(fn, gap=0.0):
+    """停損旁邊的背景工（一次只跑一件、間隔 gap 秒）⇒ 有沒有排上。⛔ 4Hz 迴圈只准用這個碰券商的排隊／確認。"""
+    try:
+        th = SL_JOB["th"]
+        now = time.time()
+        if th is not None and th.is_alive():
+            return False
+        if now - SL_JOB["at"] < gap:
+            return False
+        SL_JOB["at"] = now
+
+        def run():
+            try:
+                fn()
+            except Exception as ex:       # noqa: BLE001
+                print("⚠️ [真實] 停板排隊背景工出錯：%s" % str(ex)[:160], flush=True)
+        th = threading.Thread(target=run, name="sl-lock", daemon=True)
+        SL_JOB["th"] = th
+        th.start()
+        return True
+    except Exception:                     # noqa: BLE001
+        return False
+
+
+def lock_limit(d, price, now=None):
+    """價格是不是鎖在部位反方向的停板附近 ⇒ 停板價或 None（基準拿不到／看起來不對 ⇒ None，⛔ 不猜）。⛔ 可能讀檔／問券商 ⇒ 背景叫。"""
+    now = now or datetime.now()
+    try:
+        night = now.time() >= dtime(15, 0) or now.time() < dtime(6, 0)
+        if night:
+            base = night_fire.day_close()
+        else:
+            base = prev_day_close(now.date())
+            if base is None:
+                _PREVC.pop(now.date(), None)      # ⛔ 問不到不要快取一整天（下次再問）
+        b = float(base)
+    except Exception:                     # noqa: BLE001
+        return None
+    up, dn = limit_room.limits(b)
+    if up is None or abs(price / b - 1) > limit_room.BASE_SANE:
+        return None
+    tol = b * broker.LOCK_TOL
+    if d == 1 and price - dn <= tol:
+        return dn
+    if d == -1 and up - price <= tol:
+        return up
+    return None
+
+
+def _push(title, body):
+    try:
+        push_note.notify_bg(title, body)
+    except Exception:                     # noqa: BLE001
+        pass
+
+
+def lock_try(d, price, push=None, queue=None):
+    """（背景）鎖在反方向停板 ⇒ 掛排隊單；結果有變才推一則。"""
+    push = push or _push
+    queue = queue or broker.lock_queue
+    lim = lock_limit(d, price)
+    if lim is None:
+        return None
+    ok_q, qmsg = queue(price)
+    if qmsg and qmsg != SL_FAIL["q"] and not qmsg.startswith(("已經在停板價", "沒有部位", "正在平倉中")):
+        SL_FAIL["q"] = qmsg
+        push("停板鎖死：停損改排隊", "價格鎖在%s %d。%s。" % ("跌停" if d == 1 else "漲停", lim, qmsg))
+    return ok_q
+
+
+LOCK_WAIT_MAX_S = 45.0    # 排隊單說成交了（或問不到、或鎖往有利方向打開）但部位還在 ⇒ 最多等這麼久就照常平倉（⛔ 不准永遠等：停損不能失效）
+
+
+def _lock_timer(q, k, now):
+    """lock_q 裡記「從什麼時候開始等」⇒ 已經等了幾秒（第一次叫 ⇒ 0）。"""
+    if not isinstance(q, dict):
+        return 0.0
+    if q.get(k) is None:
+        q[k] = now
+    return now - float(q[k])
+
+
+def _lock_drop(pos):
+    pos.pop("lock_q", None)
+    pos["sl_armed"] = True                 # 停損已經觸發過 ⇒ 之後價格回到停損之內也照樣平
+
+
+def lock_verify(pos, push=None, check=None, now=None):
+    """
+    （背景）排隊中、價格還鎖著 ⇒ 確認那張單。
+    dead（被撤／被拒）⇒ 清掉 lock_q（停損迴圈下一輪會重排）＋推一則；
+    filled 但部位還在超過 LOCK_WAIT_MAX_S（排隊單口數比部位少、或回報卡住）⇒ 清掉 lock_q ⇒ 停損迴圈照常平倉。
+    """
+    now = time.time() if now is None else now
+    st = (check or broker.lock_q_check)()
+    q = pos.get("lock_q")
+    if st == "dead":
+        _lock_drop(pos)
+        (push or _push)("停板排隊單不見了", "排隊單被取消或被拒，會重新排隊。部位還在，請到大戶投看一下。")
+    elif st == "filled":
+        if _lock_timer(q, "fill_at", now) >= LOCK_WAIT_MAX_S:
+            _lock_drop(pos)
+    elif isinstance(q, dict):
+        q.pop("fill_at", None)
+    return st
+
+
+def lock_release(pos, d, price, check=None, close=None, failed=None, now=None):
+    """
+    （背景）成交價離開排隊價了。
+    ・往有利方向離開（做多：價格高於跌停排隊價）＝停板價上整排的單都被吃完了 ⇒ 排隊單幾乎一定已成交，只是回報慢
+      ⇒ ⛔ 不送 IOC（平過頭），等對帳收尾；最多等 LOCK_WAIT_MAX_S，部位還在才照常平倉（品管複驗 #B）。
+    ・往不利方向離開（排隊價不是真的停板）⇒ 排隊單沒成交完就撤掉照常平倉；成交完／問不到 ⇒ 一樣最多等 LOCK_WAIT_MAX_S。
+    """
+    now = time.time() if now is None else now
+    q = pos.get("lock_q")
+    st = (check or broker.lock_q_check)()
+    waited = _lock_timer(q, "rel_at", now)
+    px = float((q or {}).get("px") or price)
+    favorable = d * (float(price) - px) > 0
+    hold = st in ("filled", "unknown") or (favorable and st == "open")
+    if hold and waited < LOCK_WAIT_MAX_S:
+        return st
+    _lock_drop(pos)
+    ok, err = (close or broker.close)("sl")
+    print(f"[真實] 停板打開 → 平倉（排隊單 {st}、等了 {waited:.0f} 秒）：{'成功' if ok else err}", flush=True)
+    if not ok:
+        (failed or sl_failed)(pos, d, price, err, job=lambda f: f())
+    return st
+
+
+def sl_failed(pos, d, price, err, now=None, push=None, job=None, lock=None):
+    """停損送了但沒平掉 ⇒ 推手機（節流）＋ 背景看是不是鎖在停板、是就排隊。⛔ 例外全吞：這裡壞掉不可以拖垮停損迴圈。"""
+    try:
+        e = str(err or "")
+        if e.startswith(_SL_NOT_TRIED):
+            return
+        t = time.time() if now is None else now
+        push = push or _push
+        key = (pos.get("dir"), pos.get("entry"), pos.get("entry_time") or pos.get("time"))
+        if key != SL_FAIL["key"] or t - SL_FAIL["at"] >= SL_FAIL_PUSH_GAP:
+            SL_FAIL.update(key=key, at=t)
+            push("停損平不掉", "現價 %.0f，部位還在。%s" % (price, e[:160]))
+        (job or sl_job)(lambda: (lock or lock_try)(d, price))
+    except Exception as ex:               # noqa: BLE001
+        print("⚠️ [真實] 停損失敗後的通知／排隊出錯：%s" % str(ex)[:160], flush=True)
 
 
 def save_trades():

@@ -1707,7 +1707,7 @@ def _reconcile_locked(pos, _cur0, pre, meta_pre, late_pre=None):
                             # 他加碼過 ⇒ 成績單只記**我們的**口數（⛔ 不把他那幾口算進來；價錢對不上就留白）
                             record_trade(gone, None, "closed_elsewhere", qty=_ours_left(gone))
                         else:
-                            record_trade(gone, px, "tp" if px is not None else "closed_elsewhere")
+                            record_trade(gone, px, ("sl" if gone.get("lock_q") else "tp") if px is not None else "closed_elsewhere")
                         _log("position_gone", {"ok": True, "exit": px,
                                                "why": "券商那邊已經沒有部位（停利成交或他自己平掉）"})
         elif _state["position"] is None:
@@ -2838,6 +2838,11 @@ def close(reason):
     所以這裡寧可拒絕，也不用記憶體裡那份可能過期的資料。
     """
     import shioaji as sj
+    q = (_state.get("position") or {}).get("lock_q") if isinstance(_state.get("position"), dict) else None
+    if reason in ("eod", "night_eod") and isinstance(q, dict) and q.get("sess") == sess_key():
+        # ⭐ 2026-11-24：停板排隊中 ⇒ 收盤平倉⛔ 不撤排隊單（撤了＝排隊位置沒了，IOC 又撮不到）。
+        #    鎖一打開，面板的停損那條（sl-lock）會先確認排隊單、再平倉。
+        return False, "停板排隊中（%s），收盤平倉先不撤排隊單 —— 部位還在，請到大戶投看一下" % q.get("px")
     if not _close_lock.acquire(blocking=False):
         return False, "正在平倉中，請稍候"
     try:
@@ -3055,6 +3060,7 @@ def _cancel_targets(pos):
             _log("cancel_target", {"ok": False, "product": p, "err": str(e)[:200],
                                    "why": "撤不掉，平倉後請自己到大戶投刪掉那張停利單"})
     with _lock:
+        pos.pop("lock_q", None)           # ⭐ 2026-11-24：停板排隊單也是停利單那一格 ⇒ 撤了就不再算「排隊中」
         pos["target_trades"] = left
         pos["target_trade"] = None
         pos["tgt_fill"] = tf
@@ -3370,7 +3376,7 @@ def _own_finish(cur, now):
     elif cq <= 0 and gone <= 0 and tq > 0:
         # 整趟都是停利單吃掉的 ⇒ 成績單寫成跟以前一樣的一列（不掛 legs；main 那條「部位不見 ⇒ 記 tp」同一個格式）
         rp["legs"] = []
-        rec = record_trade(rp, round(tpq / tq, 2), "tp", qty=int(round(tq)))
+        rec = record_trade(rp, round(tpq / tq, 2), "sl" if cur.get("lock_q") else "tp", qty=int(round(tq)))
     else:
         rec = record_trade(rp, round(cpq / cq, 2) if cq > 0 else None, reason, qty=int(round(cq)))
     # ⭐ 第四輪品管 #2：「RECENT_CLOSE_S 內券商同方向不撿回」只套用在帳本確定平完、明細都滿了（_clean）；
@@ -3721,6 +3727,168 @@ def _close_own(pos, reason):
     return False, msg
 
 
+# ══ 停板鎖死時的停損（2026-11-24 Benson 點頭）═══════════════════════════════════════════
+# 價格鎖在部位反方向的停板（做多遇跌停鎖住／做空遇漲停鎖住）⇒ 停板價上排滿了同方向的單、對面沒人。
+# 範圍市價 IOC 永遠撮不到，而且每次重送都是重新排到最後 ⇒ 打開停板那一刻也輪不到我們。
+# 做法：把「停利單那一格」改掛成**停板價的限價 ROD 平倉單**去排隊（借停利單那一套：撤單、部分成交、帳本、成績單都是現成的）。
+#   ・面板（check_real_position）看到排隊單還在、價格還鎖在那個價 ⇒ ⛔ 不再送 IOC（會先撤掉排隊單、排隊位置就沒了）。
+#   ・價格離開停板（鎖打開）⇒ 照常 close("sl")：先撤排隊單再送 IOC（⛔ 兩張不會同時在場上 ⇒ 不會平過頭）。
+#   ・ROD 只在當盤有效（期交所規定）⇒ 換盤（日盤／夜盤）一定重掛，⛔ 不信上一盤的排隊標記。
+LOCK_TOL = 0.003       # 現價離算出來的停板多近（基準的比例）才算「鎖在停板」：基準用收盤近似結算價，誤差最大約 0.36%
+
+
+def sess_key(now=None):
+    """這一盤的代號（ROD 只活在這一盤）：'2026-11-24D'／'2026-11-24N'（夜盤過午夜仍算前一天開的那一盤）。"""
+    now = now or datetime.now()
+    if now.hour >= 15:
+        return now.strftime("%Y-%m-%d") + "N"
+    if now.hour < 6:
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d") + "N"
+    return now.strftime("%Y-%m-%d") + "D"
+
+
+def _dead_status(t):
+    st = str(getattr(getattr(t, "status", None), "status", "") or "")
+    return "Cancel" in st or "Fail" in st
+
+
+def _lock_kind(pos):
+    """這筆部位走哪條平倉路 ⇒ 'own'（帳本）／'mix'（混搭）／'one'（單一合約一口）／None（⛔ 不排隊：手動或撿回的多口，口數分不清）。"""
+    if pos.get("own"):
+        return "own"
+    if pos.get("product") in ("MIX", "MXF") or pos.get("mix0") or isinstance(pos.get("mix_sent"), dict)             or isinstance(pos.get("target_trades"), dict):
+        return "mix" if isinstance(pos.get("mix"), dict) else None
+    if _multi_pos(pos) or (_num_qty(pos.get("qty")) or 1) > 1:
+        return None
+    return "one"
+
+
+def _lock_trades(pos):
+    """這筆部位上我們掛著的停利／排隊單 ⇒ [trade]（帳本：還沒撤的 target；其他：target_trades＋target_trade）。"""
+    if pos.get("own"):
+        return [r.get("t") for r in pos.get("own_trades") or [] if r.get("role") == "target" and not r.get("cxl")]
+    out = [t for t in (pos.get("target_trades") or {}).values() if t is not None]
+    if pos.get("target_trade") is not None:
+        out.append(pos["target_trade"])
+    return out
+
+
+def lock_q_check():
+    """
+    排隊單現在怎樣 ⇒ 'none'（沒在排隊）／'filled'（全部成交，等對帳收尾）／'dead'（被撤或被拒、而且沒成交完）／
+    'open'（還在排、可能部分成交）／'unknown'（問不到）。⛔ 會問券商（update_status）⇒ 只准在背景執行緒叫。
+    """
+    pos = _state.get("position")
+    if not isinstance(pos, dict) or not isinstance(pos.get("lock_q"), dict):
+        return "none"
+    ts = _lock_trades(pos)
+    if not ts or any(t is None for t in ts):
+        return "unknown"
+    try:
+        _state["api"].update_status(_state["account"])
+    except Exception:                       # noqa: BLE001
+        return "unknown"
+    full, dead = True, False
+    for t in ts:
+        s = _deal_sums(t)
+        try:
+            oq = float(getattr(getattr(t, "order", None), "quantity", 0) or 0) * _ratio_of_trade(t)
+        except (TypeError, ValueError):
+            return "unknown"
+        if s is None or oq <= 0:
+            return "unknown"
+        if s[1] < oq - 1e-9:
+            full = False
+            if _dead_status(t):
+                dead = True
+    if full:
+        return "filled"
+    return "dead" if dead else "open"
+
+
+def lock_queue(px):
+    """
+    停損平不掉、價格鎖在反方向停板 ⇒ 把停利單換成停板價（px）的限價 ROD 平倉單排隊。⇒ (ok, 說明)。
+    ⛔ 舊的停利單撤不掉就不掛（兩張都成交＝平過頭變反向新倉）；⛔ 對帳失敗不掛；⛔ 分不出口數的部位不掛。
+    ⛔ 一口的單一合約部位：⛔ 不叫 _cancel_targets（它會把 target_trades 設成 {}，之後平倉、成績單都改走混搭那條路）
+       ⇒ 自己撤 target_trade、照舊放回 target_trade。
+    ⛔ 會問券商、會送單 ⇒ 只准在背景執行緒叫（面板 sl-lock），⛔ 不准在 4Hz 停損迴圈裡叫。
+    """
+    if not is_live() or _state["api"] is None:
+        return False, "不是真單模式"
+    if not _close_lock.acquire(blocking=False):
+        return False, "正在平倉中"
+    try:
+        fresh = reconcile()
+        if fresh == "unknown":
+            return False, "跟券商對帳失敗，不確定還剩多少 —— 先不掛排隊單"
+        if not isinstance(fresh, dict):
+            return False, "沒有部位"
+        pos = fresh
+        if pos.get("multi_unknown") or pos.get("dir") not in ("long", "short"):
+            return False, "分不出這筆部位是誰的 —— 不掛排隊單"
+        kind = _lock_kind(pos)
+        if kind is None:
+            return False, "這筆部位口數分不清（手動或重啟撿回的多口）—— 不掛排隊單"
+        px = int(round(float(px)))
+        key = sess_key()
+        q = pos.get("lock_q")
+        if isinstance(q, dict) and q.get("px") == px and q.get("sess") == key:
+            return True, "已經在停板價 %d 排隊" % px
+        if kind == "own":
+            stray = _own_cancel_targets(pos)
+        elif kind == "mix":
+            stray = _cancel_targets(pos)
+        else:
+            stray = False
+            t = pos.get("target_trade")
+            if t is not None:
+                _update_status()
+                s = _deal_sums(t)
+                if s is not None and s[1] > 0:
+                    return False, "停利單已經有成交、部位回報還沒跟上 —— 這一輪先不掛（等對帳）"
+                if not _dead_status(t):
+                    try:
+                        _state["api"].cancel_order(t)
+                        _log("cancel_target", {"ok": True, "why": "停板排隊前先撤掉原本的停利單"})
+                    except Exception as e:      # noqa: BLE001
+                        stray = True
+                        _log("cancel_target", {"ok": False, "err": str(e)[:200], "why": "停板排隊前撤不掉停利單"})
+                if not stray:
+                    with _lock:
+                        pos["target_trade"] = None
+            elif pos.get("recovered"):
+                stray = _cancel_logged_targets(pos)
+        if stray:
+            _log("lock_queue", {"ok": False, "px": px, "why": "舊的停利單撤不掉，不敢再掛排隊單（兩張都成交會平過頭）"})
+            return False, "舊的停利單撤不掉，不敢再掛停板排隊單 —— 請立刻自己到大戶投處理"
+        qty = None
+        if kind == "one":
+            qty = 1
+        elif kind == "own" and pos.get("product") != "MIX":
+            held = _num_qty(pos.get("qty"))
+            qty = _own_qty(pos)
+            if held and held > 0:
+                qty = min(qty, int(held))          # ⛔ 不比券商上剩的多（部分平掉之後）
+        ok, err = place_target(px, qty)
+        cur = _state["position"]
+        if not ok and isinstance(cur, dict) and _lock_trades(cur):
+            # ⭐ 品管複驗 #A：混搭只掛上一腿 ⇒ ⛔ 不記 lock_q（那一腿成交後會誤判「全部成交」、停損就卡住）⇒ 撤掉那一腿，照常走停損重試
+            left = _cancel_targets(cur) if kind == "mix" else (_own_cancel_targets(cur) if kind == "own" else False)
+            if left:
+                err = (err or "") + "；掛上的那一腿撤不掉，請立刻到大戶投處理"
+        with _lock:
+            if ok and isinstance(cur, dict):
+                cur["lock_q"] = {"px": px, "sess": key, "at": time.time()}
+        _log("lock_queue", {"ok": ok, "px": px, "qty": qty, "sess": key, "err": err,
+                            "why": "停板鎖死、停損平不掉 ⇒ 改掛停板價限價單排隊"})
+        if ok:
+            return True, "已在停板價 %d 掛單排隊，鎖一打開就有機會先出場" % px
+        return False, "停板排隊單掛不上（%s）" % (err or "券商拒絕")
+    finally:
+        _close_lock.release()
+
+
 _STRAY_MSG = {True: "有停利單沒撤掉，請自己到大戶投刪除",
               "unknown": "停利單可能還掛著，請到大戶投刪除（重啟後問不到那張單、撤不了）"}
 
@@ -3753,6 +3921,7 @@ def _own_cancel_targets(pos):
             _log("cancel_target", {"ok": False, "product": r["p"], "err": str(e)[:200],
                                    "why": "撤不掉，平倉後請自己到大戶投刪掉那張停利單"})
     with _lock:
+        pos.pop("lock_q", None)           # ⭐ 2026-11-24：同上（停板排隊單）
         pos["target_trade"] = None
         pos["target_trades"] = {}
     return stray
