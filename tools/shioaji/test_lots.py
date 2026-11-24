@@ -2433,8 +2433,14 @@ if _head_lp:
                                            capture_output=True).returncode == 0 else "HEAD"
     _src11 = subprocess.run(["git", "-C", str(HERE), "show", _rev11 + ":tools/shioaji/live_panel.py"],
                             capture_output=True).stdout.decode("utf-8")
+    # ⭐ 2026-11-24（Benson：「兩項都做」停損遇停板鎖死）刻意改了 check_real_position ⇒ 改跟 a6e590e8e（品管三輪通過的版本）比。
+    _rev24 = "a6e590e8e" if subprocess.run(["git", "-C", str(_repo), "rev-parse", "--verify", "-q", "a6e590e8e"],
+                                           capture_output=True).returncode == 0 else "HEAD"
+    _src24 = subprocess.run(["git", "-C", str(HERE), "show", _rev24 + ":tools/shioaji/live_panel.py"],
+                            capture_output=True).stdout.decode("utf-8")
     _diff = [f for f in ("_auto_tick", "_auto_tick_guarded", "check_real_position", "on_tick", "_auto_snap", "_auto_put")
-             if _fn_dump(_cur_src, f) != _fn_dump(_src11 if f in ("_auto_tick", "on_tick") else _head_src, f)]
+             if _fn_dump(_cur_src, f) != _fn_dump(_src11 if f in ("_auto_tick", "on_tick")
+                                                  else (_src24 if f == "check_real_position" else _head_src), f)]
     chk("  ⭐ _auto_tick／_auto_tick_guarded／check_real_position／on_tick／_auto_snap／_auto_put 跟 HEAD 相同", _diff, [])
 else:
     say(False, "  ⛔ 拿不到 git HEAD 的 live_panel.py（這一段沒驗到 ⛔ 不當成通過）")
