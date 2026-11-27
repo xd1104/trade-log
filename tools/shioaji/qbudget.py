@@ -46,6 +46,19 @@ BROKER_COUNTED = ("list_positions", "list_position_detail", "margin", "account_b
 QUOTE_METHODS = ("subscribe", "unsubscribe")
 ORDER_METHODS = ("place_order", "cancel_order", "update_order")   # 下單（分開看，也算進總數）
 
+# 系統分頁那張「API 次數」卡的分類（billed＝永豐算進 1,500 次的）
+GROUPS = (
+    ("查部位", True, ("list_positions", "list_position_detail")),
+    ("查權益", True, ("margin", "account_balance")),
+    ("查平倉", True, ("list_profit_loss", "list_profit_loss_detail", "list_settlements")),
+    ("委託狀態", False, ("update_status",)),
+    ("下單撤單", False, ("place_order", "cancel_order", "update_order")),
+    ("行情查詢", False, ("kbars", "snapshots", "ticks")),
+    ("訂閱報價", False, ("quote.subscribe", "quote.unsubscribe")),
+    ("登入", False, ("login", "logout", "activate_ca", "list_accounts", "fetch_contracts")),
+    ("流量查詢", False, ("usage",)),
+)
+
 _L = threading.Lock()
 _S = {"month": None, "days": {}, "by": {}, "local": 0, "warned": [], "dirty": False, "saved": 0.0}
 PUSH = None                 # live_panel 接上：fn(title, body)；⛔ 預設不推（測試／腳本）
@@ -192,9 +205,26 @@ def view(now=None):
                 meth[k] = meth.get(k, 0) + int(v)
         top = sorted(_S["by"].items(), key=lambda kv: -kv[1])[:12]
         local = _S["local"]
+    today_all = dict(_S_today_all(now))
+    groups = []
+    seen = set()
+    for label, billed, ms in GROUPS:
+        seen.update(ms)
+        groups.append({"k": label, "billed": billed, "m": sum(int(meth.get(x) or 0) for x in ms),
+                       "d": sum(int(today_all.get(x) or 0) for x in ms)})
+    other_m = sum(int(v) for k, v in meth.items() if k not in seen)
+    if other_m:
+        groups.append({"k": "其他", "billed": False, "m": other_m,
+                       "d": sum(int(v) for k, v in today_all.items() if k not in seen)})
     return {"month": _month(now), "total": tot, "all": alls, "cap": MONTH_CAP, "today": sum(today.values()),
+            "groups": groups,
             "today_by": today, "by_method": meth, "top": top, "local": local,
             "optional_ok": tot < MONTH_SOFT and sum(today.values()) < DAY_SOFT}
+
+
+def _S_today_all(now):
+    with _L:
+        return dict(_S["days"].get(now.strftime("%Y-%m-%d")) or {})
 
 
 def _wrap(obj, name):

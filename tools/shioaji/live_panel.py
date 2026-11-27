@@ -5017,7 +5017,8 @@ def _qb_small():
     """系統分頁「永豐查詢次數」那幾格。⛔ 不丟例外。"""
     try:
         v = qbudget.view()
-        return {"total": v["total"], "cap": v["cap"], "today": v["today"], "ok": v["optional_ok"]}
+        return {"total": v["total"], "cap": v["cap"], "today": v["today"], "ok": v["optional_ok"],
+                "groups": v.get("groups") or []}
     except Exception:                                   # noqa: BLE001
         return None
 
@@ -5061,17 +5062,20 @@ def poll_equity():
                 # ⭐ 2026-09-26 券商每日流量（加錄資料之前先量基準）。⛔ 唯讀；自己 10 分鐘一次；壞了不影響帳戶查詢
                 # ⚠️ 2026-09-29 修：第一版把這個 try 插在 `if m:` 跟它的 `else:` 中間 ⇒ else 變成 try 的 else，
                 #    流量一問成功就把剛問到的餘額清掉，畫面永遠「問不到帳戶餘額」。守衛：test_account ⑫
+            # ⭐ 2026-11-27 查詢預算：帳戶餘額改檢查點才問之後，流量／畫面那份（五檔、備份、查詢次數）⛔ 不可以跟著
+            #    幾小時才更新一次 ⇒ 移到 if 外面：每一圈照舊更新（流量自己一天一次節流）。
+            if SESSION_REF.get("api") is not None and not _eq_quiet(now):
                 try:
                     _usage_poll(now)
                 except Exception:
                     pass
-                # ⛔⛔ **先算完再進鎖**：`equity_view()` 會讀 equity/（磁碟），
-                #    而 `state_lock` 是 4Hz 主迴圈（＝他的停損）每一圈都要拿的鎖。
-                #    ⛔ 不可以把任何 I/O 留在鎖裡面。
-                view = equity_view(now)
-                view["qb"] = _qb_small()
-                with state_lock:
-                    STATE["equity"] = view
+            # ⛔⛔ **先算完再進鎖**：`equity_view()` 會讀 equity/（磁碟），
+            #    而 `state_lock` 是 4Hz 主迴圈（＝他的停損）每一圈都要拿的鎖。
+            #    ⛔ 不可以把任何 I/O 留在鎖裡面。
+            view = equity_view(now)
+            view["qb"] = _qb_small()
+            with state_lock:
+                STATE["equity"] = view
         except Exception as e:                        # noqa: BLE001 ⛔ 這條執行緒不准死
             try:
                 EQUITY.update({"m": None, "err": "帳戶查詢出錯：%s" % str(e)[:100]})

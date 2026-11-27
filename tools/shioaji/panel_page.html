@@ -6307,7 +6307,14 @@ function sysHTML(s){
  const b=E.backup||{};
  const card4='<div class="ac sc"><div class="k">資料備份</div><div class="big'+(b.warn?' warn':'')+'">'+
    (b.warn?'⚠ 要看一下':(b.ok?'✓ 正常':'—'))+'</div><div class="msg">'+esc(b.msg||'還沒有狀態')+'</div></div>';
- return '<div class="sysgrid">'+card1+card2+card3+card4+'</div>';
+ const qb=E.qb;
+ const card5=qb&&qb.groups?('<div class="ac sc"><div class="k">API 次數</div>'+
+   '<div class="row"><span></span><b>本月　今天</b></div>'+
+   qb.groups.map(g=>'<div class="row"><span>'+esc(g.k)+(g.billed?' ★':'')+'</span><b>'+
+     esc(Number(g.m).toLocaleString('en-US'))+'　'+esc(g.d)+'</b></div>').join('')+
+   '<div class="row"><span>★ 合計</span><b'+(qb.total>=qb.cap?' class="warn"':'')+'>'+
+     esc(Number(qb.total).toLocaleString('en-US'))+'／'+esc(Number(qb.cap).toLocaleString('en-US'))+'</b></div></div>'):'';
+ return '<div class="sysgrid">'+card1+card2+card3+card4+card5+'</div>';
 }
 
 /* ══════════ ⭐ 2026-10-21 右上角鈴鐺「要注意的事」══════════
