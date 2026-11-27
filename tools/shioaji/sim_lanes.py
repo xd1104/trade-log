@@ -1439,6 +1439,12 @@ def fetch_gate(kind, api, has_position, now):
       ⛔ 流量 > 85%（或讀不到上限）不抓
     ⚠️ 順序：部位排在「沒連線／隔 10 分鐘」後面 —— 面板注入的那支會跟券商問部位（唯讀），不要每分鐘白問。
     """
+    try:                                  # ⭐ 2026-11-27 查詢預算：今天／本月的可有可無額度用完 ⇒ 不抓
+        import qbudget
+        if not qbudget.optional_ok():
+            return _set_fetch(kind, "budget", "跟永豐的查詢次數今天的額度用完了，明天再抓", now)
+    except Exception:                     # noqa: BLE001
+        pass
     if QUIET_FROM <= now.time() < QUIET_TO:
         return _set_fetch(kind, "quiet", "%s~%s 不抓（日盤）" % (QUIET_FROM.strftime("%H:%M"), QUIET_TO.strftime("%H:%M")), now)
     if api is None:

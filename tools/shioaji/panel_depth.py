@@ -27,6 +27,9 @@ def restart_blocks(now):
 #    ⛔⛔ 大台／選擇權的報價**絕對不可以**進 Today（停損看的價）—— on_bidask 用代碼開頭擋（見 _is_main_code）。
 DEPTH_DIR = HERE / "depth_logs"        # ⛔ gitignore；備份只帶壓好的 .gz
 DEPTH = depth_writer.DepthWriter(DEPTH_DIR)
+# ⭐ 2026-11-27 查詢預算：選擇權五檔每次連線要訂 20 個合約＋一次快照（永豐「訂閱也算查詢」）
+#    ⇒ 一天幾次連線就幾十次 ⇒ 先關（大台、小台照錄）。要再開：改 True（每月約多 500～1,000 次）。
+DEPTH_OPT_ON = False
 DEPTH_OPT_STRIKES = 10                 # 價平附近幾個履約價（× 買權／賣權 ＝ 20 個合約）
 DEPTH_MAX_PCT = 70.0                   # 券商流量超過這個 % ⇒ 當天退訂大台與選擇權（微台照舊，下單不受影響）
 DEPTH_SUBS = {"contracts": [], "codes": [], "paused_day": None, "err": None, "at": None}
@@ -116,12 +119,12 @@ def depth_subscribe(api, main_contract, today=None, px=None):
                 subs.append((ms or mxf)[0])
         except Exception as e:
             print("⚠️ 【五檔錄製】小台找不到（其他照錄）：%s" % str(e)[:80], flush=True)
-        if px is None:
+        if px is None and DEPTH_OPT_ON:
             try:
                 px = float(api.snapshots([fut])[0].close)
             except Exception:
                 px = None
-        if px:
+        if px and DEPTH_OPT_ON:
             opts = [c for c in api.Contracts.Options.TXO if getattr(c, "delivery_date", None)
                     and c.delivery_date > today]
             if opts:

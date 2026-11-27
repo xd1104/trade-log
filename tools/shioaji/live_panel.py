@@ -64,6 +64,7 @@ import push_note         # 手機通知（背景送，壞了不影響停損）
 import lots              # 口數的唯一正本（2026-10-14 多口）。狀態檔不存在 ⇒ 1＋1（跟以前一樣）
 import tick_writer       # 逐筆報價落地。⛔ 它的存在前提是「絕不在 on_tick 裡碰磁碟」
 import depth_writer      # 研究用全天五檔落地（同一條鐵律：on_bidask 只 append）
+import qbudget           # ⭐ 2026-11-27 跟永豐的查詢次數（每月目標 1,500 次以下）：記數＋可有可無的查詢先問 optional_ok()
 # 【健檢】那一頁（唯讀）。⛔ 不 import broker、不碰任何下單路徑、一個位元組都不寫。
 # ⛔⛔ 一定要包 try（跟 strategy_lab 同一條理由）：它是「看的東西」，載入失敗
 #    絕不可以讓 `import live_panel` 跟著失敗 —— 那會變成 main() 跑不到、
@@ -287,6 +288,7 @@ SESSION_REF = {"api": None}          # K 線圖要用它去跟永豐要 K 棒
 # 測不出東西 —— 這裡純粹是多一個客觀數字，不是訊號。
 # 現貨 09:00 才開盤、13:30 收，比期貨晚開早收，所以會有「尚未開盤」的空窗。
 INDEX = {"price": None, "chg": None, "pct": None, "at": None, "contract": None, "ms": None}
+INDEX_ON = False         # ⭐ 2026-11-27 查詢預算：加權指數快照先關（只給基差那格用）
 INDEX_EVERY = 2.0        # 秒。指數輪詢的目標週期（實際週期 = max(這個值, 單次耗時)）
 CASH_OPEN = MC.as_time(MC.CASH_OPEN)
 CASH_CLOSE = pd.Timestamp("13:35").time()
@@ -299,6 +301,18 @@ CONN = {"ok": True, "since": None, "retries": 0, "last_error": None}
 
 STALE_SECONDS = 90          # 日盤超過這麼久沒收到 tick 就視為斷線
 RECONNECT_EVERY = 60        # 斷線後每隔多久重試一次
+RECONNECT_MAX = 600         # ⭐ 2026-11-27 查詢預算：連續失敗就拉長（每次登入也算一次查詢）；有部位照舊 60 秒
+
+
+def reconnect_gap(retries, has_pos):
+    """斷線重連的間隔：前 3 次 60 秒，之後 120、240、480…最多 600 秒；有部位一律 60 秒（停損要連線）。"""
+    try:
+        n = int(retries or 0)
+    except Exception:                     # noqa: BLE001
+        n = 0
+    if has_pos or n < 3:
+        return RECONNECT_EVERY
+    return min(RECONNECT_MAX, RECONNECT_EVERY * 2 ** (n - 2))
 
 
 # ---------------------------------------------------------------- 歷史矩陣
@@ -713,7 +727,7 @@ def check_real_position(price, age, sess="day"):
 # ② 停板鎖死：價格鎖在部位反方向的停板 ⇒ 背景改掛停板價限價單排隊（broker.lock_queue）。
 SL_FAIL = {"key": None, "at": 0.0, "q": None}
 SL_FAIL_PUSH_GAP = 300.0
-LOCK_VERIFY_S = 10.0      # 排隊中多久確認一次那張單還活著（被撤／被拒 ⇒ 清掉重排）
+LOCK_VERIFY_S = 60.0      # 排隊中多久確認一次那張單還活著（被撤／被拒 ⇒ 清掉重排）；⭐ 2026-11-27 查詢預算 10 ⇒ 60 秒
 LOCK_RELEASE_S = 1.0      # 鎖打開後多久再看一次排隊單成交了沒
 _SL_NOT_TRIED = ("剛剛平倉失敗", "正在平倉中", "沒有部位", "停板排隊中")   # 這一輪沒有真的試／部位已經不在 ⇒ 不推、不排隊
 SL_JOB = {"th": None, "at": 0.0}
@@ -4799,7 +4813,9 @@ def poll_index():
         try:
             api = SESSION_REF.get("api")
             t = datetime.now().time()
-            if api is not None and CASH_OPEN <= t <= CASH_CLOSE:
+            # ⭐ 2026-11-27 查詢預算：指數只給畫面的「基差」那格用（⛔ 沒有任何交易判斷用到）、每 2 秒一次快照
+            #    ⇒ 一天約 8,000 次，是最大宗之一 ⇒ 預設關（INDEX_ON=False ⇒ 畫面就當現貨沒開盤，不顯示）。
+            if INDEX_ON and api is not None and CASH_OPEN <= t <= CASH_CLOSE and qbudget.optional_ok():
                 c = INDEX.get("contract")
                 if c is None:
                     for _ in range(10):
@@ -4921,6 +4937,68 @@ def cashflow_view(now=None):
 LOTS_ERR = {"err": None}               # 口數每日檢查最近一次的錯（第二階段畫面才端出去）
 
 
+# ⭐⭐ 2026-11-27 查詢預算：帳戶餘額（api.margin）從「盤中每分鐘、其餘每 10 分鐘」改成只在這幾刻問：
+#    剛連上第一次、08:40（開盤前）、14:05（日盤收完 ⇒ 落地當天那一列＝口數每日檢查要用）、夜盤送單前 6 分鐘、
+#    05:06（夜盤收完）。⇒ 一天約 4～5 次。（EQ_AFTER_CLOSE_S＝平倉後多久再問；預設 None＝不另外問，14:05／05:06 已涵蓋）
+#    ⚠️ 代價：入金後要等下一個檢查點才重算升級（最慢幾個小時）；畫面上的餘額是上一個檢查點的數字（有寫時間）。
+EQ_LOOP_S = 30.0
+EQ_CHECKPOINTS = ("08:40", "14:05", "05:06")
+EQ_AFTER_CLOSE_S = None
+EQ_DUE = {"first": True, "had_pos": False, "close_at": None, "done": set(), "last": None}
+
+
+def _eq_checkpoints(now):
+    cps = list(EQ_CHECKPOINTS)
+    try:
+        _d, t = night_moments(now)
+        if t is not None:
+            cps.append((t - timedelta(minutes=6)).strftime("%H:%M"))
+    except Exception:                                   # noqa: BLE001
+        pass
+    return cps
+
+
+def _eq_due(now, has_pos=None):
+    """這一圈要不要問帳戶餘額。⛔ 純記憶體（broker.has_position 只讀記憶體）。"""
+    q = EQ_DUE
+    hp = broker.has_position() if has_pos is None else has_pos
+    if q["had_pos"] and not hp and EQ_AFTER_CLOSE_S is not None:
+        q["close_at"] = now + timedelta(seconds=EQ_AFTER_CLOSE_S)
+    q["had_pos"] = hp
+    why = None
+    if q["first"]:
+        why = "first"
+    elif q["close_at"] is not None and now >= q["close_at"]:
+        why = "after-close"
+    else:
+        hm = now.strftime("%H:%M")
+        for cp in _eq_checkpoints(now):
+            key = "%s %s" % (now.date(), cp)
+            if hm >= cp and key not in q["done"]:
+                q["done"].add(key)
+                if len(q["done"]) > 40:
+                    q["done"] = {key}
+                if q["last"] is None or q["last"].strftime("%Y-%m-%d %H:%M") < key:
+                    why = "checkpoint " + cp
+                    break
+    if why is None:
+        return False
+    q["first"] = False
+    if why == "after-close":
+        q["close_at"] = None
+    q["last"] = now
+    return True
+
+
+def _qb_small():
+    """系統分頁「永豐查詢次數」那幾格。⛔ 不丟例外。"""
+    try:
+        v = qbudget.view()
+        return {"total": v["total"], "cap": v["cap"], "today": v["today"], "ok": v["optional_ok"]}
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
 def poll_equity():
     """
     背景問「帳戶還有多少錢」。⚠️ **唯讀**（`broker.account_margin()` ⇒ `api.margin()`）。
@@ -4946,7 +5024,7 @@ def poll_equity():
         except Exception:
             pass
         try:
-            if SESSION_REF.get("api") is not None and not _eq_quiet(now):
+            if SESSION_REF.get("api") is not None and not _eq_quiet(now) and _eq_due(now):
                 m, err = broker.account_margin()
                 if m:
                     EQUITY.update({"m": m, "err": None,
@@ -4968,12 +5046,14 @@ def poll_equity():
                 #    而 `state_lock` 是 4Hz 主迴圈（＝他的停損）每一圈都要拿的鎖。
                 #    ⛔ 不可以把任何 I/O 留在鎖裡面。
                 view = equity_view(now)
+                view["qb"] = _qb_small()
                 with state_lock:
                     STATE["equity"] = view
         except Exception as e:                        # noqa: BLE001 ⛔ 這條執行緒不准死
             try:
                 EQUITY.update({"m": None, "err": "帳戶查詢出錯：%s" % str(e)[:100]})
                 view = equity_view(now)               # ⛔ 同上：讀檔留在鎖外面
+                view["qb"] = _qb_small()
                 with state_lock:
                     STATE["equity"] = view
             except Exception:
@@ -5005,10 +5085,8 @@ def poll_equity():
                 STATE["lots"] = _small
         except Exception as e:                        # noqa: BLE001
             LOTS_ERR["err"] = str(e)[:120]
-        t = now.time()
-        # 盤中（08:45 開盤 ~ 14:30）問密一點；其餘時間 10 分鐘一次就夠
-        every = EQUITY_EVERY if (SESSION_OPEN <= t <= EQUITY_BUSY_END) else EQUITY_EVERY_OFF
-        time.sleep(max(5.0, every - (time.time() - t0)))
+        # ⭐ 2026-11-27 查詢預算：這一圈本身不問券商（要不要問看 _eq_due）⇒ 固定 30 秒一圈，檢查點才不會錯過
+        time.sleep(max(5.0, EQ_LOOP_S - (time.time() - t0)))
 
 
 def serve():
@@ -5330,7 +5408,7 @@ def _can_enter_view(price, live, has_pos, now=None):
     c = _CAN_ENTER_VIEW
     if c["key"] == key and now - c["at"] < CAN_ENTER_VIEW_S:
         return c["v"]
-    v = broker.can_enter(price, live)
+    v = broker.can_enter(price, live, query=False)      # ⭐ 2026-11-27 查詢預算：畫面的燈 ⛔ 不問券商
     c.update(at=now, key=key, v=v)
     return v
 
@@ -5391,6 +5469,24 @@ def query_health_view():
     q = QUERY
     return {"ok": q["fail"] == 0, "fail": q["fail"], "last_s": q["last_s"], "err": q["last_err"],
             "bad_for": (round(time.time() - q["since"]) if q["since"] else None), "reconn_n": q["reconn_n"]}
+
+
+ORDER_EVT = {"n": 0, "last": None, "at": None}
+
+
+def on_order_event(stat, msg):
+    """
+    ⭐ 2026-11-27 查詢預算：永豐推來委託／成交通知（推送，不算查詢）⇒ 請背景對帳接著問幾次。
+    ⛔ 這是 SDK 的執行緒：只寫記憶體，不叫券商、不拿鎖、不丟例外。
+    """
+    try:
+        ORDER_EVT["n"] += 1
+        ORDER_EVT["last"] = str(stat)[:40]
+        ORDER_EVT["at"] = datetime.now().strftime("%H:%M:%S")
+        broker.recon_kick("券商通知 %s" % str(stat)[:30])
+        print("[委託通知] %s %s" % (ORDER_EVT["at"], ORDER_EVT["last"]), flush=True)
+    except Exception:                                       # noqa: BLE001
+        pass
 
 
 def _query_bg_once():
@@ -5771,6 +5867,13 @@ def _recover_chain(pos):
 
 
 def main():
+    # ⭐ 2026-11-27 查詢預算：本月用到 600／900／1,200／1,400／1,500 次各推一次手機；關掉時把計數落地
+    qbudget.PUSH = _push
+    try:
+        import atexit
+        atexit.register(qbudget.save)
+    except Exception:                     # noqa: BLE001
+        pass
     # ⛔ 09:03:30 的掛勾只有這裡會接（接上去就會真的送單，見 auto_fire.py）。
     #    13:43:30 的收盤平倉掛勾同理（接上去就會真的送出平倉單）。
     #    沒有 global 的話下面那兩行只會建區域變數 ⇒ 接線靜靜地沒生效。
@@ -5897,8 +6000,13 @@ def main():
                 session["api"].logout()
             except Exception:
                 pass
-        api = sj.Shioaji()
+        # ⭐ 2026-11-27 查詢預算：包一層記數（qbudget.Counted）⇒ 之後所有地方用的都是這個代理
+        api = qbudget.install(sj.Shioaji())
         api.login(api_key=api_key, secret_key=secret)
+        try:
+            api.set_order_callback(on_order_event)   # 券商推來委託／成交通知 ⇒ 提醒背景對帳（推送不是查詢）
+        except Exception as e:                       # noqa: BLE001
+            print("⚠️ [委託通知] 接不上（對帳改靠保底定時）：%s" % str(e)[:120], flush=True)
         contract = pick_live_contract(api)
         # 【真實下單一定要憑證】沒啟用的話送單會被永豐擋下來（CA not activated）。
         # 模擬帳戶不需要憑證，所以模擬測兩輪都測不到這一關 —— 2026-09-01 第一次按真單才發現。
@@ -6042,7 +6150,8 @@ def main():
             #    ⛔ 已經有的（重啟後即時收到的）不覆蓋。
             try:
                 contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
-                df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
+                with qbudget.fresh():                 # ⭐ 2026-11-27：開盤補資料一定要新的（不走 K 棒快取）
+                    df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
                 if not df.empty:
                     df["ts"] = pd.to_datetime(df["ts"])
                     _tt = df["ts"].dt.time
@@ -6063,7 +6172,8 @@ def main():
             return
         try:
             contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
-            df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
+            with qbudget.fresh():                 # ⭐ 2026-11-27：開盤補資料一定要新的（不走 K 棒快取）
+                df = pd.DataFrame({**api.kbars(contract, start=str(today), end=str(today))})
             if df.empty:
                 return
             df["ts"] = pd.to_datetime(df["ts"])
@@ -6272,7 +6382,7 @@ def main():
                     quiet = quiet_seconds(st.last_recv if st else None, session.get("conn_at"),
                                           sess, time.time())
                     lost = (quiet is not None and quiet > STALE_SECONDS) or not CONN["ok"]
-                    if lost and time.time() - last_retry > RECONNECT_EVERY:
+                    if lost and time.time() - last_retry > reconnect_gap(CONN["retries"], broker.has_position()):
                         last_retry = time.time()
                         CONN["ok"] = False
                         where = "日盤" if in_day else "夜盤"
@@ -6298,7 +6408,8 @@ def main():
                             try_reconnect("五檔已 %d 秒沒進來（成交還在）" % int(_dq))
                     except Exception as _de:      # noqa: BLE001
                         print("⚠️ 五檔看門狗出錯（不影響停損）：%s" % str(_de)[:120])
-                elif CONN["ok"] is False and time.time() - last_retry > RECONNECT_EVERY * 5:
+                elif CONN["ok"] is False and time.time() - last_retry > max(RECONNECT_EVERY * 5,
+                                                                             reconnect_gap(CONN["retries"], False)):
                     # 休市時段（13:45~15:00、05:00~08:45）慢慢重試就好
                     last_retry = time.time()
                     try_reconnect("休市時段定期重試")

@@ -28,7 +28,7 @@ def say(ok, name, got=""):
 print("=== ① 能不能進場：畫面用的那份要節流 ===")
 calls = []
 real = broker.can_enter
-broker.can_enter = lambda px, live: (calls.append((px, live)) or (True, None))
+broker.can_enter = lambda px, live, query=True: (calls.append((px, live)) or (True, None))
 try:
     LP._CAN_ENTER_VIEW.update(at=0.0, key=None, v=(False, ""))
     t0 = 1000.0

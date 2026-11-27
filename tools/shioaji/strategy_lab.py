@@ -812,6 +812,12 @@ def fetch_today(api, has_position, now=None, qt=None):
         lt = FETCH.get("last_try")
         if lt is not None and (now - lt).total_seconds() < FETCH_RETRY_S:
             return FETCH["status"]
+        try:                      # ⭐ 2026-11-27 查詢預算：今天／本月的可有可無額度用完 ⇒ 不抓
+            import qbudget
+            if not qbudget.optional_ok():
+                return _set("budget", "跟永豐的查詢次數今天的額度用完了", now)
+        except Exception:         # noqa: BLE001
+            pass
         FETCH["last_try"] = now
         u = api.usage(timeout=USAGE_TIMEOUT_MS)
         used, lim = float(u.bytes), float(u.limit_bytes)

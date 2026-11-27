@@ -339,7 +339,7 @@ def equity_view(now=None):
 
 
 USAGE_DIR = HERE / "usage"             # ⛔ gitignore
-USAGE_EVERY = 600.0
+USAGE_EVERY = 24 * 3600.0   # ⭐ 2026-11-27 查詢預算：10 分鐘 ⇒ 一天一次（api.usage 也算一次查詢）
 USAGE = {"at_ts": 0.0, "bytes": None, "limit": None, "conn": None, "at": None, "err": None}
 
 
@@ -352,6 +352,12 @@ def _usage_poll(now):
     """
     if time.time() - USAGE["at_ts"] < USAGE_EVERY:
         return
+    try:
+        import qbudget
+        if not qbudget.optional_ok():
+            return
+    except Exception:                       # noqa: BLE001
+        pass
     USAGE["at_ts"] = time.time()
     api = api_now()
     if api is None:
