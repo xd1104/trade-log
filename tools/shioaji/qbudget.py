@@ -16,6 +16,7 @@
 ⛔ list_trades() 是 SDK 本機的委託清單（不連線）⇒ 另記在 local，不算進總數（⚠️ 未跟永豐確認過）。
 """
 import json
+import os
 import sys
 import threading
 import time
@@ -28,7 +29,7 @@ DIR = HERE / "usage"
 
 MONTH_CAP = 1500            # 營業員給的線
 MONTH_SOFT = 1200           # 過了這條，可有可無的查詢整個月都停
-DAY_SOFT = 45               # 今天過了這條，可有可無的查詢今天停（1,500 ÷ 約 22 個交易日 ≈ 68，留一半給下單）
+DAY_SOFT = 90               # 今天（含下單那些必要的）過了這條，可有可無的查詢今天停；月線 MONTH_SOFT 才是主要防線
 WARN_AT = (600, 900, 1200, 1400, 1500)
 
 # 會連到券商的方法（Shioaji 物件本身）
@@ -76,7 +77,7 @@ def _caller():
     try:
         here = str(HERE).replace("\\", "/").lower()
         for fr in reversed(traceback.extract_stack(limit=12)):
-            fn = fr.filename.replace("\\", "/").lower()
+            fn = os.path.abspath(fr.filename).replace("\\", "/").lower()   # runpy 跑的檔名是相對路徑
             if fn.startswith(here) and not fn.endswith("/qbudget.py"):
                 return "%s.%s" % (Path(fr.filename).stem, fr.name)
     except Exception:                       # noqa: BLE001
@@ -239,13 +240,58 @@ class _Proxy:
         return "Counted(%r)" % (object.__getattribute__(self, "_o"),)
 
 
-# ⭐ K 棒快取：同一段（合約、起、迄）過去的日子永遠不會變 ⇒ 記住；包含今天的 ⇒ KBARS_TODAY_TTL 秒內重用
-#    （畫面的 K 線會用即時 tick 蓋掉 kbars 最後一分鐘之後的部分 ⇒ 舊幾分鐘看不出來）。
-#    ⛔ 開盤補資料（seed_from_bars）一定要新的 ⇒ 包在 `with qbudget.fresh():` 裡就不走快取。
-KBARS_TODAY_TTL = 900.0
+# ⭐ K 棒快取（品管 M4：畫面每秒要一次圖，原本今天的 kbars 每 15 分鐘就問一次、週末下週一的空結果也一直重問）
+#    到期規則：
+#      ・過去的日子、有資料 ⇒ 跨日 KBARS_PAST_SETTLE_S 秒之後抓到的才永久記（午夜剛過抓的可能少最後一根）
+#      ・未來的日子（週末畫面指到下週一）⇒ 記到那一天開始
+#      ・今天、有資料 ⇒ 記到下一個盤別邊界（05:00、08:45、13:45、15:00）——之後的分鐘由畫面用即時 tick 補
+#        （overlay_live）；斷線重連時 connect() 叫 kbars_reset() 清掉，重連後第一次會重問
+#      ・今天但空的 ⇒ KBARS_EMPTY_TTL 秒
+#    ⛔ 開盤補資料（seed_from_bars）一定要新的 ⇒ 包在 `with qbudget.fresh():` 裡就不走快取（結果照樣記住）。
+KBARS_EMPTY_TTL = 300.0
+KBARS_PAST_SETTLE_S = 600.0
+KBARS_BOUNDARIES = ("05:00", "08:45", "13:45", "15:00")
 KBARS_KEEP = 64
 _KB = {}
 _TL = threading.local()
+
+
+def kbars_reset():
+    """斷線重連後叫：今天的 K 棒快取全部作廢（斷線那段可能缺分鐘）。"""
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        for k in [k for k in _KB if k[2][:10] >= today]:
+            _KB.pop(k, None)
+    except Exception:                       # noqa: BLE001
+        pass
+
+
+def _next_boundary(now_dt):
+    from datetime import timedelta
+    for d in (0, 1):
+        day = (now_dt + timedelta(days=d)).date()
+        for hm in KBARS_BOUNDARIES:
+            t = datetime.strptime("%s %s" % (day, hm), "%Y-%m-%d %H:%M")
+            if t > now_dt:
+                return t.timestamp()
+    return now_dt.timestamp() + 3600
+
+
+def _kb_expire(key, out, now_dt):
+    """⇒ 到期的時間戳（None＝永久）。"""
+    end = key[2][:10]
+    today = now_dt.strftime("%Y-%m-%d")
+    n = len(getattr(out, "ts", []) or [])
+    if end > today:
+        return datetime.strptime(end, "%Y-%m-%d").timestamp()
+    if end < today:
+        midnight = datetime.strptime(today, "%Y-%m-%d").timestamp()
+        if n and now_dt.timestamp() - midnight >= KBARS_PAST_SETTLE_S:
+            return None
+        return now_dt.timestamp() + KBARS_EMPTY_TTL
+    if not n:
+        return now_dt.timestamp() + KBARS_EMPTY_TTL
+    return _next_boundary(now_dt)
 
 
 class fresh:
@@ -271,23 +317,21 @@ def _kb_key(a, k):
         return None
 
 
-def _kbars(v, a, k):
+def _kbars(v, a, k, now_dt=None):
     key = _kb_key(a, k)
-    now = time.time()
+    now_dt = now_dt or datetime.now()
+    now = now_dt.timestamp()
     if key is not None and not getattr(_TL, "fresh", 0):
         hit = _KB.get(key)
-        if hit is not None and (hit[0] is None or now - hit[0] < KBARS_TODAY_TTL):
+        if hit is not None and (hit[0] is None or now < hit[0]):
             return hit[1]
     note("kbars")
     out = v(*a, **k)
     if key is not None:
         try:
-            past = key[2][:10] < datetime.now().strftime("%Y-%m-%d")
-            if past and not len(getattr(out, "ts", []) or []):
-                past = False                # 空的（休市或還沒有）⇒ 不永久記
-            _KB[key] = (None if past else now, out)
+            _KB[key] = (_kb_expire(key, out, now_dt), out)
             if len(_KB) > KBARS_KEEP:
-                for kk in sorted(_KB, key=lambda x: (_KB[x][0] or 0))[: len(_KB) - KBARS_KEEP]:
+                for kk in sorted(_KB, key=lambda x: (_KB[x][0] or float("inf")))[: len(_KB) - KBARS_KEEP]:
                     _KB.pop(kk, None)
         except Exception:                   # noqa: BLE001
             pass

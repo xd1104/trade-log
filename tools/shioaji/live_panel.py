@@ -304,6 +304,22 @@ RECONNECT_EVERY = 60        # 斷線後每隔多久重試一次
 RECONNECT_MAX = 600         # ⭐ 2026-11-27 查詢預算：連續失敗就拉長（每次登入也算一次查詢）；有部位照舊 60 秒
 
 
+def offhours_gap(retries, now):
+    """
+    休市時段斷線重試的間隔（品管建議 2：週末券商維護時登入一直失敗，每 10 分鐘一次 ⇒ 一個週末約 300 次登入）。
+    ⇒ 平常 300 秒起、連續失敗照 reconnect_gap 拉長；離下一盤開盤（08:45／15:00）超過 30 分鐘時最多 1 小時一次。
+    """
+    g = max(RECONNECT_EVERY * 5, reconnect_gap(retries, False))
+    try:
+        hm = now.strftime("%H:%M")
+        near_open = now.weekday() < 5 and ("08:15" <= hm < "08:45" or "14:30" <= hm < "15:00")
+        if not near_open and int(retries or 0) >= 3:
+            g = max(g, 3600.0)
+    except Exception:                     # noqa: BLE001
+        pass
+    return g
+
+
 def reconnect_gap(retries, has_pos):
     """斷線重連的間隔：前 3 次 60 秒，之後 120、240、480…最多 600 秒；有部位一律 60 秒（停損要連線）。"""
     try:
@@ -4948,7 +4964,13 @@ EQ_DUE = {"first": True, "had_pos": False, "close_at": None, "done": set(), "las
 
 
 def _eq_checkpoints(now):
-    cps = list(EQ_CHECKPOINTS)
+    wd = now.weekday()
+    # ⭐ 週末沒有盤：週六只留 05:06（週五夜盤收完）、週日全不問；週一 05:06 沒有夜盤可收 ⇒ 不問
+    if wd == 6:
+        return []
+    if wd == 5:
+        return ["05:06"]
+    cps = [c for c in EQ_CHECKPOINTS if not (wd == 0 and c == "05:06")]
     try:
         _d, t = night_moments(now)
         if t is not None:
@@ -5387,6 +5409,7 @@ def request_restart():
     def _hard():
         # 主迴圈 20 秒內還沒收完（例如卡在永豐的呼叫）⇒ 直接結束，看門狗照樣會重開
         time.sleep(20)
+        qbudget.save()                  # ⭐ 2026-11-27：os._exit 不跑 atexit ⇒ 先把查詢計數落地
         os._exit(RESTART_EXIT)
     threading.Thread(target=_hard, daemon=True).start()
     return 200, {"ok": True, "msg": "收到，面板正在重啟，大約一分鐘後會自己接回來"}
@@ -6034,6 +6057,9 @@ def main():
         except Exception as e:                # noqa: BLE001
             print("⚠️ [小台] 找不到跟微台同月的小台合約：%s" % str(e)[:120])
         broker.configure(api, contract, {"MXF": mxf})   # 真實下單要用同一個連線與同一組合約
+        # ⭐ 2026-11-27 查詢預算（品管 M1）：斷線期間收不到委託／成交通知 ⇒ 重連後馬上對一次帳；今天的 K 棒快取作廢
+        broker.recon_kick("重連", after=(1.0,))
+        qbudget.kbars_reset()
         api.set_on_tick_fop_v1_callback(on_tick)
         api.set_on_bidask_fop_v1_callback(on_bidask)
         # 成交 + 五檔都訂：成交價進模型，五檔負責讓畫面跟得上市場
@@ -6090,7 +6116,9 @@ def main():
         ⇒ 背景每 60 秒補一次（⛔ 舊版要等報價斷 90 秒才重連，報價正常時可以卡好幾個小時 ⇒ 每一筆都「憑證沒啟用」不送）。
         ⛔ 主迴圈只做判斷與開執行緒（不呼叫券商 API）；⛔ 正在送單／平倉時不動。
         """
-        if time.time() - HEAL["at"] < 60:
+        # ⭐ 2026-11-27 查詢預算（品管建議 1）：憑證／帳號一直補不到 ⇒ 每 60 秒一次會一天 1,440 次
+        #    ⇒ 連續失敗就拉長（60、120、240…封頂 1,800 秒）
+        if time.time() - HEAL["at"] < min(1800.0, 60.0 * 2 ** min(5, HEAL.get("n", 0))):
             return
         th = HEAL["th"]
         if th is not None and th.is_alive():
@@ -6103,8 +6131,10 @@ def main():
         need_acc = broker._state.get("account") is None
         need_mxf = broker.MINI_FLAG.exists() and (broker._state.get("contracts") or {}).get("MXF") is None
         if not (need_ca or need_acc or need_mxf):
+            HEAL["n"] = 0
             return
         HEAL["at"] = time.time()
+        HEAL["n"] = HEAL.get("n", 0) + 1         # 補成功（不再需要）時下面歸零
         contract = session.get("contract")
 
         def run():
@@ -6196,7 +6226,12 @@ def main():
 
     def start_day(today):
         try:
-            api, contract = connect()
+            # ⭐ 2026-11-27 查詢預算：週末（沒有盤）連線還在就不重新登入（一次約 10 次查詢）；平日照舊每天 08:30 重登
+            if today.weekday() >= 5 and session.get("api") is not None and CONN.get("ok"):
+                api, contract = session["api"], session["contract"]
+                print(f"[{today}] 週末：連線還在，不重新登入")
+            else:
+                api, contract = connect()
             prev_close = prev_trading_close(api, contract, today)
         except Exception as e:
             CONN.update({"ok": False, "last_error": str(e)[:200],
@@ -6408,8 +6443,7 @@ def main():
                             try_reconnect("五檔已 %d 秒沒進來（成交還在）" % int(_dq))
                     except Exception as _de:      # noqa: BLE001
                         print("⚠️ 五檔看門狗出錯（不影響停損）：%s" % str(_de)[:120])
-                elif CONN["ok"] is False and time.time() - last_retry > max(RECONNECT_EVERY * 5,
-                                                                             reconnect_gap(CONN["retries"], False)):
+                elif CONN["ok"] is False and time.time() - last_retry > offhours_gap(CONN["retries"], now):
                     # 休市時段（13:45~15:00、05:00~08:45）慢慢重試就好
                     last_retry = time.time()
                     try_reconnect("休市時段定期重試")
@@ -6499,6 +6533,7 @@ def main():
             except Exception:
                 pass
     if RESTART["at"]:
+        qbudget.save()                  # ⭐ 2026-11-27：os._exit 不跑 atexit ⇒ 先把查詢計數落地
         os._exit(RESTART_EXIT)          # ⭐ 重啟鈕：已登出 ⇒ 結束，看門狗重開（⛔ os._exit：別等背景執行緒）
 
 
