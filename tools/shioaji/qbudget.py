@@ -244,9 +244,11 @@ class _Proxy:
 #    到期規則：
 #      ・過去的日子、有資料 ⇒ 跨日 KBARS_PAST_SETTLE_S 秒之後抓到的才永久記（午夜剛過抓的可能少最後一根）
 #      ・未來的日子（週末畫面指到下週一）⇒ 記到那一天開始
-#      ・今天、有資料 ⇒ 記到下一個盤別邊界（05:00、08:45、13:45、15:00）——之後的分鐘由畫面用即時 tick 補
-#        （overlay_live）；斷線重連時 connect() 叫 kbars_reset() 清掉，重連後第一次會重問
-#      ・今天但空的 ⇒ KBARS_EMPTY_TTL 秒
+#      ・今天、有資料 ⇒ 記到「下一個盤別邊界（05:00、08:45、13:45、15:00）」和「今晚午夜」較早的那個
+#        （品管 N1：夜盤那份不可以撐過午夜——過了午夜它變成「昨天」，K 線圖那條路會永久留著缺了晚上的那份）；
+#        之後的分鐘由畫面用即時 tick 補（overlay_live）；斷線重連時 connect() 叫 kbars_reset() 清掉
+#      ・今天但空的 ⇒ 開盤前記到下一個邊界；盤中 min(KBARS_EMPTY_TTL 秒, 下一個邊界)
+#      ・呼叫端可以 `with qbudget.max_age(秒):` 再壓短（品管 N2：沒有即時 tick 補的路徑，例如 one_min_bars(今天)）
 #    ⛔ 開盤補資料（seed_from_bars）一定要新的 ⇒ 包在 `with qbudget.fresh():` 裡就不走快取（結果照樣記住）。
 KBARS_EMPTY_TTL = 300.0
 KBARS_PAST_SETTLE_S = 600.0
@@ -254,6 +256,22 @@ KBARS_BOUNDARIES = ("05:00", "08:45", "13:45", "15:00")
 KBARS_KEEP = 64
 _KB = {}
 _TL = threading.local()
+
+
+class max_age:
+    """`with qbudget.max_age(900):` 裡面叫的 kbars：快取超過這麼多秒就重問（結果照樣記住）。"""
+
+    def __init__(self, s):
+        self.s = float(s)
+
+    def __enter__(self):
+        self.prev = getattr(_TL, "max_age", None)
+        _TL.max_age = self.s if self.prev is None else min(self.prev, self.s)
+        return self
+
+    def __exit__(self, *a):
+        _TL.max_age = self.prev
+        return False
 
 
 def kbars_reset():
@@ -289,9 +307,14 @@ def _kb_expire(key, out, now_dt):
         if n and now_dt.timestamp() - midnight >= KBARS_PAST_SETTLE_S:
             return None
         return now_dt.timestamp() + KBARS_EMPTY_TTL
+    from datetime import timedelta
+    nb = _next_boundary(now_dt)
+    midnight = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=1)).timestamp()
     if not n:
-        return now_dt.timestamp() + KBARS_EMPTY_TTL
-    return _next_boundary(now_dt)
+        hm = now_dt.strftime("%H:%M")
+        in_session = ("08:45" <= hm < "13:45") or hm >= "15:00" or hm < "05:00"
+        return min(nb, midnight) if not in_session else min(nb, midnight, now_dt.timestamp() + KBARS_EMPTY_TTL)
+    return min(nb, midnight)
 
 
 class fresh:
@@ -323,13 +346,14 @@ def _kbars(v, a, k, now_dt=None):
     now = now_dt.timestamp()
     if key is not None and not getattr(_TL, "fresh", 0):
         hit = _KB.get(key)
-        if hit is not None and (hit[0] is None or now < hit[0]):
+        ma = getattr(_TL, "max_age", None)
+        if hit is not None and (hit[0] is None or now < hit[0]) and (ma is None or now - hit[2] < ma):
             return hit[1]
     note("kbars")
     out = v(*a, **k)
     if key is not None:
         try:
-            _KB[key] = (_kb_expire(key, out, now_dt), out)
+            _KB[key] = (_kb_expire(key, out, now_dt), out, now)
             if len(_KB) > KBARS_KEEP:
                 for kk in sorted(_KB, key=lambda x: (_KB[x][0] or float("inf")))[: len(_KB) - KBARS_KEEP]:
                     _KB.pop(kk, None)

@@ -127,7 +127,7 @@ with Q.fresh():
     api.kbars("TMFR1", start=today, end=today)
 chk("fresh() 一定重問", raw.calls.count("kbars"), 3)
 k = ("TMFR1", today, today, ())
-Q._KB[k] = (time.time() - 1, Q._KB[k][1])
+Q._KB[k] = (time.time() - 1, Q._KB[k][1], time.time())
 api.kbars("TMFR1", start=today, end=today)
 chk("今天過了到期時間重問", raw.calls.count("kbars"), 4)
 raw.kb_ret = Kb(ts=[])
@@ -140,9 +140,9 @@ reset_q()
 d0 = datetime(2026, 11, 27, 10, 0)
 for i in range(Q.DAY_SOFT - 1):
     Q.note("margin", d0, who="t")
-chk("今天 44 次 ⇒ 還可以", Q.optional_ok(d0), True)
+chk("今天 89 次 ⇒ 還可以", Q.optional_ok(d0), True)
 Q.note("margin", d0, who="t")
-chk("今天 45 次 ⇒ 可有可無的停", Q.optional_ok(d0), False)
+chk("今天 90 次 ⇒ 可有可無的停", Q.optional_ok(d0), False)
 chk("隔天重新算", Q.optional_ok(d0 + timedelta(days=1)), True)
 reset_q()
 for i in range(Q.MONTH_SOFT):
@@ -314,14 +314,50 @@ chk("未來的日子（週末指到週一）⇒ 記到週一", Q._kb_expire(K("2
     datetime(2026, 11, 30).timestamp())
 chk("今天有資料、盤中 10:00 ⇒ 記到 13:45", Q._kb_expire(K("2026-11-28"), full, now_dt),
     datetime(2026, 11, 28, 13, 45).timestamp())
-chk("今天有資料、20:00 ⇒ 記到隔天 05:00", Q._kb_expire(K("2026-11-28"), full, datetime(2026, 11, 28, 20, 0)),
+chk("⭐N1 今天有資料、20:00 ⇒ 記到今晚午夜（不撐過午夜）", Q._kb_expire(K("2026-11-28"), full, datetime(2026, 11, 28, 20, 0)),
+    datetime(2026, 11, 29, 0, 0).timestamp())
+chk("今天有資料、00:30 ⇒ 記到 05:00", Q._kb_expire(K("2026-11-29"), full, datetime(2026, 11, 29, 0, 30)),
     datetime(2026, 11, 29, 5, 0).timestamp())
-chk("今天空的 ⇒ 5 分鐘", Q._kb_expire(K("2026-11-28"), empty, now_dt), now_dt.timestamp() + 300)
-Q._KB[K(datetime.now().strftime("%Y-%m-%d"))] = (None, full)
-Q._KB[K("2026-11-20")] = (None, full)
+chk("今天空的、開盤前 08:44 ⇒ 記到 08:45", Q._kb_expire(K("2026-11-30"), empty, datetime(2026, 11, 30, 8, 44)),
+    datetime(2026, 11, 30, 8, 45).timestamp())
+chk("今天空的、週一 03:00（夜盤時段）⇒ 5 分鐘", Q._kb_expire(K("2026-11-30"), empty, datetime(2026, 11, 30, 3, 0)),
+    datetime(2026, 11, 30, 3, 5).timestamp())
+chk("今天空的、盤中 10:00 ⇒ 5 分鐘", Q._kb_expire(K("2026-11-28"), empty, now_dt), now_dt.timestamp() + 300)
+Q._KB[K(datetime.now().strftime("%Y-%m-%d"))] = (None, full, 0)
+Q._KB[K("2026-11-20")] = (None, full, 0)
 Q.kbars_reset()
 chk("重連後今天的快取作廢、過去的留著", sorted(k[1] for k in Q._KB), ["2026-11-20"])
 Q._KB.clear()
+raw2 = FakeApi()
+api2 = Q.install(raw2)
+api2.kbars("TMFR1", start=today, end=today)
+with Q.max_age(900):
+    api2.kbars("TMFR1", start=today, end=today)
+chk("⭐N2 max_age 內：剛抓的照用", raw2.calls.count("kbars"), 1)
+kk = ("TMFR1", today, today, ())
+Q._KB[kk] = (Q._KB[kk][0], Q._KB[kk][1], time.time() - 901)
+with Q.max_age(900):
+    api2.kbars("TMFR1", start=today, end=today)
+chk("⭐N2 max_age：超過 900 秒就重問", raw2.calls.count("kbars"), 2)
+Q._KB[kk] = (Q._KB[kk][0], Q._KB[kk][1], time.time() - 901)
+api2.kbars("TMFR1", start=today, end=today)
+chk("沒包 max_age（K 線圖那條）照到期時間用快取", raw2.calls.count("kbars"), 2)
+Q._KB.clear()
+print("④c tp_pending 但已經在平倉 ⇒ 不算過渡")
+broker._state["position"] = {"dir": 1, "qty": 2, "own": True, "tp_pending": {"px": 1}, "close_reason": "sl"}
+broker._LAST_RECONCILE.update(at=t0, unknown=False)
+chk("平倉過的 tp_pending 不再 15 秒一次", broker._transient_gap(t0 + 20), None)
+broker._state["position"] = None
+print("⑦b 查詢線壞掉的重連退避")
+LP.QUERY.update(fail=5, since=1000.0, reconn_at=2000.0, kick=None, streak=0)
+chk("第一次：120 秒後可以重連", (LP.query_need_reconnect(2119) is None, LP.query_need_reconnect(2121) is not None), (True, True))
+LP.QUERY["streak"] = 2
+chk("連續重連 2 次還沒好 ⇒ 480 秒", (LP.query_need_reconnect(2479) is None, LP.query_need_reconnect(2481) is not None), (True, True))
+LP.QUERY["kick"] = "送單前"
+chk("送單前問不到照舊 120 秒", LP.query_need_reconnect(2121) is not None, True)
+LP._query_note(True, 1.0)
+chk("查詢成功一次 ⇒ 歸零", LP.QUERY["streak"], 0)
+LP.QUERY.update(fail=0, since=None, kick=None, streak=0, reconn_at=0.0)
 
 print("⑥ live_panel._eq_due")
 LP.EQ_DUE.update(first=True, had_pos=False, close_at=None, done=set(), last=None)

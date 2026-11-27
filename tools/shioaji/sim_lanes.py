@@ -1612,7 +1612,14 @@ def fetch_night(api, has_position, E, local, now):
     # ⚠️ 一天一天要（跟 live_panel._raw_days 同一招）：區間端點碰到非交易日（週六）永豐會整段回 404
     for dd in (E, E + timedelta(days=1)):
         try:
-            df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
+            try:                        # ⭐ 2026-11-27 查詢預算：剛收盤抓到的可能不完整 ⇒ 快取最多 10 分鐘就重問
+                import qbudget
+                _ma = qbudget.max_age(600)
+            except Exception:           # noqa: BLE001
+                import contextlib
+                _ma = contextlib.nullcontext()
+            with _ma:
+                df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
         except Exception as e:
             errs.append("%s：%s" % (dd, str(e)[:60]))
             continue

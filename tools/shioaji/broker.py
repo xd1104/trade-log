@@ -926,7 +926,9 @@ def _transient_gap(now):
     pos = _state["position"]
     if not isinstance(pos, dict):
         return None
-    if pos.get("tp_pending") is not None or pos.get("diff_susp") or pos.get("shrink_pend") or own_shell(pos):
+    # ⭐ 品管第二輪建議 1：平倉過（close_reason）之後 tp_pending 不會再被補掛處理 ⇒ 不拿它當過渡狀態（否則整段 15 秒一次）
+    tp_wait = pos.get("tp_pending") is not None and not pos.get("close_reason")
+    if tp_wait or pos.get("diff_susp") or pos.get("shrink_pend") or own_shell(pos):
         return RECON_TRANSIENT_EVERY
     sa = pos.get("mix_sent_at")
     if isinstance(sa, (int, float)):

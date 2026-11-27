@@ -3733,7 +3733,8 @@ def one_min_bars(d):
         if api is not None:
             try:
                 contract = getattr(api.Contracts.Futures, PRODUCT)[f"{PRODUCT}R1"]
-                df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
+                with qbudget.max_age(900):    # ⭐ 品管 N2：這條沒有即時 tick 補（程式下單頁、結算、MFE）⇒ 今天的最多 15 分鐘舊
+                    df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
             except Exception as e:
                 print(f"[回顧] 跟永豐要 {dd} 的 K 棒失敗：{str(e)[:80]}")
                 df = None
@@ -5145,6 +5146,10 @@ def prev_trading_close(api, contract, today):
             continue
         if not df.empty:
             frames.append(df)
+            # ⭐ 2026-11-27 查詢預算（品管建議 5）：從最近一天往回找，第一個有日盤 K 棒的就是答案 ⇒ 找到就停（舊版固定問 8 天）
+            _t = pd.to_datetime(df["ts"]).dt.time
+            if ((_t >= SESSION_OPEN) & (_t < DAY_END)).any():
+                break
     if not frames:
         return None
     all_df = pd.concat(frames, ignore_index=True)
@@ -5456,7 +5461,7 @@ def _query_note(ok, secs, err=None, now=None):
     q = QUERY
     q["last_s"] = None if secs is None else round(secs, 1)
     if ok and (secs is None or secs <= QUERY_SLOW_S):
-        q.update(fail=0, since=None, last_ok=now, last_err=None)
+        q.update(fail=0, since=None, last_ok=now, last_err=None, streak=0)
         return
     q["fail"] += 1
     if q["since"] is None:
@@ -5477,6 +5482,11 @@ def query_need_reconnect(now=None):
         return None
     if q["kick"]:
         return "送單前問不到券商部位（%s）" % q["kick"]
+    # ⭐ 2026-11-27 查詢預算（品管建議 2）：查詢線長時間壞掉 ⇒ 每 2 分鐘重登一次很花次數 ⇒ 連續重連還沒好過就拉長
+    #    （120、240、480、600 秒封頂）。⛔ 送單前問不到（上面那條 kick）不受影響，照舊 120 秒內就換線。
+    gap = min(600.0, QUERY_RECONNECT_GAP * 2 ** min(3, int(q.get("streak") or 0)))
+    if now - q["reconn_at"] < gap:
+        return None
     if q["fail"] >= QUERY_BAD_N and q["since"] is not None and now - q["since"] >= QUERY_BAD_S:
         return "跟券商查詢連續 %d 次失敗、已 %d 秒（%s）" % (q["fail"], int(now - q["since"]), q["last_err"] or "")
     return None
@@ -5485,6 +5495,7 @@ def query_need_reconnect(now=None):
 def query_reconnected(now=None):
     QUERY.update(kick=None, reconn_at=time.time() if now is None else now)
     QUERY["reconn_n"] += 1
+    QUERY["streak"] = int(QUERY.get("streak") or 0) + 1   # 查詢成功一次（_query_note）就歸零
     QUERY.update(fail=0, since=None)
 
 
@@ -6117,8 +6128,9 @@ def main():
         ⛔ 主迴圈只做判斷與開執行緒（不呼叫券商 API）；⛔ 正在送單／平倉時不動。
         """
         # ⭐ 2026-11-27 查詢預算（品管建議 1）：憑證／帳號一直補不到 ⇒ 每 60 秒一次會一天 1,440 次
-        #    ⇒ 連續失敗就拉長（60、120、240…封頂 1,800 秒）
-        if time.time() - HEAL["at"] < min(1800.0, 60.0 * 2 ** min(5, HEAL.get("n", 0))):
+        #    ⇒ 連續失敗就拉長（60、120、240、300 秒）
+        #    封頂 300 秒（品管：封頂太長會錯過 09:03:30 送單前最後一次補）
+        if time.time() - HEAL["at"] < min(300.0, 60.0 * 2 ** min(3, HEAL.get("n", 0))):
             return
         th = HEAL["th"]
         if th is not None and th.is_alive():
