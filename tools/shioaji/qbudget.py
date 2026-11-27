@@ -29,7 +29,7 @@ DIR = HERE / "usage"
 
 MONTH_CAP = 1500            # 營業員給的線
 MONTH_SOFT = 1200           # 過了這條，可有可無的查詢整個月都停
-DAY_SOFT = 90               # 今天（含下單那些必要的）過了這條，可有可無的查詢今天停；月線 MONTH_SOFT 才是主要防線
+DAY_SOFT = 60               # 今天（含下單那些必要的）過了這條，可有可無的查詢今天停；月線 MONTH_SOFT 才是主要防線
 WARN_AT = (600, 900, 1200, 1400, 1500)
 
 # 會連到券商的方法（Shioaji 物件本身）
@@ -39,6 +39,10 @@ API_METHODS = ("login", "logout", "activate_ca", "list_accounts", "fetch_contrac
                "usage", "place_order", "cancel_order", "update_order", "credit_enquires",
                "short_stock_sources", "subscribe_trade", "unsubscribe_trade", "account_balance")
 LOCAL_METHODS = ("list_trades",)
+# ⭐ 2026-11-27 營業員確認：算進 1,500 次的只有「查部位、查權益數、查平倉」⇒ 總數／額度／推播只看這幾個；
+#    其他（登入、訂閱、K 棒、委託狀態、下單…）照記，畫面另列「全部」。
+BROKER_COUNTED = ("list_positions", "list_position_detail", "margin", "account_balance",
+                  "list_profit_loss", "list_profit_loss_detail", "list_settlements")
 QUOTE_METHODS = ("subscribe", "unsubscribe")
 ORDER_METHODS = ("place_order", "cancel_order", "update_order")   # 下單（分開看，也算進總數）
 
@@ -125,8 +129,8 @@ def _warn(w, tot):
         pass
 
 
-def _month_total_locked():
-    return sum(sum(int(v) for v in d.values()) for d in _S["days"].values())
+def _month_total_locked(all_=False):
+    return sum(sum(int(v) for k, v in d.items() if all_ or k in BROKER_COUNTED) for d in _S["days"].values())
 
 
 def month_total(now=None):
@@ -139,7 +143,7 @@ def day_total(now=None):
     now = now or datetime.now()
     with _L:
         _roll(now)
-        return sum(int(v) for v in (_S["days"].get(now.strftime("%Y-%m-%d")) or {}).values())
+        return sum(int(v) for k, v in (_S["days"].get(now.strftime("%Y-%m-%d")) or {}).items() if k in BROKER_COUNTED)
 
 
 def optional_ok(now=None):
@@ -157,7 +161,8 @@ def save(force=True):
                 return
             body = {"month": _S["month"], "days": _S["days"], "by": _S["by"],
                     "local": _S["local"], "warned": _S["warned"],
-                    "total": _month_total_locked(), "saved_at": datetime.now().isoformat(timespec="seconds")}
+                    "total": _month_total_locked(), "all": _month_total_locked(True),
+                    "saved_at": datetime.now().isoformat(timespec="seconds")}
             _S["dirty"], _S["saved"] = False, time.time()
             month = _S["month"]
         DIR.mkdir(exist_ok=True)
@@ -179,14 +184,15 @@ def view(now=None):
     with _L:
         _roll(now)
         tot = _month_total_locked()
-        today = dict(_S["days"].get(now.strftime("%Y-%m-%d")) or {})
+        alls = _month_total_locked(True)
+        today = {k: v for k, v in (_S["days"].get(now.strftime("%Y-%m-%d")) or {}).items() if k in BROKER_COUNTED}
         meth = {}
         for d in _S["days"].values():
             for k, v in d.items():
                 meth[k] = meth.get(k, 0) + int(v)
         top = sorted(_S["by"].items(), key=lambda kv: -kv[1])[:12]
         local = _S["local"]
-    return {"month": _month(now), "total": tot, "cap": MONTH_CAP, "today": sum(today.values()),
+    return {"month": _month(now), "total": tot, "all": alls, "cap": MONTH_CAP, "today": sum(today.values()),
             "today_by": today, "by_method": meth, "top": top, "local": local,
             "optional_ok": tot < MONTH_SOFT and sum(today.values()) < DAY_SOFT}
 
