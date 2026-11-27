@@ -6297,7 +6297,10 @@ function sysHTML(s){
      '<div class="pbar'+(uw?' warn':'')+'"><i style="width:'+Math.min(100,Number(u.pct)||0).toFixed(1)+'%"></i></div>'+
      '<div class="row"><span>用了</span><b>'+esc(u.pct==null?'—':Number(u.pct).toFixed(1)+'%')+'</b></div>'+
      '<div class="row"><span>更新</span><b>'+esc(u.at||'—')+'</b></div>'):
-     '<div class="msg">'+esc(u.msg||'還沒問到')+'</div>')+'</div>';
+     '<div class="msg">'+esc(u.msg||'還沒問到')+'</div>')+
+   (E.qb?('<div class="row"><span>查詢本月</span><b'+(E.qb.total>=E.qb.cap?' class="warn"':'')+'>'+
+     esc(Number(E.qb.total).toLocaleString('en-US'))+'／'+esc(Number(E.qb.cap).toLocaleString('en-US'))+'</b></div>'+
+     '<div class="row"><span>查詢今天</span><b>'+esc(E.qb.today)+'</b></div>'):'')+'</div>';
  const d=E.depth||{};
  const card3='<div class="ac sc"><div class="k">五檔錄製</div><div class="big'+(d.warn?' warn':'')+'">'+
    (d.warn?'⚠ 有狀況':(d.msg?'錄製中':'—'))+'</div><div class="msg">'+esc(d.msg||'還沒有狀態')+'</div></div>';

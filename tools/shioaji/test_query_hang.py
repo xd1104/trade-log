@@ -98,7 +98,9 @@ LP.query_reconnected(now=now + 61)
 for i in range(3):
     LP._query_note(False, 30.0, "逾時", now=now + 62 + i * 30)
 chk("剛重連完 120 秒內不重連第二次", LP.query_need_reconnect(now + 150), None)
-chk("過了 120 秒還壞 ⇒ 再重連", bool(LP.query_need_reconnect(now + 190)), True)
+# ⭐ 2026-11-27 查詢預算：第一次重連之後還壞 ⇒ 第二次間隔拉長成 240 秒（送單前問不到那條照舊 120 秒）
+chk("重連一次還壞：240 秒內不重連", LP.query_need_reconnect(now + 290), None)
+chk("過了 240 秒還壞 ⇒ 再重連", bool(LP.query_need_reconnect(now + 310)), True)
 
 print("\n=== ④ 送單前問不到 ⇒ 馬上要重連 ===")
 reset_query()

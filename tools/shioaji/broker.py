@@ -161,6 +161,7 @@ def _ratio_of_trade(trade):
 def configure(api, contract, extra=None):
     """面板連上永豐之後叫一次。`extra`＝{"MXF": 小台合約}（⭐ 2026-11-06；沒給 ⇒ 只有微台）。"""
     _loop_reset()                          # ⭐ 第七輪品管 #2：重新連線 ⇒ 不沿用上一次的平倉單起算
+    _CLOSE_UNK.update(n=0, at=0.0)         # ⭐ 2026-11-27：換了新連線 ⇒ 平倉前對帳的退避重來（新線馬上可以問）
     with _lock:
         _state["api"] = api
         _state["contract"] = contract
@@ -881,8 +882,99 @@ def _recover_meta(got):
         got.update({k: extra[k] for k in _RECOVER_KEYS if k in extra})
 
 
-_LAST_RECONCILE = {"at": 0.0}
-RECONCILE_EVERY = 3.0     # 秒。面板每 0.25 秒跑一圈，不節流會把券商 API 打爆
+_LAST_RECONCILE = {"at": 0.0, "unknown": False}
+RECONCILE_EVERY = 3.0     # 秒。最短間隔：就算被提醒（下單、成交通知）也不會比這個密
+
+# ⭐⭐ 2026-11-27 查詢預算（永豐：每月查詢要壓到 1,500 次以下；qbudget.py）
+#    舊版：背景每 3 秒對帳一次 ⇒ 一天上萬次。新版**對帳的內容一行都沒改**，只改「什麼時候問」：
+#      ① 剛連上的第一次；② 被提醒：自己送單之後、券商推來委託或成交通知（recon_kick）⇒ 之後 5、30 秒各問一次；
+#      ③ 有部位：保底每 RECON_HOLD_EVERY 秒（2 小時）一次；④ 空手：保底 RECON_FLAT_EVERY（RECON_CHECKPOINTS 預設空）；
+#      ⑤ 上一次問不到（unknown）⇒ 有部位每 RECON_UNKNOWN_HOLD 秒、空手每 RECON_UNKNOWN_FLAT 秒重問。
+#    ⛔ 送單前（can_enter）與平倉前（close 的 fresh／again）照舊**一定**當場問 —— 這條不受預算影響。
+#    ⛔ 停損觸發看的是即時報價（訂閱推送，不是查詢）⇒ 停損反應速度不變。
+RECON_HOLD_EVERY = 7200.0
+RECON_FLAT_EVERY = 6 * 3600.0
+RECON_UNKNOWN_HOLD = 60.0
+RECON_UNKNOWN_FLAT = 600.0
+RECON_CHECKPOINTS = ()        # 空手時的固定檢查點（要的話填 "08:44" 這種；⛔ 他不手動下單 ⇒ 空手不必定時問）
+RECON_KICK_AFTER = (5.0, 30.0)
+_RECON_KICK = {"due": [], "why": None, "cp": set()}
+
+
+def recon_kick(why, now=None, after=RECON_KICK_AFTER):
+    """請背景對帳在接下來 5、30 秒各問一次（送單、券商推來通知時叫）。⛔ 純記憶體、不丟例外。"""
+    try:
+        now = time.time() if now is None else now
+        # ⭐ 品管建議 5：一筆混搭約 10 個事件 ⇒ 合併成「最後一個事件之後」各問一次（新的提醒取代還沒到的舊提醒）
+        _RECON_KICK["due"] = sorted(now + float(a) for a in after)
+        _RECON_KICK["why"] = str(why)[:60]
+    except Exception:                          # noqa: BLE001
+        pass
+
+
+RECON_TRANSIENT_EVERY = 15.0     # 部位在過渡狀態（見 _transient_gap）⇒ 多久問一次
+RECON_TRANSIENT_FRESH_S = 90.0   # 送出進場單後這麼久內算「剛進場」（IOC_FINAL_S 60 秒＋餘裕）
+RECON_LATE_EVERY = 120.0         # 晚到腿的窗口（LATE_LEG_S）內、但已過剛進場 ⇒ 多久問一次
+
+
+def _transient_gap(now):
+    """
+    ⭐ 品管 M3：帳本部位有幾個過渡狀態靠密集對帳推進（停利單還沒掛 tp_pending、差異待確認 diff_susp、
+    縮口待確認 shrink_pend、空殼（口數 0 但進場單沒結束）、剛送出進場單、晚到腿窗口）⇒ 這些時候多問。
+    ⇒ 間隔秒數；不在過渡狀態 ⇒ None。⛔ 純記憶體。
+    """
+    pos = _state["position"]
+    if not isinstance(pos, dict):
+        return None
+    # ⭐ 品管第二輪建議 1：平倉過（close_reason）之後 tp_pending 不會再被補掛處理 ⇒ 不拿它當過渡狀態（否則整段 15 秒一次）
+    tp_wait = pos.get("tp_pending") is not None and not pos.get("close_reason")
+    if tp_wait or pos.get("diff_susp") or pos.get("shrink_pend") or own_shell(pos):
+        return RECON_TRANSIENT_EVERY
+    sa = pos.get("mix_sent_at")
+    if isinstance(sa, (int, float)):
+        age = now - float(sa)
+        if 0 <= age < RECON_TRANSIENT_FRESH_S:
+            return RECON_TRANSIENT_EVERY
+        if 0 <= age < LATE_LEG_S:
+            return RECON_LATE_EVERY
+    return None
+
+
+def _recon_due(now, wall=None):
+    """背景對帳這一刻該不該問券商 ⇒ 原因字串或 None。⛔ 純記憶體。"""
+    at = float(_LAST_RECONCILE.get("at") or 0.0)
+    if at <= 0:
+        return "first"
+    if now - at < RECONCILE_EVERY:
+        return None
+    due = _RECON_KICK["due"]
+    if due and due[0] <= now:
+        _RECON_KICK["due"] = [t for t in due if t > now]
+        return "kick:%s" % (_RECON_KICK["why"] or "")
+    hold = _state["position"] is not None
+    if _LAST_RECONCILE.get("unknown"):
+        # ⭐ 品管 M1：還沒成功對帳過一次（剛重啟、記憶體是空的）⇒「空手」其實是「還不知道」⇒ 一律用短的那個
+        quick = hold or not _LAST_RECONCILE.get("ok_once")
+        if now - at >= (RECON_UNKNOWN_HOLD if quick else RECON_UNKNOWN_FLAT):
+            return "retry-unknown"
+        return None
+    tg = _transient_gap(now)
+    if tg is not None:
+        return "transient" if now - at >= tg else None
+    if hold:
+        return "hold" if now - at >= RECON_HOLD_EVERY else None
+    wall = wall or datetime.fromtimestamp(now)
+    hm = wall.strftime("%H:%M")
+    for cp in RECON_CHECKPOINTS:
+        key = "%s %s" % (wall.date(), cp)
+        if hm >= cp and key not in _RECON_KICK["cp"]:
+            _RECON_KICK["cp"].add(key)
+            if len(_RECON_KICK["cp"]) > 20:
+                _RECON_KICK["cp"] = {key}
+            last = datetime.fromtimestamp(at)
+            if last.strftime("%Y-%m-%d %H:%M") < key:      # 檢查點之後還沒問過 ⇒ 問
+                return "checkpoint " + cp
+    return "flat" if now - at >= RECON_FLAT_EVERY else None
 
 
 def reconcile_tick():
@@ -901,10 +993,16 @@ def reconcile_tick():
     if not is_live() and not (_state["position"] or {}).get("recovered"):
         return _state["position"]
     now = time.time()
-    if now - _LAST_RECONCILE["at"] < RECONCILE_EVERY:
+    why = _recon_due(now)
+    if why is None:
         return _state["position"]
     _LAST_RECONCILE["at"] = now
-    return reconcile()
+    _LAST_RECONCILE["why"] = why
+    out = reconcile()
+    _LAST_RECONCILE["unknown"] = (out == "unknown")
+    if out != "unknown":
+        _LAST_RECONCILE["ok_once"] = True
+    return out
 
 
 def _multi_pos(p):
@@ -1966,6 +2064,7 @@ def _send(order, why, product=None):
         if c is None:
             _log(why, {**body, "ok": False, "err": "沒有%s合約" % prod})
             return False, "沒有%s合約（連線時沒拿到）" % prod, None
+        recon_kick("送單 " + str(why))        # ⭐ 2026-11-27 查詢預算：送了單 ⇒ 背景對帳接著問幾次
         _ORDER_SEQ["n"] += 1                 # ⛔ 叫之前就算（叫到一半丟例外也可能已經送到券商）
         trade = api.place_order(c, order)
         _log(why, {**body, "ok": True,
@@ -1977,10 +2076,12 @@ def _send(order, why, product=None):
         return False, str(e)[:200], None
 
 
-def can_enter(price, quote_live):
+def can_enter(price, quote_live, query=True):
     """
     可不可以現在真實進場。回傳 (可以嗎, 不行的原因)。
     **每一條擋下來的理由都要講得出來** —— 按鈕變灰卻不說為什麼最讓人火大。
+    ⭐ 2026-11-27 查詢預算：`query=False`（只有畫面那顆燈用）⇒ 部位看記憶體、⛔ 不問券商。
+       ⛔ 真的要送單一律 query=True（預設）——送單前當場對帳這條不准省。
     """
     if price is None or not quote_live:
         return False, "現在沒有即時報價，不能用舊價下單"
@@ -1998,6 +2099,12 @@ def can_enter(price, quote_live):
     if n >= MAX_ENTRIES:
         return False, f"今天真實進場已經 {n} 次，達到上限 {MAX_ENTRIES} 次"
     t0 = time.time()
+    if not query:
+        if _LAST_RECONCILE.get("unknown"):
+            return False, RECON_FAIL_MSG
+        if _state["position"]:
+            return False, "已經有部位了，先平倉才能再進場"
+        return True, None
     pos = reconcile()
     if pos == "unknown":
         return False, RECON_FAIL_MSG
@@ -2853,6 +2960,20 @@ def close(reason):
         _close_lock.release()
 
 
+CLOSE_UNKNOWN_MAX = 10.0
+_CLOSE_UNK = {"n": 0, "at": 0.0}
+
+
+def _close_unknown_wait(now=None):
+    """平倉前對帳連續問不到 ⇒ 還要等幾秒（2、4、8、10…）。0 ⇒ 可以問。⛔ 純記憶體。"""
+    n = int(_CLOSE_UNK["n"] or 0)
+    if n <= 0:
+        return 0.0
+    gap = min(CLOSE_UNKNOWN_MAX, 2.0 ** n)
+    left = gap - ((time.time() if now is None else now) - float(_CLOSE_UNK["at"] or 0.0))
+    return max(0.0, left)
+
+
 def _close_locked(reason):
     import shioaji as sj
     # 失敗之後的冷卻：主迴圈每 0.25 秒就會再叫一次停損檢查，沒有冷卻的話
@@ -2862,9 +2983,19 @@ def _close_locked(reason):
             CLOSE_COOLDOWN - (time.time() - _close_fail["at"]))
     pos = _state["position"]
     if is_live():
+        # ⭐ 2026-11-27 查詢預算（品管 M2）：對帳問不到 ⇒ 舊版沒有冷卻，停損迴圈每 0.25 秒就再問一次券商
+        #    （限流／500 時幾分鐘燒光整個月額度）⇒ 改 2、4、8、10 秒退避（封頂 CLOSE_UNKNOWN_MAX），並請面板換線。
+        #    ⛔ 停損仍持續重試（不是放棄），只是不每 0.25 秒打一次。
+        wait = _close_unknown_wait()
+        if wait > 0:
+            return False, "剛剛平倉失敗（跟券商對帳問不到），%.0f 秒後再試 —— 等不及請自己到大戶投平倉" % wait
         fresh = reconcile()
         if fresh == "unknown":
+            _CLOSE_UNK["n"] += 1
+            _CLOSE_UNK["at"] = time.time()
+            _kick_reconnect("平倉前對帳問不到")
             return False, "跟券商對帳失敗，不確定部位方向 —— 請自己到大戶投平倉"
+        _CLOSE_UNK["n"] = 0
         pos = fresh
     if pos is None:
         if time.time() - _RECENT_CLOSE["at"] < RECENT_CLOSE_S and _RECENT_CLOSE.get("msg"):

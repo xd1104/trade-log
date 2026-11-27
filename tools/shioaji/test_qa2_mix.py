@@ -254,6 +254,9 @@ for kind in ("q1_stop", "q3_tp_partial_stop", "q3_lag_close", "q3_partial_entry"
              "q3_stale_up_after_tp"):
     a = scen(broker, kind)
     b = scen(bm, kind)
+    # ⭐ 2026-11-27：兩邊各跑一次會跨秒 ⇒ 成績單的 entry_time 差 1 秒不算行為不同（品管第二輪 N3：拿掉它再比）
+    _strip = lambda x: (x[0], x[1], x[2], [{k: v for k, v in r.items() if k != "entry_time"} for r in (x[3] or [])], x[4])
+    a, b = _strip(a), _strip(b)
     same = a == b
     print("  %-28s %s" % (kind, "相同" if same else "不同"))
     if not same:

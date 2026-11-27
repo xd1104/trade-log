@@ -198,7 +198,9 @@ try:
     sys.modules.setdefault("shioaji", fake_sj)
     real_sj = sys.modules["shioaji"]
     sys.modules["shioaji"] = fake_sj
-    ns = {"date": dt.date, "datetime": dt.datetime, "DEPTH_OPT_STRIKES": 10, "print": lambda *a, **k: None,
+    # ⭐ 2026-11-27 查詢預算：正式預設 DEPTH_OPT_ON=False（選擇權不訂）；這裡測「打開時」挑得對，關掉的那條另測
+    ns = {"date": dt.date, "datetime": dt.datetime, "DEPTH_OPT_STRIKES": 10, "DEPTH_OPT_ON": True,
+          "print": lambda *a, **k: None,
           "DEPTH_SUBS": {"contracts": [], "codes": [], "paused_day": None, "err": None, "at": None}}
     # ⭐ 2026-11-12 整理第 5 批：訂閱／退訂搬到 panel_depth.py（原樣）⇒ 從那支抽出來跑
     dsrc = (HERE / "panel_depth.py").read_text(encoding="utf-8")
@@ -233,6 +235,16 @@ try:
     bad = types.SimpleNamespace(Contracts=None, quote=Quote())
     chk("  出錯不往外丟", ds(bad, C("TMFJ6"), today=dt.date(2026, 9, 29)), [])
     chk("  錯誤有記下來（畫面看得到）", bool(ns["DEPTH_SUBS"]["err"]), True)
+    ns["DEPTH_SUBS"].update(paused_day=None, contracts=[], codes=[], err=None)
+    ns["DEPTH_OPT_ON"] = False
+    subd.clear()
+    snaps = []
+    api_off = types.SimpleNamespace(
+        Contracts=api.Contracts, quote=Quote(), snapshots=lambda cs: snaps.append(1) or [types.SimpleNamespace(close=34567.0)])
+    got = ds(api_off, C("TMFJ6", delivery_month="202610"), today=dt.date(2026, 9, 29))
+    chk("  ⭐ 選擇權關著 ⇒ 只訂大台＋小台", [c.code for c in got], ["TXFJ6", "MXFJ6"])
+    chk("  ⭐ 選擇權關著 ⇒ 不問快照", snaps, [])
+    chk("  ⭐ 正式預設是關的", "DEPTH_OPT_ON = False" in (HERE / "panel_depth.py").read_text(encoding="utf-8"), True)
     sys.modules["shioaji"] = real_sj
 finally:
     shutil.rmtree(tmp, ignore_errors=True)

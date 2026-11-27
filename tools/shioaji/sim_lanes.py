@@ -1439,6 +1439,12 @@ def fetch_gate(kind, api, has_position, now):
       ⛔ 流量 > 85%（或讀不到上限）不抓
     ⚠️ 順序：部位排在「沒連線／隔 10 分鐘」後面 —— 面板注入的那支會跟券商問部位（唯讀），不要每分鐘白問。
     """
+    try:                                  # ⭐ 2026-11-27 查詢預算：今天／本月的可有可無額度用完 ⇒ 不抓
+        import qbudget
+        if not qbudget.optional_ok():
+            return _set_fetch(kind, "budget", "跟永豐的查詢次數今天的額度用完了，明天再抓", now)
+    except Exception:                     # noqa: BLE001
+        pass
     if QUIET_FROM <= now.time() < QUIET_TO:
         return _set_fetch(kind, "quiet", "%s~%s 不抓（日盤）" % (QUIET_FROM.strftime("%H:%M"), QUIET_TO.strftime("%H:%M")), now)
     if api is None:
@@ -1606,7 +1612,14 @@ def fetch_night(api, has_position, E, local, now):
     # ⚠️ 一天一天要（跟 live_panel._raw_days 同一招）：區間端點碰到非交易日（週六）永豐會整段回 404
     for dd in (E, E + timedelta(days=1)):
         try:
-            df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
+            try:                        # ⭐ 2026-11-27 查詢預算：剛收盤抓到的可能不完整 ⇒ 快取最多 10 分鐘就重問
+                import qbudget
+                _ma = qbudget.max_age(600)
+            except Exception:           # noqa: BLE001
+                import contextlib
+                _ma = contextlib.nullcontext()
+            with _ma:
+                df = pd.DataFrame({**api.kbars(contract, start=str(dd), end=str(dd))})
         except Exception as e:
             errs.append("%s：%s" % (dd, str(e)[:60]))
             continue
