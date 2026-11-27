@@ -161,6 +161,7 @@ def _ratio_of_trade(trade):
 def configure(api, contract, extra=None):
     """面板連上永豐之後叫一次。`extra`＝{"MXF": 小台合約}（⭐ 2026-11-06；沒給 ⇒ 只有微台）。"""
     _loop_reset()                          # ⭐ 第七輪品管 #2：重新連線 ⇒ 不沿用上一次的平倉單起算
+    _CLOSE_UNK.update(n=0, at=0.0)         # ⭐ 2026-11-27：換了新連線 ⇒ 平倉前對帳的退避重來（新線馬上可以問）
     with _lock:
         _state["api"] = api
         _state["contract"] = contract

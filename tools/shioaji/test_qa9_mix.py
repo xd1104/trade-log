@@ -162,6 +162,7 @@ F.pos_fail = 99
 ok1, err1 = broker.close("sl")
 F.pos_fail = 0
 broker._close_fail["at"] = 0.0
+CLK.t += 2.1        # ⭐ 2026-11-27 查詢預算（品管 M2）：平倉前對帳問不到之後 2 秒才再問（停損迴圈照常每 0.25 秒叫，2 秒後真的再問）
 ok2, err2 = broker.close("sl")
 print("  (b) 第一次 close=%s（%s）平倉進行中=%s；第二次 close=%s 券商=%s" % (ok1, (err1 or "")[:30], broker._CLOSE_INFLIGHT["on"], ok2, F.hold))
 chk("Q9-2b 失敗後「平倉進行中」有清掉、之後平得掉", (broker._CLOSE_INFLIGHT["on"], ok2, F.eq()), (False, True, {}))
